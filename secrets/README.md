@@ -14,7 +14,7 @@ README — ever.
 
 | Name | Purpose | Consumed by |
 | --- | --- | --- |
-| `cloudflare-api-token-gftb-zones` | CF API token scoped to Account: Zone Create; Zone: DNS Edit + Config Rules Edit + Access: Apps Edit on GFTB-managed zones only (REV-2 path A) | `just edge-plan` / `just edge-apply` (`CLOUDFLARE_API_TOKEN`) |
+| `cloudflare-api-token-gftb-zones` | CF API token, ZONE-scoped to exactly greatfallstoolbus.org + latoolb.us: Zone: DNS Edit + Dynamic Redirect Edit + Access: Apps and Policies Edit (TIN-2385 narrowed the pre-TIN-2385 `Account: Zone Create` shape — zones are console-created now; mint/rotation: `docs/runbooks/edge-token-and-zones.md`). Same value as the protected `edge` environment secret `CLOUDFLARE_API_TOKEN_GFTB_ZONES` | `just edge-zones-plan` / `just edge-zones-apply` (`TF_VAR_cloudflare_api_token`); legacy edge-dns stack (`CLOUDFLARE_API_TOKEN`) |
 | `cf-account-id` | House Cloudflare account id | `TF_VAR_cloudflare_account_id` |
 | `dreamhost-api-key` | Registrar/DNS capture (`domain-list_domains`, `dns-list_records`); optionally `dns-add_record`/`dns-remove_record` for the DreamHost-authority records (row g REVISED) — the API has no registration-NS mutation | `docs/edge-apply-runbook.md` steps 0/1/5 |
 | `latoolbus-dkim-private-key` | DKIM signing key for latoolb.us (public half becomes a DreamHost TXT record per row g REVISED) | mail plane (TIN-2379); stored here, never in the public repo |

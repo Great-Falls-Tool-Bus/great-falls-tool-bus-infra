@@ -20,6 +20,8 @@ check:
     just arc-validate
     just edge-fmt-check
     just edge-validate
+    just edge-zones-fmt-check
+    just edge-zones-validate
 
 enrollment-preflight:
     python3 "{{ gf_core }}/scripts/implementation-overlay-preflight.py" --overlay-root . --tfvars {{ arc_tfvars }} --repo Great-Falls-Tool-Bus/great-falls-tool-bus-infra
@@ -220,3 +222,86 @@ edge-plan-destroy-check:
 edge-apply: edge-plan-destroy-check
     test -f .tofu-plans/edge-dns.tfplan
     tofu -chdir={{ edge_stack }} apply "$(pwd)/.tofu-plans/edge-dns.tfplan"
+
+# --- edge zone stack (tofu/stacks/edge; TIN-2378 prep + TIN-2385) -----------
+# Console-created zones on the house CF account, looked up by name with a
+# ZONE-SCOPED token (TF_VAR_cloudflare_api_token; protected-environment
+# secret CLOUDFLARE_API_TOKEN_GFTB_ZONES in CI, sops-lane
+# cloudflare-api-token-gftb-zones on the operator machine). Records +
+# apex Access gate + latoolb.us redirect ruleset; NO mail records
+# (TIN-2379). Never applied while edge-dns manage_* toggles are on — see
+# tofu/stacks/edge/README.md.
+
+edge_zones_stack := "tofu/stacks/edge"
+edge_zones_backend := env_var_or_default("EDGE_ZONES_BACKEND", "tofu/backend/honey-edge.s3.hcl")
+
+edge-zones-fmt-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if command -v tofu >/dev/null 2>&1; then
+        tofu fmt -check -recursive {{ edge_zones_stack }}
+    else
+        nix develop "{{ gf_core_ci }}" -c tofu fmt -check -recursive {{ edge_zones_stack }}
+    fi
+
+edge-zones-validate:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tf_data_dir="$(mktemp -d -t great-falls-tool-bus-infra-edge-zones-tofu-data.XXXXXX)"
+    trap 'rm -rf "${tf_data_dir}"' EXIT
+    if command -v tofu >/dev/null 2>&1; then
+        TF_DATA_DIR="${tf_data_dir}" tofu -chdir={{ edge_zones_stack }} init -backend=false >/tmp/great-falls-tool-bus-infra-edge-zones-init.log
+        TF_DATA_DIR="${tf_data_dir}" tofu -chdir={{ edge_zones_stack }} validate
+    else
+        nix develop "{{ gf_core_ci }}" -c bash -lc 'TF_DATA_DIR="'"${tf_data_dir}"'" tofu -chdir={{ edge_zones_stack }} init -backend=false >/tmp/great-falls-tool-bus-infra-edge-zones-init.log && TF_DATA_DIR="'"${tf_data_dir}"'" tofu -chdir={{ edge_zones_stack }} validate'
+    fi
+
+edge-zones-init:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    backend="{{ edge_zones_backend }}"
+    test -f "${backend}"
+    if [[ "${backend}" != /* ]]; then
+        backend="$(pwd)/${backend}"
+    fi
+    tofu -chdir={{ edge_zones_stack }} init -reconfigure -backend-config="${backend}"
+
+edge-zones-plan:
+    mkdir -p .tofu-plans
+    tofu -chdir={{ edge_zones_stack }} plan -out="$(pwd)/.tofu-plans/edge.tfplan"
+
+edge-zones-plan-show:
+    test -f .tofu-plans/edge.tfplan
+    tofu -chdir={{ edge_zones_stack }} show -no-color "$(pwd)/.tofu-plans/edge.tfplan"
+
+edge-zones-plan-destroy-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    test -f .tofu-plans/edge.tfplan
+    plan_json="$(mktemp "${TMPDIR:-/tmp}/gftb-edge-zones-plan.XXXXXX.json")"
+    trap 'rm -f "${plan_json}"' EXIT
+    tofu -chdir={{ edge_zones_stack }} show -json "$(pwd)/.tofu-plans/edge.tfplan" > "${plan_json}"
+    if python3 - "${plan_json}" <<'PY'
+    import json
+    import sys
+    from pathlib import Path
+
+    plan = json.loads(Path(sys.argv[1]).read_text())
+    for change in plan.get("resource_changes", []):
+        if "delete" in change.get("change", {}).get("actions", []):
+            sys.exit(0)
+    sys.exit(1)
+    PY
+    then
+        if [ "${ALLOW_EDGE_ZONES_DESTROY:-}" = "1" ]; then
+            echo "WARNING: destructive edge plan allowed because ALLOW_EDGE_ZONES_DESTROY=1"
+        else
+            echo "ERROR: destructive edge plan detected. Review just edge-zones-plan-show and record the decision before apply."
+            exit 1
+        fi
+    fi
+    echo "edge plan destroy guard passed."
+
+edge-zones-apply: edge-zones-plan-destroy-check
+    test -f .tofu-plans/edge.tfplan
+    tofu -chdir={{ edge_zones_stack }} apply "$(pwd)/.tofu-plans/edge.tfplan"
