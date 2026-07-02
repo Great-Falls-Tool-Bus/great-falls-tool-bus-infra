@@ -13,7 +13,7 @@ owner:
 core:
   repository: tinyland-inc/GloriousFlywheel
   module_name: attic-iac
-  pinned_commit: 7072ce2e0bf9d95db08add94b11123d93cd691a8
+  pinned_commit: 2281b576bce0e8dd776a047b84e7464f5b508a62
 
 substrate:
   cluster:
