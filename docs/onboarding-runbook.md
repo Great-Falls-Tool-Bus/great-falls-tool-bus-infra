@@ -91,7 +91,7 @@ gh workflow run validate.yml -R Great-Falls-Tool-Bus/great-falls-tool-bus-infra 
 Green validate run on `tinyland-nix` = end-to-end proof: App installation + org registration + scale set + label pickup.
 
 ## 11. First repo proof
-Execute first_repo_plan (great-falls-tool-bus.github.io, shared-cache-backed, cache-hit + dispatch->green timing vs goo's 114 s).
+Execute first_repo_plan — **corrected 2026-07-02 per prompts-enqueue prompt 50 (greatfallstoolbus-mvp)**: repo #1 is the greatfallstoolbus.org MVP site, its creation is gated on the prompt-50 DAG step-1 operator decision packet, and site.scaffold spawning is skill-driven + USER-ONLY house doctrine (`tinyland-spawn-sister-site`). Claude prepares the ci.yml/enrollment wiring and drives the proof AFTER the operator spawn; timing measured vs goo's 114 s.
 
 ## Step ledger (the TIN-2299 measurement)
 
@@ -112,14 +112,16 @@ Execute first_repo_plan (great-falls-tool-bus.github.io, shared-cache-backed, ca
 - [operator-terminal] Mint/read GF core read-only deploy key for GF_CORE_DEPLOY_KEY _(automatable via: L5 — needs GF-core admin key-mint tooling; gh repo deploy-key add is L3 once the keypair exists)_
 - [operator-terminal] Set overlay CI secrets (GF_CORE_DEPLOY_KEY, ARC_RUNNERS_KUBECONFIG_B64, ARC_RUNNERS_RUSTFS_*) _(automatable via: L3 — gh secret set one-liners; secret-material custody keeps the operator in the loop (L5 with a broker))_
 - [claude] Dispatch validate.yml and watch for green on tinyland-nix (label-pickup proof) _(automatable via: already-automated — gh workflow run + gh run watch)_
-- [claude] Create + seed first repo great-falls-tool-bus.github.io from site.scaffold with the goo two-tier ci.yml _(automatable via: already-automated — scaffold + this package's first_repo_plan)_
+- [operator-terminal] Spawn repo #1 via the user-only `tinyland-spawn-sister-site` skill (gated on the prompt-50 step-1 decision packet; greatfallstoolbus.org MVP per prompts-enqueue prompt 50) _(automatable via: L7 provisioning seed — spawn stays user-only by doctrine)_
+- [claude] Wire the spawned repo: goo two-tier ci.yml + mint script + registry PR + proof runs _(automatable via: already-automated — this package's first_repo_plan)_
 - [claude] GF consumer-registry PR (entry + enrolled_via enum extension if required) _(automatable via: already-automated — PR flow; merge gate is Codex/operator review)_
 - [operator-terminal] Set consumer repo vars: FLYWHEEL_ENABLED=true (+ optional GF_REAPI_TOKEN_EXCHANGE_URL) _(automatable via: L3 — gh variable set; delegable to Claude with permission)_
 - [claude] First-repo proof: two dispatches, assert remote cache hits on run 2, measure dispatch->green vs goo 114s _(automatable via: already-automated — gh run watch + timestamps + flywheel-check output)_
 
 ## First-repo plan
 
-# GFTB repo #1: great-falls-tool-bus.github.io (shared-cache-backed)
+# GFTB repo #1 (shared-cache-backed) — NAME/SHAPE per prompt 50: the greatfallstoolbus.org MVP
+# (github.io Pages fallback acceptable if the MVP decision packet chooses Pages hosting)
 
 **Repo**: `gh repo create Great-Falls-Tool-Bus/great-falls-tool-bus.github.io --public` (org Pages site must be public on the free plan), seeded from `~/git/site.scaffold` (SvelteKit static site + Nix devshell + Justfile + Bazel toolchain-only module graph — the tinyland-goo lineage).
 
