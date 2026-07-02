@@ -20,3 +20,17 @@ Hard rules:
   resource (TIN-2165/TIN-2234)
 - keep reusable OpenTofu modules, runner images, and product docs in
   `tinyland-inc/GloriousFlywheel`
+- this overlay owns the GFTB edge/DNS **apply plane**
+  (`tofu/stacks/edge-dns/`, `docs/edge-apply-runbook.md`) and the GFTB
+  tenant sops lane (`secrets/`, repo-root `.sops.yaml`); the declarations
+  SSOT is the public site repo's `tofu/{dns,mail}-intent/`, reconciled
+  against the newer `docs/mvp-decision-packet.md` row (g) REVISED + REV-2
+- never re-home GFTB apply-plane content into `tinyland-inc/blahaj` —
+  blahaj is the house's logically replaceable IaC layer (reference
+  backend, "never a required dependency"); consumer overlays live with
+  the consumer org, the same no-re-homing doctrine that governs runner
+  attach (TIN-2360 row c, amended 2026-07-02)
+- Cloudflare/DreamHost credentials by NAME only (`secrets/README.md`);
+  the DreamHost API is never used for registration-NS mutation, and no
+  agent session mutates Cloudflare or DreamHost — applies are
+  operator-gated

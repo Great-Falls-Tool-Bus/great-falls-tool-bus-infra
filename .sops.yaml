@@ -1,0 +1,22 @@
+# .sops.yaml — the GFTB tenant secret plane (sops+age)
+#
+# This PRIVATE overlay repo is where GFTB tenant ciphertext lives, under
+# secrets/ only, encrypted to the DISTINCT GFTB tenant age recipient
+# minted 2026-07-02 (TIN-2360 row d). The private half is operator
+# keys.txt custody (named gftb-tenant-age-identity in the site repo's
+# secrets.contract.yaml); the public half below is publishable by design.
+#
+# This lane SUPERSEDES the prepared-but-unused blahaj
+# tenants/great-falls-tool-bus/secrets/ lane (TIN-2360 row c, amended
+# 2026-07-02): consumer overlays own their secret plane; blahaj takes no
+# GFTB content. The same recipient is also pinned as a guard in the
+# public site repo's .sops.yaml (which holds ZERO ciphertext, ever).
+#
+# Rules: plaintext secrets, .env files, kubeconfigs, and private keys
+# never land in this tree; sops-encrypted *.enc.yaml/*.enc.json under
+# secrets/ are the only exception. Secret NAMES are inventoried in
+# secrets/README.md.
+
+creation_rules:
+  - path_regex: secrets/.*\.enc\.(yaml|json)$
+    age: age1maaym3lt2ttrcml9t75d48025elhz4xmhjefzdxwkkvw4f9yxgsql96r3e
