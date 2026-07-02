@@ -1,0 +1,13 @@
+module(
+    name = "great-falls-tool-bus-infra",
+    version = "0.1.0",
+    compatibility_level = 1,
+)
+
+bazel_dep(name = "attic-iac", version = "0.1.0")
+
+git_override(
+    module_name = "attic-iac",
+    remote = "https://github.com/tinyland-inc/GloriousFlywheel.git",
+    commit = "7072ce2e0bf9d95db08add94b11123d93cd691a8",
+)

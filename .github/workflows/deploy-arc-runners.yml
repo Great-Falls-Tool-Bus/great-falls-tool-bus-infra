@@ -1,0 +1,301 @@
+name: Deploy ARC Runners
+
+# BOOTSTRAP CIRCULARITY — READ BEFORE FIRST USE.
+# This workflow runs on `tinyland-nix`, which for the Great-Falls-Tool-Bus org
+# resolves ONLY through the great-falls-tool-bus-nix scale set that THIS
+# stack provisions, and it needs ARC_RUNNERS_KUBECONFIG_B64 / RustFS keys /
+# GF_CORE_DEPLOY_KEY secrets. Before the first successful operator-machine
+# `just arc-apply` (kubectl context `honey`), no runner can pick these jobs
+# up: the FIRST plan and FIRST apply MUST run from the operator machine per
+# docs/implementation-overlay.md. This lane is the steady-state PLAN-ONLY
+# surface after bootstrap; apply stays operator-gated via workflow_dispatch
+# action=apply, and destructive plans additionally require allow_destroy=true.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/deploy-arc-runners.yml"
+      - "Justfile"
+      - "tofu/stacks/arc-runners/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/deploy-arc-runners.yml"
+      - "Justfile"
+      - "tofu/stacks/arc-runners/**"
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Action to perform"
+        required: true
+        default: "plan"
+        type: choice
+        options:
+          - plan
+          - apply
+      allow_destroy:
+        description: "Permit destructive ARC runner changes during apply"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arc-runners-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  GF_CORE_REF: 7072ce2e0bf9d95db08add94b11123d93cd691a8
+  HAS_GF_CORE_DEPLOY_KEY: ${{ secrets.GF_CORE_DEPLOY_KEY != '' }}
+  HAS_GF_CORE_READ_TOKEN: ${{ secrets.GF_CORE_READ_TOKEN != '' }}
+  HAS_ARC_RUNNERS_KUBECONFIG: ${{ secrets.ARC_RUNNERS_KUBECONFIG_B64 != '' }}
+  HAS_ARC_RUNNERS_RUSTFS_ACCESS_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_ACCESS_KEY != '' }}
+  HAS_ARC_RUNNERS_RUSTFS_SECRET_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_SECRET_KEY != '' }}
+
+jobs:
+  plan-apply:
+    name: Plan or apply GFTB ARC runners
+    runs-on: tinyland-nix
+    timeout-minutes: 30
+    steps:
+      - name: Validate deploy secrets
+        id: secrets
+        run: |
+          set -euo pipefail
+          missing=0
+          missing_arc=0
+          if [ "${HAS_GF_CORE_DEPLOY_KEY}" != "true" ] && [ "${HAS_GF_CORE_READ_TOKEN}" != "true" ]; then
+            echo "::error::GF_CORE_DEPLOY_KEY or GF_CORE_READ_TOKEN is required."
+            missing=1
+          fi
+          if [ "${HAS_ARC_RUNNERS_KUBECONFIG}" != "true" ]; then
+            echo "::notice::ARC_RUNNERS_KUBECONFIG_B64 is not configured; skipping ARC runner plan."
+            missing_arc=1
+          fi
+          if [ "${HAS_ARC_RUNNERS_RUSTFS_ACCESS_KEY}" != "true" ]; then
+            echo "::notice::ARC_RUNNERS_RUSTFS_ACCESS_KEY is not configured; skipping ARC runner plan."
+            missing_arc=1
+          fi
+          if [ "${HAS_ARC_RUNNERS_RUSTFS_SECRET_KEY}" != "true" ]; then
+            echo "::notice::ARC_RUNNERS_RUSTFS_SECRET_KEY is not configured; skipping ARC runner plan."
+            missing_arc=1
+          fi
+          if [ "${missing_arc}" -ne 0 ]; then
+            echo "arc-deploy-secrets-present=false" >> "$GITHUB_OUTPUT"
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.action }}" = "apply" ]; then
+              echo "::error::ARC runner deploy secrets are required for action=apply."
+              missing=1
+            fi
+          else
+            echo "arc-deploy-secrets-present=true" >> "$GITHUB_OUTPUT"
+          fi
+          exit "${missing}"
+
+      - name: Checkout overlay
+        if: steps.secrets.outputs.arc-deploy-secrets-present == 'true'
+        uses: actions/checkout@v6
+        with:
+          path: overlay
+
+      - name: Checkout GloriousFlywheel core with deploy key
+        if: >-
+          steps.secrets.outputs.arc-deploy-secrets-present == 'true'
+          && env.HAS_GF_CORE_DEPLOY_KEY == 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: tinyland-inc/GloriousFlywheel
+          ref: ${{ env.GF_CORE_REF }}
+          path: GloriousFlywheel
+          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
+
+      - name: Checkout GloriousFlywheel core with read token
+        if: >-
+          steps.secrets.outputs.arc-deploy-secrets-present == 'true'
+          && env.HAS_GF_CORE_DEPLOY_KEY != 'true'
+          && env.HAS_GF_CORE_READ_TOKEN == 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: tinyland-inc/GloriousFlywheel
+          ref: ${{ env.GF_CORE_REF }}
+          path: GloriousFlywheel
+          token: ${{ secrets.GF_CORE_READ_TOKEN }}
+
+      - name: Materialize kubeconfig
+        if: steps.secrets.outputs.arc-deploy-secrets-present == 'true'
+        env:
+          ARC_RUNNERS_KUBECONFIG_B64: ${{ secrets.ARC_RUNNERS_KUBECONFIG_B64 }}
+        run: |
+          set -euo pipefail
+          kubeconfig="${RUNNER_TEMP}/arc-runners.kubeconfig"
+          printf '%s' "${ARC_RUNNERS_KUBECONFIG_B64}" | base64 -d > "${kubeconfig}"
+          chmod 600 "${kubeconfig}"
+          echo "ARC_RUNNERS_KUBECONFIG=${kubeconfig}" >> "$GITHUB_ENV"
+
+      - name: Plan ARC runners
+        if: steps.secrets.outputs.arc-deploy-secrets-present == 'true'
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ARC_RUNNERS_RUSTFS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_SECRET_KEY }}
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            export GF_CORE_PATH=../GloriousFlywheel
+            export GF_CORE_CI_PATH=../GloriousFlywheel#ci
+            if [ -n "${KUBERNETES_SERVICE_HOST:-}" ]; then
+              export GF_IN_CLUSTER_API_SERVER="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT_HTTPS:-443}"
+              nix develop ../GloriousFlywheel#ci -c bash -lc '
+                set -euo pipefail
+                context="honey"
+                cluster_name="$(kubectl --kubeconfig "${ARC_RUNNERS_KUBECONFIG}" config view -o "jsonpath={.contexts[?(@.name==\"${context}\")].context.cluster}")"
+                if [ -z "${cluster_name}" ]; then
+                  echo "::error::could not find cluster for kubeconfig context ${context}"
+                  exit 1
+                fi
+                kubectl --kubeconfig "${ARC_RUNNERS_KUBECONFIG}" config set-cluster "${cluster_name}" --server="${GF_IN_CLUSTER_API_SERVER}" >/dev/null
+                kubectl --kubeconfig "${ARC_RUNNERS_KUBECONFIG}" --context "${context}" version --request-timeout=15s >/dev/null
+              '
+            fi
+            export TF_VAR_k8s_config_path="${ARC_RUNNERS_KUBECONFIG}"
+            nix develop ../GloriousFlywheel#ci -c just arc-init
+            nix develop ../GloriousFlywheel#ci -c just arc-plan
+            nix develop ../GloriousFlywheel#ci -c tofu \
+              -chdir=../GloriousFlywheel/tofu/stacks/arc-runners \
+              show -json "$(pwd)/.tofu-plans/arc-runners.tfplan" \
+              > .tofu-plans/arc-runners.tfplan.json
+            {
+              echo "## GFTB ARC runners plan"
+              echo ""
+              echo '```'
+              nix develop ../GloriousFlywheel#ci -c just arc-plan-show
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Classify plan
+        if: steps.secrets.outputs.arc-deploy-secrets-present == 'true'
+        id: classify
+        run: |
+          set -euo pipefail
+          cd overlay
+          nix develop ../GloriousFlywheel#ci -c python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          plan = json.loads(Path(".tofu-plans/arc-runners.tfplan.json").read_text())
+          changes = [
+              change
+              for change in plan.get("resource_changes", [])
+              if change.get("change", {}).get("actions", ["no-op"]) != ["no-op"]
+          ]
+          has_destroy = any(
+              "delete" in change.get("change", {}).get("actions", [])
+              for change in changes
+          )
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              print(f"has-changes={str(bool(changes)).lower()}", file=output)
+              print(f"has-destroy={str(has_destroy).lower()}", file=output)
+          PY
+
+      - name: Upload plan artifacts
+        if: steps.secrets.outputs.arc-deploy-secrets-present == 'true'
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: gftb-arc-runners-tfplan
+          path: |
+            overlay/.tofu-plans/arc-runners.tfplan
+            overlay/.tofu-plans/arc-runners.tfplan.json
+          retention-days: 7
+
+      - name: Guard destructive plan
+        if: >-
+          github.event_name == 'workflow_dispatch'
+          && github.event.inputs.action == 'apply'
+          && steps.secrets.outputs.arc-deploy-secrets-present == 'true'
+          && steps.classify.outputs.has-destroy == 'true'
+          && github.event.inputs.allow_destroy != 'true'
+        run: |
+          echo "ERROR: destructive ARC runner plan detected." >&2
+          echo "Re-run with allow_destroy=true only after explicit teardown or state-rehome approval." >&2
+          exit 1
+
+      - name: Apply ARC runners
+        if: >-
+          github.event_name == 'workflow_dispatch'
+          && github.event.inputs.action == 'apply'
+          && steps.secrets.outputs.arc-deploy-secrets-present == 'true'
+          && steps.classify.outputs.has-changes == 'true'
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ARC_RUNNERS_RUSTFS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_SECRET_KEY }}
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            export GF_CORE_PATH=../GloriousFlywheel
+            export GF_CORE_CI_PATH=../GloriousFlywheel#ci
+            export TF_VAR_k8s_config_path="${ARC_RUNNERS_KUBECONFIG}"
+            nix develop ../GloriousFlywheel#ci -c just arc-plan-destroy-check
+            nix develop ../GloriousFlywheel#ci -c just arc-apply
+
+      - name: Verify GFTB primary runner caps
+        if: >-
+          github.event_name == 'workflow_dispatch'
+          && github.event.inputs.action == 'apply'
+          && steps.secrets.outputs.arc-deploy-secrets-present == 'true'
+          && steps.classify.outputs.has-changes == 'true'
+        run: |
+          set -euo pipefail
+          cd overlay
+          export KUBECONFIG="${ARC_RUNNERS_KUBECONFIG}"
+          nix develop ../GloriousFlywheel#ci -c python3 - <<'PY'
+          import json
+          import subprocess
+          import sys
+
+          # Conservative posture: nix lane only (docker/dind deploy flags are
+          # false). Extend this map only alongside a tfvars capacity decision.
+          expected = {
+              "great-falls-tool-bus-nix": 4,
+          }
+          result = subprocess.run(
+              [
+                  "kubectl",
+                  "-n",
+                  "arc-runners",
+                  "get",
+                  "autoscalingrunnersets.actions.github.com",
+                  *expected.keys(),
+                  "-o",
+                  "json",
+              ],
+              check=True,
+              text=True,
+              capture_output=True,
+          )
+          payload = json.loads(result.stdout)
+          actual = {
+              item["metadata"]["name"]: item.get("spec", {}).get("maxRunners")
+              for item in payload.get("items", [])
+          }
+          mismatches = [
+              f"{name}: expected {want}, got {actual.get(name)!r}"
+              for name, want in expected.items()
+              if actual.get(name) != want
+          ]
+          if mismatches:
+              print("GFTB ARC cap verification failed:", file=sys.stderr)
+              for mismatch in mismatches:
+                  print(f"- {mismatch}", file=sys.stderr)
+              sys.exit(1)
+          print("GFTB ARC cap verification passed:", actual)
+          PY

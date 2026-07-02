@@ -1,0 +1,163 @@
+name: Validate Overlay
+
+# BOOTSTRAP NOTE: this job runs on `tinyland-nix`, which for the GFTB org
+# resolves ONLY through the great-falls-tool-bus-nix scale set that this
+# overlay's ARC stack provisions. Until the first operator-machine
+# `just arc-apply` succeeds, these jobs queue unpicked. tinyland-nix (not
+# tinyland-nix-heavy, which the jesssullivan template used): GFTB provisions
+# only the nix lane, and labels resolve through this org's own scale sets.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  GF_CORE_REF: 7072ce2e0bf9d95db08add94b11123d93cd691a8
+  HAS_GF_CORE_DEPLOY_KEY: ${{ secrets.GF_CORE_DEPLOY_KEY != '' }}
+  HAS_GF_CORE_READ_TOKEN: ${{ secrets.GF_CORE_READ_TOKEN != '' }}
+  ATTIC_TOKEN: ${{ github.event_name == 'push' && secrets.ATTIC_TOKEN || '' }}
+
+jobs:
+  validate:
+    runs-on: tinyland-nix
+    steps:
+      - name: Require GloriousFlywheel core read credential
+        run: |
+          if [[ "${HAS_GF_CORE_DEPLOY_KEY}" != "true" && "${HAS_GF_CORE_READ_TOKEN}" != "true" ]]; then
+            echo "::error::GF_CORE_DEPLOY_KEY or GF_CORE_READ_TOKEN is required to validate this private implementation overlay against the private GloriousFlywheel core repo. Prefer the read-only deploy key path; do not use a broad personal token by default."
+            exit 1
+          fi
+      - name: Checkout overlay
+        uses: actions/checkout@v6
+        with:
+          path: overlay
+      - name: Checkout GloriousFlywheel core with deploy key
+        if: env.HAS_GF_CORE_DEPLOY_KEY == 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: tinyland-inc/GloriousFlywheel
+          ref: ${{ env.GF_CORE_REF }}
+          path: GloriousFlywheel
+          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
+      - name: Checkout GloriousFlywheel core with read token
+        if: env.HAS_GF_CORE_DEPLOY_KEY != 'true' && env.HAS_GF_CORE_READ_TOKEN == 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: tinyland-inc/GloriousFlywheel
+          ref: ${{ env.GF_CORE_REF }}
+          path: GloriousFlywheel
+          token: ${{ secrets.GF_CORE_READ_TOKEN }}
+      - name: Validate overlay contract
+        env:
+          ATTIC_PUBLIC_KEY: ${{ github.event_name == 'push' && vars.ATTIC_PUBLIC_KEY || '' }}
+          GH_ACTION_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          for nixbin in /nix/var/nix/profiles/default/bin "${HOME}/.nix-profile/bin"; do
+            if [ -d "${nixbin}" ]; then
+              export PATH="${nixbin}:${PATH}"
+            fi
+          done
+
+          if ! command -v nix >/dev/null 2>&1; then
+            echo "::error::nix is required on the validation runner."
+            exit 1
+          fi
+
+          if ! nix store ping >/dev/null 2>&1; then
+            echo "::warning::Nix daemon socket is unavailable; starting the Nix daemon stack."
+            sudo rm -f /nix/var/nix/daemon-socket/socket || true
+            if command -v determinate-nixd >/dev/null 2>&1; then
+              sudo -b "$(command -v determinate-nixd)" daemon
+            else
+              nix_daemon_bin="$(command -v nix-daemon || true)"
+              if [ -z "${nix_daemon_bin}" ]; then
+                echo "::error::nix-daemon is not on PATH, and nix store ping failed."
+                exit 1
+              fi
+              sudo -b "${nix_daemon_bin}" --daemon
+            fi
+
+            (
+              for attempt in $(seq 1 30); do
+                if nix store ping >/dev/null 2>&1; then
+                  exit 0
+                fi
+                if [ "${attempt}" -eq 30 ]; then
+                  exit 1
+                fi
+                sleep 1
+              done
+            ) &
+            daemon_wait_pid="$!"
+            if ! wait "${daemon_wait_pid}"; then
+              echo "::error::nix-daemon did not become reachable after restart."
+              exit 1
+            fi
+          fi
+
+          append_nix_config_line() {
+            local key="$1"
+            local value="$2"
+            if printf '%s\n' "${NIX_CONFIG:-}" | grep -Eq "^[[:space:]]*${key}[[:space:]]*="; then
+              return 0
+            fi
+            if [ -n "${NIX_CONFIG:-}" ]; then
+              export NIX_CONFIG="$(printf '%s\n%s = %s' "${NIX_CONFIG}" "${key}" "${value}")"
+            else
+              export NIX_CONFIG="${key} = ${value}"
+            fi
+          }
+
+          append_nix_config_line "experimental-features" "nix-command flakes"
+          append_nix_config_line "accept-flake-config" "true"
+          append_nix_config_line "access-tokens" "github.com=${GH_ACTION_TOKEN}"
+          if [ -n "${ATTIC_PUBLIC_KEY:-}" ]; then
+            append_nix_config_line "extra-substituters" "http://attic.nix-cache.svc.cluster.local/main"
+            append_nix_config_line "extra-trusted-public-keys" "${ATTIC_PUBLIC_KEY}"
+          fi
+
+          cd overlay
+          export GF_CORE_PATH=../GloriousFlywheel
+
+          (
+            while true; do
+              echo "overlay validation still running at $(date -u +%H:%M:%SZ)"
+              sleep 30
+            done
+          ) &
+          heartbeat_pid="$!"
+          trap 'kill "${heartbeat_pid}" 2>/dev/null || true' EXIT
+
+          nix develop ../GloriousFlywheel#ci -c bash -lc '
+            set -euo pipefail
+
+            overlay_root="$(pwd)"
+            gf_core="${GF_CORE_PATH}"
+            arc_tf_data_dir=""
+            trap "rm -rf \"${arc_tf_data_dir}\"" EXIT
+
+            echo "::group::runner taxonomy"
+            python3 scripts/validate-overlay-runner-taxonomy.py tofu/stacks/arc-runners/great-falls-tool-bus.tfvars
+            bash scripts/test-overlay-runner-taxonomy.sh
+            echo "::endgroup::"
+
+            echo "::group::ARC tofu fmt"
+            tofu fmt -check tofu/stacks/arc-runners/great-falls-tool-bus.tfvars
+            echo "::endgroup::"
+
+            echo "::group::ARC tofu validate"
+            arc_tf_data_dir="$(mktemp -d -t great-falls-tool-bus-infra-tofu-data.XXXXXX)"
+            cd "${gf_core}/tofu/stacks/arc-runners"
+            TF_DATA_DIR="${arc_tf_data_dir}" tofu init -backend=false >/tmp/great-falls-tool-bus-infra-arc-init.log
+            TF_DATA_DIR="${arc_tf_data_dir}" tofu validate
+            echo "::endgroup::"
+          '

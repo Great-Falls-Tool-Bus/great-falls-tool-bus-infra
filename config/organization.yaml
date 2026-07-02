@@ -1,0 +1,46 @@
+schema_version: 1
+overlay_kind: implementation
+
+owner:
+  slug: Great-Falls-Tool-Bus
+  display_name: Great Falls Tool Bus
+  forge: github
+  account_kind: organization
+  repository: Great-Falls-Tool-Bus/great-falls-tool-bus-infra
+  github_config_url: https://github.com/Great-Falls-Tool-Bus
+  github_app_secret_name: github-app-secret-great-falls-tool-bus
+
+core:
+  repository: tinyland-inc/GloriousFlywheel
+  module_name: attic-iac
+  pinned_commit: 7072ce2e0bf9d95db08add94b11123d93cd691a8
+
+substrate:
+  cluster:
+    name: honey
+    context: honey
+    arc_controller_owner: tinyland-inc/tinyland-infra
+  state_backend:
+    type: s3
+    bucket: tofu-state
+    key_prefix: great-falls-tool-bus-infra
+    endpoint: http://tofu-state-rustfs.nix-cache.svc:9000
+  caches:
+    attic_server: http://attic.nix-cache.svc.cluster.local
+    attic_cache: main
+    attic_public_key: main:eaUydxuDu7xBoy5cCo3MdknYAkVyTIASQ7DGuwxa+XA=
+    bazel_cache_endpoint: grpc://bazel-cache.nix-cache.svc.cluster.local:9092
+    bazel_executor_endpoint: grpc://gf-reapi-cell.gf-rbe.svc.cluster.local:8980
+
+runner_contract:
+  shared_labels:
+    - tinyland-nix
+    - tinyland-docker
+    - tinyland-dind
+    - tinyland-nix-heavy
+    - tinyland-nix-kvm
+    - tinyland-nix-gpu
+  forbidden:
+    - repo-specific runner labels
+    - project identity labels
+    - personal-account runner groups
