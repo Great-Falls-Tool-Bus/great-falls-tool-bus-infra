@@ -31,6 +31,7 @@ from the personal-account jesssullivan template.
   (documented substrate fact; NOT wired into the primary lane yet — see the
   executor-flip note in the tfvars)
 - State: bucket `tofu-state`, key prefix `great-falls-tool-bus-infra`
+  (`arc-runners/` and `edge-dns/` state keys)
 - Core pin: `7072ce2e0bf9d95db08add94b11123d93cd691a8` — GloriousFlywheel
   `origin/main` HEAD at overlay authoring (2026-07-02). Chosen over the
   template's pin because (a) GFTB depends on contracts that postdate it
@@ -48,6 +49,23 @@ Private credentials stay outside Git:
 - RustFS/S3 backend access keys
 - kubeconfigs and operator tokens
 - `.env` files and local backend configs with secrets
+
+## Edge/DNS apply plane (TIN-2360 row c, amended 2026-07-02)
+
+Beyond ARC tenancy, this overlay is the **canonical apply home for the
+GFTB edge**: [`tofu/stacks/edge-dns/`](tofu/stacks/edge-dns/README.md)
+consumes the public site repo's declare-only intent
+(`greatfallstoolbus.org` `tofu/{dns,mail}-intent/`), the tenant sops+age
+lane lives under [`secrets/`](secrets/README.md) (distinct GFTB
+recipient, row d), and the CF/DreamHost apply steps are
+[`docs/edge-apply-runbook.md`](docs/edge-apply-runbook.md). The DNS
+cutover chain (TIN-2378 → TIN-2379 → TIN-2380) executes from sessions in
+this repo — not from `tinyland-inc/blahaj`, which stays the house's
+replaceable IaC layer consumed as a service (`relay.tinyland.dev`, honey
+mail stack, ARC controller). Fail-closed default: the stack's `manage_*`
+toggles are off (packet row g REVISED + REV-2 — DreamHost stays DNS
+authority; only the gated apex may move to CF), so `just edge-plan` is
+empty until the operator picks the REV-2 path.
 
 ## Bootstrap (read first)
 
