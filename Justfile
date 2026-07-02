@@ -67,7 +67,16 @@ flywheel-enroll repo="Great-Falls-Tool-Bus/great-falls-tool-bus.github.io":
     @echo "This umbrella does NOT mutate the cluster."
 
 arc-fmt-check:
-    nix develop "{{ gf_core_ci }}" -c tofu fmt -check {{ arc_tfvars }}
+    #!/usr/bin/env bash
+    # Fresh-clone friendly: use tofu from PATH when present; the GF-core nix
+    # devshell is the fallback for machines without tofu installed (it requires
+    # a sibling GF checkout or GF_CORE_CI_PATH).
+    set -euo pipefail
+    if command -v tofu >/dev/null 2>&1; then
+        tofu fmt -check {{ arc_tfvars }}
+    else
+        nix develop "{{ gf_core_ci }}" -c tofu fmt -check {{ arc_tfvars }}
+    fi
 
 arc-validate:
     #!/usr/bin/env bash
