@@ -40,6 +40,58 @@ variable "pages_host" {
   default     = "greatfallstoolbus-org.pages.dev"
 }
 
+variable "mail_dns_enabled" {
+  description = <<-EOT
+    Master gate for the latoolb.us mail DNS records staged below (MX,
+    SPF, DMARC, and — separately — DKIM once var.mail_dkim_txt is set).
+    Default false: this stack's plan is a no-op for mail with defaults,
+    matching this stack's carries-no-mail-DNS posture until TIN-2379
+    (mail-crs) is applied and the operator has answered D11 (mail
+    target: blahaj relay per ADR 010 vs. Google Workspace — OPEN as of
+    2026-07-03, see recent DreamHost Google Workspace orders). Do not
+    flip to true until D11 is answered AND a DKIM key exists (see
+    README.md "mail DNS enable sequence").
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "mail_mx_target" {
+  description = <<-EOT
+    MX content for latoolb.us (priority 10), gated by
+    var.mail_dns_enabled. Default is the blahaj mail substrate's public
+    MX ingress hostname per ADR 010
+    (great-falls-tool-bus-infra/blahaj-infra-boundary docs/architecture/
+    decisions/010-tenant-list-engine-smtp-interface.md +
+    docs/mail/MAIL_ROUTING_ARCHITECTURE.md: "Internet -> relay.tinyland.dev
+    -> BuyVM relay -> honey Postfix"), i.e. relay.tinyland.dev.
+
+    D11 IS OPEN (2026-07-03): the operator has recent DreamHost Google
+    Workspace orders on file and MAY choose Google Workspace MX
+    (aspmx.l.google.com etc.) for latoolb.us instead of the blahaj relay
+    — that choice is UNCONFIRMED. Do not enable var.mail_dns_enabled
+    (and do not publish MX records) until D11 is answered. If D11
+    resolves to Google Workspace, override this variable rather than
+    changing the default silently.
+  EOT
+  type        = string
+  default     = "relay.tinyland.dev"
+}
+
+variable "mail_dkim_txt" {
+  description = <<-EOT
+    DKIM TXT record value for selector "mail" on latoolb.us
+    (mail._domainkey.latoolb.us), e.g. "v=DKIM1; k=rsa; p=<pubkey>".
+    Default "" means no DKIM record is created (count = 0) regardless
+    of var.mail_dns_enabled — the key is extracted post mail-crs apply
+    (TIN-2379; k8s/mail/latoolb-us-production/maildomain-latoolb-us.yaml
+    dkimSelector: mail) and set here explicitly. Selector "mail" must
+    match that CR's dkimSelector if it ever changes.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "alias_redirect_target" {
   description = <<-EOT
     301 target for latoolb.us + www.latoolb.us. Defaults to the raw
