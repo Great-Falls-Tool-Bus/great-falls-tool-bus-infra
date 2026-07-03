@@ -12,8 +12,11 @@ metadata:
 spec:
   domain: latoolb.us
   dkimSelector: mail
-  dkimSecretRef:
-    name: dkim-keys
-    key: latoolb.us.mail.key
+  # NOTE: no dkimSecretRef by overlay doctrine (validate-mail-crs.sh: DKIM key
+  # material is substrate/operator-owned). The signing key lives in the mail
+  # namespace (dkim-keys/latoolb.us.mail.key, materialized 2026-07-03); the
+  # controller condition DKIMReady stays False cosmetically — upstream
+  # contradiction filed (controller requires same-namespace secretRef the
+  # tenant lane forbids). Go/no-go = actual DKIM signature on the smoke mail.
   maxAccounts: 8
   enabled: true
