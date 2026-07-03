@@ -1,0 +1,238 @@
+name: Edge Zone Stack
+
+# TIN-2378 prep + TIN-2385 implementation: plan-on-PR/push for
+# tofu/stacks/edge (console-created zones, zone-scoped token), apply only
+# via manual workflow_dispatch action=apply — the same operator-gated
+# chassis as deploy-arc-runners.yml. The job binds to the protected `edge`
+# environment, whose only secret is the zone-scoped Cloudflare token
+# CLOUDFLARE_API_TOKEN_GFTB_ZONES (name only here; mint + rotation:
+# docs/runbooks/edge-token-and-zones.md). FAIL-SOFT: until that secret
+# exists (the token is minted late in the runbook), PR/push runs skip
+# green with a notice — the house skip-green idiom; manual action=apply
+# fails closed instead.
+#
+# BOOTSTRAP NOTE: runs on `tinyland-nix`, which for the GFTB org resolves
+# only through this overlay's own scale set — see README.md Bootstrap.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/edge-plan.yml"
+      - "Justfile"
+      - "tofu/stacks/edge/**"
+      - "tofu/backend/honey-edge.s3.hcl"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/edge-plan.yml"
+      - "Justfile"
+      - "tofu/stacks/edge/**"
+      - "tofu/backend/honey-edge.s3.hcl"
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Action to perform"
+        required: true
+        default: "plan"
+        type: choice
+        options:
+          - plan
+          - apply
+      allow_destroy:
+        description: "Permit destructive edge zone changes during apply"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: edge-zones-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  GF_CORE_REF: 2281b576bce0e8dd776a047b84e7464f5b508a62
+  HAS_GF_CORE_DEPLOY_KEY: ${{ secrets.GF_CORE_DEPLOY_KEY != '' }}
+  HAS_GF_CORE_READ_TOKEN: ${{ secrets.GF_CORE_READ_TOKEN != '' }}
+  HAS_CLOUDFLARE_API_TOKEN_GFTB_ZONES: ${{ secrets.CLOUDFLARE_API_TOKEN_GFTB_ZONES != '' }}
+  HAS_ARC_RUNNERS_RUSTFS_ACCESS_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_ACCESS_KEY != '' }}
+  HAS_ARC_RUNNERS_RUSTFS_SECRET_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_SECRET_KEY != '' }}
+
+jobs:
+  plan-apply:
+    name: Plan or apply GFTB edge zones
+    runs-on: tinyland-nix
+    timeout-minutes: 30
+    # Protected environment (TIN-2385): required reviewers gate every run
+    # that touches the zone-scoped token; the secret lives ONLY here, not
+    # at repository scope.
+    environment: edge
+    steps:
+      - name: Validate deploy secrets
+        id: secrets
+        run: |
+          set -euo pipefail
+          missing=0
+          missing_edge=0
+          if [ "${HAS_GF_CORE_DEPLOY_KEY}" != "true" ] && [ "${HAS_GF_CORE_READ_TOKEN}" != "true" ]; then
+            echo "::error::GF_CORE_DEPLOY_KEY or GF_CORE_READ_TOKEN is required."
+            missing=1
+          fi
+          if [ "${HAS_CLOUDFLARE_API_TOKEN_GFTB_ZONES}" != "true" ]; then
+            echo "::notice::CLOUDFLARE_API_TOKEN_GFTB_ZONES is not configured in the edge environment; skipping edge zone plan (token mint is a runbook step — docs/runbooks/edge-token-and-zones.md)."
+            missing_edge=1
+          fi
+          if [ "${HAS_ARC_RUNNERS_RUSTFS_ACCESS_KEY}" != "true" ]; then
+            echo "::notice::ARC_RUNNERS_RUSTFS_ACCESS_KEY is not configured; skipping edge zone plan."
+            missing_edge=1
+          fi
+          if [ "${HAS_ARC_RUNNERS_RUSTFS_SECRET_KEY}" != "true" ]; then
+            echo "::notice::ARC_RUNNERS_RUSTFS_SECRET_KEY is not configured; skipping edge zone plan."
+            missing_edge=1
+          fi
+          if [ "${missing_edge}" -ne 0 ]; then
+            echo "edge-deploy-secrets-present=false" >> "$GITHUB_OUTPUT"
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.action }}" = "apply" ]; then
+              echo "::error::edge zone deploy secrets are required for action=apply."
+              missing=1
+            fi
+          else
+            echo "edge-deploy-secrets-present=true" >> "$GITHUB_OUTPUT"
+          fi
+          exit "${missing}"
+
+      - name: Checkout overlay
+        if: steps.secrets.outputs.edge-deploy-secrets-present == 'true'
+        uses: actions/checkout@v6
+        with:
+          path: overlay
+
+      - name: Checkout GloriousFlywheel core with deploy key
+        if: >-
+          steps.secrets.outputs.edge-deploy-secrets-present == 'true'
+          && env.HAS_GF_CORE_DEPLOY_KEY == 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: tinyland-inc/GloriousFlywheel
+          ref: ${{ env.GF_CORE_REF }}
+          path: GloriousFlywheel
+          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
+
+      - name: Checkout GloriousFlywheel core with read token
+        if: >-
+          steps.secrets.outputs.edge-deploy-secrets-present == 'true'
+          && env.HAS_GF_CORE_DEPLOY_KEY != 'true'
+          && env.HAS_GF_CORE_READ_TOKEN == 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: tinyland-inc/GloriousFlywheel
+          ref: ${{ env.GF_CORE_REF }}
+          path: GloriousFlywheel
+          token: ${{ secrets.GF_CORE_READ_TOKEN }}
+
+      - name: Plan edge zones
+        if: steps.secrets.outputs.edge-deploy-secrets-present == 'true'
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ARC_RUNNERS_RUSTFS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_SECRET_KEY }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN_GFTB_ZONES }}
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            export GF_CORE_PATH=../GloriousFlywheel
+            export GF_CORE_CI_PATH=../GloriousFlywheel#ci
+            nix develop ../GloriousFlywheel#ci -c just edge-zones-fmt-check
+            nix develop ../GloriousFlywheel#ci -c just edge-zones-validate
+            nix develop ../GloriousFlywheel#ci -c just edge-zones-init
+            nix develop ../GloriousFlywheel#ci -c just edge-zones-plan
+            nix develop ../GloriousFlywheel#ci -c tofu \
+              -chdir=tofu/stacks/edge \
+              show -json "$(pwd)/.tofu-plans/edge.tfplan" \
+              > .tofu-plans/edge.tfplan.json
+            {
+              echo "## GFTB edge zone plan"
+              echo ""
+              echo '```'
+              nix develop ../GloriousFlywheel#ci -c just edge-zones-plan-show
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Classify plan
+        if: steps.secrets.outputs.edge-deploy-secrets-present == 'true'
+        id: classify
+        run: |
+          set -euo pipefail
+          cd overlay
+          nix develop ../GloriousFlywheel#ci -c python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          plan = json.loads(Path(".tofu-plans/edge.tfplan.json").read_text())
+          changes = [
+              change
+              for change in plan.get("resource_changes", [])
+              if change.get("change", {}).get("actions", ["no-op"]) != ["no-op"]
+          ]
+          has_destroy = any(
+              "delete" in change.get("change", {}).get("actions", [])
+              for change in changes
+          )
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              print(f"has-changes={str(bool(changes)).lower()}", file=output)
+              print(f"has-destroy={str(has_destroy).lower()}", file=output)
+          PY
+
+      - name: Upload plan artifacts
+        if: steps.secrets.outputs.edge-deploy-secrets-present == 'true'
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: gftb-edge-tfplan
+          path: |
+            overlay/.tofu-plans/edge.tfplan
+            overlay/.tofu-plans/edge.tfplan.json
+          retention-days: 7
+
+      - name: Guard destructive plan
+        if: >-
+          github.event_name == 'workflow_dispatch'
+          && github.event.inputs.action == 'apply'
+          && steps.secrets.outputs.edge-deploy-secrets-present == 'true'
+          && steps.classify.outputs.has-destroy == 'true'
+          && github.event.inputs.allow_destroy != 'true'
+        run: |
+          echo "ERROR: destructive edge zone plan detected." >&2
+          echo "Re-run with allow_destroy=true only after an explicit operator decision is recorded." >&2
+          exit 1
+
+      - name: Apply edge zones
+        if: >-
+          github.event_name == 'workflow_dispatch'
+          && github.event.inputs.action == 'apply'
+          && steps.secrets.outputs.edge-deploy-secrets-present == 'true'
+          && steps.classify.outputs.has-changes == 'true'
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ARC_RUNNERS_RUSTFS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_SECRET_KEY }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN_GFTB_ZONES }}
+          # Wire the dispatch input through to the just-level destroy guard
+          # so allow_destroy=true is honored end-to-end (the workflow-level
+          # Guard step above already gated it).
+          ALLOW_EDGE_ZONES_DESTROY: ${{ github.event.inputs.allow_destroy == 'true' && '1' || '' }}
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            export GF_CORE_PATH=../GloriousFlywheel
+            export GF_CORE_CI_PATH=../GloriousFlywheel#ci
+            nix develop ../GloriousFlywheel#ci -c just edge-zones-plan-destroy-check
+            nix develop ../GloriousFlywheel#ci -c just edge-zones-apply

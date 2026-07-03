@@ -67,6 +67,18 @@ toggles are off (packet row g REVISED + REV-2 — DreamHost stays DNS
 authority; only the gated apex may move to CF), so `just edge-plan` is
 empty until the operator picks the REV-2 path.
 
+The TIN-2385 realization of that path is
+[`tofu/stacks/edge/`](tofu/stacks/edge/README.md): zones added
+**console-side** to the house CF account, looked up by name with a
+**zone-scoped** token (protected `edge` environment secret
+`CLOUDFLARE_API_TOKEN_GFTB_ZONES`, name only), managing the proxied
+apex/www records, the REV-2 Access gate, and the `latoolb.us` 301
+redirects — no mail records (TIN-2379). Console/registrar steps:
+[`docs/runbooks/edge-token-and-zones.md`](docs/runbooks/edge-token-and-zones.md);
+CI plan/apply chassis: `.github/workflows/edge-plan.yml` (skip-green
+until the token secret exists). The two edge stacks never both apply —
+see the stack README's reconciliation rules.
+
 ## Bootstrap (read first)
 
 This overlay's own CI runs on `tinyland-nix`, which for GFTB resolves ONLY
