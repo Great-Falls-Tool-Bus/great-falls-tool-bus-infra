@@ -23,6 +23,8 @@ check:
     just edge-validate
     just edge-zones-fmt-check
     just edge-zones-validate
+    just substrate-boundary-selftest
+    just substrate-boundary
 
 enrollment-preflight:
     python3 "{{ gf_core }}/scripts/implementation-overlay-preflight.py" --overlay-root . --tfvars {{ arc_tfvars }} --repo Great-Falls-Tool-Bus/great-falls-tool-bus-infra
@@ -54,12 +56,11 @@ taxonomy-selftest:
 
 # Substrate-boundary conformance (TIN-2423 / ledger item 30): this overlay's
 # CODE surfaces may reach the blahaj substrate only via a named interface
-# recorded in config/substrate-boundary-allowlist.json. NOT yet wired into
-# `check`/CI — see PR notes: one un-allowlisted hit is open pending
-# disposition (a boundary-disclaiming comment in
-# tofu/stacks/edge-dns/versions.tf that names the substrate org/repo in
-# prose, not an actual code reach). Standalone per the taxonomy-selftest /
-# enrollment-preflight precedent above.
+# recorded in config/substrate-boundary-allowlist.json. Wired into `check`
+# below (the sole finding — a boundary-disclaiming comment in
+# tofu/stacks/edge-dns/versions.tf that named the substrate org/repo in
+# prose, not an actual code reach — was reworded so the scan reports
+# 0 violations).
 substrate-boundary:
     python3 scripts/validate-substrate-boundary.py
 
