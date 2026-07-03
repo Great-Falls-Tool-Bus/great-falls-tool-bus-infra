@@ -32,13 +32,14 @@ from the personal-account jesssullivan template.
   executor-flip note in the tfvars)
 - State: bucket `tofu-state`, key prefix `great-falls-tool-bus-infra`
   (`arc-runners/` and `edge-dns/` state keys)
-- Core pin: `7072ce2e0bf9d95db08add94b11123d93cd691a8` — GloriousFlywheel
-  `origin/main` HEAD at overlay authoring (2026-07-02). Chosen over the
-  template's pin because (a) GFTB depends on contracts that postdate it
+- Core pin: `2281b576bce0e8dd776a047b84e7464f5b508a62` — GloriousFlywheel
+  `origin/main`, refreshed 2026-07-02 from the overlay-authoring pin
+  `7072ce2e` (PR #3, preflight next-action #1). Tracking main was chosen over
+  the template's pin because (a) GFTB depends on contracts that postdate it
   (extra-runner-set executor wiring, consumer registry, token-exchange front
   door) and (b) the template carried four divergent pins across its own files
   — a drift wart. This overlay uses ONE pin everywhere:
-  `config/organization.yaml`, `MODULE.bazel`, and both workflow `GF_CORE_REF`s.
+  `config/organization.yaml`, `MODULE.bazel`, and every workflow `GF_CORE_REF`.
 - Capacity posture (TIN-2165/TIN-2234 pod-cap crunch): nix only, `min 0 / max
   4`, no warm pool, docker/dind off, sting placement + the dedicated
   `compute-expansion` toleration.

@@ -151,11 +151,11 @@ kubeconfig, or derived secret material.
 ## Current Core Pin
 
 This overlay pins GloriousFlywheel core at
-`7072ce2e0bf9d95db08add94b11123d93cd691a8` — `origin/main` HEAD at overlay
-authoring (2026-07-02). HEAD was chosen over the template's pin because GFTB
-needs the newer contracts (extra-runner-set executor wiring, the consumer
-registry, the public token-exchange front door), a fresh overlay has no live
-state to protect, and the template's four internally divergent pins were a
-wart to fix, not replicate. The same commit appears in
-`config/organization.yaml`, `MODULE.bazel`, and both workflow `GF_CORE_REF`s;
-refresh all four together.
+`2281b576bce0e8dd776a047b84e7464f5b508a62` — `origin/main`, refreshed
+2026-07-02 (PR #3) from the overlay-authoring pin `7072ce2e`. Tracking main
+was chosen over the template's pin because GFTB needs the newer contracts
+(extra-runner-set executor wiring, the consumer registry, the public
+token-exchange front door), a fresh overlay has no live state to protect, and
+the template's four internally divergent pins were a wart to fix, not
+replicate. The same commit appears in `config/organization.yaml`,
+`MODULE.bazel`, and every workflow `GF_CORE_REF`; refresh them all together.

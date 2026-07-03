@@ -2,7 +2,7 @@
 
 # GFTB Overlay Onboarding Runbook (org #3)
 
-Prereqs: operator machine with kubectl context `honey` working (neo qualifies), side-by-side checkout `~/git/GloriousFlywheel` at `7072ce2e0bf9d95db08add94b11123d93cd691a8` or newer, `gh` authed as a Great-Falls-Tool-Bus org owner, RustFS `tofu-state` credentials in the operator secret store.
+Prereqs: operator machine with kubectl context `honey` working (neo qualifies), side-by-side checkout `~/git/GloriousFlywheel` at `2281b576bce0e8dd776a047b84e7464f5b508a62` or newer, `gh` authed as a Great-Falls-Tool-Bus org owner, RustFS `tofu-state` credentials in the operator secret store.
 
 ## 1. Create the org GitHub App (browser)
 Open https://github.com/organizations/Great-Falls-Tool-Bus/settings/apps/new

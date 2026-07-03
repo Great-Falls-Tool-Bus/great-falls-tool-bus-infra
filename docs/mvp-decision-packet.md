@@ -28,3 +28,27 @@ site repo was spawned before this packet flipped.
   un-gating is a deliberate later flip, not a default.
 - The site repo predates the packet; audit its config against rows
   (c)/(d)/(g-rev2) rather than assuming conformance.
+
+## Correction — row (c), dated 2026-07-03 (mandated by memo 0002)
+
+Row (c) above is **superseded as written**. The operator boundary correction
+of 2026-07-02 (site repo
+`docs/decisions/0002-blahaj-substrate-boundary.md`, verbatim intent: "the
+apply plane for GFTB belongs in great-falls-tool-bus-infra; blahaj is the IaC
+substrate LAYER and must stay logically replaceable, never intertangled with
+projects"; acknowledged on TIN-2378, comment b25465d8: "blahaj = swappable
+substrate; apply plane re-homes to great-falls-tool-bus-infra") re-homed
+**all GFTB apply-plane concerns** — mail intent (CR manifests), DNS/redirect,
+Mailman3/Anubis runtime stacks — to THIS repo as the **org apply-plane
+overlay**. `tinyland-inc/blahaj` stays the substrate, consumed only through
+its named interfaces (MailDomain/MailAccount CRDs, `relay.tinyland.dev`, the
+S3 tofu-state endpoint, the tenant SOPS recipient rule); row (c)'s
+"massageithaca precedent" grounding was already forbidden by blahaj's own
+doctrine (memo 0002 §b). Per the memo 0002 amendment (TIN-2385, ledger item
+20), the Cloudflare edge-authority carve-out resolved to option (ii): this
+overlay holds the zone-scoped token (`CLOUDFLARE_API_TOKEN_GFTB_ZONES`, edge
+environment) and applies GFTB DNS/Access/redirect through
+`tofu/stacks/edge/`. DKIM private keys (blahaj-transport-consumed) remain the
+one ciphertext staying blahaj-side. Memo 0002's process rule applies here:
+this is a dated correction note, never a silent rewrite — row (c)'s original
+text stands above as the historical record.

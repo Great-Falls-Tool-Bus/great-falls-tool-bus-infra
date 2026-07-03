@@ -10,17 +10,18 @@ they exist as **console-created zones on the house Cloudflare account**
   step 1)
 - manages `greatfallstoolbus.org` apex CNAME (CF-flattened) + `www`
   CNAME → `var.pages_host`, proxied — default
-  `great-falls-tool-bus.github.io` (current GH Pages origin; merging the
-  variable is inert), documented cutover value
-  `greatfallstoolbus-org.pages.dev` (CF Pages, ADR 0003 — see
-  "`pages_host` cutover" below)
+  `greatfallstoolbus-org.pages.dev` (the LIVE CF Pages origin: the ADR
+  0003 cutover was executed 2026-07-03 and the cutover value committed
+  as the default in PR #15 — see "`pages_host` cutover" below)
 - gates the apex behind a Cloudflare Access application + allow policy
   (allowlist `jess@sulliwood.org`; Alex/Kate/Joe are a one-line
   `access_allowed_emails` expansion) — packet row (g) REV-2
 - serves the `latoolb.us` root+`www` 301 redirect ruleset; the target is
   `var.alias_redirect_target`, defaulting to the raw Pages project URL
   (`https://great-falls-tool-bus.github.io/greatfallstoolbus.org/`) and
-  flipping to the apex when the Access gate opens
+  flipping to the apex when the Access gate opens. Status 2026-07-03:
+  the `latoolb.us` NS is still DreamHost (CF zone undelegated), so the
+  ruleset is dormant until that NS decision lands
 - carries **no mail DNS records** — MX/SPF/DKIM/DMARC are TIN-2379's
 
 Auth is exclusively `TF_VAR_cloudflare_api_token`: a token scoped to
@@ -30,19 +31,19 @@ EXACTLY these two zones, held as the protected-environment secret
 ([`secrets/README.md`](../../secrets/README.md)). No account id input:
 the account id the Access policy needs is read off the zone lookup.
 
-## `pages_host` cutover (ADR 0003, operator-approved 2026-07-03)
+## `pages_host` cutover (ADR 0003 — EXECUTED 2026-07-03)
 
-The apex + `www` targets are `var.pages_host`. The flip from GH Pages to
-CF Pages is NOT a code change to this stack: it happens by setting
-`var.pages_host` at apply time (`TF_VAR_pages_host=greatfallstoolbus-org.pages.dev`
-on the plan/apply invocation) **or** by a one-line tfvars change (add
-`pages_host = "greatfallstoolbus-org.pages.dev"` to the tfvars fed to
-`just edge-zones-plan`) — and ONLY AFTER the CF Pages project exists and
-the `greatfallstoolbus.org` custom domain is attached to it. Full
-sequencing, token doctrine (account-scoped Pages:Edit token vs. the
-zone-scoped token), and the verify matrix:
+The apex + `www` targets are `var.pages_host`. The GH Pages → CF Pages
+flip was executed 2026-07-03: the CF Pages project exists with the
+`greatfallstoolbus.org` custom domain attached, and the cutover value
+`greatfallstoolbus-org.pages.dev` is committed as the variable default
+(PR #15) — apex + `www` serve from CF Pages behind the REV-2 Access
+gate. Full sequencing, token doctrine (account-scoped Pages:Edit token
+vs. the zone-scoped token), and the verify matrix:
 [`docs/runbooks/edge-token-and-zones.md`](../../docs/runbooks/edge-token-and-zones.md)
-step 5. Rollback is the same one-line change back to the default.
+step 5. Rollback is a one-line flip back to the GH Pages host
+(`great-falls-tool-bus.github.io`) via tfvars or `TF_VAR_pages_host` at
+apply time.
 
 ## Relationship to `tofu/stacks/edge-dns/` (read before touching either)
 
