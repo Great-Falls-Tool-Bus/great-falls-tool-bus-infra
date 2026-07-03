@@ -115,7 +115,7 @@ wrangler deploy workflow runs (plus the account id wrangler requires —
 an identifier we still keep out of Git, per house norms):
 
 ```bash
-gh secret set CLOUDFLARE_API_TOKEN_GFTB_PAGES --repo Great-Falls-Tool-Bus/greatfallstoolbus.org
+gh secret set CLOUDFLARE_API_TOKEN --repo Great-Falls-Tool-Bus/greatfallstoolbus.org
 gh secret set CLOUDFLARE_ACCOUNT_ID --repo Great-Falls-Tool-Bus/greatfallstoolbus.org
 ```
 
@@ -160,7 +160,7 @@ the `pages_host` flip, or the apex CNAME points at a `pages.dev` host
 that won't serve the site.
 
 1. **Operator: mint + store the account-scoped Pages:Edit token** —
-   steps 2b and 3 above (`CLOUDFLARE_API_TOKEN_GFTB_PAGES`,
+   steps 2b and 3 above (`CLOUDFLARE_API_TOKEN`,
    `CLOUDFLARE_ACCOUNT_ID` in the site repo).
 2. **Agent: create the Pages project + attach the custom domain +
    gate previews.** Under the Pages token only: create project
