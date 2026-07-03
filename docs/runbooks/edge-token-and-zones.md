@@ -1,7 +1,7 @@
 # GFTB edge: zones, CF tokens, NS repoint, CF Pages cutover (operator console runbook)
 
 **TIN-2378 prep + TIN-2385 (zone-scoped CF token in this repo's
-protected environment) + the ADR 0003 CF Pages cutover
+workflow_dispatch-gated environment) + the ADR 0003 CF Pages cutover
 (operator-approved 2026-07-03).** This runbook is the console/registrar
 half of [`tofu/stacks/edge/`](../../tofu/stacks/edge/README.md) — token
 mints, zone adds, NS repoints, and secret stores are **operator
@@ -97,8 +97,12 @@ stdin; never pass values as arguments or paste them into a transcript.
 
 **Zone-scoped token (2a)** → this repo's protected **`edge`**
 environment (Repo Settings → Environments → `edge`, create it if
-absent; protection: required reviewer = the operator, no self-review
-bypass):
+absent). NOTE: this is a **free community org** — required-reviewer and
+branch-policy environment protection are GitHub paid-plan features and are
+**deliberately not used** (operator decision 2026-07-03). The apply gate is
+**workflow_dispatch `action=apply`** (the workflow never applies on push/PR);
+do not set a deployment-branch policy (main is unprotected, so it would block
+the dispatch-apply):
 
 ```bash
 gh secret set CLOUDFLARE_API_TOKEN_GFTB_ZONES --env edge --repo Great-Falls-Tool-Bus/great-falls-tool-bus-infra
