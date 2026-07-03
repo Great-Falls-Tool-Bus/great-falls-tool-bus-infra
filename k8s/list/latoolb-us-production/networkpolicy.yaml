@@ -1,0 +1,143 @@
+# NetworkPolicies for the Mailman stack, consistent with a default-deny
+# namespace posture. Each policy selects specific pods; a selected pod becomes
+# default-deny for that direction except what is allowed here.
+#
+# CONTRACT-CRITICAL (blahaj tenant-list-engine-smtp-v0 §"Network admission on
+# the incoming leg"): the substrate postfix pod is HOST-NETWORKED, so LMTP
+# connections to mailman-core:8024 originate from NODE addresses, not a postfix
+# podSelector. The tenant MUST admit 8024 ingress from the mail-egress node
+# CIDRs and MUST NOT assume a podSelector source.
+#
+# PLACEHOLDER: the node CIDR below is a stand-in. Replace it with the substrate
+# mail-egress node CIDR(s) — source of truth is blahaj
+# dhall/render/mail-honey.dhall (node CIDRs, ~line 34) / the mail stack's own
+# network-policies.tf workaround. Do NOT apply until this is the real value, or
+# the incoming leg fails closed. Tracked as a pre-apply gate in the runbook.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mailman-core
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: mailman-core
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mailman-core
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # Substrate postfix -> LMTP 8024 (host-networked: node CIDR source).
+    - from:
+        - ipBlock:
+            cidr: 10.0.0.0/8 # PLACEHOLDER — replace with mail-egress node CIDR
+      ports:
+        - protocol: TCP
+          port: 8024
+    # Web -> core REST 8001.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mailman-web
+      ports:
+        - protocol: TCP
+          port: 8001
+  egress:
+    - to: [] # DNS
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Outgoing submission -> substrate postfix 587 (STARTTLS + SASL).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: tinyland-dev-production
+      ports:
+        - protocol: TCP
+          port: 587
+    # Core -> Postgres.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mailman-postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mailman-web
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: mailman-web
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mailman-web
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # HTTP 8080 from the house tunnel ingress. PLACEHOLDER selector — tighten
+    # to the actual cloudflared/ingress namespace when the archive route is
+    # designed (follow-up; nothing exposed before round-trip proof).
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to: [] # DNS
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Web -> core REST 8001.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mailman-core
+      ports:
+        - protocol: TCP
+          port: 8001
+    # Web -> Postgres.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mailman-postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mailman-postgres
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: mailman-postgres
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mailman-postgres
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mailman-core
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mailman-web
+      ports:
+        - protocol: TCP
+          port: 5432
+  egress:
+    - to: [] # DNS
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

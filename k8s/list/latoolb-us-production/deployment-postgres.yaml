@@ -1,0 +1,103 @@
+# Single small PostgreSQL backing BOTH Mailman core (mailman DB) and the web
+# UI (mailmanweb DB). JUSTIFICATION for one Postgres over SQLite: core and web
+# are separate Pods that each need write access to their database; SQLite files
+# cannot be safely shared across two Pods, and HyperKitty's archive/search load
+# is far better served by Postgres than by two isolated SQLite files. One tiny
+# Postgres instance is the least-moving-parts option that still fits the
+# ~2GB-RAM class in TIN-2380. A second database (mailmanweb) is created by the
+# initdb hook ConfigMap below.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mailman-postgres-initdb
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: mailman-postgres
+    app.kubernetes.io/component: database
+data:
+  10-create-web-db.sh: |
+    #!/bin/sh
+    set -eu
+    # POSTGRES_DB (mailman) is created by the image; add the web database.
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" <<-SQL
+      SELECT 'CREATE DATABASE mailmanweb OWNER ' || quote_ident(current_user)
+      WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'mailmanweb')\gexec
+    SQL
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mailman-postgres
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: mailman-postgres
+    app.kubernetes.io/component: database
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mailman-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mailman-postgres
+        app.kubernetes.io/component: database
+    spec:
+      securityContext:
+        fsGroup: 999
+        runAsNonRoot: true
+        runAsUser: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          # PIN: confirm/replace with an immutable digest before apply.
+          image: postgres:16.4-alpine
+          ports:
+            - name: postgres
+              containerPort: 5432
+          envFrom:
+            - secretRef:
+                # Operator-owned Secret (see docs/runbooks/list-bringup.md):
+                # POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB=mailman.
+                name: mailman-db
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\""]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mailman-postgres-data
+        - name: initdb
+          configMap:
+            name: mailman-postgres-initdb
+            defaultMode: 0o555

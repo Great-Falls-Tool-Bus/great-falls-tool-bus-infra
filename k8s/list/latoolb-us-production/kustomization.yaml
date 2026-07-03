@@ -1,0 +1,31 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: latoolb-us-production
+
+# GFTB first-of-kind mailing-list engine (TIN-2380): GNU Mailman 3 core +
+# Postorius + HyperKitty for keyholders@latoolb.us, deployed overlay-side into
+# the tenant namespace and consuming the blahaj mail substrate through the
+# named tenant list-engine SMTP relay contract (blahaj ADR 010 / contract v0).
+#
+# DRAFT — reviewable, NOT applied. See docs/runbooks/list-bringup.md and the PR
+# body for every pre-apply verification item (image digests, controller secret
+# wiring, node CIDRs, RBAC scope).
+
+resources:
+  - mailaccount-lists-bounces.yaml
+  - pvcs.yaml
+  - configmap-mailman.yaml
+  - deployment-postgres.yaml
+  - service-postgres.yaml
+  - deployment-mailman-core.yaml
+  - service-mailman-core.yaml
+  - deployment-mailman-web.yaml
+  - service-mailman-web.yaml
+  - networkpolicy.yaml
+
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/managed-by: great-falls-tool-bus-infra
+      app.kubernetes.io/part-of: great-falls-tool-bus
+      app.tinyland.dev/tenant: great-falls-tool-bus

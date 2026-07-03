@@ -1,0 +1,29 @@
+apiVersion: mail.tinyland.dev/v1alpha1
+kind: MailAccount
+metadata:
+  name: lists-bounces
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: gftb-list-smtp-account
+    app.kubernetes.io/component: submission-identity
+  annotations:
+    linear.app/issue: TIN-2380
+    blahaj.dev/substrate-contract: tenant-list-engine-smtp-v0
+    greatfallstoolbus.org/intent-source: k8s/list/latoolb-us-production
+spec:
+  # Contract capability #2 (submission identity): the tenant mints its OWN
+  # submission credential under its list domain and configures Mailman's
+  # outgoing [mta] against postfix.tinyland-dev-production.svc.cluster.local:587
+  # (STARTTLS + SASL). See docs/contracts/tenant-list-engine-smtp.md §"Auth
+  # posture" in blahaj. This is a NEW account distinct from the existing
+  # keyholders@latoolb.us mailbox (k8s/mail/...); it is the envelope sender /
+  # SASL login for list traffic and VERP bounces.
+  email: lists-bounces@latoolb.us
+  domainRef: latoolb-us
+  quota: 1024
+  enabled: true
+  # No passwordSecretRef by overlay doctrine: the account controller generates
+  # the initial credential on first reconcile (same rule the validate-mail-crs
+  # gate enforces on keyholders). The generated password is projected into the
+  # lists-bounces-smtp Secret by the operator (out of band, protected) and
+  # consumed by mailman-core's outgoing runner. See docs/runbooks/list-bringup.md.

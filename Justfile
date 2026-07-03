@@ -345,3 +345,26 @@ mail-cr-server-dry-run: mail-cr-validate _mail-kubeconfig-inputs
 
 mail-cr-apply: mail-cr-server-dry-run
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ mail_cr_dir }}
+
+# --- GFTB Mailman 3 list stack (TIN-2380) -----------------------------------
+# First-of-kind mailing-list engine (Mailman core + Postorius + HyperKitty) for
+# keyholders@latoolb.us, deployed overlay-side into latoolb-us-production and
+# consuming the blahaj mail substrate through the tenant-list-engine SMTP relay
+# contract (ADR 010). Checked-in validation is offline. Live server
+# dry-run/apply needs a namespace-scoped kubeconfig with WORKLOAD verbs — see
+# the RBAC note in docs/runbooks/list-bringup.md (the existing mail kubeconfig
+# is scoped to mail CRs only and cannot apply Deployments/Services/PVCs).
+
+list_stack_dir := "k8s/list/latoolb-us-production"
+
+list-stack-validate:
+    bash scripts/validate-list-stack.sh {{ list_stack_dir }}
+
+list-stack-render: list-stack-validate
+    kubectl kustomize {{ list_stack_dir }}
+
+list-stack-server-dry-run: list-stack-validate _mail-kubeconfig-inputs
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply --dry-run=server -k {{ list_stack_dir }}
+
+list-stack-apply: list-stack-server-dry-run
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ list_stack_dir }}

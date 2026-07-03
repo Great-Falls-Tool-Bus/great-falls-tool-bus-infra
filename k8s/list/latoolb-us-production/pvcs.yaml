@@ -1,0 +1,50 @@
+# Persistent volumes for the Mailman 3 stack. Sized for a tiny community org
+# (single small list); the operator confirms the namespace's default
+# StorageClass before apply (no storageClassName is pinned so the cluster
+# default is used).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mailman-postgres-data
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: mailman-postgres
+    app.kubernetes.io/component: database
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mailman-core-data
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: mailman-core
+    app.kubernetes.io/component: list-engine
+spec:
+  # Message store + queue (/opt/mailman) must survive restarts.
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mailman-web-data
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: mailman-web
+    app.kubernetes.io/component: web
+spec:
+  # HyperKitty full-text search index + collected static + uploads.
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
