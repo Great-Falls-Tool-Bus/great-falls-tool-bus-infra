@@ -66,9 +66,12 @@ jobs:
     name: Plan or apply GFTB edge zones
     runs-on: tinyland-nix
     timeout-minutes: 30
-    # Protected environment (TIN-2385): required reviewers gate every run
-    # that touches the zone-scoped token; the secret lives ONLY here, not
-    # at repository scope.
+    # The zone-scoped token secret lives ONLY in this `edge` environment,
+    # not at repository scope. NOTE: this is a plain environment — required-
+    # reviewer / branch-policy protection rules are a GitHub paid-plan feature
+    # not available on this free community org (operator decision 2026-07-03).
+    # The effective apply gate is workflow_dispatch action=apply (this workflow
+    # never applies on push/PR); see the secrets gate in the classify step.
     environment: edge
     steps:
       - name: Validate deploy secrets
