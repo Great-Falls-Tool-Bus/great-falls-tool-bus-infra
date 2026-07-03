@@ -1,15 +1,20 @@
-# GFTB edge: zones, zone-scoped token, NS repoint (operator console runbook)
+# GFTB edge: zones, CF tokens, NS repoint, CF Pages cutover (operator console runbook)
 
 **TIN-2378 prep + TIN-2385 (zone-scoped CF token in this repo's
-protected environment).** This runbook is the console/registrar half of
-[`tofu/stacks/edge/`](../../tofu/stacks/edge/README.md) — everything
-here is an **operator action**; no agent session mutates Cloudflare,
-DreamHost, or GitHub settings. Doctrine:
+protected environment) + the ADR 0003 CF Pages cutover
+(operator-approved 2026-07-03).** This runbook is the console/registrar
+half of [`tofu/stacks/edge/`](../../tofu/stacks/edge/README.md) — token
+mints, zone adds, NS repoints, and secret stores are **operator
+actions**; the CF Pages project setup in step 5 is the one agent-driven
+exception, and it runs under the account-scoped Pages:Edit token only
+(the token doctrine extension approved with ADR 0003 — no agent session
+touches DNS, redirects, or Access via that token). Doctrine:
 [`docs/mvp-decision-packet.md`](../mvp-decision-packet.md) (row g
 REVISED + REV-2 — the gated apex moves to a CF zone; this runbook is the
-TIN-2385 realization of that path) and the substrate-boundary memo
-(greatfallstoolbus.org `docs/decisions/0002`). Secret **names only** —
-no values, ever.
+TIN-2385 realization of that path), the substrate-boundary memo
+(greatfallstoolbus.org `docs/decisions/0002`), and the CF Pages cutover
+ADR (greatfallstoolbus.org `docs/decisions/0003`). Secret **names
+only** — no values, ever.
 
 Sibling runbook: [`docs/edge-apply-runbook.md`](../edge-apply-runbook.md)
 (the pre-TIN-2385 `edge-dns/` stack, zone-creating + fail-closed). When
@@ -46,11 +51,15 @@ account first and do steps 1–3 there instead — the stack is
 account-agnostic (it reads the account id off the zone lookup, never
 from config).
 
-## 2. Mint the zone-scoped API token (console)
+## 2. Mint the two API tokens (console)
 
-Dashboard → My Profile → API Tokens → **Create Custom Token**:
+Two tokens, two blast radii — never one token with both shapes.
+Dashboard → My Profile → API Tokens → **Create Custom Token**, once per
+token:
 
-- Permissions:
+### 2a. Zone-scoped token (the tofu stack's credential)
+
+- Permissions — EXACTLY these three:
   - Zone → **DNS → Edit**
   - Zone → **Dynamic Redirect → Edit** (the redirect-rules ruleset
     phase; on older dashboards this appears under Config Rules /
@@ -61,31 +70,64 @@ Dashboard → My Profile → API Tokens → **Create Custom Token**:
 - No account-level permission groups, no TTL-unbounded client IP
   allowances beyond house norms.
 
-Caveat to verify at mint time: the stack's Access **policy** is a
-reusable (account-level) API object even though the **application** is
-zone-level. If the first `just edge-zones-plan`/apply returns a 403 on
-the policy call, add the narrowest account-scope Access permission
-(Account → Access: Apps and Policies → Edit) to this token — scoped to
-the house account resource only — and record that exception here. Do
-not broaden any other permission.
+### 2b. Account-scoped Pages token (ADR 0003 doctrine extension, approved 2026-07-03)
 
-## 3. Store the token as a protected-environment secret (console)
+- Permissions — EXACTLY one:
+  - Account → **Cloudflare Pages → Edit**
+- Account Resources: **Include → Specific account →** the house account
+  only.
+- NO zone permission groups of any kind — this token can create/deploy
+  Pages projects and attach custom domains, and nothing else. DNS,
+  redirects, and Access stay exclusively behind the zone-scoped token
+  (2a) and its operator-gated apply plane.
 
-Repo Settings → Environments → **`edge`** (create it if absent):
+Caveat to verify at mint time (token 2a): the stack's Access **policy**
+is a reusable (account-level) API object even though the
+**application** is zone-level. If the first `just edge-zones-plan`/apply
+returns a 403 on the policy call, add the narrowest account-scope
+Access permission (Account → Access: Apps and Policies → Edit) to the
+**zone-scoped token (2a)** — scoped to the house account resource
+only — and record that exception here. Do not broaden any other
+permission, and never add it to the Pages token (2b).
 
-- Protection: required reviewer = the operator; no self-review bypass.
-- Environment secret: **`CLOUDFLARE_API_TOKEN_GFTB_ZONES`** = the token
-  value from step 2. Name only anywhere in Git; the value lives ONLY in
-  this environment (and, for operator-machine use, the sops-lane
-  credential `cloudflare-api-token-gftb-zones` — `secrets/README.md`).
-- Consumed by [`edge-plan.yml`](../../.github/workflows/edge-plan.yml)
-  as `TF_VAR_cloudflare_api_token`. Until the secret exists the workflow
-  skips green with a notice (house skip-green idiom).
+## 3. Store the tokens as GitHub secrets (operator)
 
-Rotation: quarterly, or immediately on suspicion — mint a replacement
-token (step 2), overwrite the environment secret and the sops-lane copy,
-then **Roll** (revoke) the old token in the CF dashboard. No config
-change is needed; nothing in Git references the value.
+Names only anywhere in Git — the commands below prompt for the value on
+stdin; never pass values as arguments or paste them into a transcript.
+
+**Zone-scoped token (2a)** → this repo's protected **`edge`**
+environment (Repo Settings → Environments → `edge`, create it if
+absent; protection: required reviewer = the operator, no self-review
+bypass):
+
+```bash
+gh secret set CLOUDFLARE_API_TOKEN_GFTB_ZONES --env edge --repo Great-Falls-Tool-Bus/great-falls-tool-bus-infra
+```
+
+Consumed by [`edge-plan.yml`](../../.github/workflows/edge-plan.yml) as
+`TF_VAR_cloudflare_api_token`. Until the secret exists the workflow
+skips green with a notice (house skip-green idiom). Operator-machine
+copy: the sops-lane credential `cloudflare-api-token-gftb-zones`
+(`secrets/README.md`).
+
+**Account-scoped Pages token (2b)** → the public site repo, where the
+wrangler deploy workflow runs (plus the account id wrangler requires —
+an identifier we still keep out of Git, per house norms):
+
+```bash
+gh secret set CLOUDFLARE_API_TOKEN_GFTB_PAGES --repo Great-Falls-Tool-Bus/greatfallstoolbus.org
+gh secret set CLOUDFLARE_ACCOUNT_ID --repo Great-Falls-Tool-Bus/greatfallstoolbus.org
+```
+
+Operator-machine copy of the Pages token: the sops-lane credential
+`cloudflare-api-token-gftb-pages` (`secrets/README.md`; account id:
+existing `cf-account-id` entry).
+
+Rotation (both tokens): quarterly, or immediately on suspicion — mint a
+replacement token (step 2), overwrite the GitHub secret and the
+sops-lane copy, then **Roll** (revoke) the old token in the CF
+dashboard. No config change is needed; nothing in Git references the
+values.
 
 ## 4. Repoint nameservers at DreamHost (registrar panel)
 
@@ -98,13 +140,55 @@ hosts from step 1. The DreamHost API has **no registration-NS mutation**
 NS flip so the cutover is atomic; records added while `pending` activate
 with the zone.
 
-Sequencing per TIN-2378: the site repo's `static/CNAME` +
-`BASE_PATH=""` precondition must be merged before the apex points at
-Pages, and the `alias_redirect_target` variable stays at its raw-Pages
-default until the Access gate is verified working (then flip it to
+Sequencing: the serving-origin cutover is step 5 (CF Pages, ADR 0003).
+The `alias_redirect_target` variable stays at its default until the
+Access gate is verified working (then flip it to
 `https://greatfallstoolbus.org/` in a one-line PR).
 
-## 5. Verification matrix (TIN-2378)
+Rollback-era note (GH Pages): the pre-ADR-0003 sequence required the
+site repo's `static/CNAME` + `BASE_PATH=""` precondition merged before
+the apex pointed at GH Pages, and the GitHub **org verified-domain TXT**
+record (`docs/edge-apply-runbook.md` verification-TXT step) to bind
+`greatfallstoolbus.org` to the org. Leave that TXT record in place — it
+is harmless, and it keeps the GH Pages origin a working rollback target
+(`pages_host` flip back to the default, step 5).
+
+## 5. CF Pages cutover sequence (ADR 0003, operator-approved 2026-07-03)
+
+The order matters: the Pages project + custom domain must exist BEFORE
+the `pages_host` flip, or the apex CNAME points at a `pages.dev` host
+that won't serve the site.
+
+1. **Operator: mint + store the account-scoped Pages:Edit token** —
+   steps 2b and 3 above (`CLOUDFLARE_API_TOKEN_GFTB_PAGES`,
+   `CLOUDFLARE_ACCOUNT_ID` in the site repo).
+2. **Agent: create the Pages project + attach the custom domain +
+   gate previews.** Under the Pages token only: create project
+   `greatfallstoolbus-org` (production branch = the site repo's main;
+   serving host `greatfallstoolbus-org.pages.dev`), attach the
+   `greatfallstoolbus.org` custom domain to it, and enable the Access
+   policy on the `*.greatfallstoolbus-org.pages.dev` preview
+   deployments (Pages project → Settings → Access policy) so preview
+   URLs are never public. Caveat, same shape as the step-2a caveat: if
+   the preview Access enable 403s under Pages:Edit only, the operator
+   flips that one toggle console-side — do NOT broaden the token.
+3. **Site PR merges** — the site repo's wrangler workflow deploys the
+   built site to the project; verify
+   `https://greatfallstoolbus-org.pages.dev/` serves before touching
+   DNS.
+4. **`pages_host` flip applied** — set
+   `var.pages_host = "greatfallstoolbus-org.pages.dev"` (apply-time
+   `TF_VAR_pages_host` or a one-line tfvars change —
+   [`tofu/stacks/edge/README.md`](../../tofu/stacks/edge/README.md),
+   "`pages_host` cutover") and run the operator-gated plan/apply. The
+   apex Access gate and the `latoolb.us` redirect are untouched by the
+   flip.
+5. **Verify matrix** — step 6 below. Rollback: flip `pages_host` back
+   to the `great-falls-tool-bus.github.io` default (the org
+   verified-domain TXT and the GH Pages deploy stay intact for exactly
+   this).
+
+## 6. Verification matrix (TIN-2378 + ADR 0003)
 
 ```bash
 # NS cutover took (expect the two assigned CF hosts per zone)
@@ -125,7 +209,9 @@ curl -sI http://latoolb.us/ | sed -n '1p;/^location/Ip'
 curl -sI https://latoolb.us/ | sed -n '1p;/^location/Ip'
 curl -sI https://www.latoolb.us/ | sed -n '1p;/^location/Ip'
 
-# Origin still healthy independent of the edge
+# Origin still healthy independent of the edge (the var.pages_host value)
+curl -sI https://greatfallstoolbus-org.pages.dev/ | sed -n '1p'
+# Rollback-era origin (GH Pages) — only meaningful while pages_host is at its default
 curl -sI https://great-falls-tool-bus.github.io/greatfallstoolbus.org/ | sed -n '1p'
 
 # NO mail records materialized by this stack (TIN-2379 owns them)
