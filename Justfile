@@ -16,6 +16,7 @@ default:
 
 check:
     just taxonomy
+    just mail-cr-validate
     just arc-fmt-check
     just arc-validate
     just edge-fmt-check
@@ -305,3 +306,27 @@ edge-zones-plan-destroy-check:
 edge-zones-apply: edge-zones-plan-destroy-check
     test -f .tofu-plans/edge.tfplan
     tofu -chdir={{ edge_zones_stack }} apply "$(pwd)/.tofu-plans/edge.tfplan"
+
+# --- GFTB tenant mail custom resources (TIN-2379) ---------------------------
+# Tenant-owned MailDomain/MailAccount declarations live here and apply through
+# the namespace grant declared in blahaj (latoolb-us-production only). The
+# checked-in validation is offline. Live server dry-run/apply requires a
+# namespace-scoped kubeconfig from the protected mail environment.
+
+mail_cr_dir := "k8s/mail/latoolb-us-production"
+
+mail-cr-validate:
+    bash scripts/validate-mail-crs.sh {{ mail_cr_dir }}
+
+mail-cr-render: mail-cr-validate
+    kubectl kustomize {{ mail_cr_dir }}
+
+_mail-kubeconfig-inputs:
+    test -n "${GFTB_MAIL_KUBECONFIG:-}" || { echo "Set GFTB_MAIL_KUBECONFIG to the namespace-scoped kubeconfig path"; exit 1; }
+    test -f "${GFTB_MAIL_KUBECONFIG}"
+
+mail-cr-server-dry-run: mail-cr-validate _mail-kubeconfig-inputs
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply --dry-run=server -k {{ mail_cr_dir }}
+
+mail-cr-apply: mail-cr-server-dry-run
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ mail_cr_dir }}

@@ -46,6 +46,23 @@ Required secrets:
 If they are absent, pull-request and push runs skip ARC planning with notices;
 manual `action=apply` fails closed.
 
+## Mail CR Apply Secret
+
+`GFTB_MAIL_KUBECONFIG_B64` belongs only in the protected `mail` environment.
+It is the base64-encoded namespace-scoped kubeconfig minted from the Blahaj
+tenant namespace grant for `latoolb-us-production`.
+
+The kubeconfig may apply only `mail.tinyland.dev` `MailDomain`,
+`MailAccount`, and `MailAlias` resources in that namespace. It must not carry
+cluster-scoped rights, Secret rights, or access to other namespaces.
+
+Local operator runs use a file path instead:
+
+```bash
+GFTB_MAIL_KUBECONFIG=/path/to/latoolb-us-production.kubeconfig just mail-cr-server-dry-run
+GFTB_MAIL_KUBECONFIG=/path/to/latoolb-us-production.kubeconfig just mail-cr-apply
+```
+
 BOOTSTRAP NOTE: these secrets only matter AFTER the GFTB scale set exists.
 Overlay CI itself runs on `tinyland-nix`, which resolves through the scale set
 this stack provisions — the first plan/apply always happens on the operator

@@ -1,0 +1,16 @@
+apiVersion: mail.tinyland.dev/v1alpha1
+kind: MailDomain
+metadata:
+  name: latoolb-us
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: gftb-mail-domain
+  annotations:
+    linear.app/issue: TIN-2379
+    blahaj.dev/substrate-contract: tenant-namespace-grant-v0
+    greatfallstoolbus.org/intent-source: tofu/mail-intent/intent.yaml
+spec:
+  domain: latoolb.us
+  dkimSelector: mail
+  maxAccounts: 8
+  enabled: true
