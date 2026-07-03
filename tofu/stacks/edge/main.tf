@@ -109,10 +109,6 @@ resource "cloudflare_zero_trust_access_application" "pages_dev" {
   }]
 }
 
-import {
-  to = cloudflare_zero_trust_access_application.pages_dev
-  id = "accounts/${data.cloudflare_zone.web.account.id}/a792bcb9-d0d0-4d1f-a797-69ffdc035d8c"
-}
 
 # Reusable Access policies are account-level API objects; the account id
 # is read from the zone lookup, never committed. The token's Access
