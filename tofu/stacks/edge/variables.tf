@@ -44,16 +44,18 @@ variable "mail_dns_enabled" {
   description = <<-EOT
     Master gate for the latoolb.us mail DNS records staged below (MX,
     SPF, DMARC, and — separately — DKIM once var.mail_dkim_txt is set).
-    Default false: this stack's plan is a no-op for mail with defaults,
-    matching this stack's carries-no-mail-DNS posture until TIN-2379
-    (mail-crs) is applied and the operator has answered D11 (mail
-    target: blahaj relay per ADR 010 vs. Google Workspace — OPEN as of
-    2026-07-03, see recent DreamHost Google Workspace orders). Do not
-    flip to true until D11 is answered AND a DKIM key exists (see
-    README.md "mail DNS enable sequence").
+    Enabled 2026-07-03: the preconditions in README.md "mail DNS enable
+    sequence" are met — TIN-2379 mail-crs APPLIED (MailDomain latoolb-us
+    + MailAccount keyholders created via run 28683888543), D11 answered
+    (self-hosted mail confirmed by the operator; the Google-Workspace
+    notion was ambient DreamHost account noise, closed as moot), the
+    DKIM key generated + materialized (dkim-keys/latoolb.us.mail.key;
+    custody ciphertext blahaj PR #865), and the latoolb.us NS repointed
+    to Cloudflare (propagating; CF accepts records on a pending zone,
+    they serve on activation).
   EOT
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "mail_mx_target" {
@@ -66,13 +68,9 @@ variable "mail_mx_target" {
     docs/mail/MAIL_ROUTING_ARCHITECTURE.md: "Internet -> relay.tinyland.dev
     -> BuyVM relay -> honey Postfix"), i.e. relay.tinyland.dev.
 
-    D11 IS OPEN (2026-07-03): the operator has recent DreamHost Google
-    Workspace orders on file and MAY choose Google Workspace MX
-    (aspmx.l.google.com etc.) for latoolb.us instead of the blahaj relay
-    — that choice is UNCONFIRMED. Do not enable var.mail_dns_enabled
-    (and do not publish MX records) until D11 is answered. If D11
-    resolves to Google Workspace, override this variable rather than
-    changing the default silently.
+    D11 CLOSED 2026-07-03: the operator confirmed self-hosted mail —
+    "we do not use google workspace, we are self hosting mail." The MX
+    target is the blahaj relay above, as decided in row (e)/ADR 010.
   EOT
   type        = string
   default     = "relay.tinyland.dev"
@@ -82,14 +80,16 @@ variable "mail_dkim_txt" {
   description = <<-EOT
     DKIM TXT record value for selector "mail" on latoolb.us
     (mail._domainkey.latoolb.us), e.g. "v=DKIM1; k=rsa; p=<pubkey>".
-    Default "" means no DKIM record is created (count = 0) regardless
-    of var.mail_dns_enabled — the key is extracted post mail-crs apply
-    (TIN-2379; k8s/mail/latoolb-us-production/maildomain-latoolb-us.yaml
-    dkimSelector: mail) and set here explicitly. Selector "mail" must
-    match that CR's dkimSelector if it ever changes.
+    "" means no DKIM record is created (count = 0) regardless of
+    var.mail_dns_enabled. Set 2026-07-03 to the public half of the
+    keypair generated per multidomain-mail proposal §4 (selector "mail",
+    2048-bit; private key = dkim-keys/latoolb.us.mail.key in-cluster +
+    sops custody in blahaj tenants/great-falls-tool-bus/secrets/).
+    Selector "mail" must match the MailDomain CR's dkimSelector
+    (k8s/mail/latoolb-us-production/maildomain-latoolb-us.yaml).
   EOT
   type        = string
-  default     = ""
+  default     = "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAysrM9OU25XpwMPRfJoXLEnYSO64eJM36hzAhTOkk/GtgGI1yf7Xz/DIEtuYP73xe0pR4j9gS/e5feUvauqUnXaFVhQEGpac0ewL31mHDlfDepudLwYXC7vNrX1nkTYBmEhbHh9JKXMRbDOt57USQUAlHFtdZg/paRKGn2m85xQUUUMQ1PoIqgBIjKcue/HsqaPUSbIxEIFl5JkhczWF64gtqP3Il0JyPmSGGlGsXCTRkyNx0DHEah4pOkghoNgv0Gsve6mg/dI4jN/sqPAfq8/1Y2KeJMTl/IGPhC23JdZRo3rAq8PGeuY8rjcyZV3h8hV/GU5ROvX/AoUz6HREg3QIDAQAB"
 }
 
 variable "alias_redirect_target" {
@@ -97,11 +97,11 @@ variable "alias_redirect_target" {
     301 target for latoolb.us + www.latoolb.us. Defaults to the raw
     GitHub Pages project URL; flips to https://greatfallstoolbus.org/
     when the Access gate on the apex opens — a one-line tfvars change,
-    no resource churn. Status 2026-07-03: TIN-2378 closed Done (NS
-    cutover executed for greatfallstoolbus.org), but the latoolb.us NS
-    is still DreamHost — the CF zone is undelegated, so this redirect
-    ruleset is DORMANT; the target flip waits on the Access gate
-    opening, which is a separate pending decision.
+    no resource churn. Status 2026-07-03 (later): D1=A executed — the
+    latoolb.us NS was repointed to Cloudflare in the DreamHost panel
+    (registry propagation pending; the zone auto-activates and this
+    ruleset starts serving then). The target flip to the apex still
+    waits on the Access gate opening (TIN-2421 criteria).
   EOT
   type        = string
   default     = "https://great-falls-tool-bus.github.io/greatfallstoolbus.org/"

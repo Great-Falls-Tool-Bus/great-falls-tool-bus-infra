@@ -12,5 +12,8 @@ metadata:
 spec:
   domain: latoolb.us
   dkimSelector: mail
+  dkimSecretRef:
+    name: dkim-keys
+    key: latoolb.us.mail.key
   maxAccounts: 8
   enabled: true
