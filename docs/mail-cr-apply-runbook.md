@@ -17,6 +17,10 @@ services, or secret values.
   `GFTB_MAIL_KUBECONFIG_B64` as a compatibility alias.
 - Blahaj PR #834 or later is deployed so the honey mail transport can accept
   `latoolb.us`.
+- If `MailDomain.spec.dkimSecretRef` is present, it must be the operator-
+  materialized substrate key reference only: `dkim-keys` /
+  `latoolb.us.mail.key`. The CR declares the reference; it does not carry or
+  create key material.
 
 ## Local operator flow
 

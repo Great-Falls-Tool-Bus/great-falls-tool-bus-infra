@@ -157,15 +157,14 @@ resource "cloudflare_dns_record" "alias_www" {
   ttl     = 1
 }
 
-# --- latoolb.us mail DNS (TIN-2379) — staged, gated OFF by default ----------
+# --- latoolb.us mail DNS (TIN-2379) — staged; enabled after D11 closed -------
 # Mirrors the fail-closed shape already codified in the sibling
 # tofu/stacks/edge-dns/ stack (alias_mx/alias_spf/alias_dmarc/alias_dkim),
 # realized here against the console-created zone this stack looks up.
-# ALL records below are gated on var.mail_dns_enabled (default false) —
-# plan is a no-op with defaults. D11 IS OPEN (2026-07-03): the blahaj
-# relay (ADR 010) vs. Google Workspace MX choice is unconfirmed; do not
-# flip var.mail_dns_enabled until D11 is answered. See README.md "mail
-# DNS enable sequence".
+# MX/SPF/DMARC records remain gated on var.mail_dns_enabled; D11 closed
+# self-hosted on 2026-07-03, so this branch flips the default true with
+# MX -> relay.tinyland.dev per ADR 010. See README.md "mail DNS enable
+# sequence".
 
 resource "cloudflare_dns_record" "alias_mx" {
   count = var.mail_dns_enabled ? 1 : 0
@@ -173,7 +172,7 @@ resource "cloudflare_dns_record" "alias_mx" {
   zone_id  = data.cloudflare_zone.alias.zone_id
   name     = local.alias_domain
   type     = "MX"
-  content  = var.mail_mx_target # default: blahaj relay ingress, ADR 010 — D11 OPEN, may become Google Workspace
+  content  = var.mail_mx_target # default: blahaj relay ingress, ADR 010
   priority = 10
   proxied  = false
   ttl      = 1
@@ -215,11 +214,9 @@ resource "cloudflare_dns_record" "alias_dmarc" {
 
 # DKIM: selector "mail" matches k8s/mail/latoolb-us-production/
 # maildomain-latoolb-us.yaml dkimSelector and the blahaj dhall fragment.
-# Record only materializes once the key is extracted post mail-crs apply
-# and var.mail_dkim_txt is set — independent of var.mail_dns_enabled so
-# a DKIM-only rollout (key ready before D11 lands) is possible, though
-# the enable sequence in README.md recommends flipping mail_dns_enabled
-# and setting the DKIM value together.
+# Record only materializes once var.mail_dkim_txt is set to the public
+# half of the operator-materialized DKIM key. DKIM is independent of
+# var.mail_dns_enabled so a DKIM-only rollout remains possible.
 resource "cloudflare_dns_record" "alias_dkim" {
   count = var.mail_dkim_txt != "" ? 1 : 0
 
