@@ -1,7 +1,7 @@
 # edge-dns stack — GFTB apply-plane consumption of the site repo's
 # declare-only DNS/mail intent (greatfallstoolbus.org tofu/dns-intent +
 # tofu/mail-intent). TIN-2360 row (c) as amended 2026-07-02: apply-plane
-# consumption lives in THIS consumer overlay, never in tinyland-inc/blahaj.
+# consumption lives in THIS consumer overlay, never in the blahaj substrate repo.
 
 terraform {
   required_version = ">= 1.6.0"
