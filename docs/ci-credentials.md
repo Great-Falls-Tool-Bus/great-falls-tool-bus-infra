@@ -89,7 +89,8 @@ GFTB-bound ARC runner scale sets, queued validation runs, or core-pin drift
 are blockers.
 
 The overlay validates against GloriousFlywheel main at
-`7072ce2e0bf9d95db08add94b11123d93cd691a8` (origin/main HEAD at overlay
-authoring, 2026-07-02) — the single pin shared by `config/organization.yaml`,
-`MODULE.bazel`, and both workflows. Refresh this pin to a newer merged commit
-or release before moving live ARC state when the core contract changes.
+`2281b576bce0e8dd776a047b84e7464f5b508a62` (origin/main, refreshed 2026-07-02
+in PR #3 from the overlay-authoring pin `7072ce2e`) — the single pin shared by
+`config/organization.yaml`, `MODULE.bazel`, and every workflow. Refresh this
+pin to a newer merged commit or release before moving live ARC state when the
+core contract changes.

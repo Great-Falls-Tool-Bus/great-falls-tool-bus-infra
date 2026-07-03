@@ -6,8 +6,8 @@
 #
 # Record surface (site repo tofu/dns-intent reconciled to TIN-2378):
 #   greatfallstoolbus.org  apex CNAME (CF-flattened) + www -> var.pages_host,
-#                          proxied (GH Pages today; CF Pages after the
-#                          ADR 0003 cutover flip — see variables.tf)
+#                          proxied (CF Pages since the ADR 0003 cutover,
+#                          executed 2026-07-03 — see variables.tf)
 #   latoolb.us             root+www 301 redirect ruleset (variable target)
 # NO mail DNS records here — TIN-2379 owns those (MX/SPF/DKIM/DMARC).
 
@@ -94,8 +94,9 @@ resource "cloudflare_zero_trust_access_application" "web_www" {
 # Cloudflare's own zone, so it cannot be gated by a zone-bound Access app; this
 # is an ACCOUNT-level self_hosted app covering the pages.dev origin, sharing the
 # apex allowlist policy. Gates the last public surface during the REV-2 phase.
-# The `import` block adopts the app created out-of-band on 2026-07-03 so CI
-# manages it with no ungated window (remove the import block after first apply).
+# The app was created out-of-band on 2026-07-03 and adopted into state via a
+# one-time `import` block (run 28673911406); the import block has since been
+# removed (PR #18) — CI now manages the resource normally.
 resource "cloudflare_zero_trust_access_application" "pages_dev" {
   account_id          = data.cloudflare_zone.web.account.id
   name                = "GFTB pages.dev gate (REV-2)"
