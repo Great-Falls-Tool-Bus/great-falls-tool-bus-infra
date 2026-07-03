@@ -90,6 +90,30 @@ resource "cloudflare_zero_trust_access_application" "web_www" {
   }]
 }
 
+# CF Pages serves greatfallstoolbus-org.pages.dev (production + *.preview) on
+# Cloudflare's own zone, so it cannot be gated by a zone-bound Access app; this
+# is an ACCOUNT-level self_hosted app covering the pages.dev origin, sharing the
+# apex allowlist policy. Gates the last public surface during the REV-2 phase.
+# The `import` block adopts the app created out-of-band on 2026-07-03 so CI
+# manages it with no ungated window (remove the import block after first apply).
+resource "cloudflare_zero_trust_access_application" "pages_dev" {
+  account_id          = data.cloudflare_zone.web.account.id
+  name                = "GFTB pages.dev gate (REV-2)"
+  type                = "self_hosted"
+  self_hosted_domains = ["greatfallstoolbus-org.pages.dev", "*.greatfallstoolbus-org.pages.dev"]
+  session_duration    = "24h"
+
+  policies = [{
+    id         = cloudflare_zero_trust_access_policy.web_apex_allow.id
+    precedence = 1
+  }]
+}
+
+import {
+  to = cloudflare_zero_trust_access_application.pages_dev
+  id = "${data.cloudflare_zone.web.account.id}/a792bcb9-d0d0-4d1f-a797-69ffdc035d8c"
+}
+
 # Reusable Access policies are account-level API objects; the account id
 # is read from the zone lookup, never committed. The token's Access
 # permission is granted on the account resource but the policy gates only
