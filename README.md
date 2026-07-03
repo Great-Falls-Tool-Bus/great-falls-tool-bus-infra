@@ -90,8 +90,9 @@ move into Blahaj.
 Use `just mail-cr-validate` for offline shape validation and
 `just mail-cr-server-dry-run` / `just mail-cr-apply` only with a
 namespace-scoped kubeconfig supplied through `GFTB_MAIL_KUBECONFIG`.
-The protected CI secret name is `GFTB_MAIL_KUBECONFIG_B64` in the `mail`
-environment. See [`docs/mail-cr-apply-runbook.md`](docs/mail-cr-apply-runbook.md).
+The protected CI secret name is `MAIL_APPLY_KUBECONFIG_B64` in the `mail`
+environment; `GFTB_MAIL_KUBECONFIG_B64` remains a compatibility alias. See
+[`docs/mail-cr-apply-runbook.md`](docs/mail-cr-apply-runbook.md).
 
 ## Bootstrap (read first)
 

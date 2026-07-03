@@ -12,8 +12,9 @@ services, or secret values.
 - The namespace-scoped kubeconfig has been minted from
   `great-falls-tool-bus-apply-token`.
 - The kubeconfig value is stored only in the protected `mail` environment as
-  `GFTB_MAIL_KUBECONFIG_B64`, or on the operator machine as a local file passed
-  through `GFTB_MAIL_KUBECONFIG`.
+  `MAIL_APPLY_KUBECONFIG_B64`, or on the operator machine as a local file passed
+  through `GFTB_MAIL_KUBECONFIG`. The CI workflow also accepts
+  `GFTB_MAIL_KUBECONFIG_B64` as a compatibility alias.
 - Blahaj PR #834 or later is deployed so the honey mail transport can accept
   `latoolb.us`.
 

@@ -48,9 +48,11 @@ manual `action=apply` fails closed.
 
 ## Mail CR Apply Secret
 
-`GFTB_MAIL_KUBECONFIG_B64` belongs only in the protected `mail` environment.
+`MAIL_APPLY_KUBECONFIG_B64` belongs only in the protected `mail` environment.
 It is the base64-encoded namespace-scoped kubeconfig minted from the Blahaj
-tenant namespace grant for `latoolb-us-production`.
+tenant namespace grant for `latoolb-us-production`. The workflow also accepts
+`GFTB_MAIL_KUBECONFIG_B64` as a compatibility alias, but operators should not
+set both names unless they intentionally hold the same value.
 
 The kubeconfig may apply only `mail.tinyland.dev` `MailDomain`,
 `MailAccount`, and `MailAlias` resources in that namespace. It must not carry

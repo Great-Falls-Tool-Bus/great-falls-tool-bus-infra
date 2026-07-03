@@ -42,7 +42,6 @@ env:
   GF_CORE_REF: 2281b576bce0e8dd776a047b84e7464f5b508a62
   HAS_GF_CORE_DEPLOY_KEY: ${{ secrets.GF_CORE_DEPLOY_KEY != '' }}
   HAS_GF_CORE_READ_TOKEN: ${{ secrets.GF_CORE_READ_TOKEN != '' }}
-  HAS_GFTB_MAIL_KUBECONFIG_B64: ${{ secrets.GFTB_MAIL_KUBECONFIG_B64 != '' }}
 
 jobs:
   validate:
@@ -101,9 +100,12 @@ jobs:
             exit 1
           fi
       - name: Validate mail kubeconfig secret
+        env:
+          MAIL_APPLY_KUBECONFIG_B64: ${{ secrets.MAIL_APPLY_KUBECONFIG_B64 }}
+          GFTB_MAIL_KUBECONFIG_B64: ${{ secrets.GFTB_MAIL_KUBECONFIG_B64 }}
         run: |
-          if [ "${HAS_GFTB_MAIL_KUBECONFIG_B64}" != "true" ]; then
-            echo "::error::GFTB_MAIL_KUBECONFIG_B64 is required in the protected mail environment."
+          if [[ -z "${MAIL_APPLY_KUBECONFIG_B64:-}" && -z "${GFTB_MAIL_KUBECONFIG_B64:-}" ]]; then
+            echo "::error::MAIL_APPLY_KUBECONFIG_B64 is required in the protected mail environment; GFTB_MAIL_KUBECONFIG_B64 is also accepted as a compatibility alias."
             exit 1
           fi
       - name: Checkout overlay
@@ -127,10 +129,18 @@ jobs:
           path: GloriousFlywheel
           token: ${{ secrets.GF_CORE_READ_TOKEN }}
       - name: Materialize namespace kubeconfig
+        env:
+          MAIL_APPLY_KUBECONFIG_B64: ${{ secrets.MAIL_APPLY_KUBECONFIG_B64 }}
+          GFTB_MAIL_KUBECONFIG_B64: ${{ secrets.GFTB_MAIL_KUBECONFIG_B64 }}
         run: |
           set -euo pipefail
           kubeconfig="${RUNNER_TEMP}/gftb-mail.kubeconfig"
-          printf '%s' "${{ secrets.GFTB_MAIL_KUBECONFIG_B64 }}" | base64 -d > "${kubeconfig}"
+          if [[ -n "${MAIL_APPLY_KUBECONFIG_B64:-}" ]]; then
+            kubeconfig_b64="${MAIL_APPLY_KUBECONFIG_B64}"
+          else
+            kubeconfig_b64="${GFTB_MAIL_KUBECONFIG_B64}"
+          fi
+          printf '%s' "${kubeconfig_b64}" | base64 -d > "${kubeconfig}"
           chmod 600 "${kubeconfig}"
           echo "GFTB_MAIL_KUBECONFIG=${kubeconfig}" >> "$GITHUB_ENV"
       - name: Server dry-run
