@@ -22,7 +22,9 @@ they exist as **console-created zones on the house Cloudflare account**
   flipping to the apex when the Access gate opens. Status 2026-07-03:
   the `latoolb.us` NS is still DreamHost (CF zone undelegated), so the
   ruleset is dormant until that NS decision lands
-- carries **no mail DNS records** — MX/SPF/DKIM/DMARC are TIN-2379's
+- stages `latoolb.us` mail DNS (MX/SPF/DMARC/DKIM) ALL gated behind
+  `var.mail_dns_enabled` (default `false`) — see "mail DNS enable
+  sequence" below
 
 Auth is exclusively `TF_VAR_cloudflare_api_token`: a token scoped to
 EXACTLY these two zones, held as the protected-environment secret
@@ -44,6 +46,36 @@ vs. the zone-scoped token), and the verify matrix:
 step 5. Rollback is a one-line flip back to the GH Pages host
 (`great-falls-tool-bus.github.io`) via tfvars or `TF_VAR_pages_host` at
 apply time.
+
+## `latoolb.us` mail DNS enable sequence (TIN-2379, D11 OPEN)
+
+MX/SPF/DMARC/DKIM records for `latoolb.us` are staged in `main.tf`,
+gated behind `var.mail_dns_enabled` (default `false`; MX/SPF/DMARC) and
+`var.mail_dkim_txt` (default `""`; DKIM only materializes once set).
+With defaults, `tofu plan` for this block is a no-op. **Do not flip
+`mail_dns_enabled` to `true` yet** — the enable sequence is:
+
+1. `latoolb.us` NS cutover to Cloudflare completes and the zone goes
+   live (D1=A: DreamHost panel change saved 2026-07-03, registry
+   propagation pending; CF zone auto-activates on delegation).
+2. **D11 is answered** — the operator confirms the mail target: the
+   blahaj relay per [ADR
+   010](https://github.com/tinyland-inc/blahaj/blob/main/docs/architecture/decisions/010-tenant-list-engine-smtp-interface.md)
+   (`var.mail_mx_target` default `relay.tinyland.dev`) vs. Google
+   Workspace MX (recent DreamHost Google Workspace orders make this a
+   live alternative — UNCONFIRMED as of 2026-07-03). If Google
+   Workspace wins, override `var.mail_mx_target` and the SPF content
+   before enabling.
+3. Mail is applied on the substrate side (TIN-2379 `mail-crs.yml`
+   server-dry-run -> apply) so the `MailDomain`/`MailAccount` CRs
+   (`k8s/mail/latoolb-us-production/`) are live and a DKIM key exists
+   for selector `mail`.
+4. `var.mail_dkim_txt` is set to the extracted DKIM public-key TXT
+   value.
+5. `var.mail_dns_enabled` flips to `true`.
+6. PR-plan (this repo's normal `edge-plan.yml` PR flow) then
+   `workflow_dispatch action=apply` (dispatch-apply doctrine, D6) — no
+   direct apply.
 
 ## Relationship to `tofu/stacks/edge-dns/` (read before touching either)
 
