@@ -1,0 +1,5 @@
+{
+  "$comment": "TIN-2423 / ledger item 30: named-interface allowlist for the substrate-boundary validator. Every entry carries provenance (TIN-2398 guardrail #2). A blahaj-reach hit under an allowlisted path_prefix is a NAMED INTERFACE, not a bleed. This overlay's real blahaj touchpoint (tenant MailDomain/MailAccount CRs, TIN-2379) is a k8s API reach via a namespace-scoped kubeconfig against mail.tinyland.dev/v1alpha1 CRDs, not a blahaj repo-tree reach, so it does not trip these patterns and needs no entry here. See docs/mail-cr-apply-runbook.md.",
+  "schema_version": 1,
+  "allowed": []
+}

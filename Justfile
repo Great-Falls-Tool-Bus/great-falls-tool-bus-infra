@@ -52,6 +52,20 @@ taxonomy:
 taxonomy-selftest:
     bash scripts/test-overlay-runner-taxonomy.sh
 
+# Substrate-boundary conformance (TIN-2423 / ledger item 30): this overlay's
+# CODE surfaces may reach the blahaj substrate only via a named interface
+# recorded in config/substrate-boundary-allowlist.json. NOT yet wired into
+# `check`/CI — see PR notes: one un-allowlisted hit is open pending
+# disposition (a boundary-disclaiming comment in
+# tofu/stacks/edge-dns/versions.tf that names the substrate org/repo in
+# prose, not an actual code reach). Standalone per the taxonomy-selftest /
+# enrollment-preflight precedent above.
+substrate-boundary:
+    python3 scripts/validate-substrate-boundary.py
+
+substrate-boundary-selftest:
+    python3 scripts/validate-substrate-boundary.py --self-test
+
 # Verify a registered RBE/image consumer against the three live realities GF-core
 # CI cannot see (overlay tfvars anchor + RBE wiring, consumer workflow runs-on,
 # live Helm-managed runner), each reusing an already-built guard. Read-only.
