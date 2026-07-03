@@ -158,11 +158,13 @@ jobs:
               -chdir=tofu/stacks/edge \
               show -json "$(pwd)/.tofu-plans/edge.tfplan" \
               > .tofu-plans/edge.tfplan.json
+            nix develop ../GloriousFlywheel#ci -c just edge-zones-plan-show \
+              > .tofu-plans/edge.plan.txt
             {
               echo "## GFTB edge zone plan"
               echo ""
               echo '```'
-              nix develop ../GloriousFlywheel#ci -c just edge-zones-plan-show
+              cat .tofu-plans/edge.plan.txt
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
 
@@ -192,15 +194,19 @@ jobs:
               print(f"has-destroy={str(has_destroy).lower()}", file=output)
           PY
 
-      - name: Upload plan artifacts
+      # D8 (audit wf_0118a02c): NEVER upload .tofu-plans/edge.tfplan or its
+      # show -json rendering — plan binaries/JSON embed sensitive variable
+      # values (the zone-scoped Cloudflare token). Only the redacted plan
+      # TEXT (`tofu show` prints "(sensitive value)") leaves the runner; the
+      # apply job re-plans in-job, so nothing is lost by not persisting the
+      # binary.
+      - name: Upload plan text artifact
         if: steps.secrets.outputs.edge-deploy-secrets-present == 'true'
         continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
-          name: gftb-edge-tfplan
-          path: |
-            overlay/.tofu-plans/edge.tfplan
-            overlay/.tofu-plans/edge.tfplan.json
+          name: gftb-edge-plan-text
+          path: overlay/.tofu-plans/edge.plan.txt
           retention-days: 7
 
       - name: Guard destructive plan

@@ -1,0 +1,149 @@
+name: Edge Zone Drift (zero-diff)
+
+# Scheduled plan-only drift lane for tofu/stacks/edge: every 12h it plans the
+# live edge zone state and asserts "No changes." — the same executable
+# zero-diff gate tinyland-infra's arc-org-plan.yml uses, borrowed verbatim.
+# There is deliberately NO apply lane here. Like edge-plan.yml this binds the
+# protected `edge` environment (zone-scoped Cloudflare token) and skips green
+# with a notice while the token secret is unset (the runbook mints it late).
+#
+# D8 (audit wf_0118a02c): the plan is produced text-only (no -out=); a
+# persisted plan binary embeds the zone token and is apply-able, so only the
+# redacted plan TEXT is ever written or uploaded.
+#
+# BOOTSTRAP NOTE: runs on `tinyland-nix`, which for the GFTB org resolves only
+# through this overlay's own scale set — see README.md Bootstrap.
+
+on:
+  schedule:
+    # Every 12 hours (00:00 and 12:00 UTC).
+    - cron: "0 */12 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: edge-drift-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  GF_CORE_REF: 2281b576bce0e8dd776a047b84e7464f5b508a62
+  HAS_GF_CORE_DEPLOY_KEY: ${{ secrets.GF_CORE_DEPLOY_KEY != '' }}
+  HAS_GF_CORE_READ_TOKEN: ${{ secrets.GF_CORE_READ_TOKEN != '' }}
+  HAS_CLOUDFLARE_API_TOKEN_GFTB_ZONES: ${{ secrets.CLOUDFLARE_API_TOKEN_GFTB_ZONES != '' }}
+  HAS_ARC_RUNNERS_RUSTFS_ACCESS_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_ACCESS_KEY != '' }}
+  HAS_ARC_RUNNERS_RUSTFS_SECRET_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_SECRET_KEY != '' }}
+
+jobs:
+  drift:
+    name: Assert zero-diff GFTB edge plan
+    runs-on: tinyland-nix
+    timeout-minutes: 30
+    # Same protected `edge` environment as edge-plan.yml. NOTE: this is a plain
+    # environment — required-reviewer / branch-policy protection rules are a
+    # GitHub paid-plan feature not available on this free community org
+    # (operator decision 2026-07-03).
+    environment: edge
+    steps:
+      - name: Validate deploy secrets
+        id: secrets
+        run: |
+          set -euo pipefail
+          missing=0
+          missing_edge=0
+          if [ "${HAS_GF_CORE_DEPLOY_KEY}" != "true" ] && [ "${HAS_GF_CORE_READ_TOKEN}" != "true" ]; then
+            echo "::error::GF_CORE_DEPLOY_KEY or GF_CORE_READ_TOKEN is required."
+            missing=1
+          fi
+          if [ "${HAS_CLOUDFLARE_API_TOKEN_GFTB_ZONES}" != "true" ]; then
+            echo "::notice::CLOUDFLARE_API_TOKEN_GFTB_ZONES is not configured in the edge environment; skipping edge drift plan (token mint is a runbook step — docs/runbooks/edge-token-and-zones.md)."
+            missing_edge=1
+          fi
+          if [ "${HAS_ARC_RUNNERS_RUSTFS_ACCESS_KEY}" != "true" ]; then
+            echo "::notice::ARC_RUNNERS_RUSTFS_ACCESS_KEY is not configured; skipping edge drift plan."
+            missing_edge=1
+          fi
+          if [ "${HAS_ARC_RUNNERS_RUSTFS_SECRET_KEY}" != "true" ]; then
+            echo "::notice::ARC_RUNNERS_RUSTFS_SECRET_KEY is not configured; skipping edge drift plan."
+            missing_edge=1
+          fi
+          if [ "${missing_edge}" -ne 0 ]; then
+            echo "edge-deploy-secrets-present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "edge-deploy-secrets-present=true" >> "$GITHUB_OUTPUT"
+          fi
+          exit "${missing}"
+
+      - name: Checkout overlay
+        if: steps.secrets.outputs.edge-deploy-secrets-present == 'true'
+        uses: actions/checkout@v6
+        with:
+          path: overlay
+
+      - name: Checkout GloriousFlywheel core with deploy key
+        if: >-
+          steps.secrets.outputs.edge-deploy-secrets-present == 'true'
+          && env.HAS_GF_CORE_DEPLOY_KEY == 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: tinyland-inc/GloriousFlywheel
+          ref: ${{ env.GF_CORE_REF }}
+          path: GloriousFlywheel
+          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
+
+      - name: Checkout GloriousFlywheel core with read token
+        if: >-
+          steps.secrets.outputs.edge-deploy-secrets-present == 'true'
+          && env.HAS_GF_CORE_DEPLOY_KEY != 'true'
+          && env.HAS_GF_CORE_READ_TOKEN == 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: tinyland-inc/GloriousFlywheel
+          ref: ${{ env.GF_CORE_REF }}
+          path: GloriousFlywheel
+          token: ${{ secrets.GF_CORE_READ_TOKEN }}
+
+      - name: Plan edge zones (text-only, no persisted binary)
+        if: steps.secrets.outputs.edge-deploy-secrets-present == 'true'
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ARC_RUNNERS_RUSTFS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_SECRET_KEY }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN_GFTB_ZONES }}
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            export GF_CORE_PATH=../GloriousFlywheel
+            export GF_CORE_CI_PATH=../GloriousFlywheel#ci
+            nix develop ../GloriousFlywheel#ci -c just edge-zones-init
+            # Deliberately NO -out=: the zero-diff gate needs only the text; a
+            # persisted plan binary is secret-bearing and apply-able.
+            nix develop ../GloriousFlywheel#ci -c tofu \
+              -chdir=tofu/stacks/edge plan -no-color \
+              | tee edge-drift-plan.txt
+
+      - name: Assert zero-diff plan (No changes.)
+        if: steps.secrets.outputs.edge-deploy-secrets-present == 'true'
+        run: |
+          set -euo pipefail
+          test -f overlay/edge-drift-plan.txt
+          if grep -qF 'No changes.' overlay/edge-drift-plan.txt; then
+            echo "Zero-diff gate PASSED: GFTB edge plan reports no changes against the live edge zone state."
+          else
+            echo "::error::Zero-diff gate FAILED: the GFTB edge plan is not empty against the live edge zone state. Inspect the gftb-edge-drift-plan artifact; the console-side edge config has drifted from tofu/stacks/edge."
+            exit 1
+          fi
+
+      - name: Upload drift plan text artifact
+        if: always() && steps.secrets.outputs.edge-deploy-secrets-present == 'true'
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: gftb-edge-drift-plan
+          path: overlay/edge-drift-plan.txt
+          if-no-files-found: ignore
+          retention-days: 7
