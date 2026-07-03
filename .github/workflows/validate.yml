@@ -150,6 +150,10 @@ jobs:
             bash scripts/test-overlay-runner-taxonomy.sh
             echo "::endgroup::"
 
+            echo "::group::mail CRs"
+            just mail-cr-validate
+            echo "::endgroup::"
+
             echo "::group::ARC tofu fmt"
             tofu fmt -check tofu/stacks/arc-runners/great-falls-tool-bus.tfvars
             echo "::endgroup::"

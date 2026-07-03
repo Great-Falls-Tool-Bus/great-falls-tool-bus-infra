@@ -79,6 +79,20 @@ CI plan/apply chassis: `.github/workflows/edge-plan.yml` (skip-green
 until the token secret exists). The two edge stacks never both apply —
 see the stack README's reconciliation rules.
 
+## Mail CR apply plane (TIN-2379)
+
+Tenant-owned mail custom resources live in
+[`k8s/mail/latoolb-us-production/`](k8s/mail/latoolb-us-production/).
+They consume the namespace grant declared in `tinyland-inc/blahaj`
+`deploy/tenants/great-falls-tool-bus/rbac.yaml`; the CR declarations do not
+move into Blahaj.
+
+Use `just mail-cr-validate` for offline shape validation and
+`just mail-cr-server-dry-run` / `just mail-cr-apply` only with a
+namespace-scoped kubeconfig supplied through `GFTB_MAIL_KUBECONFIG`.
+The protected CI secret name is `GFTB_MAIL_KUBECONFIG_B64` in the `mail`
+environment. See [`docs/mail-cr-apply-runbook.md`](docs/mail-cr-apply-runbook.md).
+
 ## Bootstrap (read first)
 
 This overlay's own CI runs on `tinyland-nix`, which for GFTB resolves ONLY
