@@ -47,8 +47,7 @@ assert_eq "$(field '.spec.dkimSelector' "${domain_file}")" "mail" "MailDomain sp
 assert_eq "$(field '.spec.enabled' "${domain_file}")" "true" "MailDomain spec.enabled"
 
 if [ "$(field '.spec.dkimSecretRef // ""' "${domain_file}")" != "" ]; then
-  assert_eq "$(field '.spec.dkimSecretRef.name' "${domain_file}")" "dkim-keys" "MailDomain spec.dkimSecretRef.name"
-  assert_eq "$(field '.spec.dkimSecretRef.key' "${domain_file}")" "latoolb.us.mail.key" "MailDomain spec.dkimSecretRef.key"
+  fail "MailDomain must not declare dkimSecretRef; DKIM key material and runtime references stay substrate/operator-owned"
 fi
 if [ "$(field '.spec.catchAll // ""' "${domain_file}")" != "" ]; then
   fail "MailDomain must not declare catchAll until an operator chooses the mailbox policy"
