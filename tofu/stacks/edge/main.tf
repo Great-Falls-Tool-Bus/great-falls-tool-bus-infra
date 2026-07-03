@@ -72,6 +72,24 @@ resource "cloudflare_zero_trust_access_application" "web_apex" {
   }]
 }
 
+# www gets its own Access application sharing the apex allowlist policy.
+# CF Pages serves www.greatfallstoolbus.org as its own custom domain (no
+# implicit www->apex redirect like GitHub Pages did), so without this the
+# www hostname would be an ungated public surface during the REV-2 gated
+# phase. Additive: leaves the apex application untouched.
+resource "cloudflare_zero_trust_access_application" "web_www" {
+  zone_id          = data.cloudflare_zone.web.zone_id
+  name             = "greatfallstoolbus.org www gate (REV-2)"
+  domain           = "www.${local.web_domain}"
+  type             = "self_hosted"
+  session_duration = "24h"
+
+  policies = [{
+    id         = cloudflare_zero_trust_access_policy.web_apex_allow.id
+    precedence = 1
+  }]
+}
+
 # Reusable Access policies are account-level API objects; the account id
 # is read from the zone lookup, never committed. The token's Access
 # permission is granted on the account resource but the policy gates only
