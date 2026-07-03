@@ -23,6 +23,23 @@ variable "access_allowed_emails" {
   default     = ["jess@sulliwood.org"]
 }
 
+variable "pages_host" {
+  description = <<-EOT
+    Host the greatfallstoolbus.org apex + www CNAMEs point at (both
+    CF-proxied; the apex is CF-flattened). Default is the CURRENT GitHub
+    Pages project host, so merging this variable is inert — no plan
+    diff. The CF Pages cutover value (ADR 0003, site repo
+    docs/decisions/0003, operator-approved 2026-07-03) is
+    greatfallstoolbus-org.pages.dev. Flip it by setting
+    TF_VAR_pages_host at apply time or via a one-line tfvars change,
+    ONLY AFTER the CF Pages project exists AND the greatfallstoolbus.org
+    custom domain is attached to it — sequencing:
+    docs/runbooks/edge-token-and-zones.md step 5.
+  EOT
+  type        = string
+  default     = "great-falls-tool-bus.github.io"
+}
+
 variable "alias_redirect_target" {
   description = <<-EOT
     301 target for latoolb.us + www.latoolb.us. Defaults to the raw

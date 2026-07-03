@@ -5,14 +5,15 @@
 # account id the Access policy needs is read off the zone lookup.
 #
 # Record surface (site repo tofu/dns-intent reconciled to TIN-2378):
-#   greatfallstoolbus.org  apex CNAME (CF-flattened) + www -> GH Pages, proxied
+#   greatfallstoolbus.org  apex CNAME (CF-flattened) + www -> var.pages_host,
+#                          proxied (GH Pages today; CF Pages after the
+#                          ADR 0003 cutover flip — see variables.tf)
 #   latoolb.us             root+www 301 redirect ruleset (variable target)
 # NO mail DNS records here — TIN-2379 owns those (MX/SPF/DKIM/DMARC).
 
 locals {
   web_domain   = "greatfallstoolbus.org"
   alias_domain = "latoolb.us"
-  pages_host   = "great-falls-tool-bus.github.io"
 }
 
 data "cloudflare_zone" "web" {
@@ -39,7 +40,7 @@ resource "cloudflare_dns_record" "web_apex" {
   zone_id = data.cloudflare_zone.web.zone_id
   name    = local.web_domain
   type    = "CNAME"
-  content = local.pages_host
+  content = var.pages_host
   proxied = true
   ttl     = 1
 }
@@ -48,7 +49,7 @@ resource "cloudflare_dns_record" "web_www" {
   zone_id = data.cloudflare_zone.web.zone_id
   name    = "www.${local.web_domain}"
   type    = "CNAME"
-  content = local.pages_host
+  content = var.pages_host
   proxied = true
   ttl     = 1
 }
