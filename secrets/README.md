@@ -6,8 +6,8 @@ recipient (TIN-2360 row d; private half = operator keys.txt custody). This
 lane supersedes the prepared-but-unused blahaj
 `tenants/great-falls-tool-bus/secrets/` lane for overlay-consumed secrets.
 Transport-consumed DKIM private keys are the explicit carve-out: they live in
-the Blahaj substrate custody lane and are referenced here only by public
-Secret name/key.
+the Blahaj substrate custody lane and are recorded here only by public Secret
+name/key.
 
 The public site repo's `secrets.contract.yaml` remains the names-only
 public contract; this file is the private-side inventory of what actually
@@ -20,7 +20,7 @@ README — ever.
 | `cloudflare-api-token-gftb-pages` | CF API token, ACCOUNT-scoped to the house account with EXACTLY one permission: Account: Cloudflare Pages Edit (ADR 0003 doctrine extension, approved 2026-07-03; mint/rotation: `docs/runbooks/edge-token-and-zones.md` step 2b). NO zone permissions — DNS/redirect/Access stay behind `cloudflare-api-token-gftb-zones`. Same value as the site repo secret `CLOUDFLARE_API_TOKEN_GFTB_PAGES` | CF Pages project create / custom-domain attach / wrangler deploys (site repo `Great-Falls-Tool-Bus/greatfallstoolbus.org`) |
 | `cf-account-id` | House Cloudflare account id | `TF_VAR_cloudflare_account_id`; site repo secret `CLOUDFLARE_ACCOUNT_ID` (wrangler) |
 | `dreamhost-api-key` | Registrar/DNS capture (`domain-list_domains`, `dns-list_records`); optionally `dns-add_record`/`dns-remove_record` for the DreamHost-authority records (row g REVISED) — the API has no registration-NS mutation | `docs/edge-apply-runbook.md` steps 0/1/5 |
-| `latoolbus-dkim-private-key` | DKIM signing key for latoolb.us. **Carve-out:** custody is Blahaj substrate-side; this overlay references only `dkim-keys` / `latoolb.us.mail.key` and publishes the public TXT half through the edge stack. | mail substrate + GFTB edge DNS (TIN-2379); not stored in this repo |
+| `latoolbus-dkim-private-key` | DKIM signing key for latoolb.us. **Carve-out:** custody is Blahaj substrate-side; this overlay records only `dkim-keys` / `latoolb.us.mail.key` and publishes the public TXT half through the edge stack. | mail substrate + GFTB edge DNS (TIN-2379); not stored in this repo |
 
 Usage shape (operator machine, key in age custody):
 
