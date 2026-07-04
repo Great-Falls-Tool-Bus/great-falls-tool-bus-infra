@@ -5,8 +5,8 @@ Tracking: TIN-2380. Contract: blahaj ADR 010 / `docs/contracts/tenant-list-engin
 This runbook brings up the first-of-kind GFTB mailing-list engine
 (GNU Mailman 3 core + Postorius + HyperKitty) for `keyholders@latoolb.us` in
 `latoolb-us-production`, and proves it end to end. `keyholders@latoolb.us` is
-the private access-gating role list. It is not the future public discussion
-list; that later surface is expected to be `discuss@latoolb.us` or equivalent.
+the private access-gating role list. It is not the public discussion list;
+that separate surface is `discuss@latoolb.us`.
 This runbook does **not** mint DNS records, DKIM keys, or the substrate postfix
 transport/`extraDomains` entries.
 
@@ -14,10 +14,12 @@ transport/`extraDomains` entries.
 > Bound on `local-path-retain`, and `mailman-postgres`, `mailman-core`, and
 > `mailman-web` are Ready. `keyholders@latoolb.us` exists in Mailman with
 > private archive policy, moderated subscription, accepted non-member posts, and
-> no public advertisement. No members/owners have been added yet. The transport
-> cutover remains gated; the substrate transport lines are staged but commented
-> out, so `keyholders@` still resolves to the plain mailbox until the operator
-> declares cutover.
+> no public advertisement. Jess is the first owner/member. The keyholders
+> recipient-scoped substrate transport is active: inbound mail reaches Mailman
+> over LMTP, then fans out through authenticated `lists-bounces@latoolb.us`
+> submission. Remaining proof is the strict artifact set: received headers with
+> `DKIM-Signature: d=latoolb.us` / auth pass, plus private/member-only archive
+> evidence or explicit archive-off evidence.
 
 ## Readiness status (checked 2026-07-04, session 1f91b703)
 
@@ -27,12 +29,10 @@ check.
 
 1. **Mail substrate certified (SPF+DKIM both directions). CLEARED.** Done
    2026-07-04; `keyholders@latoolb.us` is live.
-2. **Substrate transport for list addresses. STAGED, NOT ACTIVE.** Blahaj PR
-   #875 landed recipient-scoped transport lines for the `keyholders@` family,
-   but they are deliberately commented out. The cutover is a separate operator
-   act: uncomment the recipient-scoped lines, render/apply the substrate, then
-   retire the plain Dovecot mailbox. Do not use a domain-wide `latoolb.us`
-   route.
+2. **Substrate transport for keyholders list addresses. ACTIVE.** Blahaj PR
+   #894 activated the recipient-scoped `keyholders@` family and #901 corrected
+   the source comments to match the live state. Do not use a domain-wide
+   `latoolb.us` route.
 3. **Dovecot/controller bridge (blahaj #872 defect 3). PARTIALLY MITIGATED.**
    TIN-2379 proved bidirectional mail with SPF and DKIM pass after a reviewed
    mail-stack apply. Keep #872 open for durable controller/secret convergence;
@@ -54,9 +54,9 @@ check.
    `MAILMAN_HOSTNAME` as the internal core host while public identity belongs in
    `SERVE_FROM_DOMAIN`, and mailman-web serves HTTP on port 8000, not 8080.
 
-Distance to first test: add the first owner/subscriber addresses with consent,
-then perform the operator-approved transport cutover and round-trip smoke. The
-cutover is still held until list ownership/membership is configured.
+Distance to strict proof: capture the received-message headers from a
+post-cutover round trip and the private/member-only archive evidence. The
+transport cutover is already complete for the keyholders family.
 
 ## Keyholders list policy (operator-decided 2026-07-04)
 
@@ -75,9 +75,10 @@ Required list settings:
 - **Non-member posts:** accepted or moderated-through so first-contact access
   requests from strangers reach the keyholders. Rspamd and Mailman moderation
   are the spam/abuse controls.
-- **Future public list:** `discuss@latoolb.us` is the right place for open
-  subscription and public HyperKitty archives when that work is explicitly
-  started. Do not give `keyholders@` public-archive semantics.
+- **Public discussion list:** `discuss@latoolb.us` carries open subscription
+  and public HyperKitty archive semantics. Its source/transport reconciliation
+  is tracked separately on TIN-2498. Do not give `keyholders@` public-archive
+  semantics.
 
 ## Component pins (TIN-2380)
 
@@ -153,10 +154,11 @@ and replace the tags with immutable `@sha256:` digests in the Deployments.
    or moderate non-member posts so access requests reach keyholders.
 5. Add the first owner/subscriber addresses only after consent; do not subscribe
    people just because the list exists.
-6. Smoke list configuration without transport cutover where possible.
-7. Only after explicit operator go: uncomment the staged recipient-scoped
-   substrate transport lines for the `keyholders@` family, render/apply the
-   substrate, and retire the plain mailbox.
+6. Smoke list configuration and privacy semantics.
+7. Confirm the recipient-scoped substrate transport remains active for the
+   `keyholders@` family. The transport cutover happened on 2026-07-04; future
+   edits should preserve the recipient-scoped route and avoid domain-wide
+   `latoolb.us` routing.
 
 ## Round-trip smoke (proof)
 
@@ -207,19 +209,22 @@ proof. Each step is tagged with who executes it.
 5. **[agent]** `just list-stack-validate` (already passing) then
    `just list-stack-render` to confirm the kustomize build is still clean
    after any manifest changes.
-6. **[operator]** Add first owner/subscriber addresses with consent.
-7. **[operator]** Explicitly approve the transport cutover. Until then,
-    `keyholders@` remains the plain mailbox and no list-family LMTP route is
-    active.
-8. **[operator/tester]** Send a message to `keyholders@latoolb.us` from one
-    of the subscribed external addresses (round-trip smoke, see below).
-9. **[agent]** Collect the smoke evidence: `mailman-core` logs showing the
-    LMTP delivery, the fanned-out message headers (`DKIM-Signature:
-    d=latoolb.us`), and the private/member-visible HyperKitty archive entry at
-    `https://lists.latoolb.us/archives/list/keyholders@latoolb.us/`.
+6. **[done 2026-07-04]** Added Jess as first owner/member.
+7. **[done 2026-07-04]** Activated the recipient-scoped substrate transport for
+    the `keyholders@` family; the plain mailbox path is retired for that
+    address family.
+8. **[done 2026-07-04]** Sent a post-cutover message through Mailman and
+    observed fan-out through authenticated `lists-bounces@latoolb.us`
+    submission accepted by Gmail.
+9. **[agent/tester]** Collect the durable strict-proof artifact set: received
+    message headers (`DKIM-Signature: d=latoolb.us` and provider auth pass) and
+    the private/member-visible HyperKitty archive entry at
+    `https://lists.latoolb.us/archives/list/keyholders@latoolb.us/`, or a
+    recorded archive-off/member-only proof.
 
-The transport cutover is the point of no return for the current plain mailbox;
-do not bundle it with storage or readiness fixes.
+The transport cutover was the point of no return for the current plain mailbox
+and is now complete for the keyholders family. Do not undo it while working on
+storage, image pins, discuss@, or readiness documentation.
 
 ## Post-apply read-only checks
 
