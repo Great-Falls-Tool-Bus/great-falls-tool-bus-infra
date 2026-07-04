@@ -178,23 +178,21 @@ resource "cloudflare_dns_record" "alias_mx" {
   ttl      = 1
 }
 
-# SPF mirrors the sibling edge-dns stack's "v=spf1 mx ~all" (the mx
-# mechanism resolves to var.mail_mx_target above, so it authorizes the
-# same relay without pinning an IP literal here). The blahaj substrate's
-# own per-tenant dhall fragment for latoolb.us
-# (blahaj-infra-boundary dhall/fragments/latoolb-us-domain.dhall)
-# instead pins the literal BuyVM relay IP: "v=spf1 ip4:45.61.188.177 mx
-# ~all" (constants.dhall mailRelay.publicIp). The two are not identical;
-# noting the ambiguity per task instruction rather than silently picking
-# one — reconcile with the edge-dns stack and the mail-crs apply before
-# this is ever enabled with mail_mx_target left at the blahaj relay.
+# SPF ambiguity RESOLVED by live evidence (2026-07-04 port25 round-trip,
+# session 1f91b703): outbound egresses directly from honey (Source IP
+# 71.168.64.84, HELO mail.tinyland.dev), NOT via the BuyVM relay — so
+# "v=spf1 mx ~all" softfailed (mx only covers relay.tinyland.dev =
+# 45.61.188.177). The working reference is tinyland.dev's own SPF, which
+# authorizes BOTH the relay and honey's egress:
+#   "v=spf1 ip4:45.61.188.177 ip4:71.168.64.84 mx ~all"
+# Mirrored verbatim here. DKIM already passes (selector mail).
 resource "cloudflare_dns_record" "alias_spf" {
   count = var.mail_dns_enabled ? 1 : 0
 
   zone_id = data.cloudflare_zone.alias.zone_id
   name    = local.alias_domain
   type    = "TXT"
-  content = "\"v=spf1 mx ~all\"" # starting SPF; tighten only after quiet DMARC
+  content = "\"v=spf1 ip4:45.61.188.177 ip4:71.168.64.84 mx ~all\"" # tighten ~all only after quiet DMARC
   ttl     = 1
 }
 
