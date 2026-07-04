@@ -100,10 +100,14 @@ fi
 # --- Storage class must be explicit -----------------------------------------
 # Honey has no default StorageClass. A missing storageClassName passed offline
 # validation once but left all Mailman pods Pending after apply.
-for pvc in mailman-postgres-data mailman-core-data mailman-web-data; do
-  sc="$(yq -r "select(.metadata.name == \"${pvc}\") | .spec.storageClassName // \"\"" "${pvcs_file}")"
-  assert_eq "${sc}" "local-path-retain" "${pvc} storageClassName"
-done
+# Multi-doc-safe check: the earlier `yq select(...)` form only read the first
+# YAML document under some yq builds, so PVCs 2 and 3 falsely validated as
+# empty. Assert by count instead: all three PVCs must exist and each must pin
+# local-path-retain.
+pvc_count="$(grep -cE '^  name: mailman-(postgres|core|web)-data$' "${pvcs_file}")"
+sc_count="$(grep -cE '^  storageClassName: local-path-retain$' "${pvcs_file}")"
+assert_eq "${pvc_count}" "3" "mailman PVC count"
+assert_eq "${sc_count}" "3" "mailman PVC storageClassName local-path-retain pins"
 
 # --- Core first-start memory floor ------------------------------------------
 # Mailman core OOMKilled under a 768Mi cap before opening LMTP/REST on the
