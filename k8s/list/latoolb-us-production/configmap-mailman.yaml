@@ -18,10 +18,16 @@ data:
   SERVE_FROM_DOMAIN: "lists.latoolb.us"
   MAILMAN_ADMIN_USER: "jess"
   MAILMAN_ADMIN_EMAIL: "keyholders@latoolb.us"
-  # Core <-> web REST wiring (intra-namespace ClusterIP DNS).
+  # Core <-> web REST wiring. Core binds REST to the pod IP (not loopback), so
+  # even with core+web co-located (TIN-2493) the web tier reaches REST through
+  # the mailman-core Service DNS name, not 127.0.0.1.
   MAILMAN_REST_URL: "http://mailman-core:8001"
   MAILMAN_REST_USER: "restadmin"
-  HYPERKITTY_URL: "http://mailman-web:8080/hyperkitty"
+  # Archive POST target. Co-located (TIN-2493): core POSTs to the web tier in
+  # the same pod over loopback, so HyperKitty sees source 127.0.0.1 and the
+  # MAILMAN_ARCHIVER_FROM trust matches. uwsgi binds 0.0.0.0:8000, so target the
+  # container port 8000 directly (not the Service's external 8080).
+  HYPERKITTY_URL: "http://127.0.0.1:8000/hyperkitty"
   # Outgoing submission endpoint — contract capability #1. STARTTLS + SASL on
   # 587; the SMTP username/password come from the lists-bounces-smtp Secret.
   SMTP_HOST: "postfix.tinyland-dev-production.svc.cluster.local"

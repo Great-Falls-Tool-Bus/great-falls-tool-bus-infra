@@ -116,13 +116,50 @@ assert_eq "${sc_count}" "3" "mailman PVC storageClassName local-path-retain pins
 core_memory_limit="$(yq -r 'select(.metadata.name == "mailman-core") | .spec.template.spec.containers[] | select(.name == "mailman-core") | .resources.limits.memory' "${dir}/deployment-mailman-core.yaml")"
 assert_eq "${core_memory_limit}" "2Gi" "mailman-core memory limit"
 
-# --- Web HTTP socket ---------------------------------------------------------
+# --- Web tier co-located with core (TIN-2493) --------------------------------
+# The HyperKitty archiver trusts only the source IP in MAILMAN_ARCHIVER_FROM,
+# which the web tier's settings.py derives from MAILMAN_HOST_IP. In the earlier
+# two-Deployment shape the archive POST arrived from the dynamic core POD IP and
+# HyperKitty answered 403. The fix co-locates mailman-web as a second container
+# in the mailman-core pod so the POST travels over loopback (127.0.0.1:8000) and
+# the trusted source matches. Assert that co-located shape holds.
+core_deploy="${dir}/deployment-mailman-core.yaml"
+
+# The standalone web Deployment must be gone (folded into the core pod).
+if [ -f "${dir}/deployment-mailman-web.yaml" ]; then
+  fail "deployment-mailman-web.yaml must be removed; mailman-web is co-located inside deployment-mailman-core.yaml (TIN-2493)"
+fi
+
 # docker-mailman mailman-web:0.5 listens for HTTP on uwsgi.ini's http-socket
-# 8000. Port 8080 is not HTTP and returns EOF to probes.
-web_http_port="$(yq -r 'select(.metadata.name == "mailman-web") | .spec.template.spec.containers[] | select(.name == "mailman-web") | .ports[] | select(.name == "http") | .containerPort' "${dir}/deployment-mailman-web.yaml")"
-web_np_port="$(yq -r 'select(.metadata.name == "mailman-web") | .spec.ingress[].ports[] | select(.protocol == "TCP") | .port' "${dir}/networkpolicy.yaml")"
-assert_eq "${web_http_port}" "8000" "mailman-web HTTP container port"
-assert_eq "${web_np_port}" "8000" "mailman-web NetworkPolicy HTTP port"
+# 8000. Port 8080 is not HTTP and returns EOF to probes. The web container now
+# lives inside the mailman-core Deployment.
+web_http_port="$(yq -r 'select(.metadata.name == "mailman-core") | .spec.template.spec.containers[] | select(.name == "mailman-web") | .ports[] | select(.name == "http") | .containerPort' "${core_deploy}")"
+assert_eq "${web_http_port}" "8000" "co-located mailman-web HTTP container port (inside mailman-core Deployment)"
+
+# MAILMAN_HOST_IP on the web container drives MAILMAN_ARCHIVER_FROM; it must be
+# 127.0.0.1 so the same-pod loopback archive POST is trusted.
+web_host_ip="$(yq -r 'select(.metadata.name == "mailman-core") | .spec.template.spec.containers[] | select(.name == "mailman-web") | .env[] | select(.name == "MAILMAN_HOST_IP") | .value' "${core_deploy}")"
+assert_eq "${web_host_ip}" "127.0.0.1" "co-located mailman-web MAILMAN_HOST_IP (drives MAILMAN_ARCHIVER_FROM loopback trust)"
+
+# Core POSTs the archive over loopback to the same-pod web tier, not the Service.
+hyperkitty_url="$(yq -r 'select(.metadata.name == "mailman-env") | .data.HYPERKITTY_URL' "${cfg_file}")"
+assert_eq "${hyperkitty_url}" "http://127.0.0.1:8000/hyperkitty" "HYPERKITTY_URL must POST over same-pod loopback (co-located archive trust)"
+
+# The web HTTP ingress (8000) is folded into the mailman-core NetworkPolicy; the
+# standalone mailman-web policy would select no pods after co-location and must
+# be gone (a policy selecting nothing is a silent no-op footgun).
+if yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "mailman-web") | .metadata.name' "${dir}/networkpolicy.yaml" | grep -q "mailman-web"; then
+  fail "the standalone mailman-web NetworkPolicy must be removed; it selects no pods after co-location (TIN-2493)"
+fi
+web_np_port="$(yq -r 'select(.metadata.name == "mailman-core") | .spec.ingress[].ports[] | select(.port == 8000) | .port' "${dir}/networkpolicy.yaml")"
+assert_eq "${web_np_port}" "8000" "web HTTP ingress (8000) folded into the mailman-core NetworkPolicy"
+
+# The mailman-web Service must still front the web container, now by selecting
+# the combined mailman-core pod on targetPort 8000 (external 8080 unchanged).
+web_svc_selector="$(yq -r '.spec.selector["app.kubernetes.io/name"]' "${dir}/service-mailman-web.yaml")"
+web_svc_target="$(yq -r '.spec.ports[] | select(.name == "http") | .targetPort' "${dir}/service-mailman-web.yaml")"
+assert_eq "${web_svc_selector}" "mailman-core" "mailman-web Service selector (co-located pod)"
+assert_eq "${web_svc_target}" "8000" "mailman-web Service targetPort (web container HTTP socket)"
 
 # --- Full render must succeed ----------------------------------------------
 kubectl kustomize "${dir}" >/dev/null
