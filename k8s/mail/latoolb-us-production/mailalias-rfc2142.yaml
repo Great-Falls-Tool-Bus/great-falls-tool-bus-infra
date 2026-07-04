@@ -1,0 +1,33 @@
+# RFC 2142 role addresses for latoolb.us. postmaster@ is the DMARC rua
+# target (edge stack _dmarc TXT); without it aggregate reports bounce.
+apiVersion: mail.tinyland.dev/v1alpha1
+kind: MailAlias
+metadata:
+  name: postmaster
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: gftb-mail-alias
+  annotations:
+    linear.app/issue: TIN-2379
+    blahaj.dev/substrate-contract: tenant-namespace-grant-v0
+    greatfallstoolbus.org/intent-source: tofu/mail-intent/intent.yaml
+spec:
+  alias: postmaster@latoolb.us
+  destinations:
+    - keyholders@latoolb.us
+---
+apiVersion: mail.tinyland.dev/v1alpha1
+kind: MailAlias
+metadata:
+  name: abuse
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: gftb-mail-alias
+  annotations:
+    linear.app/issue: TIN-2379
+    blahaj.dev/substrate-contract: tenant-namespace-grant-v0
+    greatfallstoolbus.org/intent-source: tofu/mail-intent/intent.yaml
+spec:
+  alias: abuse@latoolb.us
+  destinations:
+    - keyholders@latoolb.us
