@@ -76,6 +76,21 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
+    # Core -> Web (HyperKitty archive API). The archive runner POSTs each list
+    # message to the mailman-web Service on 8080, which DNATs to the pod's
+    # targetPort http = containerPort 8000. Canal matches the service port here,
+    # so 8080 is the one that gates the POST; 8000 kept for post-DNAT-matching
+    # CNIs. Without this the archive step times out (~139s) and stalls the
+    # pipeline so messages are accepted but never fanned out.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mailman-web
+      ports:
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 8080
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -93,6 +108,10 @@ spec:
     # HTTP 8000 from the house tunnel ingress. PLACEHOLDER selector — tighten
     # to the actual cloudflared/ingress namespace when the archive route is
     # designed (follow-up; nothing exposed before round-trip proof).
+    # HTTP 8000 from any namespace covers the mailman-core archive POST too:
+    # core -> mailman-web Service:8080 DNATs to the pod's targetPort 8000, so
+    # ingress arrives on 8000 and this existing rule admits it. No separate
+    # 8080 ingress rule is needed (and the pod does not listen on 8080).
     - from:
         - namespaceSelector: {}
       ports:
