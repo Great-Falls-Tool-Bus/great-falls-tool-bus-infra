@@ -40,11 +40,25 @@ spec:
       ports:
         - protocol: TCP
           port: 8024
-    # Web -> core REST 8001.
+    # Web UI (Postorius/HyperKitty) HTTP 8000. Folded in from the retired
+    # standalone mailman-web policy (TIN-2493): the web tier is now a container
+    # in THIS pod, and the house tunnel ingress reaches it on 8000 (the
+    # mailman-web Service DNATs its external 8080 -> targetPort 8000).
+    # PLACEHOLDER selector — tighten to the cloudflared/ingress namespace when
+    # the archive route is designed; nothing is exposed before round-trip proof.
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8000
+    # Intra-pod REST (TIN-2493). The co-located web tier reaches core REST via
+    # the mailman-core Service because core binds REST to the pod IP, not
+    # loopback, so this is not a pure-loopback call: the Service hairpins back to
+    # this same pod and the source is this pod. Admit 8001 from self.
     - from:
         - podSelector:
             matchLabels:
-              app.kubernetes.io/name: mailman-web
+              app.kubernetes.io/name: mailman-core
       ports:
         - protocol: TCP
           port: 8001
@@ -76,55 +90,12 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
-    # Core -> Web (HyperKitty archive API). The archive runner POSTs each list
-    # message to the mailman-web Service on 8080, which DNATs to the pod's
-    # targetPort http = containerPort 8000. Canal matches the service port here,
-    # so 8080 is the one that gates the POST; 8000 kept for post-DNAT-matching
-    # CNIs. Without this the archive step times out (~139s) and stalls the
-    # pipeline so messages are accepted but never fanned out.
-    - to:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: mailman-web
-      ports:
-        - protocol: TCP
-          port: 8000
-        - protocol: TCP
-          port: 8080
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: mailman-web
-  namespace: latoolb-us-production
-  labels:
-    app.kubernetes.io/name: mailman-web
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: mailman-web
-  policyTypes: [Ingress, Egress]
-  ingress:
-    # HTTP 8000 from the house tunnel ingress. PLACEHOLDER selector — tighten
-    # to the actual cloudflared/ingress namespace when the archive route is
-    # designed (follow-up; nothing exposed before round-trip proof).
-    # HTTP 8000 from any namespace covers the mailman-core archive POST too:
-    # core -> mailman-web Service:8080 DNATs to the pod's targetPort 8000, so
-    # ingress arrives on 8000 and this existing rule admits it. No separate
-    # 8080 ingress rule is needed (and the pod does not listen on 8080).
-    - from:
-        - namespaceSelector: {}
-      ports:
-        - protocol: TCP
-          port: 8000
-  egress:
-    - to: [] # DNS
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
-    # Web -> core REST 8001.
+    # Intra-pod REST egress (TIN-2493). The co-located web tier calls core REST
+    # through the mailman-core Service, which hairpins to this same pod. Admit
+    # 8001 to self. The HyperKitty archive POST travels the OTHER way over
+    # loopback (HYPERKITTY_URL = http://127.0.0.1:8000/hyperkitty), which
+    # bypasses NetworkPolicy entirely, so the old Core -> Web 8080/8000 egress
+    # rule is no longer needed and has been removed.
     - to:
         - podSelector:
             matchLabels:
@@ -132,14 +103,12 @@ spec:
       ports:
         - protocol: TCP
           port: 8001
-    # Web -> Postgres.
-    - to:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: mailman-postgres
-      ports:
-        - protocol: TCP
-          port: 5432
+# The standalone mailman-web NetworkPolicy is gone (TIN-2493): the web tier is
+# now a container in the mailman-core pod, so a policy selecting
+# app.kubernetes.io/name=mailman-web would match no pods and silently do
+# nothing. Its two needs are folded into the mailman-core policy above: HTTP
+# 8000 ingress (tunnel/UI) and Postgres 5432 egress (already covered by core's
+# Postgres egress rule, same pod). DNS is covered by core's DNS egress.
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -154,13 +123,13 @@ spec:
       app.kubernetes.io/name: mailman-postgres
   policyTypes: [Ingress, Egress]
   ingress:
+    # Both DB clients (core + the co-located web tier) live in the mailman-core
+    # pod now (TIN-2493), so a single mailman-core podSelector covers them; the
+    # former separate mailman-web selector matched no pods after co-location.
     - from:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: mailman-core
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: mailman-web
       ports:
         - protocol: TCP
           port: 5432

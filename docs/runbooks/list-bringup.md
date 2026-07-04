@@ -10,6 +10,15 @@ that separate surface is `discuss@latoolb.us`.
 This runbook does **not** mint DNS records, DKIM keys, or the substrate postfix
 transport/`extraDomains` entries.
 
+> **Pod layout note (2026-07-04, TIN-2493):** `mailman-core` and `mailman-web`
+> are **co-located in one pod** — `mailman-web` is a second container in the
+> `mailman-core` Deployment. This lets the HyperKitty archive POST travel over
+> loopback (`http://127.0.0.1:8000/hyperkitty`) so its source IP matches
+> `MAILMAN_ARCHIVER_FROM` (`MAILMAN_HOST_IP=127.0.0.1`), which the earlier
+> two-Deployment shape could not satisfy (the POST arrived from the dynamic core
+> pod IP and HyperKitty answered 403). The `mailman-web` Service still fronts the
+> web container, now selecting the `mailman-core` pod.
+
 > **Current state (2026-07-04):** stack objects are applied, all three PVCs are
 > Bound on `local-path-retain`, and `mailman-postgres`, `mailman-core`, and
 > `mailman-web` are Ready. `keyholders@latoolb.us` exists in Mailman with
@@ -147,8 +156,10 @@ and replace the tags with immutable `@sha256:` digests in the Deployments.
 1. `just list-stack-validate` (offline invariants + `kubectl kustomize`).
 2. If PVCs are not yet bound, apply the storageClassName fix and confirm the
    three PVCs bind.
-3. Wait for `mailman-postgres`, then `mailman-core`, then `mailman-web` to be
-   Ready (order enforced by readiness, not hard deps).
+3. Wait for `mailman-postgres`, then `mailman-core` to be Ready (order enforced
+   by readiness, not hard deps). Since TIN-2493 the `mailman-core` pod also runs
+   the `mailman-web` container, so its readiness now covers both the list engine
+   and the archive/admin web tier.
 4. Create the `keyholders@latoolb.us` list; set archive policy to
    **private/members-only or off**; set subscription to owner-approved; accept
    or moderate non-member posts so access requests reach keyholders.

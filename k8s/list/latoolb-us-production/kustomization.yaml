@@ -18,9 +18,11 @@ resources:
   - configmap-mailman.yaml
   - deployment-postgres.yaml
   - service-postgres.yaml
+  # mailman-core + mailman-web are co-located in one pod (TIN-2493), so the
+  # web tier lives inside deployment-mailman-core.yaml. service-mailman-web
+  # still fronts the web container; it now selects the mailman-core pod.
   - deployment-mailman-core.yaml
   - service-mailman-core.yaml
-  - deployment-mailman-web.yaml
   - service-mailman-web.yaml
   - networkpolicy.yaml
 

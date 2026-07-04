@@ -313,29 +313,40 @@ membership owner-curated so the keyholder set is not open to self-subscription.
 
 ### Pod layout
 
-| Pod (Deployment) | Role | Data |
-| --- | --- | --- |
-| `mailman-core` | Mailman 3 core: LMTP listener `:8024`, REST `:8001` (pod IP), outgoing runner (587 STARTTLS + SASL) | `mailman-core-data` PVC at `/opt/mailman` (message store + queue) |
-| `mailman-web` | Postorius (list admin UI) + HyperKitty (archive), uwsgi HTTP on container port `8000` (Service `:8080`) | `mailman-web-data` PVC at `/opt/mailman-web-data` (search index, static, uploads) |
-| `mailman-postgres` | PostgreSQL 16.4 backing both `mailman` (core) and `mailmanweb` (web) databases | `mailman-postgres-data` PVC (authoritative list state) |
+> **Note (2026-07-04, TIN-2493):** `mailman-core` and `mailman-web` are
+> **co-located in one pod** (two containers in the `mailman-core` Deployment) so
+> the HyperKitty archive POST travels over loopback and its source IP matches
+> the archiver trust. See section 7 for the root cause this replaced.
 
-All three PVCs use `storageClassName: local-path-retain`, so the volumes survive
-a PVC reclaim. The Postgres PVC is the one that holds all list configuration and
-membership; protect it.
+| Pod (Deployment) | Containers | Role | Data |
+| --- | --- | --- | --- |
+| `mailman-core` | `mailman-core` | Mailman 3 core: LMTP listener `:8024`, REST `:8001` (pod IP), outgoing runner (587 STARTTLS + SASL) | `mailman-core-data` PVC at `/opt/mailman` (message store + queue) |
+| `mailman-core` | `mailman-web` | Postorius (list admin UI) + HyperKitty (archive), uwsgi HTTP on container port `8000` (Service `mailman-web:8080`) | `mailman-web-data` PVC at `/opt/mailman-web-data` (search index, static, uploads) |
+| `mailman-postgres` | `mailman-postgres` | PostgreSQL 16.4 backing both `mailman` (core) and `mailmanweb` (web) databases | `mailman-postgres-data` PVC (authoritative list state) |
+
+The `mailman-web` Service still exists and now selects the `mailman-core` pod
+(targetPort `8000`, external `:8080` unchanged). All three PVCs use
+`storageClassName: local-path-retain`, so the volumes survive a PVC reclaim. The
+Postgres PVC is the one that holds all list configuration and membership; protect
+it.
 
 ### Safe restart order
 
-Deployments use `Recreate` strategy. When a full restart is needed, bring pods
-back in dependency order:
+The Deployments use `Recreate` strategy. After co-location (TIN-2493) the
+restart set is two Deployments, not three:
 
 1. `mailman-postgres` first; wait for it to be Ready (`pg_isready`).
-2. `mailman-core` next; it needs the database and hosts REST/LMTP.
-3. `mailman-web` last; it depends on core REST and the web database.
+2. `mailman-core` next; it now runs both the core and web containers, so one
+   `rollout restart` cycles the whole list engine plus the archive/admin UI. It
+   needs the database and hosts REST/LMTP; the co-located web tier reaches core
+   REST over the `mailman-core` Service and archives over loopback once core is
+   up.
 
-Restart a single Deployment with
+Restart a Deployment with
 `kubectl --context honey -n latoolb-us-production rollout restart deploy/<name>`
-and wait for Ready before moving to the next. A core restart briefly drops the
-LMTP listener, so substrate deliveries retry until it returns.
+and wait for Ready. A core restart briefly drops the LMTP listener (substrate
+deliveries retry until it returns) and the web UI at the same time, since they
+share the pod.
 
 ### Operator secrets (by name only)
 
@@ -369,12 +380,16 @@ controller does not yet converge it automatically.
 
 ### Known gaps
 
-- **TIN-2493, HyperKitty archiver 403 (High).** The archive POST from
-  `mailman-core` to `mailman-web` currently returns 403 because
-  `MAILMAN_ARCHIVER_FROM` trusts a fixed IP but the POST arrives from the core
-  **pod IP** (dynamic, `10.244.x`). Archives are therefore **not populating**
-  yet. Do not treat an empty archive as message loss; delivery and fan-out are
-  independent of archiving. Tracked as TIN-2493.
+- **TIN-2493, HyperKitty archiver 403 (High) — fix staged, operator-gated.**
+  In the original two-Deployment shape the archive POST from `mailman-core` to
+  `mailman-web` returned 403 because `MAILMAN_ARCHIVER_FROM` trusts a fixed IP
+  but the POST arrived from the core **pod IP** (dynamic, `10.244.x`). The fix
+  (this manifest revision, 2026-07-04) co-locates the web tier in the
+  `mailman-core` pod so the POST goes over loopback (`127.0.0.1:8000`) with
+  `MAILMAN_HOST_IP=127.0.0.1`, and it survives a core restart because the
+  loopback source is stable. Until the co-located manifests are applied,
+  archives do **not** populate; do not treat an empty archive as message loss,
+  since delivery and fan-out are independent of archiving.
 - **`lists.latoolb.us` has no DNS or tunnel.** The public archive/admin
   hostname is not published. There is no MX, no A/AAAA, and no Cloudflare tunnel
   route pointing at `mailman-web`.

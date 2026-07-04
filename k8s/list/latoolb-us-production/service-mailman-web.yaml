@@ -13,9 +13,14 @@ metadata:
     app.kubernetes.io/component: web
 spec:
   type: ClusterIP
+  # Co-located (TIN-2493): the web tier is a container in the mailman-core pod,
+  # so front it by selecting that pod. targetPort is the numeric 8000 (the web
+  # container's HTTP socket) rather than a named port, since the combined pod
+  # exposes several named ports across its two containers. External shape (8080)
+  # is unchanged.
   selector:
-    app.kubernetes.io/name: mailman-web
+    app.kubernetes.io/name: mailman-core
   ports:
     - name: http
       port: 8080
-      targetPort: http
+      targetPort: 8000
