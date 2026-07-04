@@ -1,7 +1,8 @@
 # Persistent volumes for the Mailman 3 stack. Sized for a tiny community org
-# (single small list); the operator confirms the namespace's default
-# StorageClass before apply (no storageClassName is pinned so the cluster
-# default is used).
+# (single small list). storageClassName pinned to local-path-retain: honey has
+# no default StorageClass, and list DB + archive + subscriber state must
+# survive a PVC reclaim (Retain), matching the house mail-data pattern
+# (tinyland-dev-production mail replicas use *-retain classes).
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -11,6 +12,7 @@ metadata:
     app.kubernetes.io/name: mailman-postgres
     app.kubernetes.io/component: database
 spec:
+  storageClassName: local-path-retain
   accessModes:
     - ReadWriteOnce
   resources:
@@ -26,6 +28,7 @@ metadata:
     app.kubernetes.io/name: mailman-core
     app.kubernetes.io/component: list-engine
 spec:
+  storageClassName: local-path-retain
   # Message store + queue (/opt/mailman) must survive restarts.
   accessModes:
     - ReadWriteOnce
@@ -42,6 +45,7 @@ metadata:
     app.kubernetes.io/name: mailman-web
     app.kubernetes.io/component: web
 spec:
+  storageClassName: local-path-retain
   # HyperKitty full-text search index + collected static + uploads.
   accessModes:
     - ReadWriteOnce
