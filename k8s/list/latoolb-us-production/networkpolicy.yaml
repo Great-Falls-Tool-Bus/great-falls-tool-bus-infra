@@ -28,9 +28,15 @@ spec:
   policyTypes: [Ingress, Egress]
   ingress:
     # Substrate postfix -> LMTP 8024 (host-networked: node CIDR source).
+    # 10.244.0.0/24 = blahaj postfix_host_network_node_cidrs on honey
+    # (tofu/config/mail-honey.tfvars.json). On this INGRESS leg the
+    # host-networked postfix's source is SNAT'd to the flannel node CIDR
+    # (10.244.0.0/24), which is why this differs from the egress leg's raw
+    # host IP. rke2-canal (Calico policy + flannel), not Cilium. Tightened
+    # from a 10.0.0.0/8 placeholder.
     - from:
         - ipBlock:
-            cidr: 10.0.0.0/8 # PLACEHOLDER — replace with mail-egress node CIDR
+            cidr: 10.244.0.0/24
       ports:
         - protocol: TCP
           port: 8024
@@ -50,10 +56,15 @@ spec:
         - protocol: TCP
           port: 53
     # Outgoing submission -> substrate postfix 587 (STARTTLS + SASL).
+    # postfix is HOST-NETWORKED (hostIP 192.168.70.10 on honey), so a
+    # podSelector/namespaceSelector can never match it. EGRESS targets the raw
+    # host LAN IP (destination is not SNAT'd), unlike the ingress leg above
+    # where the host->pod source appears as the flannel CIDR 10.244.0.0/24.
+    # /32 is the tightest form and matches the honey-pinned hostIP. Verified by
+    # a controlled reachability test 2026-07-04 (rke2-canal, not Cilium).
     - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: tinyland-dev-production
+        - ipBlock:
+            cidr: 192.168.70.10/32
       ports:
         - protocol: TCP
           port: 587

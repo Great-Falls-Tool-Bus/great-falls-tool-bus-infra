@@ -124,8 +124,11 @@ and replace the tags with immutable `@sha256:` digests in the Deployments.
 4. **Operator-owned Secrets.** Create these in `latoolb-us-production` (no
    values in git):
    - `mailman-db`: `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB=mailman`,
-     `DATABASE_URL_CORE` (`postgres://<user>:<pw>@mailman-postgres:5432/mailman`),
-     `DATABASE_URL_WEB` (`postgres://<user>:<pw>@mailman-postgres:5432/mailmanweb`).
+     `DATABASE_URL_CORE` (`postgresql://<user>:<pw>@mailman-postgres:5432/mailman`),
+     `DATABASE_URL_WEB` (`postgresql://<user>:<pw>@mailman-postgres:5432/mailmanweb`).
+     Use the `postgresql://` scheme, NOT `postgres://`: mailman-core runs
+     SQLAlchemy 1.4+, which dropped the `postgres://` dialect alias and fails
+     with `NoSuchModuleError: Can't load plugin: sqlalchemy.dialects:postgres`.
    - `mailman-app`: `DJANGO_SECRET_KEY`, `HYPERKITTY_API_KEY`,
      `MAILMAN_REST_PASSWORD`, `MAILMAN_ADMIN_PASSWORD`.
    - `lists-bounces-smtp`: key `username` set to `lists-bounces@latoolb.us`,

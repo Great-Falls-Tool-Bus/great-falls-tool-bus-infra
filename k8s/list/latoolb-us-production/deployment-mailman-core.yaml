@@ -32,39 +32,11 @@ spec:
         runAsNonRoot: false # docker-mailman entrypoint drops to mailman uid internally
         seccompProfile:
           type: RuntimeDefault
-      initContainers:
-        # Render the final [mta] block: copy the non-secret template, then
-        # append smtp_user/smtp_pass from the Secret so no credential is ever
-        # committed. Kept as the last section so the appended lines stay in it.
-        - name: render-mta-config
-          image: ghcr.io/maxking/mailman-core:0.5
-          command:
-            - /bin/sh
-            - -c
-            - |
-              set -eu
-              cp /tmpl/mailman-extra.cfg /rendered/mailman-extra.cfg
-              {
-                printf 'smtp_user: %s\n' "${SMTP_USER}"
-                printf 'smtp_pass: %s\n' "${SMTP_PASS}"
-              } >> /rendered/mailman-extra.cfg
-          env:
-            - name: SMTP_USER
-              valueFrom:
-                secretKeyRef:
-                  name: lists-bounces-smtp
-                  key: username
-            - name: SMTP_PASS
-              valueFrom:
-                secretKeyRef:
-                  name: lists-bounces-smtp
-                  key: password
-          volumeMounts:
-            - name: mta-template
-              mountPath: /tmpl
-              readOnly: true
-            - name: mta-rendered
-              mountPath: /rendered
+      # NOTE: the maxking/mailman-core:0.5 entrypoint GENERATES the [mta] block
+      # itself from SMTP_* env vars (see the container env below) and cats it
+      # into /etc/mailman.cfg. It does NOT read a MM_EXTRA_CONFIG file. An
+      # earlier initContainer that rendered /etc/mailman-extra.cfg was dead code
+      # (verified 2026-07-04) and has been removed in favour of the env vars.
       containers:
         - name: mailman-core
           image: ghcr.io/maxking/mailman-core:0.5
@@ -84,12 +56,32 @@ spec:
             # An explicit env entry takes precedence over the same envFrom key.
             - name: DATABASE_CLASS
               value: mailman.database.postgresql.PostgreSQLDatabase
-            # Include the rendered extra config (STARTTLS+SASL [mta] block).
-            # ASSUMPTION to verify against the pinned image: MM_EXTRA_CONFIG is
-            # the include hook. If the tag uses a different mechanism, mount the
-            # rendered file at that path instead — values are unchanged.
-            - name: MM_EXTRA_CONFIG
-              value: /etc/mailman-extra/mailman-extra.cfg
+            # Outgoing [mta] block: the entrypoint templates these into
+            # mailman.cfg. Submit to the substrate postfix over 587 STARTTLS +
+            # SASL as lists-bounces@ (the tenant's own submission identity).
+            # VERIFY_* off: the postfix cert is *.tinyland.dev and we connect by
+            # service DNS, so hostname/cert verification cannot match; the path
+            # is NetworkPolicy-scoped and TLS-encrypted regardless.
+            - name: SMTP_HOST
+              value: postfix.tinyland-dev-production.svc.cluster.local
+            - name: SMTP_PORT
+              value: "587"
+            - name: SMTP_SECURE_MODE
+              value: starttls
+            - name: SMTP_VERIFY_HOSTNAME
+              value: "False"
+            - name: SMTP_VERIFY_CERT
+              value: "False"
+            - name: SMTP_HOST_USER
+              valueFrom:
+                secretKeyRef:
+                  name: lists-bounces-smtp
+                  key: username
+            - name: SMTP_HOST_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: lists-bounces-smtp
+                  key: password
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -108,9 +100,6 @@ spec:
           volumeMounts:
             - name: core-data
               mountPath: /opt/mailman
-            - name: mta-rendered
-              mountPath: /etc/mailman-extra
-              readOnly: true
           resources:
             requests:
               cpu: 100m
@@ -132,8 +121,3 @@ spec:
         - name: core-data
           persistentVolumeClaim:
             claimName: mailman-core-data
-        - name: mta-template
-          configMap:
-            name: mailman-core-mta-template
-        - name: mta-rendered
-          emptyDir: {}
