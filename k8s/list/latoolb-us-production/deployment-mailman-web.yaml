@@ -1,0 +1,95 @@
+# Mailman 3 web UI: Postorius (list admin) + HyperKitty (public archive),
+# served by uwsgi. Talks to core over REST (8001) and to Postgres (mailmanweb
+# DB). HyperKitty receives archived messages from core via HYPERKITTY_URL +
+# HYPERKITTY_API_KEY.
+#
+# PIN INTENT (TIN-2380): Postorius 1.3.13 + HyperKitty 1.3.12, carried by the
+# maxking/docker-mailman `mailman-web:0.5` line. Confirm exact component
+# versions and replace the tag with an immutable @sha256 digest before apply.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mailman-web
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: mailman-web
+    app.kubernetes.io/component: web
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mailman-web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mailman-web
+        app.kubernetes.io/component: web
+    spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mailman-web
+          image: ghcr.io/maxking/mailman-web:0.5
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: mailman-env
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: mailman-db
+                  key: DATABASE_URL_WEB
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mailman-app
+                  key: DJANGO_SECRET_KEY
+            - name: HYPERKITTY_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mailman-app
+                  key: HYPERKITTY_API_KEY
+            - name: MAILMAN_REST_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mailman-app
+                  key: MAILMAN_REST_PASSWORD
+            - name: MAILMAN_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mailman-app
+                  key: MAILMAN_ADMIN_PASSWORD
+          volumeMounts:
+            - name: web-data
+              mountPath: /opt/mailman-web-data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              cpu: 750m
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: lists.latoolb.us
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 20
+      volumes:
+        - name: web-data
+          persistentVolumeClaim:
+            claimName: mailman-web-data

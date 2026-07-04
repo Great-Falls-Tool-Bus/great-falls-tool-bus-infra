@@ -1,0 +1,25 @@
+# THE service the tenant-list-engine SMTP relay contract names as the incoming
+# LMTP target (blahaj ADR 010 §Decision / contract Consumers table):
+#   mailman-core.latoolb-us-production.svc.cluster.local:8024
+# The substrate transport-map entry (a blahaj-side substrate PR — NOT in this
+# repo) routes the list domain here. Name and port 8024 are load-bearing and
+# must match the contract exactly. REST (8001) is intra-namespace only.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mailman-core
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: mailman-core
+    app.kubernetes.io/component: list-engine
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: mailman-core
+  ports:
+    - name: lmtp
+      port: 8024
+      targetPort: lmtp
+    - name: rest
+      port: 8001
+      targetPort: rest

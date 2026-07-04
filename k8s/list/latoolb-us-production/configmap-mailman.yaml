@@ -1,0 +1,63 @@
+# Non-secret configuration for the Mailman 3 stack. Secret material (DB
+# password, Django SECRET_KEY, HyperKitty API key, Mailman REST admin
+# password, and the lists-bounces SMTP password) lives ONLY in operator-owned
+# Secrets referenced by name from the Deployments — never in this repo
+# (blahaj contract: "No secret values in any repository").
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mailman-env
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: mailman
+    app.kubernetes.io/component: config
+data:
+  # Public identity of the list site.
+  MAILMAN_HOSTNAME: "lists.latoolb.us"
+  SERVE_FROM_DOMAIN: "lists.latoolb.us"
+  MAILMAN_ADMIN_USER: "jess"
+  MAILMAN_ADMIN_EMAIL: "keyholders@latoolb.us"
+  # Core <-> web REST wiring (intra-namespace ClusterIP DNS).
+  MAILMAN_REST_URL: "http://mailman-core:8001"
+  MAILMAN_REST_USER: "restadmin"
+  HYPERKITTY_URL: "http://mailman-web:8080/hyperkitty"
+  # Outgoing submission endpoint — contract capability #1. STARTTLS + SASL on
+  # 587; the SMTP username/password come from the lists-bounces-smtp Secret.
+  SMTP_HOST: "postfix.tinyland-dev-production.svc.cluster.local"
+  SMTP_PORT: "587"
+  MTA: "postfix"
+  # Django/uwsgi.
+  DATABASE_TYPE: "postgres"
+  DATABASE_CLASS: "django.db.backends.postgresql"
+---
+# Rendered into the final [mta] block of mailman-core's config by an
+# initContainer (see deployment-mailman-core.yaml). The @PLACEHOLDER@ auth
+# lines are appended from the Secret at runtime so no credential is ever
+# committed. This block encodes the contract exactly:
+#   - incoming: Mailman hosts the LMTP listener on 0.0.0.0:8024 (contract
+#     capability #4 target). 0.0.0.0 (not the 127.0.0.1 upstream default) so the
+#     mailman-core Service can reach it from substrate postfix.
+#   - outgoing: submit via 587 STARTTLS + SASL to the substrate submission
+#     endpoint (contract capability #1/#2). Port 25 CIDR-trust is TRANSITIONAL
+#     and deliberately NOT used.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mailman-core-mta-template
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: mailman-core
+    app.kubernetes.io/component: config
+data:
+  mailman-extra.cfg: |
+    [mta]
+    incoming: mailman.mta.postfix.LMTP
+    outgoing: mailman.mta.deliver.deliver
+    lmtp_host: 0.0.0.0
+    lmtp_port: 8024
+    smtp_host: postfix.tinyland-dev-production.svc.cluster.local
+    smtp_port: 587
+    smtp_secure_mode: starttls
+    # smtp_user / smtp_pass are appended here by the initContainer from the
+    # lists-bounces-smtp Secret. Keep this [mta] block LAST in the file so the
+    # appended lines stay inside the section.

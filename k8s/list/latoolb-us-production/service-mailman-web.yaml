@@ -1,0 +1,22 @@
+# Web UI service (Postorius + HyperKitty). ClusterIP only: public exposure of
+# the HyperKitty archive rides the house Cloudflare tunnel as a substrate
+# service with route intent declared GFTB-side (TIN-2380 Anubis note). That
+# ingress/tunnel route is a FOLLOW-UP and is intentionally NOT in this draft —
+# nothing form-shaped or publicly exposed ships before the list round-trip is
+# proven (TIN-2378 apex-gate constraint).
+apiVersion: v1
+kind: Service
+metadata:
+  name: mailman-web
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: mailman-web
+    app.kubernetes.io/component: web
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: mailman-web
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

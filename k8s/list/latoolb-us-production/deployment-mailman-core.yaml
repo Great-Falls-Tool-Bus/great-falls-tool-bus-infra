@@ -1,0 +1,132 @@
+# GNU Mailman 3 core (list engine). Hosts the LMTP listener the substrate
+# postfix delivers list mail to (contract capability #4, target
+# mailman-core.latoolb-us-production.svc.cluster.local:8024) and runs the
+# outgoing runner that submits via 587 STARTTLS + SASL (capabilities #1/#2).
+#
+# PIN INTENT (TIN-2380): GNU Mailman core 3.3.10. The maxking/docker-mailman
+# project ships rolling image tags, not per-Mailman-version tags; the `0.5`
+# line carries the 3.3.x series. Confirm the exact core version and replace the
+# tag with an immutable @sha256 digest before apply (see runbook).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mailman-core
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: mailman-core
+    app.kubernetes.io/component: list-engine
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mailman-core
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mailman-core
+        app.kubernetes.io/component: list-engine
+    spec:
+      securityContext:
+        runAsNonRoot: false # docker-mailman entrypoint drops to mailman uid internally
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # Render the final [mta] block: copy the non-secret template, then
+        # append smtp_user/smtp_pass from the Secret so no credential is ever
+        # committed. Kept as the last section so the appended lines stay in it.
+        - name: render-mta-config
+          image: ghcr.io/maxking/mailman-core:0.5
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              cp /tmpl/mailman-extra.cfg /rendered/mailman-extra.cfg
+              {
+                printf 'smtp_user: %s\n' "${SMTP_USER}"
+                printf 'smtp_pass: %s\n' "${SMTP_PASS}"
+              } >> /rendered/mailman-extra.cfg
+          env:
+            - name: SMTP_USER
+              valueFrom:
+                secretKeyRef:
+                  name: lists-bounces-smtp
+                  key: username
+            - name: SMTP_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: lists-bounces-smtp
+                  key: password
+          volumeMounts:
+            - name: mta-template
+              mountPath: /tmpl
+              readOnly: true
+            - name: mta-rendered
+              mountPath: /rendered
+      containers:
+        - name: mailman-core
+          image: ghcr.io/maxking/mailman-core:0.5
+          ports:
+            - name: lmtp
+              containerPort: 8024
+            - name: rest
+              containerPort: 8001
+          envFrom:
+            - configMapRef:
+                name: mailman-env
+          env:
+            # Include the rendered extra config (STARTTLS+SASL [mta] block).
+            # ASSUMPTION to verify against the pinned image: MM_EXTRA_CONFIG is
+            # the include hook. If the tag uses a different mechanism, mount the
+            # rendered file at that path instead — values are unchanged.
+            - name: MM_EXTRA_CONFIG
+              value: /etc/mailman-extra/mailman-extra.cfg
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: mailman-db
+                  key: DATABASE_URL_CORE
+            - name: HYPERKITTY_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mailman-app
+                  key: HYPERKITTY_API_KEY
+            - name: MAILMAN_REST_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mailman-app
+                  key: MAILMAN_REST_PASSWORD
+          volumeMounts:
+            - name: core-data
+              mountPath: /opt/mailman
+            - name: mta-rendered
+              mountPath: /etc/mailman-extra
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 768Mi
+          readinessProbe:
+            tcpSocket:
+              port: rest
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          livenessProbe:
+            tcpSocket:
+              port: lmtp
+            initialDelaySeconds: 40
+            periodSeconds: 20
+      volumes:
+        - name: core-data
+          persistentVolumeClaim:
+            claimName: mailman-core-data
+        - name: mta-template
+          configMap:
+            name: mailman-core-mta-template
+        - name: mta-rendered
+          emptyDir: {}
