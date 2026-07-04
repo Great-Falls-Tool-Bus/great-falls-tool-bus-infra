@@ -1,4 +1,4 @@
-# Mailman 3 web UI: Postorius (list admin) + HyperKitty (public archive),
+# Mailman 3 web UI: Postorius (list admin) + HyperKitty (private archive),
 # served by uwsgi. Talks to core over REST (8001) and to Postgres (mailmanweb
 # DB). HyperKitty receives archived messages from core via HYPERKITTY_URL +
 # HYPERKITTY_API_KEY.
@@ -35,11 +35,23 @@ spec:
           image: ghcr.io/maxking/mailman-web:0.5
           ports:
             - name: http
-              containerPort: 8080
+              # docker-mailman's uwsgi.ini exposes the HTTP socket on 8000;
+              # 8080 is not HTTP and returns EOF to HTTP probes.
+              containerPort: 8000
           envFrom:
             - configMapRef:
                 name: mailman-env
           env:
+            # settings.py resolves MAILMAN_HOSTNAME via gethostbyname() to build
+            # MAILMAN_ARCHIVER_FROM. MAILMAN_HOSTNAME is lists.latoolb.us (no DNS
+            # yet), so the lookup NXDOMAIN-crashed the web pod at import time.
+            # Pin MAILMAN_HOST_IP to the mailman-core Service ClusterIP to skip
+            # the lookup. NOTE: archive POSTs arrive from the core POD IP (10.244
+            # .x, dynamic), not this Service IP, so the archiver source-IP trust
+            # is a follow-up (co-locate core+web, or widen ARCHIVER_FROM). Does
+            # not affect the outbound smoke; the private archive is members-only.
+            - name: MAILMAN_HOST_IP
+              value: "10.245.131.24"
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:

@@ -12,8 +12,9 @@ metadata:
     app.kubernetes.io/name: mailman
     app.kubernetes.io/component: config
 data:
-  # Public identity of the list site.
-  MAILMAN_HOSTNAME: "lists.latoolb.us"
+  # Internal Mailman core host. docker-mailman's web settings resolve this
+  # during Django settings import; keep public identity on SERVE_FROM_DOMAIN.
+  MAILMAN_HOSTNAME: "mailman-core"
   SERVE_FROM_DOMAIN: "lists.latoolb.us"
   MAILMAN_ADMIN_USER: "jess"
   MAILMAN_ADMIN_EMAIL: "keyholders@latoolb.us"

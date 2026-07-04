@@ -10,6 +10,7 @@ dir="${1:?usage: validate-list-stack.sh <manifest-dir>}"
 account_file="${dir}/mailaccount-lists-bounces.yaml"
 core_svc_file="${dir}/service-mailman-core.yaml"
 cfg_file="${dir}/configmap-mailman.yaml"
+pvcs_file="${dir}/pvcs.yaml"
 kustomization_file="${dir}/kustomization.yaml"
 
 fail() {
@@ -37,6 +38,7 @@ command -v kubectl >/dev/null 2>&1 || fail "kubectl is required for kubectl kust
 require_file "${account_file}"
 require_file "${core_svc_file}"
 require_file "${cfg_file}"
+require_file "${pvcs_file}"
 require_file "${kustomization_file}"
 
 # --- Submission identity (contract capability #2) --------------------------
@@ -64,6 +66,13 @@ smtp_port="$(yq -r 'select(.metadata.name == "mailman-env") | .data.SMTP_PORT' "
 assert_eq "${smtp_host}" "postfix.tinyland-dev-production.svc.cluster.local" "outgoing SMTP host (substrate submission endpoint)"
 assert_eq "${smtp_port}" "587" "outgoing SMTP port (submission, not port-25 CIDR trust)"
 
+# docker-mailman uses MAILMAN_HOSTNAME as the internal core host during web
+# settings import. The public list identity belongs in SERVE_FROM_DOMAIN.
+mailman_hostname="$(yq -r 'select(.metadata.name == "mailman-env") | .data.MAILMAN_HOSTNAME' "${cfg_file}")"
+serve_from_domain="$(yq -r 'select(.metadata.name == "mailman-env") | .data.SERVE_FROM_DOMAIN' "${cfg_file}")"
+assert_eq "${mailman_hostname}" "mailman-core" "Mailman internal hostname"
+assert_eq "${serve_from_domain}" "lists.latoolb.us" "public list domain"
+
 # The [mta] template must require STARTTLS and must not weaken to port 25.
 mta_tmpl="$(yq -r 'select(.metadata.name == "mailman-core-mta-template") | .data["mailman-extra.cfg"]' "${cfg_file}")"
 echo "${mta_tmpl}" | grep -q "smtp_secure_mode: starttls" || fail "[mta] must set smtp_secure_mode: starttls"
@@ -87,6 +96,33 @@ fi
 if ! grep -REq "image:\s*\S+" "${dir}"; then
   fail "no container images found; expected mailman-core, mailman-web, postgres"
 fi
+
+# --- Storage class must be explicit -----------------------------------------
+# Honey has no default StorageClass. A missing storageClassName passed offline
+# validation once but left all Mailman pods Pending after apply.
+# Multi-doc-safe check: the earlier `yq select(...)` form only read the first
+# YAML document under some yq builds, so PVCs 2 and 3 falsely validated as
+# empty. Assert by count instead: all three PVCs must exist and each must pin
+# local-path-retain.
+pvc_count="$(grep -cE '^  name: mailman-(postgres|core|web)-data$' "${pvcs_file}")"
+sc_count="$(grep -cE '^  storageClassName: local-path-retain$' "${pvcs_file}")"
+assert_eq "${pvc_count}" "3" "mailman PVC count"
+assert_eq "${sc_count}" "3" "mailman PVC storageClassName local-path-retain pins"
+
+# --- Core first-start memory floor ------------------------------------------
+# Mailman core OOMKilled under a 768Mi cap before opening LMTP/REST on the
+# first live bring-up. Keep a conservative floor in CI unless the image changes
+# and a lower cap is proven.
+core_memory_limit="$(yq -r 'select(.metadata.name == "mailman-core") | .spec.template.spec.containers[] | select(.name == "mailman-core") | .resources.limits.memory' "${dir}/deployment-mailman-core.yaml")"
+assert_eq "${core_memory_limit}" "2Gi" "mailman-core memory limit"
+
+# --- Web HTTP socket ---------------------------------------------------------
+# docker-mailman mailman-web:0.5 listens for HTTP on uwsgi.ini's http-socket
+# 8000. Port 8080 is not HTTP and returns EOF to probes.
+web_http_port="$(yq -r 'select(.metadata.name == "mailman-web") | .spec.template.spec.containers[] | select(.name == "mailman-web") | .ports[] | select(.name == "http") | .containerPort' "${dir}/deployment-mailman-web.yaml")"
+web_np_port="$(yq -r 'select(.metadata.name == "mailman-web") | .spec.ingress[].ports[] | select(.protocol == "TCP") | .port' "${dir}/networkpolicy.yaml")"
+assert_eq "${web_http_port}" "8000" "mailman-web HTTP container port"
+assert_eq "${web_np_port}" "8000" "mailman-web NetworkPolicy HTTP port"
 
 # --- Full render must succeed ----------------------------------------------
 kubectl kustomize "${dir}" >/dev/null

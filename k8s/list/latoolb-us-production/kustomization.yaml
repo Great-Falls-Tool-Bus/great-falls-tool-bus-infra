@@ -7,9 +7,10 @@ namespace: latoolb-us-production
 # the tenant namespace and consuming the blahaj mail substrate through the
 # named tenant list-engine SMTP relay contract (blahaj ADR 010 / contract v0).
 #
-# DRAFT — reviewable, NOT applied. See docs/runbooks/list-bringup.md and the PR
-# body for every pre-apply verification item (image digests, controller secret
-# wiring, node CIDRs, RBAC scope).
+# APPLIED 2026-07-04 (operator-ratified single private keyholders role-list;
+# RBAC + secrets + server-dry-run verified). Pods bind once storageClassName
+# lands (local-path-retain). List creation + transport cutover are the
+# remaining gated steps (see docs/runbooks/list-bringup.md).
 
 resources:
   - mailaccount-lists-bounces.yaml
