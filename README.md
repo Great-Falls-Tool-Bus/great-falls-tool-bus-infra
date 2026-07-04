@@ -14,6 +14,11 @@ scale set serves every repo in the org, so this overlay needs **no** per-repo
 `extra_runner_sets` registration anchors (the biggest structural difference
 from the personal-account jesssullivan template).
 
+## Architecture
+
+Grounded mermaid diagrams (mail flow, network/ports, planes, Bazel/GF) live in
+[`docs/architecture/diagrams.md`](docs/architecture/diagrams.md).
+
 ## Current Contract
 
 - Core product repo: `tinyland-inc/GloriousFlywheel`
