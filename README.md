@@ -95,6 +95,11 @@ The protected CI secret name is `MAIL_APPLY_KUBECONFIG_B64` in the `mail`
 environment; `GFTB_MAIL_KUBECONFIG_B64` remains a compatibility alias. See
 [`docs/mail-cr-apply-runbook.md`](docs/mail-cr-apply-runbook.md).
 
+Mailman list engine runbooks: bring-up in
+[`docs/runbooks/list-bringup.md`](docs/runbooks/list-bringup.md); day-to-day
+operation (members, moderation, settings, stack) in
+[`docs/runbooks/list-operations.md`](docs/runbooks/list-operations.md).
+
 ## Bootstrap (read first)
 
 This overlay's own CI runs on `tinyland-nix`, which for GFTB resolves ONLY
