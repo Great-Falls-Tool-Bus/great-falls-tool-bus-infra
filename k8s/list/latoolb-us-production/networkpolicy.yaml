@@ -51,10 +51,13 @@ spec:
       ports:
         - protocol: TCP
           port: 8000
-    # Intra-pod REST (TIN-2493). The co-located web tier reaches core REST via
-    # the mailman-core Service because core binds REST to the pod IP, not
-    # loopback, so this is not a pure-loopback call: the Service hairpins back to
-    # this same pod and the source is this pod. Admit 8001 from self.
+    # Intra-pod REST (TIN-2493). The co-located web tier reaches core REST at
+    # the POD IP directly (downward-API MAILMAN_REST_URL): same netns, local
+    # interface, no Service hairpin (broken under flannel) and no CNI transit,
+    # so NetworkPolicy does not see it. The podSelector rule below is kept as
+    # defense-in-depth for any future pod-to-pod REST caller; the temporary
+    # ipBlock 10.244.0.0/24 admission was removed as too broad (it admitted
+    # every pod on the node to core REST).
     - from:
         - podSelector:
             matchLabels:

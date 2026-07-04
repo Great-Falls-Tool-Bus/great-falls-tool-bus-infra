@@ -152,6 +152,23 @@ spec:
             # tier at import time when lists.latoolb.us had no DNS.
             - name: MAILMAN_HOST_IP
               value: "127.0.0.1"
+            # Core binds REST to the POD IP (not loopback), and the Service
+            # hairpin is broken under rke2-canal/flannel (hairpin-mode off:
+            # verified live 2026-07-04, service-DNAT-to-self SYNs never return,
+            # wedging every uwsgi worker). Same pod netns, so target the pod IP
+            # directly via the downward API. $(POD_IP) expands because POD_IP
+            # is defined earlier in this env list.
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: MAILMAN_REST_URL
+              value: "http://$(POD_IP):8001"
+            # 127.0.0.1 into Django ALLOWED_HOSTS so IP-host loopback requests
+            # (probes, diagnostics) pass; the archive POST itself uses Host:
+            # localhost which the image whitelists for the archiving API.
+            - name: DJANGO_ALLOWED_HOSTS
+              value: "127.0.0.1"
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
