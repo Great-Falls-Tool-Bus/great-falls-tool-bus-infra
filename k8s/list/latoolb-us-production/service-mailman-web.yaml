@@ -1,9 +1,8 @@
-# Web UI service (Postorius + HyperKitty). ClusterIP only: public exposure of
-# the HyperKitty archive rides the house Cloudflare tunnel as a substrate
-# service with route intent declared GFTB-side (TIN-2380 Anubis note). That
-# ingress/tunnel route is a FOLLOW-UP and is intentionally NOT in this draft —
-# nothing form-shaped or publicly exposed ships before the list round-trip is
-# proven (TIN-2378 apex-gate constraint).
+# Web UI service (Postorius + HyperKitty). ClusterIP only. The keyholders
+# archive is private/members-only or off because access requests may carry
+# personal details. A future discuss@ list can own public archive semantics.
+# Tunnel route intent remains a follow-up and must preserve that privacy
+# boundary (TIN-2378 apex-gate constraint).
 apiVersion: v1
 kind: Service
 metadata:

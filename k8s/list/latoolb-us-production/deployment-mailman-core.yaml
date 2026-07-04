@@ -77,6 +77,13 @@ spec:
             - configMapRef:
                 name: mailman-env
           env:
+            # Override the shared mailman-env DATABASE_CLASS: that value
+            # (django.db.backends.postgresql) is correct for the Django web
+            # tier but WRONG for core, which uses SQLAlchemy. Core crashed with
+            # ModuleNotFoundError: No module named 'django' until this override.
+            # An explicit env entry takes precedence over the same envFrom key.
+            - name: DATABASE_CLASS
+              value: mailman.database.postgresql.PostgreSQLDatabase
             # Include the rendered extra config (STARTTLS+SASL [mta] block).
             # ASSUMPTION to verify against the pinned image: MM_EXTRA_CONFIG is
             # the include hook. If the tag uses a different mechanism, mount the
@@ -107,10 +114,10 @@ spec:
           resources:
             requests:
               cpu: 100m
-              memory: 256Mi
+              memory: 512Mi
             limits:
               cpu: 500m
-              memory: 768Mi
+              memory: 2Gi
           readinessProbe:
             tcpSocket:
               port: rest

@@ -79,14 +79,14 @@ spec:
       app.kubernetes.io/name: mailman-web
   policyTypes: [Ingress, Egress]
   ingress:
-    # HTTP 8080 from the house tunnel ingress. PLACEHOLDER selector — tighten
+    # HTTP 8000 from the house tunnel ingress. PLACEHOLDER selector — tighten
     # to the actual cloudflared/ingress namespace when the archive route is
     # designed (follow-up; nothing exposed before round-trip proof).
     - from:
         - namespaceSelector: {}
       ports:
         - protocol: TCP
-          port: 8080
+          port: 8000
   egress:
     - to: [] # DNS
       ports:
