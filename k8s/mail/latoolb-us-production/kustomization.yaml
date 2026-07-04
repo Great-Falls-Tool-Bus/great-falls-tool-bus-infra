@@ -4,6 +4,7 @@ namespace: latoolb-us-production
 resources:
   - maildomain-latoolb-us.yaml
   - mailaccount-keyholders.yaml
+  - mailalias-rfc2142.yaml
 labels:
   - includeSelectors: false
     pairs:
