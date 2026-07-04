@@ -67,7 +67,7 @@ GFTB_MAIL_KUBECONFIG=/path/to/latoolb-us-production.kubeconfig just mail-cr-appl
 
 BOOTSTRAP NOTE: these secrets only matter AFTER the GFTB scale set exists.
 Overlay CI itself runs on `tinyland-nix`, which resolves through the scale set
-this stack provisions — the first plan/apply always happens on the operator
+this stack provisions. The first plan/apply always happens on the operator
 machine (see docs/implementation-overlay.md).
 
 ## Why It Exists
@@ -90,7 +90,7 @@ are blockers.
 
 The overlay validates against GloriousFlywheel main at
 `2281b576bce0e8dd776a047b84e7464f5b508a62` (origin/main, refreshed 2026-07-02
-in PR #3 from the overlay-authoring pin `7072ce2e`) — the single pin shared by
+in PR #3 from the overlay-authoring pin `7072ce2e`), the single pin shared by
 `config/organization.yaml`, `MODULE.bazel`, and every workflow. Refresh this
 pin to a newer merged commit or release before moving live ARC state when the
 core contract changes.

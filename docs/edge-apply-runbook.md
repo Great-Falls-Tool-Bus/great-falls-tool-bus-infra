@@ -1,8 +1,8 @@
 # GFTB edge/DNS apply runbook (Cloudflare + DreamHost)
 
-**TIN-2360 rows (b)/(c)/(g); row (c) amended 2026-07-02 — apply home is
-THIS overlay, not blahaj; row (g) REVISED + REV-2 (packet-final,
-operator-attested 2026-07-02) — DreamHost stays DNS authority; only the
+**TIN-2360 rows (b)/(c)/(g); row (c) amended 2026-07-02 (apply home is
+THIS overlay, not blahaj); row (g) REVISED + REV-2 (packet-final,
+operator-attested 2026-07-02): DreamHost stays DNS authority; only the
 GATED apex may move to a CF zone.** This runbook realizes the declare-only
 intent in the public site repo (`greatfallstoolbus.org` →
 `tofu/dns-intent/intent.yaml` + `tofu/mail-intent/intent.yaml`) through
@@ -16,7 +16,7 @@ authority; the DNS cutover chain (TIN-2378 → TIN-2379 → TIN-2380)
 executes from sessions in **this repo**.
 
 Credentials are referenced **by name only** and resolve from the tenant
-sops lane ([`secrets/README.md`](../secrets/README.md)) — never from this
+sops lane ([`secrets/README.md`](../secrets/README.md)), never from this
 file, never committed:
 
 | Name | Scope needed |
@@ -25,7 +25,7 @@ file, never committed:
 | `cf-account-id` (`TF_VAR_cloudflare_account_id`) | House Cloudflare account id |
 | `dreamhost-api-key` (`DREAMHOST_API_KEY`) | Registrar/DNS capture + (if the operator chooses API over panel) `dns-add_record`/`dns-remove_record` on the DreamHost-authority zones |
 
-Values written `<like-this>` are chosen/minted at execution time — never
+Values written `<like-this>` are chosen/minted at execution time, never
 guessed. **No agent session mutates Cloudflare or DreamHost; every
 mutation is an operator-gated step below.**
 
@@ -61,18 +61,18 @@ Row (g) REV-2: the live apex serves **GATED behind Cloudflare Access**
 un-gating is deliberately flipped. Access requires the apex hostname
 proxied on a Cloudflare zone, so pick one:
 
-- **Path A — move the web zone to CF (this stack).** Set
+- **Path A (move the web zone to CF, this stack).** Set
   `manage_web_zone = true` in the tfvars and continue with steps 2–5.
   The Access application + allow policy are added to this stack alongside
   that flip (they are deliberately not pre-authored while the path is
   undecided).
-- **Path B — gate a CF-zone preview host** (e.g. a host on an existing
+- **Path B (gate a CF-zone preview host)** (e.g. a host on an existing
   house zone) until public cutover. Nothing to apply in this stack;
   `greatfallstoolbus.org` DNS stays entirely at DreamHost (GH Pages
   A/CNAME records set DreamHost-side, panel or `dns-add_record`) and this
   stack stays dormant until the un-gating cutover.
 
-Either way: `latoolb.us` stays DreamHost — its GH-Pages-independent
+Either way: `latoolb.us` stays DreamHost. Its GH-Pages-independent
 records (MX `10 relay.tinyland.dev`, SPF, later DKIM/DMARC, and the 301
 redirect to the canonical site) are **DreamHost-side operator steps**
 mirroring the site repo's `tofu/mail-intent/intent.yaml`, sequenced by
@@ -91,14 +91,14 @@ Records are pre-staged **before** the NS flip, so the cutover is atomic.
 The zone sits `pending` until step 3; records added meanwhile activate
 with the zone. Web records stay **DNS-only (grey cloud)** until GitHub
 Pages issues the custom-domain certificate (`web_records_proxied =
-false`) — then flip to proxied, which REV-2 needs for Access anyway.
+false`), then flip to proxied, which REV-2 needs for Access anyway.
 
 Repo precondition first (site repo, separate PR there): `static/CNAME`
 containing `greatfallstoolbus.org` + a `BASE_PATH=""` build must land
 before DNS points at Pages, otherwise Pages serves broken project-path
 URLs.
 
-## 3. NS flip at DreamHost (path A; panel — the API cannot do this)
+## 3. NS flip at DreamHost (path A; panel, the API cannot do this)
 
 Read the assigned NS hosts from the stack outputs:
 
@@ -119,16 +119,16 @@ After the site-repo precondition PR lands and (path A) NS is flipped: set
 the custom domain on the Pages site
 (`PUT /repos/Great-Falls-Tool-Bus/greatfallstoolbus.org/pages` with
 `{"cname":"greatfallstoolbus.org"}`, or repo Settings → Pages). GitHub
-issues the org verification TXT value in that flow — set
+issues the org verification TXT value in that flow. Set
 `github_pages_verification_txt` in
 `tofu/stacks/edge-dns/great-falls-tool-bus.tfvars` and re-run step 2 to
 create the record (path B: add the TXT DreamHost-side instead). Wait for
 the certificate, then set `web_records_proxied = true`, re-apply, and add
 the Access application + allow policy (REV-2 gate) in the same change.
-Verify with the site-repo checklist step 2 — expect the Access
+Verify with the site-repo checklist step 2, expect the Access
 interstitial, not the public site, until un-gating.
 
-## 5. Mail records that need minted values (DKIM, DMARC — DreamHost-side)
+## 5. Mail records that need minted values (DKIM, DMARC, DreamHost-side)
 
 Blocked on the TIN-2379 mail-plane mints, never guessed: DKIM selector +
 key pair (private key = `latoolbus-dkim-private-key`, held ONLY in this
@@ -139,18 +139,18 @@ plane ships `enable_mta_sts = False`.
 
 ## Boundary notes (what stays house-plane, consumed as services)
 
-- `relay.tinyland.dev` is the house public MX target — a service this
+- `relay.tinyland.dev` is the house public MX target, a service this
   tenant points at, not infrastructure this repo manages.
 - The honey-cluster mail stack (MailDomain/MailAccount CRDs under
   `mail.tinyland.dev/v1alpha1`, the Mailman3/Postorius/HyperKitty trio,
-  Anubis behind the tunnel — TIN-2379/TIN-2380) runs on the house
+  Anubis behind the tunnel, TIN-2379/TIN-2380) runs on the house
   substrate. The **GFTB tenant-side CR declarations** land in this repo
   when those issues execute, applied with the same operator-gated posture
   as ARC (kubectl context `honey`); the blahaj repo takes no GFTB content.
 
 ## Exit
 
-Hand back to the site repo's `docs/runbooks/dns-mail-checklist.md` — its
-exit criteria (site + 301s serving — behind Access while gated,
+Hand back to the site repo's `docs/runbooks/dns-mail-checklist.md`. Its
+exit criteria (site + 301s serving, behind Access while gated,
 MX/SPF/DKIM/DMARC resolving, round-trip list mail passing SPF+DKIM+DMARC)
 are the completion definition for this runbook too.

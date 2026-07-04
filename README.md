@@ -1,7 +1,7 @@
 # great-falls-tool-bus-infra
 
 Private implementation overlay for the Great-Falls-Tool-Bus (GFTB) GitHub
-organization boundary — the third owner overlay on the shared Honey substrate,
+organization boundary, the third owner overlay on the shared Honey substrate
 after `tinyland-inc/tinyland-infra` and `Jesssullivan/jesssullivan-infra`.
 
 This repository carries owner-specific deployment facts for GFTB org repo
@@ -11,8 +11,8 @@ types, and caches as the other overlays.
 Because GFTB is an organization (not a personal account), ARC registers at the
 ORG scope: `github_config_url = https://github.com/Great-Falls-Tool-Bus`. One
 scale set serves every repo in the org, so this overlay needs **no** per-repo
-`extra_runner_sets` registration anchors — the biggest structural difference
-from the personal-account jesssullivan template.
+`extra_runner_sets` registration anchors (the biggest structural difference
+from the personal-account jesssullivan template).
 
 ## Current Contract
 
@@ -28,17 +28,17 @@ from the personal-account jesssullivan template.
 - Shared Nix cache: `http://attic.nix-cache.svc.cluster.local`
 - Shared Bazel cache: `grpc://bazel-cache.nix-cache.svc.cluster.local:9092`
 - Shared Bazel executor: `grpc://gf-reapi-cell.gf-rbe.svc.cluster.local:8980`
-  (documented substrate fact; NOT wired into the primary lane yet — see the
+  (documented substrate fact, NOT wired into the primary lane yet; see the
   executor-flip note in the tfvars)
 - State: bucket `tofu-state`, key prefix `great-falls-tool-bus-infra`
   (`arc-runners/` and `edge-dns/` state keys)
-- Core pin: `2281b576bce0e8dd776a047b84e7464f5b508a62` — GloriousFlywheel
+- Core pin: `2281b576bce0e8dd776a047b84e7464f5b508a62` (GloriousFlywheel
   `origin/main`, refreshed 2026-07-02 from the overlay-authoring pin
-  `7072ce2e` (PR #3, preflight next-action #1). Tracking main was chosen over
+  `7072ce2e`, PR #3, preflight next-action #1). Tracking main was chosen over
   the template's pin because (a) GFTB depends on contracts that postdate it
   (extra-runner-set executor wiring, consumer registry, token-exchange front
-  door) and (b) the template carried four divergent pins across its own files
-  — a drift wart. This overlay uses ONE pin everywhere:
+  door) and (b) the template carried four divergent pins across its own files,
+  a drift wart. This overlay uses ONE pin everywhere:
   `config/organization.yaml`, `MODULE.bazel`, and every workflow `GF_CORE_REF`.
 - Capacity posture (TIN-2165/TIN-2234 pod-cap crunch): nix only, `min 0 / max
   4`, no warm pool, docker/dind off, sting placement + the dedicated
@@ -61,10 +61,10 @@ lane lives under [`secrets/`](secrets/README.md) (distinct GFTB
 recipient, row d), and the CF/DreamHost apply steps are
 [`docs/edge-apply-runbook.md`](docs/edge-apply-runbook.md). The DNS
 cutover chain (TIN-2378 → TIN-2379 → TIN-2380) executes from sessions in
-this repo — not from `tinyland-inc/blahaj`, which stays the house's
+this repo, not from `tinyland-inc/blahaj`, which stays the house's
 replaceable IaC layer consumed as a service (`relay.tinyland.dev`, honey
 mail stack, ARC controller). Fail-closed default: the stack's `manage_*`
-toggles are off (packet row g REVISED + REV-2 — DreamHost stays DNS
+toggles are off (packet row g REVISED + REV-2, DreamHost stays DNS
 authority; only the gated apex may move to CF), so `just edge-plan` is
 empty until the operator picks the REV-2 path.
 
@@ -74,10 +74,10 @@ The TIN-2385 realization of that path is
 **zone-scoped** token (protected `edge` environment secret
 `CLOUDFLARE_API_TOKEN_GFTB_ZONES`, name only), managing the proxied
 apex/www records, the REV-2 Access gate, and the `latoolb.us` 301
-redirects — no mail records (TIN-2379). Console/registrar steps:
+redirects (no mail records, TIN-2379). Console/registrar steps:
 [`docs/runbooks/edge-token-and-zones.md`](docs/runbooks/edge-token-and-zones.md);
 CI plan/apply chassis: `.github/workflows/edge-plan.yml` (skip-green
-until the token secret exists). The two edge stacks never both apply —
+until the token secret exists). The two edge stacks never both apply;
 see the stack README's reconciliation rules.
 
 ## Mail CR apply plane (TIN-2379)

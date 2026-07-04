@@ -15,6 +15,7 @@ default:
     @just --list
 
 check:
+    just secrets-scan-dir
     just taxonomy
     just mail-cr-validate
     just arc-fmt-check
@@ -25,6 +26,22 @@ check:
     just edge-zones-validate
     just substrate-boundary-selftest
     just substrate-boundary
+
+# Gitleaks scan of working tree files (AGENTS.md hard rule: no secrets in Git)
+secrets-scan-dir:
+    gitleaks dir --config .gitleaks.toml --redact --verbose .
+
+# Gitleaks scan of git history
+secrets-scan:
+    gitleaks git --config .gitleaks.toml --redact --verbose .
+
+# Generate changelog (git-cliff)
+changelog:
+    git-cliff --output CHANGELOG.md
+
+# Preview changelog without writing
+changelog-preview:
+    git-cliff --unreleased
 
 enrollment-preflight:
     python3 "{{ gf_core }}/scripts/implementation-overlay-preflight.py" --overlay-root . --tfvars {{ arc_tfvars }} --repo Great-Falls-Tool-Bus/great-falls-tool-bus-infra

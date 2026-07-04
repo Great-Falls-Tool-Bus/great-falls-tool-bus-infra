@@ -25,8 +25,8 @@ GFTB is a GitHub organization, so ARC registers at the ORG scope:
 `github_config_url = https://github.com/Great-Falls-Tool-Bus`. The GFTB GitHub
 App is installed org-wide (all repositories), which makes the single
 `great-falls-tool-bus-nix` scale set reachable from every GFTB repo. There is
-no repo-scoped registration anchor and no per-repo `extra_runner_sets` entry —
-the personal-account anchor pattern in the jesssullivan overlay exists only
+no repo-scoped registration anchor and no per-repo `extra_runner_sets` entry.
+The personal-account anchor pattern in the jesssullivan overlay exists only
 because personal accounts lack org-level registration.
 
 Workflows use shared labels such as `tinyland-nix`. Reachability is solved by
@@ -68,7 +68,7 @@ Raising any of these is an explicit operator decision followed by
 - Bazel cache: `grpc://bazel-cache.nix-cache.svc.cluster.local:9092`
 - Bazel executor: `grpc://gf-reapi-cell.gf-rbe.svc.cluster.local:8980`
   (substrate fact; the primary lane is cache-only until the deliberate
-  executor flip — see the tfvars comment)
+  executor flip, see the tfvars comment)
 - state bucket: `tofu-state`, key prefix `great-falls-tool-bus-infra`
 - public token mint: `https://gf-token-exchange.tinyland.dev/v1/token/exchange`
 
@@ -151,7 +151,7 @@ kubeconfig, or derived secret material.
 ## Current Core Pin
 
 This overlay pins GloriousFlywheel core at
-`2281b576bce0e8dd776a047b84e7464f5b508a62` — `origin/main`, refreshed
+`2281b576bce0e8dd776a047b84e7464f5b508a62`, `origin/main`, refreshed
 2026-07-02 (PR #3) from the overlay-authoring pin `7072ce2e`. Tracking main
 was chosen over the template's pin because GFTB needs the newer contracts
 (extra-runner-set executor wiring, the consumer registry, the public

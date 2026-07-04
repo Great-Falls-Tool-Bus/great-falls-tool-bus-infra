@@ -23,6 +23,8 @@
             packages = [
               pkgs.git
               pkgs.gh
+              pkgs.gitleaks
+              pkgs.git-cliff
               pkgs.jq
               pkgs.just
               pkgs.opentofu
