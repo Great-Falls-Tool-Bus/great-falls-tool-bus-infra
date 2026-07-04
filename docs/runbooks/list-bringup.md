@@ -10,6 +10,53 @@ records, DKIM keys, or the substrate postfix transport/`extraDomains` entries.
 > **This stack is a DRAFT.** Work the pre-apply gates below in order; several
 > are hard blockers that will fail-closed if skipped.
 
+## Readiness status (checked 2026-07-04, session 1f91b703)
+
+Read-only check against PR #27's review comment (5 named pre-apply gates) and
+blahaj substrate truth. No applies, no cluster mutation happened for this
+check.
+
+1. **Mail substrate certified (SPF+DKIM both directions). CLEARED.** Done
+   2026-07-04; `keyholders@latoolb.us` is live.
+2. **Substrate transport for list addresses. OPEN, substrate PR required.**
+   blahaj `docs/contracts/tenant-list-engine-smtp.md:181-199` states
+   `postfix_transport_config` is not yet modeled in the dhall layer; the
+   Consumers table (line 293) marks GFTB "Specified; not yet onboarded (no
+   transport entry, no Mailman deployment)." Also found this check:
+   `keyholders@latoolb.us` already exists as a plain mailbox `MailAccount`
+   (`k8s/mail/latoolb-us-production/mailaccount-keyholders.yaml:1-16`,
+   TIN-2379). A domain-wide transport entry for `latoolb.us` would misroute
+   that mailbox's mail into Mailman's LMTP, so the substrate PR needs a
+   `lists.` subdomain or a recipient-scoped transport line, not a
+   domain-scoped one.
+3. **Dovecot/controller bridge (blahaj #872 defect 3). OPEN, design fix not
+   implemented.** The account-controller writes tenant-namespace secrets that
+   the running dovecot never reads (frozen subPath mount); the keyholders
+   inbound leg only works today from a hand-merge, not a durable fix. The
+   follow-on note on #872 says outbound DKIM has the same stale-config shape,
+   and both are gated behind PR #874 (open, fixes the tofu plan/apply
+   provider and RustFS lane) landing first, then one reviewed mail-stack
+   apply converging dovecot and DKIM together. Mailman's outgoing SASL
+   submission rides this same bridge, so this gate blocks list send today.
+4. **Validator parity. CLEARED.** `scripts/validate-list-stack.sh` already
+   enforces the same class of rule `validate-mail-crs.sh` enforces for
+   `MailDomain` (no operator-only field committed): it asserts no
+   `passwordSecretRef` on the `lists-bounces` `MailAccount` (lines 49-52),
+   the LMTP port/host, and the SMTP submission host/port, then runs
+   `kubectl kustomize`. It is wired into `list-crs.yml` on every PR/push
+   touching `k8s/list/**` and it already passed in CI ("Validate list
+   stack", pass, 3m13s).
+5. **Server dry-run before apply. NOT YET RUN.** `list-crs.yml`'s server job
+   only runs on `workflow_dispatch`; `gh pr checks 27` shows it "skipping."
+   It also needs the RBAC kubeconfig (gate 2 below) and the image-digest pin
+   (Component pins, above) before it can run meaningfully.
+
+Distance to first test: gates 2 and 3 are substrate-owned and unresolved;
+gate 3 further depends on PR #874 merging and a reviewed mail-stack apply
+landing first. Expect several sequenced substrate-owner and operator
+sessions between a merged PR #27 and a first external subscriber, not a
+same-day turn.
+
 ## Component pins (TIN-2380)
 
 | Component | Intended version | Image |
@@ -38,7 +85,7 @@ and replace the tags with immutable `@sha256:` digests in the Deployments.
    substitute for it.
 2. **Apply RBAC scope.** The existing `mail` environment kubeconfig
    (`MAIL_APPLY_KUBECONFIG_B64`) is scoped to `mail.tinyland.dev`
-   `MailDomain`/`MailAccount`/`MailAlias` **only** (docs/ci-credentials.md) — it
+   `MailDomain`/`MailAccount`/`MailAlias` **only** (docs/ci-credentials.md), so it
    **cannot** apply the Deployments, Services, PVCs, ConfigMaps, or
    NetworkPolicies in this stack. Before apply, provision either (a) a broadened
    namespace grant (blahaj PR extending the `latoolb-us-production` grant to
@@ -48,7 +95,7 @@ and replace the tags with immutable `@sha256:` digests in the Deployments.
 3. **Node CIDR in the NetworkPolicy.** `k8s/list/.../networkpolicy.yaml` admits
    LMTP :8024 from a **PLACEHOLDER** `10.0.0.0/8` block. The substrate postfix
    is host-networked, so LMTP arrives from **node** addresses. Replace the
-   placeholder with the real mail-egress node CIDR(s) — source of truth is
+   placeholder with the real mail-egress node CIDR(s); source of truth is
    blahaj `dhall/render/mail-honey.dhall` (node CIDRs) / the mail stack's
    `network-policies.tf` node workaround. If the tenant namespace is
    default-deny and this is wrong, the incoming leg fails closed.
@@ -72,7 +119,7 @@ and replace the tags with immutable `@sha256:` digests in the Deployments.
 ## Bring-up order
 
 1. Apply the substrate PR (gate 1) and confirm the domain resolves at the MX.
-2. `just list-stack-validate` — offline invariants + `kubectl kustomize`.
+2. `just list-stack-validate` (offline invariants + `kubectl kustomize`).
 3. Create the operator Secrets (gate 4).
 4. Apply the `lists-bounces` `MailAccount` (mail lane), wait for the controller
    to generate its credential, project it into `lists-bounces-smtp` (gate 4).
@@ -93,7 +140,7 @@ and replace the tags with immutable `@sha256:` digests in the Deployments.
 3. Confirm the list **fans the message out** to subscribers.
    - Confirms the outgoing runner → `postfix:587` STARTTLS + SASL submission,
      and (check headers) a valid `DKIM-Signature: d=latoolb.us` added by the
-     substrate rspamd milter (capability #5 — the real DKIM go/no-go, not the
+     substrate rspamd milter (capability #5, the real DKIM go/no-go, not the
      controller's cosmetic `DKIMReady`).
 4. Confirm the message appears in the public archive.
 
@@ -110,6 +157,60 @@ route exposes it under the `/archives` prefix (the docker-mailman nginx
 convention). Public exposure of this URL rides the Cloudflare tunnel as a
 **follow-up** (route intent declared GFTB-side, TIN-2380 Anubis note); nothing
 is publicly exposed until the round-trip smoke above passes.
+
+## First-tester plan (merged PR #27 to a subscribed external tester)
+
+Ordered steps from a merged PR #27 to `jess@sulliwood.org` (plus a second
+external address) subscribed to `keyholders@latoolb.us`, with a round-trip
+list message and a HyperKitty archive entry as proof. Each step is tagged
+with who executes it.
+
+1. **[substrate-owner]** Land the transport-map substrate PR (readiness gate
+   2): add the `postfix_transport_config` dhall carrier, pick a routing
+   shape that does not collide with the existing `keyholders@latoolb.us`
+   mailbox (`lists.` subdomain, or a recipient-scoped line), and land the
+   `extraDomains` entry in the same PR.
+2. **[substrate-owner]** Merge PR #874 (tofu plan/apply fix), then run one
+   reviewed mail-stack apply that converges the account-controller/dovecot
+   bridge and the per-domain DKIM signing config (readiness gate 3).
+3. **[operator]** Provision the workload-capable list-apply kubeconfig (or a
+   broadened namespace grant) and set it as the `GFTB_MAIL_KUBECONFIG`
+   workflow secret (readiness gate 5's RBAC half).
+4. **[operator]** Confirm the pinned image versions and replace the
+   `maxking/docker-mailman` tags with `@sha256` digests (Component pins,
+   above).
+5. **[agent]** `just list-stack-validate` (already passing) then
+   `just list-stack-render` to confirm the kustomize build is still clean
+   after any manifest changes from steps 1-4.
+6. **[operator]** Create the operator-owned Secrets (`mailman-db`,
+   `mailman-app`) with real values (pre-apply gate 4, values never in git).
+7. **[agent]** Apply just the `lists-bounces` `MailAccount` manifest
+   (`kubectl apply -f mailaccount-lists-bounces.yaml`, not the full
+   kustomization) against the existing narrow mail kubeconfig, since a
+   `MailAccount` is one of the three resource types that kubeconfig already
+   covers. Wait for the controller to reconcile and generate the credential.
+8. **[operator]** Project the controller-generated credential into the
+   `lists-bounces-smtp` Secret (`username`/`password` keys); never hand-mint
+   it.
+9. **[agent]** `GFTB_MAIL_KUBECONFIG=... just list-stack-server-dry-run`
+   (workload-capable kubeconfig from step 3) via `workflow_dispatch`.
+10. **[operator]** `just list-stack-apply`. The apply trigger stays with the
+    operator by design.
+11. **[agent]** Confirm `mailman-postgres`, `mailman-core`, `mailman-web` all
+    reach Ready, then create the `keyholders@latoolb.us` list in Postorius,
+    set the archive policy to public, and add `jess@sulliwood.org` plus a
+    second external address as subscribers.
+12. **[operator/tester]** Send a message to `keyholders@latoolb.us` from one
+    of the subscribed external addresses (round-trip smoke, see below).
+13. **[agent]** Collect the smoke evidence: `mailman-core` logs showing the
+    LMTP delivery, the fanned-out message headers (`DKIM-Signature:
+    d=latoolb.us`), and the HyperKitty archive entry at
+    `https://lists.latoolb.us/archives/list/keyholders@latoolb.us/`.
+
+Steps 1-2 are the long poles; both are substrate-owned and neither has
+landed yet. Steps 3, 4, 6, 8, 10, and 12 need an operator (credentials,
+secrets, or an external mailbox the agent does not control). Steps 5, 7, 9,
+11, and 13 are agent-executable once their upstream dependency clears.
 
 ## Post-apply read-only checks
 
