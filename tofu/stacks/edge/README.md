@@ -27,6 +27,10 @@ they exist as **console-created zones on the house Cloudflare account**
   `var.mail_dns_enabled` (default `true` after D11 closed self-hosted)
   — see "mail DNS enable
   sequence" below
+- stages the `forms.latoolb.us` contact-form ingress CNAME → the shared
+  honey-ingress Cloudflare Tunnel (proxied), gated behind
+  `var.forms_dns_enabled` (default `false`, fail-closed) — TIN-2420 Path
+  B; see "`forms.latoolb.us` DNS enable sequence" below
 
 Auth is exclusively `TF_VAR_cloudflare_api_token`: a token scoped to
 EXACTLY these two zones, held as the protected-environment secret
@@ -71,6 +75,31 @@ DKIM only materializes once set). The enable sequence is:
    value.
 5. `var.mail_dns_enabled` flips to `true` (current branch default).
 6. PR-plan (this repo's normal `edge-plan.yml` PR flow) then
+   `workflow_dispatch action=apply` (dispatch-apply doctrine, D6) — no
+   direct apply.
+
+## `forms.latoolb.us` DNS enable sequence (TIN-2420 Path B)
+
+The site contact form POSTs to the in-cluster intake handler (honeypot +
+5/min rate limit + CORS locked to `https://greatfallstoolbus.org` +
+validation, all smoke-proven; handler POST 200 → mailman ACCEPT → Gmail
+250). The handler is fronted by Anubis (v1.13.0, digest-pinned) and
+reached from the internet over the **shared honey-ingress Cloudflare
+Tunnel**. `forms.latoolb.us` is the form-origin hostname: a **proxied**
+CNAME to that tunnel's cname target
+`da3ffda2-68ee-46d1-aa55-ec8dae2bd471.cfargotunnel.com` (tunnel id per
+`Great-Falls-Tool-Bus/blahaj-infra-boundary` PR #908 recon).
+
+Staged in `main.tf` gated behind `var.forms_dns_enabled`
+(default `false`, fail-closed — merging changes nothing until flipped).
+Enable sequence:
+
+1. `latoolb.us` NS cutover to Cloudflare completes and the zone is live
+   (shared with the mail enable sequence, step 1 above).
+2. The honey-ingress tunnel has an ingress route for `forms.latoolb.us`
+   fronting the Anubis-gated intake handler (substrate side).
+3. `var.forms_dns_enabled` flips to `true` in a follow-up change.
+4. PR-plan (this repo's normal `edge-plan.yml` PR flow) then
    `workflow_dispatch action=apply` (dispatch-apply doctrine, D6) — no
    direct apply.
 
