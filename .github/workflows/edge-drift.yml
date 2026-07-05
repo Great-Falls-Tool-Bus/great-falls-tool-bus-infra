@@ -124,11 +124,11 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH=../GloriousFlywheel#ci
-            nix develop ../GloriousFlywheel#ci -c just edge-zones-init
+            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            nix develop "${GF_CORE_CI_PATH}" -c just edge-zones-init
             # Deliberately NO -out=: the zero-diff gate needs only the text; a
             # persisted plan binary is secret-bearing and apply-able.
-            nix develop ../GloriousFlywheel#ci -c just _edge-zones-plan-text \
+            nix develop "${GF_CORE_CI_PATH}" -c just _edge-zones-plan-text \
               | tee edge-drift-plan.txt
 
       - name: Assert zero-diff plan (No changes.)

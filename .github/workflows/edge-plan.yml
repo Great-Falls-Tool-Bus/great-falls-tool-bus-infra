@@ -154,13 +154,13 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH=../GloriousFlywheel#ci
-            nix develop ../GloriousFlywheel#ci -c just edge-zones-fmt-check
-            nix develop ../GloriousFlywheel#ci -c just edge-zones-validate
-            nix develop ../GloriousFlywheel#ci -c just edge-zones-init
-            nix develop ../GloriousFlywheel#ci -c just edge-zones-plan
-            nix develop ../GloriousFlywheel#ci -c just _edge-zones-plan-json
-            nix develop ../GloriousFlywheel#ci -c just edge-zones-plan-show \
+            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            nix develop "${GF_CORE_CI_PATH}" -c just edge-zones-fmt-check
+            nix develop "${GF_CORE_CI_PATH}" -c just edge-zones-validate
+            nix develop "${GF_CORE_CI_PATH}" -c just edge-zones-init
+            nix develop "${GF_CORE_CI_PATH}" -c just edge-zones-plan
+            nix develop "${GF_CORE_CI_PATH}" -c just _edge-zones-plan-json
+            nix develop "${GF_CORE_CI_PATH}" -c just edge-zones-plan-show \
               > .tofu-plans/edge.plan.txt
             {
               echo "## GFTB edge zone plan"
@@ -176,7 +176,8 @@ jobs:
         run: |
           set -euo pipefail
           cd overlay
-          nix develop ../GloriousFlywheel#ci -c python3 - <<'PY'
+          export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+          nix develop "${GF_CORE_CI_PATH}" -c python3 - <<'PY'
           import json
           import os
           from pathlib import Path
@@ -245,6 +246,6 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH=../GloriousFlywheel#ci
-            nix develop ../GloriousFlywheel#ci -c just edge-zones-plan-destroy-check
-            nix develop ../GloriousFlywheel#ci -c just edge-zones-apply
+            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            nix develop "${GF_CORE_CI_PATH}" -c just edge-zones-plan-destroy-check
+            nix develop "${GF_CORE_CI_PATH}" -c just edge-zones-apply

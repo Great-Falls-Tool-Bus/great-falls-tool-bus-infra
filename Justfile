@@ -4,10 +4,11 @@ set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 # GF core checkout path default. The older personal-account overlay defaulted to
 # "../GloriousFlywheel-infra-overlays" — a dead-name rename residue that forced
 # every operator to export GF_CORE_PATH. This overlay defaults to the real
-# checkout directory name. Override with GF_CORE_PATH / GF_CORE_CI_PATH when
-# the core checkout lives elsewhere (CI checks core out as ../GloriousFlywheel).
+# checkout directory name. Override GF_CORE_PATH when the core source checkout
+# lives elsewhere. GF_CORE_CI_PATH is a pinned GitHub flake ref by default so
+# tooling no longer assumes a sibling checkout for the #ci devshell.
 gf_core := env_var_or_default("GF_CORE_PATH", "../GloriousFlywheel")
-gf_core_ci := env_var_or_default("GF_CORE_CI_PATH", "../GloriousFlywheel#ci")
+gf_core_ci := env_var_or_default("GF_CORE_CI_PATH", "github:tinyland-inc/GloriousFlywheel/2281b576bce0e8dd776a047b84e7464f5b508a62#ci")
 arc_tfvars := "tofu/stacks/arc-runners/great-falls-tool-bus.tfvars"
 arc_backend := env_var_or_default("ARC_BACKEND", "tofu/backend/honey.s3.hcl")
 
@@ -119,8 +120,8 @@ flywheel-enroll repo="Great-Falls-Tool-Bus/great-falls-tool-bus.github.io":
 arc-fmt-check:
     #!/usr/bin/env bash
     # Fresh-clone friendly: use tofu from PATH when present; the GF-core nix
-    # devshell is the fallback for machines without tofu installed (it requires
-    # a sibling GF checkout or GF_CORE_CI_PATH).
+    # devshell is the fallback for machines without tofu installed. GF_CORE_CI_PATH
+    # defaults to a pinned GitHub flake ref, not a sibling checkout.
     set -euo pipefail
     if command -v tofu >/dev/null 2>&1; then
         tofu fmt -check {{ arc_tfvars }}
