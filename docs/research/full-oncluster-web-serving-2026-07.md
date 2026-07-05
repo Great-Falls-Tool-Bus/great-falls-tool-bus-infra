@@ -1,6 +1,7 @@
 # Full on-cluster web serving for GFTB — corrections / research brief (TIN-2537)
 
-Status: **RESEARCH BRIEF, not a decision** (authored 2026-07-05 under the
+Status: **RESEARCH BRIEF, not a decision** (authored 2026-07-05; updated
+2026-07-05 with the live on-cluster probe — TIN-2537 / TIN-2541 — under the
 operator's standing drive/decide/adversarially-review delegation). This document
 does **not** reverse ADR 0003. It assembles the grounded evidence a
 *superseding* hosting ADR would need, reassesses ADR 0003's original rejection
@@ -40,8 +41,10 @@ inviable under private repos (ADR 0007 / site PR #74).
   standing production-static ruling; adopt the MI pattern as the *sanctioned*
   path for every gated/dynamic surface (already true for the form); and treat a
   full static-production migration as an operator-gated, phased, reversible
-  option that a superseding ADR — grounded on a live pod-headroom probe — would
-  authorize. This brief is that ADR's evidence base.
+  option that a superseding ADR — now grounded on the completed 2026-07-05 live
+  pod-headroom probe (§L, TIN-2541) — would authorize. This brief is that ADR's
+  evidence base, and the probe closes its last open capacity dependency (~176
+  free pod slots cluster-wide; ADR 0003's honey headroom figure was obsolete).
 
 ## 1. The MI proven full-on-cluster web pattern, and how GFTB adopts it
 
@@ -216,16 +219,19 @@ comment 2026-07-05):
 
 | ADR 0003 blocker | Reassessment | Grounding |
 |---|---|---|
-| **No house precedent** for full on-cluster web serving | **DISSOLVED.** MI serves its public app fully on-cluster (`adapter-node` → image → Deployment → ClusterIP → tunnel), retired Vercel *and* Pages. It is a clean, copyable reference. | `MassageIthaca:svelte.config.js`, `ContainerFile`, `docs/deployment/overview.md`; `blahaj:tofu/stacks/massageithaca/main.tf` |
-| **Honey pod-cap headroom** (~103-104/110) | **PARTIALLY DISSOLVED, gated on a live probe.** MI runs `replicas=2` on-cluster comfortably, so a 2-pod GFTB web workload is clearly *shaped* to fit. BUT the binding constraint is real: max-pods 110/node, /24 podCIDR ceiling 234, 3 nodes (~330 slots), honey `quota_pods=200`. Exact *live* headroom is NOT determinable from any repo (OQ-5) — a superseding ADR must cite a live `kubectl` count. Adding a 2-replica web Deployment (+PDB surge) is a handful of pods, plausible but not free. | `blahaj:ansible/…rke2_agent_config.j2` (max-pods 110), `rke2-kubelet-max-pods.yml` (234 ceiling), `dhall/fragments/cluster-defaults/honey.dhall` (quota_pods 200), `tofu/config/massageithaca-prod-honey.tfvars.json` (replicas=2) |
-| **TIN-991 route authority** (tunnel token / route mutation) | **REFRAMED to a settled governance constraint, not a feasibility blocker.** MI proves the route pattern works end-to-end. For GFTB, public route mutation is *deliberately* operator-gated with a protected Cloudflare credential — there is NO CI auto-applier for durable single-service routes; the tunnel `TUNNEL_TOKEN` lives only in the live `cloudflared-token` Secret (SOPS follow-up TIN-991). This is a persistent *process* constraint (an operator applies the route out-of-band), not a reason the pattern cannot work. GFTB already lives inside it for the live form route. | `blahaj:deploy/honey/retained-cloudflared.yaml`, `tofu/intent/great-falls-tool-bus/forms-intake-route.json`; overlay `docs/runbooks/form-intake.md` |
+| **No house precedent** for full on-cluster web serving | **DISSOLVED (evidentially).** MI serves its public app fully on-cluster (`adapter-node` → image → Deployment → ClusterIP → tunnel), retired Vercel *and* Pages. It is a clean, copyable reference. | `MassageIthaca:svelte.config.js`, `ContainerFile`, `docs/deployment/overview.md`; `blahaj:tofu/stacks/massageithaca/main.tf` |
+| **Honey pod-cap headroom** (~103-104/110, ~6 free) | **DISSOLVED (evidentially) by the 2026-07-05 live probe — see §L.1.** ADR 0003's figure is **OBSOLETE**: honey was expanded to a **150** pod cap and now reads **138/150 (12 free)**; bumble **50/110 (60 free)**; sting **96/200 (104 free)**; **~176 free cluster-wide**. A `replicas=2` web Deployment (+PDB surge) fits easily — place it on bumble/sting (honey is tightest). The "not determinable from any repo" caveat is retired: the number is now measured. | Live read-only `kubectl` probe (honey RKE2, 2026-07-05, §L.1); MI `tofu/config/massageithaca-prod-honey.tfvars.json` (replicas=2) |
+| **TIN-991 route authority / sting SPOF** | **DISSOLVED (evidentially) / REFRAMED — see §L.3.** Routes are dashboard-managed: a *process* constraint (operator applies out-of-band), not a feasibility one, and MI proves the route pattern works end-to-end; GFTB already lives inside it for the live form route. The "sting SPOF" is the **CI-RUNNER** concentration (all ARC/nix runners on sting) — a deploy-velocity concern, known/accepted/mitigated and already borne by MI/mail/form — **not** a serving risk. Live topology shows **serving SPOF = NONE** (3 nodes, anti-affinity, `cloudflared replicas:2`); the genuine SPOF is **site-level** (one on-prem location), a bounded availability tradeoff MI production already accepts. | `blahaj:deploy/honey/retained-cloudflared.yaml`, `tofu/intent/great-falls-tool-bus/forms-intake-route.json`; overlay `docs/runbooks/form-intake.md`; live topology probe (§L.3) |
 
-Net: of the three original blockers, **one is fully dissolved (no precedent)**,
-**one is reframed to a standing governance constraint that GFTB already operates
-inside (route authority)**, and **one survives only as a capacity question that
-a live pod-headroom probe resolves (pod-cap)**. None is a categorical bar to
-on-cluster serving; the honest residual is capacity headroom, verifiable in
-minutes with cluster access.
+Net: against the 2026-07-05 live probe, **all three original blockers are now
+evidentially dissolved** — no-precedent (MI is the reference), pod-cap (measured
+~176 free cluster-wide; honey's ~6-free figure was obsolete), and the
+route-authority / sting-SPOF pairing (route mutation is a process constraint, and
+the sting SPOF is CI-runner not serving). None is a categorical bar to on-cluster
+serving. The honest residual is no longer *capacity* but *governance and
+availability posture* — the site-level SPOF tradeoff (§L.3) and the operator's
+scoped ADR-0003 reading (below), both of which a superseding ADR would carry
+forward rather than re-litigate.
 
 **Crucial scoping correction (operator, TIN-2535, 2026-07-05):** ADR 0003's
 rejection must stay "scoped precisely to STATIC PRODUCTION serving, and do not
@@ -236,6 +242,98 @@ TIN-2528) are "dynamic web I/O the CF Pages CDN cannot serve" — on-cluster for
 those is **not** an ADR 0003 reversal; it is the already-decided path. This
 brief therefore does not claim ADR 0003 was wrong; it claims its *no-precedent*
 premise no longer holds and its scope must be read narrowly.
+
+## Live probe (2026-07-05) — OQ-5 resolved, reaper confirmed, SPOF reframed (TIN-2541)
+
+A live, **read-only `kubectl`** probe of the honey RKE2 cluster (2026-07-05)
+supplies the single fact no repo could — actual pod headroom — and in doing so
+retires the last surviving ADR 0003 blocker. It also confirms the ephemeral-lane
+reaper is healthy and corrects the SPOF framing ADR 0003 carried. This is
+evidence, not a decision; ADR 0003 is not reversed here.
+
+### L.1 Pod headroom — OQ-5 closed; ADR 0003's honey figure is OBSOLETE
+
+Live scheduled/capacity counts (read-only `kubectl`, honey cluster, 2026-07-05):
+
+| Node | Scheduled / capacity | Free | Note |
+|---|---|---|---|
+| honey | 138 / **150** | **12** | honey was **EXPANDED to a 150 pod cap**; ADR 0003's "~103-104/110, ~6 free" is **OBSOLETE/faulty** — it described a since-superseded 110-cap. Tightest node. |
+| bumble | 50 / 110 | **60** | ample headroom |
+| sting | 96 / 200 | **104** | ample headroom |
+| **Cluster-wide** | — | **~176** | ~176 free pod slots across the 3 nodes |
+
+A `replicas=2` web Deployment (+ PDB surge) is a handful of pods and **fits
+easily**; the honest placement guidance is bumble/sting (60/104 free), since
+honey is tightest at 12. **OQ-5 is resolved: the pod-cap blocker no longer binds.**
+This retires the "not determinable from any repo" caveat the §4 table carried —
+the number is now measured, not inferred.
+
+### L.2 Reaper health — the ephemeral-lane backstop is healthy (not leaking)
+
+The kube-system CronJob **`massageithaca-pr-lane-backstop-reaper`** is **Active**
+(schedule `*/10`, last ran ~5 min before the probe, **not suspended**). Live
+`pr-ephemeral` namespaces carry correct `expires-epoch` TTLs
+(`tinyland-dev-pr-611/645/646` are future-dated and healthy). One lane
+(`tinyland-dev-pr-620-apex`) sat ~80 min past its TTL but was still Active —
+this is **WITHIN NORMAL operation**, not a leak: the full GitHub reaper runs on a
+4h cycle and the backstop applies a 6h hard-delete grace, so ~80 min of
+post-TTL persistence is **expected latency**. Conclusion: the reaper is healthy,
+so an on-cluster preview/ephemeral lane (TIN-2535, §5a) inherits a **proven,
+self-cleaning** lifecycle rather than an untested one.
+
+### L.3 SPOF reframe — serving SPOF is NONE; the genuine SPOF is site-level
+
+ADR 0003 cited a "sting SPOF." The live topology (3 nodes, all on ONE on-prem
+`/24`: honey `192.168.70.10`, bumble `.11`, sting `.12`) shows this must be split
+into three distinct claims:
+
+- **Serving SPOF = NONE.** It is a 3-node cluster; the overlay already specs
+  pod/node anti-affinity, and `cloudflared` runs `replicas:2`, so a node loss
+  reschedules. No single node is a serving single-point-of-failure.
+- **The "sting SPOF" ADR 0003 named is the CI-RUNNER concentration, not
+  serving.** ALL ARC / nix runners (`great-falls-tool-bus-nix` + all listeners)
+  run on **sting**. That is a **deploy-velocity** concern (a wedged runner stalls
+  applies), which is **known, accepted, and mitigated**, and is **already borne**
+  by the live MI / mail / form stacks. It is **not** a serving risk.
+- **The genuine SPOF is SITE-LEVEL.** The whole cluster is one physical on-prem
+  location — the honest availability tradeoff versus CF Pages' global CDN. MI
+  **already accepts** this for its production surface; Cloudflare's proxy
+  fronts + caches the origin; and a **warm CF-Pages standby** (ties to ADR 0007)
+  is the named mitigation for any surface that moves on-cluster.
+
+So the ADR 0003 "sting SPOF" blocker, read against live topology, does not bar
+on-cluster serving: the serving layer has no single-node SPOF, the runner
+concentration is a separate accepted deploy-velocity tradeoff, and the real
+(site-level) SPOF is a bounded, already-mitigated availability tradeoff MI
+production already lives inside.
+
+### L.4 Deploy path — inherits MI's proven machinery, no new mechanism
+
+The probe confirms the deploy path is house-standard, not novel: tofu CI/CD
+gitops via the GFTB overlay (`great-falls-tool-bus-infra`) using
+`tinyland-inc/ci-templates` reusable workflows plus the MassageIthaca
+`repository_dispatch` → blahaj `tofu-apply` → reaper flow; **or** direct operator
+`kubectl`/`tofu`. GFTB on-cluster serving therefore inherits MI's proven
+apply / promotion / reaper path — **no new deploy machinery** is introduced.
+
+### L.5 ADR 0003 stale assumptions — retire by annotation (not silent rewrite)
+
+The live probe retires three ADR 0003 assumptions; they are **annotated** here,
+not silently rewritten in the source ADR:
+
+1. **"honey pod-cap ~110 / ~6 free"** — **false**: honey is now 150-cap, and
+   cluster-wide free is ~176 (§L.1).
+2. **"no house precedent"** — **false**: MI serves production **fully**
+   on-cluster (adapter-node → image → K8s → tunnel); Vercel + Neon + Pages are
+   retired (§1a).
+3. **"TIN-991 route authority / sting SPOF"** — **reframed**: routes are
+   dashboard-managed (a *process* constraint, not a feasibility one; MI proves
+   the route pattern works), and the sting SPOF is **CI-runner**, not serving
+   (§L.3).
+
+**ADR 0003 remains valid ONLY as a static-production-era snapshot.** It is not a
+categorical bar to on-cluster serving; its capacity premise is now measured false
+and its SPOF premise is now scoped correctly.
 
 ## 5. Reconciliation with the preview ADR (TIN-2535) and the rollback gap (ADR 0007 / PR #74)
 
@@ -307,17 +405,19 @@ brief as reversing ADR 0003. Instead:
    web surface (it already is, de facto, for the form). Capture the adoption map
    (§1c) + the overlay stack template (§2) so the next surface is a copy, not a
    design.
-3. **Gate any *static-production* migration behind a superseding ADR** whose
-   single open dependency is a **live pod-headroom probe** (OQ-5). This brief is
-   that ADR's evidence base; it deliberately stops short of the decision.
+3. **Gate any *static-production* migration behind a superseding ADR.** Its one
+   open capacity dependency — the **live pod-headroom probe** (OQ-5) — is now
+   **closed** (§L.1: ~176 free cluster-wide, 2026-07-05). This brief is that
+   ADR's evidence base; it deliberately stops short of the decision.
 
 **Phased path (nothing applied; each phase operator-gated):**
 
 - **P0 — Decision hygiene (docs only).** Land this brief; add the ADR-0003
   scoping note; keep CF Pages for static production for now.
-- **P1 — Probe.** Operator runs a live `kubectl` pod-count on honey/bumble/sting
-  vs the 110/node cap + `quota_pods=200`; record actual headroom. This is the
-  one fact no repo can supply.
+- **P1 — Probe. DONE (2026-07-05, §L.1).** The live read-only `kubectl`
+  pod-count on honey/bumble/sting recorded ~176 free slots cluster-wide (honey
+  138/150, bumble 50/110, sting 96/200); honey's cap is now 150, not 110. This
+  was the one fact no repo could supply; it is now on the record.
 - **P2 — App-repo container readiness (public repo, no apply).** In
   `greatfallstoolbus.org`: add the `adapter-node` build behind a flag, the
   `ContainerFile`, and a same-org GHCR publish workflow (ambient `GITHUB_TOKEN`).
@@ -356,10 +456,12 @@ brief as reversing ADR 0003. Instead:
   explicit `owns_container_image_production` flag; `owns_gitops_apply` /
   `owns_cloudflare_mutation` stay false. The pins must be updated deliberately,
   not drift.
-- **OQ-5 (live pod headroom):** exact running pod count vs the 110/node cap on
-  the 3-node cluster is not determinable from any repo — the single hard
-  dependency for a static-production migration decision. Needs a live `kubectl`
-  read.
+- **OQ-5 (live pod headroom): RESOLVED 2026-07-05 (§L.1).** The live read-only
+  `kubectl` probe measured honey **138/150 (12 free)**, bumble **50/110 (60
+  free)**, sting **96/200 (104 free)** — **~176 free cluster-wide**. A
+  `replicas=2` web Deployment fits easily (place on bumble/sting). ADR 0003's
+  "~6 free / 110-cap" honey figure is obsolete. This was the single hard
+  dependency for a static-production migration decision; it no longer binds.
 - **OQ-6 (`.sops.yaml` guard drift):** both the overlay `.sops.yaml` and the
   public `secrets.contract.yaml` assert the GFTB age *recipient* is pinned as a
   guard in the public repo's `.sops.yaml`, but no such file exists in the public
@@ -368,7 +470,13 @@ brief as reversing ADR 0003. Instead:
 
 ## Sources (all read READ-ONLY)
 
-- Linear: TIN-2537 (this brief's issue), TIN-2535 (preview ADR + operator
+- **Live cluster probe (2026-07-05, read-only `kubectl`, honey RKE2):** node
+  pod-count vs capacity (honey 138/150, bumble 50/110, sting 96/200); kube-system
+  CronJob `massageithaca-pr-lane-backstop-reaper` schedule/last-run/suspend
+  state; `pr-ephemeral` namespace `expires-epoch` TTLs
+  (`tinyland-dev-pr-611/645/646/620-apex`); node internal IPs / `/24` topology
+  (honey `192.168.70.10`, bumble `.11`, sting `.12`). Grounds §L (TIN-2541).
+- Linear: TIN-2537 (this brief's issue), TIN-2541 (live probe), TIN-2535 (preview ADR + operator
   scoping comment 2026-07-05), TIN-2528 (archive), ADR 0003 + ADR 0007
   (referenced), TIN-2385 / TIN-2382 / TIN-991 / TIN-2420.
 - `Jesssullivan/MassageIthaca`: `svelte.config.js`, `ContainerFile`,
