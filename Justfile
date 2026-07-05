@@ -345,16 +345,68 @@ form-stack-server-dry-run: form-stack-validate _mail-kubeconfig-inputs
 form-stack-apply: form-stack-server-dry-run
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ form_stack_dir }}
 
-# --- GFTB on-cluster web serving skeleton (TIN-2541) ------------------------
-# DECLARE-ONLY. SvelteKit adapter-node -> ClusterIP 80->3000 -> honey-ingress
-# cloudflared tunnel, mirroring the proven MassageIthaca full-on-cluster pattern.
-# NOTHING IS APPLIED: the Deployment ships replicas:0 with a non-resolvable
-# placeholder image, the namespace is not created, and the tunnel route is
-# dashboard/token-managed (never in git; TIN-991). There is deliberately NO
-# web-stack-apply recipe — applying this skeleton is not a supported operation;
-# a cutover is operator-gated under a superseding hosting ADR. See k8s/web/README.md.
+# --- GFTB on-cluster web serving (TIN-2541 skeleton; TIN-2543 cutover) -------
+# DECLARE-ONLY IN GIT. SvelteKit adapter-node -> ClusterIP 80->3000 ->
+# honey-ingress cloudflared tunnel, mirroring the proven MassageIthaca
+# full-on-cluster pattern. The checked-in overlay applies to NOTHING as-is: the
+# Deployment ships replicas:0 with a non-resolvable placeholder image, the
+# namespace is not created here, and the tunnel route is dashboard/token-managed
+# (never in git; TIN-991). scripts/validate-web-stack.sh guards that posture.
+#
+# The cutover recipes below are the operator-gated APPLY plane (TIN-2543, ADR
+# 0008), run ONLY through .github/workflows/web-stack.yml (workflow_dispatch +
+# confirm=apply, protected web-apply environment). They do NOT un-park the tree:
+# the real image is supplied at dispatch (WEB_APPLY_IMAGE) and replicas are
+# flipped imperatively post-apply, so the k8s/web overlay stays replicas:0 +
+# placeholder. The namespace-scoped web-apply SA cannot create namespaces; the
+# operator mints the greatfallstoolbus-org-production namespace + SA/RBAC out of
+# band first. See k8s/web/README.md and docs/runbooks/oncluster-web-cutover.md.
 
 web_stack_dir := "k8s/web/greatfallstoolbus-org-production"
+web_stack_ns := "greatfallstoolbus-org-production"
 
 web-stack-validate:
     bash scripts/validate-web-stack.sh {{ web_stack_dir }}
+
+# Operator-supplied cutover inputs (env-delivered by web-stack.yml; never baked):
+#   WEB_APPLY_KUBECONFIG  path to the materialized namespace-scoped SA kubeconfig
+#   WEB_APPLY_IMAGE       image to serve (operator-resolved; not the PLACEHOLDER)
+#   WEB_APPLY_REPLICAS    replica count to flip to (default 2, the MI prod shape)
+_web-apply-inputs:
+    test -n "${WEB_APPLY_KUBECONFIG:-}" || { echo "Set WEB_APPLY_KUBECONFIG to the web-apply kubeconfig path"; exit 1; }
+    test -f "${WEB_APPLY_KUBECONFIG}"
+    test -n "${WEB_APPLY_IMAGE:-}" || { echo "Set WEB_APPLY_IMAGE to the operator-resolved image reference"; exit 1; }
+    case "${WEB_APPLY_IMAGE}" in *PLACEHOLDER*) echo "refusing the declare-only PLACEHOLDER image; supply the real operator-resolved reference"; exit 1 ;; esac
+
+# Server-side dry-run of the workload apply against the live API (no mutation).
+web-stack-server-dry-run: web-stack-validate _web-apply-inputs
+    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply --dry-run=server -k {{ web_stack_dir }}
+
+# Operator-gated cutover apply: workload -> pin image -> flip replicas 0 -> N.
+# The namespace must already exist (the SA is namespace-scoped and cannot create
+# it); replicas are patched on the Deployment resource, not via the scale
+# subresource, so the least-privilege patch-Deployment grant is sufficient.
+web-stack-apply: web-stack-server-dry-run
+    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply -k {{ web_stack_dir }}
+    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} set image deployment/greatfallstoolbus-org greatfallstoolbus-org="${WEB_APPLY_IMAGE}"
+    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} patch deployment/greatfallstoolbus-org --type merge --patch '{"spec":{"replicas":'"${WEB_APPLY_REPLICAS:-2}"'}}'
+    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} rollout status deployment/greatfallstoolbus-org --timeout=180s
+
+# Post-apply read-only health gate: Deployment readyReplicas == desired. A ready
+# replica means the kubelet readinessProbe (GET /health on :3000) passed, so this
+# IS the /health gate. An in-namespace ad hoc curl is intentionally NOT the gate:
+# the NetworkPolicy admits :3000 only from the cloudflared tunnel and Prometheus,
+# so the Service /health curl is verified at runbook P4 through the tunnel.
+web-stack-health:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    test -n "${WEB_APPLY_KUBECONFIG:-}" || { echo "Set WEB_APPLY_KUBECONFIG to the web-apply kubeconfig path"; exit 1; }
+    desired="$(kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} get deployment/greatfallstoolbus-org -o jsonpath='{.spec.replicas}')"
+    ready="$(kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} get deployment/greatfallstoolbus-org -o jsonpath='{.status.readyReplicas}')"
+    ready="${ready:-0}"
+    echo "web stack health: ${ready}/${desired} replicas Ready (readinessProbe = GET /health on :3000)"
+    if [ "${ready}" != "${desired}" ]; then
+      echo "health gate FAILED: ready ${ready} != desired ${desired}" >&2
+      exit 1
+    fi
+    echo "web stack health gate passed"

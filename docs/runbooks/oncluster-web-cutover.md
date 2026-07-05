@@ -334,10 +334,20 @@ tinyland-nix`, a protected **environment** gate, PR/push = validate-only, and a
 manual **`workflow_dispatch` with `action` choice** (`plan`/`server-dry-run`
 then `apply`), fail-soft skip-green when the environment secret is absent,
 destructive-plan guard, and a namespace kubeconfig materialized only inside the
-protected environment. A cutover adds a `web-stack.yml` of that same shape
-(gated on the `web-apply` environment holding `web-apply-kubeconfig`) — **that
-workflow is not part of this change**; it is declared here as the reference
-shape, matching the parked overlay's declare-only posture.
+protected environment. That cutover workflow now exists as
+[`.github/workflows/web-stack.yml`](../../.github/workflows/web-stack.yml)
+(TIN-2543): the same chassis, but **apply-only**. It triggers ONLY on
+`workflow_dispatch` with a required `confirm=apply` sentinel (no push/PR), gates
+fail-closed on the GF core read credential **and** the protected `web-apply`
+environment holding `web-apply-kubeconfig`, takes the operator-resolved image as
+a dispatch `image` input (never a committed pin), and runs `just web-stack-apply`
+(workload apply, image pin, `replicas` flip 0 to N) followed by an in-cluster
+`/health` readiness gate. It does **not** un-park the overlay: the `k8s/web/`
+tree stays declare-only and `scripts/validate-web-stack.sh` still guards
+`replicas: 0` + placeholder image + no namespace. The
+`greatfallstoolbus-org-production` namespace and the `web-apply` SA/RBAC are
+minted by the operator out of band first (the SA is namespace-scoped and cannot
+create namespaces).
 
 The public app repo's `tinyland.repo.json` boundaries will need
 `owns_container_image_production=true` while `owns_gitops_apply=false` and
