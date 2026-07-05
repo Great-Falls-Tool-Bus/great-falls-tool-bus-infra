@@ -1,0 +1,119 @@
+# TIN-2528 — Anubis bot policy for the PUBLIC discuss@ archive route.
+#
+# This is the upstream v1.13.0 default policy with the forms-specific
+# `/api/contact` ALLOW REMOVED (there is no API on this route) and ONE rule
+# PREPENDED: an anti-bulk-export CHALLENGE on HyperKitty's mbox export path.
+#
+# HOW THIS DIFFERS FROM THE FORMS POLICY (k8s/form/.../configmap-anubis-policy):
+#   - The forms route needed an ALLOW carve-out because a cross-origin JSON
+#     fetch() cannot solve a browser PoW challenge. The archive is a pure
+#     BROWSING surface, so no such carve-out exists: every human-browser
+#     request is CHALLENGEd exactly as founding row `f` decided.
+#   - Search-engine crawlers (Googlebot/Bingbot/Qwant) stay ALLOWed. The
+#     discuss@ archive is intentionally public, so indexing it is desirable;
+#     an operator who wants the archive UN-indexed flips those three to DENY
+#     (and see robots.txt note in the packet). Crawlers can never reach the
+#     PRIVATE keyholders@ archive regardless — HyperKitty returns 403/404 for
+#     a private list to any anonymous client, allowlisted crawler or not.
+#
+# THE EXPORT WRINKLE: HyperKitty exposes a per-list gzipped-mbox export under
+# `/archives/list/<list>/export/<name>.mbox.gz`. Anonymous bulk-pulling the
+# whole archive as mbox is the main cost/abuse vector on an open archive
+# (large streamed responses + DB pressure). The prepended rule CHALLENGEs the
+# export path for ALL user agents, placed BEFORE the crawler ALLOWs, so even
+# an allowlisted crawler must solve a PoW to hit /export — which a headless
+# crawler cannot, blocking automated bulk export while a human can still solve
+# and download. Rules are evaluated top-to-bottom, first terminal match wins.
+#
+# FORMAT: v1.13.0 parses the policy as JSON only (cmd/anubis/policy.go decodes
+# with encoding/json). Rule fields at v1.13.0: name / user_agent_regex /
+# path_regex / action. path_regex matches r.URL.Path only (no method matcher
+# at this version). See k8s/form/.../configmap-anubis-policy.yaml for the
+# format provenance notes.
+#
+# DECLARE-ONLY: nothing here is applied. See README.md.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: anubis-archive-policy
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: anubis-archive
+    app.kubernetes.io/component: pow-gate
+data:
+  botPolicies.json: |
+    {
+      "bots": [
+        {
+          "name": "hyperkitty-mbox-export",
+          "path_regex": "/export/.*\\.mbox(\\.gz)?$",
+          "action": "CHALLENGE"
+        },
+        {
+          "name": "amazonbot",
+          "user_agent_regex": "Amazonbot",
+          "action": "DENY"
+        },
+        {
+          "name": "googlebot",
+          "user_agent_regex": "\\+http\\:\\/\\/www\\.google\\.com/bot\\.html",
+          "action": "ALLOW"
+        },
+        {
+          "name": "bingbot",
+          "user_agent_regex": "\\+http\\:\\/\\/www\\.bing\\.com/bingbot\\.htm",
+          "action": "ALLOW"
+        },
+        {
+          "name": "qwantbot",
+          "user_agent_regex": "\\+https\\:\\/\\/help\\.qwant\\.com/bot/",
+          "action": "ALLOW"
+        },
+        {
+          "name": "us-artificial-intelligence-scraper",
+          "user_agent_regex": "\\+https\\:\\/\\/github\\.com\\/US-Artificial-Intelligence\\/scraper",
+          "action": "DENY"
+        },
+        {
+          "name": "well-known",
+          "path_regex": "^/.well-known/.*$",
+          "action": "ALLOW"
+        },
+        {
+          "name": "favicon",
+          "path_regex": "^/favicon.ico$",
+          "action": "ALLOW"
+        },
+        {
+          "name": "robots-txt",
+          "path_regex": "^/robots.txt$",
+          "action": "ALLOW"
+        },
+        {
+          "name": "rss-readers",
+          "path_regex": ".*\\.(rss|xml|atom|json)$",
+          "action": "ALLOW"
+        },
+        {
+          "name": "lightpanda",
+          "user_agent_regex": "^Lightpanda/.*$",
+          "action": "DENY"
+        },
+        {
+          "name": "headless-chrome",
+          "user_agent_regex": "HeadlessChrome",
+          "action": "DENY"
+        },
+        {
+          "name": "headless-chromium",
+          "user_agent_regex": "HeadlessChromium",
+          "action": "DENY"
+        },
+        {
+          "name": "generic-browser",
+          "user_agent_regex": "Mozilla",
+          "action": "CHALLENGE"
+        }
+      ],
+      "dnsbl": true
+    }

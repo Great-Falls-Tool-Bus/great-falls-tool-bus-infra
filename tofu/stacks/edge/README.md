@@ -31,6 +31,10 @@ they exist as **console-created zones on the house Cloudflare account**
   honey-ingress Cloudflare Tunnel (proxied), gated behind
   `var.forms_dns_enabled` (default `false`, fail-closed) — TIN-2420 Path
   B; see "`forms.latoolb.us` DNS enable sequence" below
+- stages the `lists.latoolb.us` public-archive ingress CNAME → the SAME
+  shared honey-ingress Cloudflare Tunnel (proxied), gated behind
+  `var.archives_dns_enabled` (default `false`, fail-closed) — TIN-2528;
+  see "`lists.latoolb.us` archives DNS enable sequence" below
 
 Auth is exclusively `TF_VAR_cloudflare_api_token`: a token scoped to
 EXACTLY these two zones, held as the protected-environment secret
@@ -102,6 +106,42 @@ Enable sequence:
 4. PR-plan (this repo's normal `edge-plan.yml` PR flow) then
    `workflow_dispatch action=apply` (dispatch-apply doctrine, D6) — no
    direct apply.
+
+## `lists.latoolb.us` archives DNS enable sequence (TIN-2528 — declare-only)
+
+The PUBLIC `discuss@latoolb.us` HyperKitty archive rides the shared
+honey-ingress Cloudflare Tunnel, fronted by a second Anubis PoW gate
+(`k8s/archive/latoolb-us-production/`, `anubis-archive`). `lists.latoolb.us`
+is the archive-origin hostname: a **proxied** CNAME to the same tunnel cname
+target as `forms.latoolb.us`. Hostname is `lists.` (not `archives.`) because
+the HyperKitty archive URL shape is already `https://lists.latoolb.us/
+archives/list/<list>@latoolb.us/` (TIN-2380) and one HyperKitty instance
+serves every list off that one host — see `docs/discuss-archive-packet.md`.
+
+Staged in `main.tf` gated behind `var.archives_dns_enabled` (default
+`false`, fail-closed — merging changes nothing until flipped).
+
+**This route has an extra HARD gate the forms route does not.** The same web
+tier also serves the PRIVATE `keyholders@` archive, so flipping this on
+without the privacy pre-flight would risk exposing private list content.
+Enable sequence:
+
+1. `latoolb.us` NS cutover to Cloudflare completes and the zone is live
+   (shared with the mail/forms enable sequences).
+2. The `k8s/archive/...` stack is applied and the honey-ingress tunnel has an
+   ingress route for `lists.latoolb.us` fronting `anubis-archive:8081`
+   (substrate/dashboard side).
+3. **PRIVACY PRE-FLIGHT PASSES** (operator-gated, read-only): `keyholders@`
+   `archive_policy=private|never`, HyperKitty is **>= 1.3.8** (the RSS-feed
+   private-leak fix), and an anonymous probe confirms the private archive
+   (HTML, RSS/Atom, permalinks, `/export/`, search) 403s while `discuss@`
+   renders. Full procedure + command: `docs/discuss-archive-packet.md`.
+4. `var.archives_dns_enabled` flips to `true` in a follow-up change.
+5. PR-plan (`edge-plan.yml`) then `workflow_dispatch action=apply`
+   (dispatch-apply doctrine, D6) — no direct apply.
+
+Rollback: flip `var.archives_dns_enabled` back to `false` (plan/apply) and
+remove the `lists.latoolb.us` tunnel public-hostname route dashboard-side.
 
 ## Relationship to `tofu/stacks/edge-dns/` (read before touching either)
 

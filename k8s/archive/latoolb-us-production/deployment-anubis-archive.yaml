@@ -1,0 +1,126 @@
+# TIN-2528 — Anubis PoW gate for the PUBLIC discuss@ HyperKitty archive.
+# This is a SECOND, independent instance of the proven TIN-2420 Anubis gate
+# (k8s/form/latoolb-us-production/deployment-anubis.yaml), scoped to the
+# archive route only. It is named `anubis-archive` so it never collides with
+# the forms `anubis` Deployment/Service/policy already live in this namespace.
+#
+# Role (say it plainly): Anubis here is an ANTI-SCRAPE / anti-bulk-crawl PoW
+# gate for a surface that is INTENTIONALLY public to humans. It is NOT
+# authentication and it is NOT the privacy control. The privacy control is the
+# per-list archive_policy in Mailman core (keyholders@ = private; discuss@ =
+# public), enforced by HyperKitty for anonymous users. Anubis only taxes bulk
+# bots on the browsing surface so an open archive does not become free crawl
+# fodder or a search-cost amplifier. See docs/discuss-archive-packet.md.
+#
+# DECLARE-ONLY: nothing here is applied. See README.md.
+#
+# Image PINNED BY DIGEST (ghcr.io/techarohq/anubis:v1.13.0), identical to the
+# forms gate so the two instances share a vetted, digest-locked image. Config
+# is via env vars (facebookgo/flagenv maps each CLI flag to an UPPER_SNAKE
+# env: bind -> BIND, target -> TARGET, difficulty -> DIFFICULTY,
+# metrics-bind -> METRICS_BIND, policy-fname -> POLICY_FNAME). Anubis
+# auto-generates an ephemeral ed25519 signing key at startup; with a single
+# replica a restart only invalidates in-flight challenges (visitor re-solves).
+# No persistent state, no volume beyond the read-only policy mount.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anubis-archive
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: anubis-archive
+    app.kubernetes.io/component: pow-gate
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: anubis-archive
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: anubis-archive
+        app.kubernetes.io/component: pow-gate
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: anubis
+          image: ghcr.io/techarohq/anubis:v1.13.0@sha256:7fd4c947f830f0ccad85dda41d33e711f27ca043109633eea60190a573c34919
+          env:
+            # Serve the PoW gate on :8081 (the tunnel target); flag default is
+            # :8923.
+            - name: BIND
+              value: ":8081"
+            - name: BIND_NETWORK
+              value: "tcp"
+            # Reverse-proxy solved requests to the in-namespace HyperKitty web
+            # tier. The mailman-web Service (ClusterIP 8080 -> pod targetPort
+            # 8000) fronts the web container co-located in the mailman-core pod
+            # (TIN-2493). Anubis dials the Service name+port; kube-proxy DNATs
+            # to the pod on 8000. HyperKitty owns per-list visibility, so
+            # keyholders@ stays private behind this same web tier.
+            - name: TARGET
+              value: "http://mailman-web:8080"
+            # Difficulty: leading zero nibbles a client must brute-force. Flag
+            # default is 5; 4 matches the forms gate — near-instant for a real
+            # human browsing the archive, still a tax on bulk crawlers.
+            - name: DIFFICULTY
+              value: "4"
+            # Metrics bind kept off the exposed path (not scraped yet, not
+            # reachable through the tunnel netpol). Explicit so it is not a
+            # surprise default.
+            - name: METRICS_BIND
+              value: ":9090"
+            - name: SLOG_LEVEL
+              value: "INFO"
+            # Bot policy document (JSON at v1.13.0). See
+            # configmap-anubis-policy.yaml: unlike the forms gate there is NO
+            # ALLOW carve-out for an API path — the archive is a pure browsing
+            # surface, so every human-browser request is CHALLENGEd and only
+            # crawlers/feeds are shaped.
+            - name: POLICY_FNAME
+              value: "/etc/anubis/botPolicies.json"
+          ports:
+            - name: http
+              containerPort: 8081
+            - name: metrics
+              containerPort: 9090
+          volumeMounts:
+            - name: policy
+              mountPath: /etc/anubis
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 20
+      volumes:
+        - name: policy
+          configMap:
+            name: anubis-archive-policy
+            items:
+              - key: botPolicies.json
+                path: botPolicies.json

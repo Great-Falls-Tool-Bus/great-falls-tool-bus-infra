@@ -253,6 +253,39 @@ resource "cloudflare_dns_record" "alias_forms" {
   ttl     = 1
 }
 
+# --- lists.latoolb.us — public discuss@ archive ingress tunnel CNAME --------
+# (TIN-2528, declare-only design packet). Mirrors the forms.latoolb.us record
+# above EXACTLY: a PROXIED CNAME to the SAME shared honey-ingress Cloudflare
+# Tunnel cname target, so the proxied edge answers and the tunnel carries the
+# request to the in-cluster anubis-archive PoW gate, which fronts the
+# HyperKitty web tier (k8s/archive/latoolb-us-production/).
+#
+# Hostname choice = lists.latoolb.us (NOT archives.latoolb.us): the HyperKitty
+# archive URL shape is ALREADY documented as
+# https://lists.latoolb.us/archives/list/<list>@latoolb.us/ (TIN-2380,
+# docs/runbooks/list-bringup.md "HyperKitty private archive URL shape"), and
+# ONE HyperKitty instance serves every list path-based off that one host — so
+# the host name reflects the whole lists engine, not a single archive. See
+# docs/discuss-archive-packet.md for the full rationale.
+#
+# FAIL-CLOSED: gated behind var.archives_dns_enabled, which DEFAULTS FALSE.
+# Merging this record changes NOTHING (no-op plan) until the flag is flipped
+# in a deliberate follow-up. Activation stays an operator-reviewable plan/apply
+# (dispatch-apply doctrine, D6), never a merge side effect — and, uniquely for
+# this route, it must NOT be flipped until the PRIVACY PRE-FLIGHT passes
+# (keyholders@ archive_policy=private|never AND HyperKitty enforces it for
+# anonymous users). Flip sequence: README.md "archives DNS enable sequence".
+resource "cloudflare_dns_record" "alias_archives" {
+  count = var.archives_dns_enabled ? 1 : 0
+
+  zone_id = data.cloudflare_zone.alias.zone_id
+  name    = "lists.${local.alias_domain}"
+  type    = "CNAME"
+  content = "da3ffda2-68ee-46d1-aa55-ec8dae2bd471.cfargotunnel.com"
+  proxied = true
+  ttl     = 1
+}
+
 resource "cloudflare_ruleset" "alias_redirect" {
   zone_id = data.cloudflare_zone.alias.zone_id
   name    = "GFTB alias redirect"

@@ -112,6 +112,35 @@ variable "forms_dns_enabled" {
   default     = true
 }
 
+variable "archives_dns_enabled" {
+  description = <<-EOT
+    Master gate for the lists.latoolb.us public-archive ingress CNAME
+    (TIN-2528). When true, lists.latoolb.us is a PROXIED CNAME to the
+    SAME shared honey-ingress Cloudflare Tunnel cname target
+    da3ffda2-68ee-46d1-aa55-ec8dae2bd471.cfargotunnel.com used by the
+    forms route, routing browser traffic through the tunnel to the
+    in-cluster anubis-archive PoW gate, which fronts the HyperKitty web
+    tier (k8s/archive/latoolb-us-production/) serving the PUBLIC discuss@
+    archive.
+
+    Defaults FALSE (fail-closed, mirroring var.forms_dns_enabled's
+    original shape). Merging the record changes nothing until this flag is
+    flipped in a follow-up, so activation stays an operator-reviewable
+    plan/apply (dispatch-apply doctrine, D6), not a merge side effect.
+
+    UNIQUE TO THIS ROUTE — do NOT flip true until the PRIVACY PRE-FLIGHT
+    passes: one HyperKitty instance serves BOTH lists path-based off this
+    one host, so exposing lists.latoolb.us also exposes the web tier that
+    serves the PRIVATE keyholders@ archive. Preconditions: keyholders@
+    archive_policy=private|never AND HyperKitty (>= 1.3.8, the RSS-feed
+    private-leak fix) enforces it for anonymous users, verified read-only.
+    Flip sequence + the full pre-flight: tofu/stacks/edge/README.md
+    "archives DNS enable sequence" and docs/discuss-archive-packet.md.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "alias_redirect_target" {
   description = <<-EOT
     301 target for latoolb.us + www.latoolb.us. Defaults to the raw
