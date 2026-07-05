@@ -18,7 +18,7 @@ fail() { echo "SELF-TEST FAILED: $1" >&2; cat "${TMP_DIR}/out" >&2; exit 1; }
 cat >"${TMP_DIR}/underwired-nix.tfvars" <<'EOF'
 extra_runner_sets = {
   some-product-nix = {
-    github_config_url = "https://github.com/Jesssullivan/x"
+    github_config_url = "https://github.com/ExampleOwner/x"
     runner_label      = "tinyland-nix"
     runner_type       = "nix"
     cpu_limit         = "4"
@@ -35,7 +35,7 @@ cat >"${TMP_DIR}/wired-nix.tfvars" <<EOF
 ${ATTIC_KEY}
 extra_runner_sets = {
   some-product-nix = {
-    github_config_url       = "https://github.com/Jesssullivan/x"
+    github_config_url       = "https://github.com/ExampleOwner/x"
     runner_label            = "tinyland-nix"
     runner_type             = "nix"
     attic_server            = "http://attic.nix-cache.svc.cluster.local"
@@ -51,7 +51,7 @@ cat >"${TMP_DIR}/cache-only-nix.tfvars" <<EOF
 ${ATTIC_KEY}
 extra_runner_sets = {
   some-cache-nix = {
-    github_config_url    = "https://github.com/Jesssullivan/x"
+    github_config_url    = "https://github.com/ExampleOwner/x"
     runner_label         = "tinyland-nix"
     runner_type          = "nix"
     attic_server         = "http://attic.nix-cache.svc.cluster.local"
@@ -65,7 +65,7 @@ run "${TMP_DIR}/cache-only-nix.tfvars" || fail "cache-only nix unexpectedly fail
 cat >"${TMP_DIR}/executor-dind.tfvars" <<'EOF'
 extra_runner_sets = {
   some-dind = {
-    github_config_url       = "https://github.com/Jesssullivan/x"
+    github_config_url       = "https://github.com/ExampleOwner/x"
     runner_label            = "tinyland-dind"
     runner_type             = "dind"
     bazel_cache_endpoint    = "grpc://bazel-cache.nix-cache.svc.cluster.local:9092"
@@ -80,7 +80,7 @@ cat >"${TMP_DIR}/executor-no-cache.tfvars" <<EOF
 ${ATTIC_KEY}
 extra_runner_sets = {
   bad-executor = {
-    github_config_url       = "https://github.com/Jesssullivan/x"
+    github_config_url       = "https://github.com/ExampleOwner/x"
     runner_label            = "tinyland-nix"
     runner_type             = "nix"
     attic_server            = "http://attic.nix-cache.svc.cluster.local"
@@ -95,7 +95,7 @@ grep -q "executor-backed mode requires a remote cache" "${TMP_DIR}/out" || fail 
 cat >"${TMP_DIR}/exempt-docker.tfvars" <<'EOF'
 extra_runner_sets = {
   personal-docker = {
-    github_config_url = "https://github.com/Jesssullivan/blog"
+    github_config_url = "https://github.com/ExampleOwner/blog"
     runner_label      = "tinyland-docker"
     runner_type       = "docker"
   }

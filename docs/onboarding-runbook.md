@@ -125,7 +125,7 @@ Execute first_repo_plan (**corrected 2026-07-02 per prompts-enqueue prompt 50 (g
 
 **Repo**: `gh repo create Great-Falls-Tool-Bus/great-falls-tool-bus.github.io --public` (org Pages site must be public on the free plan), seeded from `~/git/site.scaffold` (SvelteKit static site + Nix devshell + Justfile + Bazel toolchain-only module graph, the tinyland-goo lineage).
 
-**Runner story (the org inversion)**: `runs-on: tinyland-nix` resolves via the GFTB App's org-wide installation + the `great-falls-tool-bus-nix` scale set. The arc-runner module publishes the shared `tinyland-nix` label alongside the owner-distinct registration name. NO jesssullivan-infra anchor, NO extra_runner_sets entry, NO tfvars change: org-scoped registration already reaches this repo. This is the structural payoff vs orgs #1/#2.
+**Runner story (the org inversion)**: `runs-on: tinyland-nix` resolves via the GFTB App's org-wide installation + the `great-falls-tool-bus-nix` scale set. The arc-runner module publishes the shared `tinyland-nix` label alongside the owner-distinct registration name. NO personal-account overlay anchor, NO extra_runner_sets entry, NO tfvars change: org-scoped registration already reaches this repo. This is the structural payoff vs orgs #1/#2.
 
 **ci.yml**: copy tinyland-goo's two-tier shape verbatim, adjusted for GFTB:
 1. `check-build` + `bazel-graph` baseline lanes on `ubuntu-latest` (hosted; always green independent of the flywheel).

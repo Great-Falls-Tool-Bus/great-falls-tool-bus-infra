@@ -40,7 +40,7 @@ python3 "${GF_CORE}/scripts/validate-consumer-registry.py" >/dev/null || fail "c
 note "ok: static validator + registry valid"
 
 # CHECK 1 — overlay tfvars anchor exists, RBE-wired, runner_label == runner_class.
-# Org-shape delta from the jesssullivan template: GFTB registers ARC at the ORG
+# Org-shape delta from the older personal-account overlay: GFTB registers ARC at the ORG
 # scope, so a consumer's tfvars_anchor is normally the PRIMARY nix lane
 # (nix_runner_scale_set_name) rather than an extra_runner_sets block. Accept
 # either; the taxonomy validator runs WITHOUT --allow-repo-registration-anchor

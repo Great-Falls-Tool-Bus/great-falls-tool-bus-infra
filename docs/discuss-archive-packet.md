@@ -154,12 +154,13 @@ kubectl -n latoolb-us-production port-forward svc/mailman-web 8080:8080 &
 
 # 2. Probe the PRIVATE list as a fully anonymous client across EVERY surface.
 #    Every one of these MUST be 403/404/redirect-to-login (NOT 200):
+private_list="keyholders@latoolb.us"
 for u in \
-  "archives/list/keyholders@latoolb.us/" \
-  "archives/list/keyholders@latoolb.us/latest" \
-  "archives/list/keyholders@latoolb.us/feed/" \
-  "archives/list/keyholders@latoolb.us/export/keyholders@latoolb.us.mbox.gz" \
-  "archives/list/keyholders@latoolb.us/search/?q=access" ; do
+  "archives/list/${private_list}/" \
+  "archives/list/${private_list}/latest" \
+  "archives/list/${private_list}/feed/" \
+  "archives/list/${private_list}/export/${private_list}.mbox.gz" \
+  "archives/list/${private_list}/search/?q=access" ; do
     printf '%-72s ' "$u"
     curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: lists.latoolb.us' \
       "http://127.0.0.1:8080/$u"

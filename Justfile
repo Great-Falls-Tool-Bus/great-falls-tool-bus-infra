@@ -1,7 +1,7 @@
 set dotenv-load := false
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
-# GF core checkout path default. The jesssullivan-infra template defaulted to
+# GF core checkout path default. The older personal-account overlay defaulted to
 # "../GloriousFlywheel-infra-overlays" — a dead-name rename residue that forced
 # every operator to export GF_CORE_PATH. This overlay defaults to the real
 # checkout directory name. Override with GF_CORE_PATH / GF_CORE_CI_PATH when
@@ -16,6 +16,7 @@ default:
 
 check:
     just secrets-scan-dir
+    just public-surface
     just taxonomy
     just mail-cr-validate
     just list-stack-validate
@@ -35,6 +36,11 @@ secrets-scan-dir:
 # Gitleaks scan of git history
 secrets-scan:
     gitleaks git --config .gitleaks.toml --redact --verbose .
+
+# Keep public docs/workflows pointed at audited Justfile recipes, not raw
+# tofu/kubectl copy-paste snippets.
+public-surface:
+    python3 scripts/validate-public-operator-surface.py
 
 # Generate changelog (git-cliff)
 changelog:

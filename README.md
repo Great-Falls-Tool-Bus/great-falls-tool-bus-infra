@@ -1,8 +1,7 @@
 # great-falls-tool-bus-infra
 
-Private implementation overlay for the Great-Falls-Tool-Bus (GFTB) GitHub
-organization boundary, the third owner overlay on the shared Honey substrate
-after `tinyland-inc/tinyland-infra` and `Jesssullivan/jesssullivan-infra`.
+Implementation overlay for the Great-Falls-Tool-Bus (GFTB) GitHub
+organization boundary, the third owner overlay on the shared Honey substrate.
 
 This repository carries owner-specific deployment facts for GFTB org repo
 enrollment while reusing the same GloriousFlywheel backend services, runner
@@ -12,7 +11,7 @@ Because GFTB is an organization (not a personal account), ARC registers at the
 ORG scope: `github_config_url = https://github.com/Great-Falls-Tool-Bus`. One
 scale set serves every repo in the org, so this overlay needs **no** per-repo
 `extra_runner_sets` registration anchors (the biggest structural difference
-from the personal-account jesssullivan template).
+from the older personal-account overlay template).
 
 ## Architecture
 
