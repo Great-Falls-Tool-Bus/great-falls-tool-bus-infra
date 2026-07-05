@@ -159,10 +159,7 @@ jobs:
             nix develop ../GloriousFlywheel#ci -c just edge-zones-validate
             nix develop ../GloriousFlywheel#ci -c just edge-zones-init
             nix develop ../GloriousFlywheel#ci -c just edge-zones-plan
-            nix develop ../GloriousFlywheel#ci -c tofu \
-              -chdir=tofu/stacks/edge \
-              show -json "$(pwd)/.tofu-plans/edge.tfplan" \
-              > .tofu-plans/edge.tfplan.json
+            nix develop ../GloriousFlywheel#ci -c just _edge-zones-plan-json
             nix develop ../GloriousFlywheel#ci -c just edge-zones-plan-show \
               > .tofu-plans/edge.plan.txt
             {

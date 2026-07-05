@@ -21,7 +21,7 @@ Hard rules:
 - keep reusable OpenTofu modules, runner images, and product docs in
   `tinyland-inc/GloriousFlywheel`
 - this overlay owns the GFTB edge/DNS **apply plane**
-  (`tofu/stacks/edge-dns/`, `docs/edge-apply-runbook.md`) and the GFTB
+  (`tofu/stacks/edge/`, `docs/runbooks/edge-token-and-zones.md`) and the GFTB
   tenant sops lane (`secrets/`, repo-root `.sops.yaml`); the declarations
   SSOT is the public site repo's `tofu/{dns,mail}-intent/`, reconciled
   against the newer `docs/mvp-decision-packet.md` row (g) REVISED + REV-2

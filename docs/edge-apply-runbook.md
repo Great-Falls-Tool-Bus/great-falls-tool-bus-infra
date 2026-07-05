@@ -1,4 +1,13 @@
-# GFTB edge/DNS apply runbook (Cloudflare + DreamHost)
+# Archived GFTB edge-dns apply runbook
+
+This is a pre-TIN-2385 reference for the superseded `tofu/stacks/edge-dns/`
+stack. It is intentionally not wired into the public Justfile. The live
+operator surface is [`docs/runbooks/edge-token-and-zones.md`](runbooks/edge-token-and-zones.md)
+plus `just edge-zones-*`, backed by [`tofu/stacks/edge/`](../tofu/stacks/edge/README.md).
+
+Do not execute this runbook unless a new operator decision explicitly
+resurrects the old `edge-dns` stack and reintroduces Justfile recipes in the
+same reviewed PR.
 
 **TIN-2360 rows (b)/(c)/(g); row (c) amended 2026-07-02 (apply home is
 THIS overlay, not blahaj); row (g) REVISED + REV-2 (packet-final,
@@ -79,19 +88,14 @@ mirroring the site repo's `tofu/mail-intent/intent.yaml`, sequenced by
 TIN-2378/TIN-2379. `manage_alias_zone` exists only for the explicitly
 deferred whole-zone migration and is expected to stay `false`.
 
-## 2. Plan + apply the stack (path A only)
+## 2. Plan + apply the stack (archived)
 
-```bash
-sops exec-env secrets/edge-dns.enc.yaml 'just edge-init && just edge-plan'
-just edge-plan-show     # expect: web zone + A×4 + www (+ verification TXT when set)
-sops exec-env secrets/edge-dns.enc.yaml 'just edge-apply'
-```
+No live operator recipe exists for this stack. The previous `edge-*` recipes
+were removed from the Justfile after the TIN-2385 zone-scoped stack became the
+live apply plane. Use `just edge-zones-plan` / `just edge-zones-apply` instead.
 
-Records are pre-staged **before** the NS flip, so the cutover is atomic.
-The zone sits `pending` until step 3; records added meanwhile activate
-with the zone. Web records stay **DNS-only (grey cloud)** until GitHub
-Pages issues the custom-domain certificate (`web_records_proxied =
-false`), then flip to proxied, which REV-2 needs for Access anyway.
+The historical sequence pre-staged records before the NS flip so the cutover
+could be atomic. That behavior now belongs to the live `edge/` stack.
 
 Repo precondition first (site repo, separate PR there): `static/CNAME`
 containing `greatfallstoolbus.org` + a `BASE_PATH=""` build must land
@@ -100,11 +104,9 @@ URLs.
 
 ## 3. NS flip at DreamHost (path A; panel, the API cannot do this)
 
-Read the assigned NS hosts from the stack outputs:
-
-```bash
-just edge-init >/dev/null && tofu -chdir=tofu/stacks/edge-dns output
-```
+Read the assigned NS hosts from the live edge stack outputs through the
+operator-gated `edge-zones-*` lane, not by running raw `tofu` against this
+archived stack.
 
 The DreamHost API has **no registration-nameserver mutation**; the flip
 is a DreamHost **panel** step (Domains → Registrations → nameservers):
@@ -121,10 +123,12 @@ the custom domain on the Pages site
 `{"cname":"greatfallstoolbus.org"}`, or repo Settings → Pages). GitHub
 issues the org verification TXT value in that flow. Set
 `github_pages_verification_txt` in
-`tofu/stacks/edge-dns/great-falls-tool-bus.tfvars` and re-run step 2 to
-create the record (path B: add the TXT DreamHost-side instead). Wait for
-the certificate, then set `web_records_proxied = true`, re-apply, and add
-the Access application + allow policy (REV-2 gate) in the same change.
+`tofu/stacks/edge-dns/great-falls-tool-bus.tfvars` in this historical model
+and re-ran the archived stack to create the record (path B: add the TXT
+DreamHost-side instead). In the live model, use the `edge-zones-*` lane
+described by `docs/runbooks/edge-token-and-zones.md`. Wait for the
+certificate, then set the proxied serving posture and Access gate in that live
+stack.
 Verify with the site-repo checklist step 2, expect the Access
 interstitial, not the public site, until un-gating.
 

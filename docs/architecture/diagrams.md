@@ -140,7 +140,7 @@ flowchart TD
     end
 
     subgraph overlay["Apply plane: great-falls-tool-bus-infra"]
-        edge["tofu apply<br/>edge-dns / edge zones"]
+        edge["tofu apply<br/>live edge zone stack"]
         crs["Mail CRs<br/>MailDomain / MailAccount / MailAlias<br/>k8s/mail/"]
         liststack["Mailman list stack<br/>k8s/list/"]
         gate["Protected env gate: mail<br/>mail-crs.yml / list-crs.yml"]

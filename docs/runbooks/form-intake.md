@@ -198,19 +198,13 @@ reply directly.
 
 ## Rollback
 
-Delete the two Deployments (the gate and the handler); the tunnel route can be
-left or removed:
+Rollback is operator-controlled. First remove the Cloudflare public-hostname
+route; that instantly stops internet reach regardless of pod state. A workload
+teardown, if needed, should be performed from the private cluster operations
+lane with an explicit recorded decision, not copied from this public runbook.
 
-```bash
-kubectl --context honey -n latoolb-us-production delete deploy anubis form-handler
-# full teardown of the stack:
-kubectl --context honey -n latoolb-us-production delete -k k8s/form/latoolb-us-production
-```
-
-Removing the Cloudflare public-hostname route (gate 3) instantly stops all
-internet reach regardless of pod state. The reciprocal list-stack netpol rule is
-harmless to leave (it only admits a pod that no longer exists); remove it on a
-full revert of this change.
+The reciprocal list-stack netpol rule is harmless to leave (it only admits a
+pod that no longer exists); remove it on a full revert of this change.
 
 ## Notes
 
