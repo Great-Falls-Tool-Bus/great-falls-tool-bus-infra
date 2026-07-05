@@ -345,6 +345,29 @@ form-stack-server-dry-run: form-stack-validate _mail-kubeconfig-inputs
 form-stack-apply: form-stack-server-dry-run
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ form_stack_dir }}
 
+# --- GFTB public discuss@ archive stack (TIN-2528) --------------------------
+# SECOND Anubis PoW gate (anubis-archive) fronting the HyperKitty web tier so
+# the PUBLIC discuss@ archive can ride the shared honey-ingress Cloudflare
+# Tunnel (anti-scrape, NOT auth). Faithful mirror of the form-stack recipes
+# above, pointed at k8s/archive. Deployed overlay-side into latoolb-us-production
+# and dry-run/applied with the SAME namespace-scoped mail kubeconfig (same RBAC
+# caveat as the form/list stacks). Checked-in validation is offline. DECLARE-ONLY:
+# applying it exposes nothing until the privacy pre-flight passes, the Cloudflare
+# tunnel public-hostname route is added (dashboard-side), and
+# var.archives_dns_enabled flips true. See
+# k8s/archive/latoolb-us-production/README.md and docs/discuss-archive-packet.md.
+
+archive_stack_dir := "k8s/archive/latoolb-us-production"
+
+archive-stack-validate:
+    bash scripts/validate-archive-stack.sh {{ archive_stack_dir }}
+
+archive-stack-server-dry-run: archive-stack-validate _mail-kubeconfig-inputs
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply --dry-run=server -k {{ archive_stack_dir }}
+
+archive-stack-apply: archive-stack-server-dry-run
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ archive_stack_dir }}
+
 # --- GFTB on-cluster web serving (TIN-2541 skeleton; TIN-2543 cutover) -------
 # DECLARE-ONLY IN GIT. SvelteKit adapter-node -> ClusterIP 80->3000 ->
 # honey-ingress cloudflared tunnel, mirroring the proven MassageIthaca
