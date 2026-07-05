@@ -1,0 +1,123 @@
+# TIN-2420 Path B — Anubis bot policy for the contact-intake route.
+#
+# THE WRINKLE this policy resolves: Anubis's proof-of-work is a JavaScript/WASM
+# challenge served as an HTML interstitial into a *browsing context*. The static
+# site (greatfallstoolbus.org) reaches the handler with a cross-origin
+# `fetch()` POST to /api/contact — that fetch receives the challenge HTML as an
+# opaque body and CANNOT solve it (no browsing context, no script execution on
+# the response). A programmatic JSON client can never clear a browser challenge.
+#
+# Upstream's own answer for JSON/API callers is an ALLOW rule on the path,
+# ordered before the generic browser CHALLENGE rule (rules are evaluated top to
+# bottom, first terminal match wins). See TecharoHQ/anubis discussion #1543
+# ("How to bypass challenge for special urls (api entries)") and
+# docs/admin/policies — ALLOW "bypasses all further checks and sends the request
+# to the backend". No released Anubis version (through v1.17.0 as of 2026-07)
+# ships a fetch/XHR-solvable challenge; allowlisting the path is THE pattern.
+#
+# TRADEOFF (stated crisply): with /api/contact ALLOWed, Anubis no longer gates
+# that one path. The handler's own defenses are therefore the primary control
+# for the API: honeypot ('website' field), per-client token bucket (5/min),
+# strict JSON validation + header-injection sanitising, a 64 KiB body cap, and
+# CORS locked to https://greatfallstoolbus.org. Founding row `f` (the Anubis
+# gate) is HONORED: every other path on the forms hostname — i.e. the browsing
+# surface — still gets the PoW challenge (generic-browser: Mozilla -> CHALLENGE),
+# so a human pointing a browser at forms.latoolb.us is challenged as decided.
+#
+# FORMAT: v1.13.0 parses the policy as JSON ONLY (cmd/anubis/policy.go decodes
+# with encoding/json; the built-in default is cmd/anubis/botPolicies.json). YAML
+# policy support landed later (v1.17.0). Rule fields available at v1.13.0 are
+# name / user_agent_regex / path_regex / action; there is NO request-method
+# matcher at this version (method/header-expr matching is a later addition), and
+# path_regex matches r.URL.Path only. Hence the ALLOW is path-scoped, not
+# method-scoped — acceptable because the handler rejects every method other than
+# POST/OPTIONS on that path and owns its own abuse controls.
+#
+# This is the upstream v1.13.0 default policy with ONE rule prepended: the
+# /api/contact ALLOW. Everything below it is the stock curated allow/deny list
+# so bot posture and the browsing-surface challenge are unchanged.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: anubis-policy
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: anubis
+    app.kubernetes.io/component: pow-gate
+data:
+  botPolicies.json: |
+    {
+      "bots": [
+        {
+          "name": "gftb-contact-api",
+          "path_regex": "^/api/contact$",
+          "action": "ALLOW"
+        },
+        {
+          "name": "amazonbot",
+          "user_agent_regex": "Amazonbot",
+          "action": "DENY"
+        },
+        {
+          "name": "googlebot",
+          "user_agent_regex": "\\+http\\:\\/\\/www\\.google\\.com/bot\\.html",
+          "action": "ALLOW"
+        },
+        {
+          "name": "bingbot",
+          "user_agent_regex": "\\+http\\:\\/\\/www\\.bing\\.com/bingbot\\.htm",
+          "action": "ALLOW"
+        },
+        {
+          "name": "qwantbot",
+          "user_agent_regex": "\\+https\\:\\/\\/help\\.qwant\\.com/bot/",
+          "action": "ALLOW"
+        },
+        {
+          "name": "us-artificial-intelligence-scraper",
+          "user_agent_regex": "\\+https\\:\\/\\/github\\.com\\/US-Artificial-Intelligence\\/scraper",
+          "action": "DENY"
+        },
+        {
+          "name": "well-known",
+          "path_regex": "^/.well-known/.*$",
+          "action": "ALLOW"
+        },
+        {
+          "name": "favicon",
+          "path_regex": "^/favicon.ico$",
+          "action": "ALLOW"
+        },
+        {
+          "name": "robots-txt",
+          "path_regex": "^/robots.txt$",
+          "action": "ALLOW"
+        },
+        {
+          "name": "rss-readers",
+          "path_regex": ".*\\.(rss|xml|atom|json)$",
+          "action": "ALLOW"
+        },
+        {
+          "name": "lightpanda",
+          "user_agent_regex": "^Lightpanda/.*$",
+          "action": "DENY"
+        },
+        {
+          "name": "headless-chrome",
+          "user_agent_regex": "HeadlessChrome",
+          "action": "DENY"
+        },
+        {
+          "name": "headless-chromium",
+          "user_agent_regex": "HeadlessChromium",
+          "action": "DENY"
+        },
+        {
+          "name": "generic-browser",
+          "user_agent_regex": "Mozilla",
+          "action": "CHALLENGE"
+        }
+      ],
+      "dnsbl": true
+    }

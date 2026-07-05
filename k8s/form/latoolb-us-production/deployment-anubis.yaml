@@ -63,11 +63,26 @@ spec:
               value: ":9090"
             - name: SLOG_LEVEL
               value: "INFO"
+            # Bot policy document. The flag is `policy-fname`; facebookgo/flagenv
+            # maps it UPPER_SNAKE with dashes -> underscores (same rule that gives
+            # metrics-bind -> METRICS_BIND above), so the env is POLICY_FNAME.
+            # Empty default = the built-in policy; we override it with a mounted
+            # copy that ALLOWs POST /api/contact (the cross-origin fetch cannot
+            # solve a browser PoW challenge) while keeping the browsing surface
+            # challenged. v1.13.0 parses the policy as JSON. See the ConfigMap
+            # configmap-anubis-policy.yaml and docs/runbooks/form-intake.md.
+            - name: POLICY_FNAME
+              value: "/etc/anubis/botPolicies.json"
           ports:
             - name: http
               containerPort: 8081
             - name: metrics
               containerPort: 9090
+          volumeMounts:
+            # Read-only policy mount; compatible with readOnlyRootFilesystem.
+            - name: policy
+              mountPath: /etc/anubis
+              readOnly: true
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -90,3 +105,12 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 20
+      volumes:
+        # The bot policy, projected read-only from the ConfigMap to
+        # /etc/anubis/botPolicies.json (POLICY_FNAME).
+        - name: policy
+          configMap:
+            name: anubis-policy
+            items:
+              - key: botPolicies.json
+                path: botPolicies.json

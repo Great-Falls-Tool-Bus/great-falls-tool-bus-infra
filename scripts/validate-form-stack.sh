@@ -12,6 +12,7 @@ handler_svc="${dir}/service-form-handler.yaml"
 handler_cm="${dir}/configmap-form-handler.yaml"
 anubis_deploy="${dir}/deployment-anubis.yaml"
 anubis_svc="${dir}/service-anubis.yaml"
+anubis_policy_cm="${dir}/configmap-anubis-policy.yaml"
 netpol="${dir}/networkpolicy.yaml"
 kustomization="${dir}/kustomization.yaml"
 
@@ -37,8 +38,11 @@ assert_eq() {
 command -v yq >/dev/null 2>&1 || fail "yq is required"
 command -v kubectl >/dev/null 2>&1 || fail "kubectl is required for kubectl kustomize"
 
+command -v jq >/dev/null 2>&1 || fail "jq is required (bot policy JSON assertions)"
+
 for f in "${handler_deploy}" "${handler_svc}" "${handler_cm}" \
-  "${anubis_deploy}" "${anubis_svc}" "${netpol}" "${kustomization}"; do
+  "${anubis_deploy}" "${anubis_svc}" "${anubis_policy_cm}" "${netpol}" \
+  "${kustomization}"; do
   require_file "${f}"
 done
 
@@ -72,6 +76,42 @@ anubis_bind="$(yq -r 'select(.kind == "Deployment" and .metadata.name == "anubis
 assert_eq "${anubis_bind}" ":8081" "Anubis BIND (tunnel target port)"
 anubis_svc_port="$(yq -r '.spec.ports[] | select(.name == "http") | .port' "${anubis_svc}")"
 assert_eq "${anubis_svc_port}" "8081" "Anubis Service port (tunnel target)"
+
+# --- Bot policy: JSON API route ALLOWed, browsing surface still CHALLENGEd -----
+# The site's cross-origin fetch() POST to /api/contact cannot solve Anubis's
+# browser PoW challenge, so the policy must ALLOW that path while keeping the
+# default browser challenge for everything else (founding row f). v1.13.0 parses
+# the policy as JSON, so we assert the mounted ConfigMap's JSON shape directly.
+assert_eq "$(yq -r '.kind' "${anubis_policy_cm}")" "ConfigMap" "anubis policy object kind"
+assert_eq "$(yq -r '.metadata.name' "${anubis_policy_cm}")" "anubis-policy" "anubis policy ConfigMap name"
+
+# Anubis must be pointed at the mounted policy (POLICY_FNAME) and mount it.
+anubis_policy_fname="$(yq -r 'select(.kind == "Deployment" and .metadata.name == "anubis") | .spec.template.spec.containers[] | select(.name == "anubis") | .env[] | select(.name == "POLICY_FNAME") | .value' "${anubis_deploy}")"
+assert_eq "${anubis_policy_fname}" "/etc/anubis/botPolicies.json" "Anubis POLICY_FNAME (mounted policy path)"
+anubis_policy_vol="$(yq -r 'select(.kind == "Deployment" and .metadata.name == "anubis") | .spec.template.spec.volumes[] | select(.configMap.name == "anubis-policy") | .name' "${anubis_deploy}")"
+test -n "${anubis_policy_vol}" || fail "Anubis Deployment must mount a volume from the anubis-policy ConfigMap"
+anubis_policy_mount="$(yq -r 'select(.kind == "Deployment" and .metadata.name == "anubis") | .spec.template.spec.containers[] | select(.name == "anubis") | .volumeMounts[] | select(.name == "'"${anubis_policy_vol}"'") | .mountPath' "${anubis_deploy}")"
+assert_eq "${anubis_policy_mount}" "/etc/anubis" "Anubis policy volumeMount path (must yield POLICY_FNAME)"
+
+# The policy body must be valid JSON (v1.13.0 decodes with encoding/json).
+policy_json="$(yq -r '.data["botPolicies.json"]' "${anubis_policy_cm}")"
+echo "${policy_json}" | jq -e . >/dev/null 2>&1 || fail "botPolicies.json is not valid JSON (v1.13.0 parses JSON only)"
+
+# There must be an ALLOW rule that matches POST /api/contact. Assert against the
+# real regex, not just its presence, so a typo in the pattern fails CI. The
+# regex is bound to $p first because test()'s input becomes the probe string.
+allow_matches="$(echo "${policy_json}" | jq -r '[.bots[] | select(.action == "ALLOW" and .path_regex != null and (.path_regex as $p | "/api/contact" | test($p)))] | length')"
+test "${allow_matches}" -ge 1 || fail "policy must ALLOW /api/contact (a path_regex ALLOW rule that matches the endpoint)"
+
+# The default browser challenge must remain intact (row f: browsing surface gated).
+challenge_present="$(echo "${policy_json}" | jq -r '[.bots[] | select(.action == "CHALLENGE" and .user_agent_regex != null and (.user_agent_regex as $u | "Mozilla/5.0" | test($u)))] | length')"
+test "${challenge_present}" -ge 1 || fail "policy must keep a CHALLENGE rule for browser user agents (default browsing-surface gate)"
+
+# Order matters: the /api/contact ALLOW must precede the browser CHALLENGE so a
+# real browser's fetch (Mozilla UA) hits ALLOW first, not the challenge.
+allow_idx="$(echo "${policy_json}" | jq -r 'first(.bots | to_entries[] | select(.value.action == "ALLOW" and .value.path_regex != null and (.value.path_regex as $p | "/api/contact" | test($p))) | .key)')"
+challenge_idx="$(echo "${policy_json}" | jq -r 'first(.bots | to_entries[] | select(.value.action == "CHALLENGE" and .value.user_agent_regex != null and (.value.user_agent_regex as $u | "Mozilla/5.0" | test($u))) | .key)')"
+test "${allow_idx}" -lt "${challenge_idx}" || fail "the /api/contact ALLOW rule must be ordered before the browser CHALLENGE rule"
 
 # --- LMTP target (contract: keyholders list, port 8024) ----------------------
 lmtp_host="$(yq -r 'select(.kind == "Deployment" and .metadata.name == "form-handler") | .spec.template.spec.containers[] | select(.name == "form-handler") | .env[] | select(.name == "LMTP_HOST") | .value' "${handler_deploy}")"
@@ -146,4 +186,4 @@ fi
 # --- Full render must succeed ------------------------------------------------
 kubectl kustomize "${dir}" >/dev/null
 
-echo "form stack validation passed: Anubis PoW gate -> form-handler -> LMTP :8024 keyholders@latoolb.us, CORS greatfallstoolbus.org only, digests pinned, no committed secrets"
+echo "form stack validation passed: Anubis PoW gate (ALLOW /api/contact, CHALLENGE browsing surface) -> form-handler -> LMTP :8024 keyholders@latoolb.us, CORS greatfallstoolbus.org only, digests pinned, no committed secrets"
