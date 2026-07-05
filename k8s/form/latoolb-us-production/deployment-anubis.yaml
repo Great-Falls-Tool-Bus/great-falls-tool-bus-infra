@@ -1,0 +1,92 @@
+# TIN-2420 Path B — Anubis: the FIRST house deployment of the Anubis proof-of-work
+# anti-bot gate (founding row f DECIDED the Anubis gate; do not relitigate).
+# Scoped to THIS route only: Anubis is the only pod the tunnel reaches, and it
+# reverse-proxies solved requests to the form-handler.
+#
+# Image PINNED BY DIGEST (ghcr.io/techarohq/anubis:v1.13.0).
+# Config is via env vars — Anubis uses facebookgo/flagenv, which maps each CLI
+# flag to an UPPER_SNAKE env var (bind -> BIND, target -> TARGET, difficulty ->
+# DIFFICULTY, metrics-bind -> METRICS_BIND). Verified against the v1.13.0
+# cmd/anubis/main.go flag table. Anubis auto-generates an ephemeral ed25519
+# signing key at startup (no key env in v1.13.0); with a single replica this is
+# fine — a restart only invalidates in-flight challenges, and the visitor simply
+# re-solves the PoW. No persistent state, no volume.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anubis
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: anubis
+    app.kubernetes.io/component: pow-gate
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: anubis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: anubis
+        app.kubernetes.io/component: pow-gate
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: anubis
+          image: ghcr.io/techarohq/anubis:v1.13.0@sha256:7fd4c947f830f0ccad85dda41d33e711f27ca043109633eea60190a573c34919
+          env:
+            # Serve the PoW gate on :8081 (the tunnel target); the flag default
+            # is :8923.
+            - name: BIND
+              value: ":8081"
+            - name: BIND_NETWORK
+              value: "tcp"
+            # Reverse-proxy solved requests to the in-namespace handler Service.
+            - name: TARGET
+              value: "http://form-handler:8080"
+            # Modest difficulty: number of leading zero nibbles the client must
+            # brute-force. The flag default is 5; 4 keeps a legitimate contact
+            # visitor's solve near-instant while still taxing bulk bots.
+            - name: DIFFICULTY
+              value: "4"
+            # Metrics bind is kept off the exposed path; not scraped yet and not
+            # reachable through the tunnel netpol. Explicit so it is not a
+            # surprise default.
+            - name: METRICS_BIND
+              value: ":9090"
+            - name: SLOG_LEVEL
+              value: "INFO"
+          ports:
+            - name: http
+              containerPort: 8081
+            - name: metrics
+              containerPort: 9090
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 20

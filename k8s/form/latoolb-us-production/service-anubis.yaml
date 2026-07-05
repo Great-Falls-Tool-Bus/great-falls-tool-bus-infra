@@ -1,0 +1,22 @@
+# ClusterIP the cloudflared tunnel targets for the forms hostname (e.g.
+# forms.latoolb.us). Anubis is the ONLY component the tunnel reaches; it fronts
+# the form-handler. The tunnel public-hostname -> this Service:8081 route is a
+# Cloudflare-side config (token-managed tunnel; the ingress map lives in the
+# Cloudflare zero-trust dashboard/API, NOT in this repo or a ConfigMap). See the
+# runbook.
+apiVersion: v1
+kind: Service
+metadata:
+  name: anubis
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: anubis
+    app.kubernetes.io/component: pow-gate
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: anubis
+  ports:
+    - name: http
+      port: 8081
+      targetPort: http

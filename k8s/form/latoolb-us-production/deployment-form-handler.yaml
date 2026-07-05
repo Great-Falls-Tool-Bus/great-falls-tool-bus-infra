@@ -1,0 +1,89 @@
+# TIN-2420 Path B — form-handler: a tiny stdlib-only HTTP service that validates
+# the contact payload and injects it over LMTP to the keyholders@ Mailman list.
+#
+# Image is the upstream python runtime PINNED BY DIGEST; the application is the
+# ConfigMap-mounted server.py (no build, no pushed image of our own). runAsNonRoot
+# with a read-only root FS: nothing is written to disk at runtime.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: form-handler
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: form-handler
+    app.kubernetes.io/component: contact-intake
+spec:
+  replicas: 1
+  # Single replica keeps the in-memory token bucket coherent (no shared store).
+  # The workload is trivially cheap; horizontal scale would need an external
+  # rate-limit store, which is out of scope for a contact form.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: form-handler
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: form-handler
+        app.kubernetes.io/component: contact-intake
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: form-handler
+          image: python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df
+          command: ["python3", "/app/server.py"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: FORM_BIND_PORT
+              value: "8080"
+            - name: LMTP_HOST
+              value: mailman-core.latoolb-us-production.svc.cluster.local
+            - name: LMTP_PORT
+              value: "8024"
+            - name: FORM_MAIL_FROM
+              value: form-intake@latoolb.us
+            - name: FORM_MAIL_TO
+              value: keyholders@latoolb.us
+            - name: FORM_ALLOWED_ORIGIN
+              value: https://greatfallstoolbus.org
+          volumeMounts:
+            - name: src
+              mountPath: /app
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 20
+      volumes:
+        - name: src
+          configMap:
+            name: form-handler-src

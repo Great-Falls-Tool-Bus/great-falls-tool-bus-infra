@@ -1,0 +1,109 @@
+# NetworkPolicies for the TIN-2420 contact-intake stack, default-deny posture
+# (each selected pod becomes default-deny for the selected direction except what
+# is allowed here). Two enforced legs:
+#
+#   tunnel(cloudflared) --8081--> anubis --8080--> form-handler --8024--> mailman-core
+#
+# TUNNEL-SOURCE FINDING (read-only kubectl --context honey, 2026-07-04):
+#   The house tunnel is cloudflared, deployed as a NON-host-networked Deployment
+#   (replicas: 2) in the `cloudflared` namespace. Pods carry flannel pod IPs
+#   (observed 10.244.0.90 on honey, 10.244.2.133 on sting), NOT node IPs. This
+#   is the crucial contrast with the substrate postfix in the list stack, which
+#   IS host-networked and therefore appears as a node/flannel-CIDR source. Since
+#   cloudflared is a normal pod, cross-namespace pod-to-pod traffic under
+#   rke2-canal (Calico policy + flannel VXLAN) preserves the real pod source, so
+#   a namespaceSelector on the `cloudflared` namespace is the correct, tightest
+#   admission — no ipBlock/SNAT workaround is needed on THIS ingress leg.
+#   The cloudflared namespace has only the default identity label
+#   kubernetes.io/metadata.name=cloudflared (no custom labels), so we select on
+#   that. The tunnel is token-managed: the forms hostname -> anubis:8081 route
+#   lives Cloudflare-side, not here.
+#   FALLBACK (documented, not applied): if a future CNI change SNATs
+#   cross-node pod traffic and the namespaceSelector stops matching, widen to
+#   `ipBlock: 10.244.0.0/16` (the flannel pod CIDR) with the same rigor the list
+#   netpol uses for the host-networked postfix leg. Prefer the namespaceSelector
+#   until a live round-trip proves otherwise.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: anubis
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: anubis
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: anubis
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # Tunnel -> Anubis PoW gate on 8081. Source is the cloudflared namespace
+    # (non-host-networked pods; see the TUNNEL-SOURCE FINDING above).
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cloudflared
+      ports:
+        - protocol: TCP
+          port: 8081
+  egress:
+    - to: [] # DNS
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Anubis -> form-handler only (proxy the solved request). No other egress.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: form-handler
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: form-handler
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: form-handler
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: form-handler
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # ONLY Anubis may reach the handler on 8080. The handler is never exposed
+    # directly through the tunnel; the PoW gate is not bypassable at the network
+    # layer.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: anubis
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to: [] # DNS
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Handler -> mailman-core LMTP 8024 only. In-namespace pod-to-pod, so a
+    # podSelector matches (unlike the host-networked postfix leg in the list
+    # stack). The RECIPROCAL admission — mailman-core accepting 8024 from this
+    # pod — is added to the list stack's own NetworkPolicy (k8s/list/.../
+    # networkpolicy.yaml) in this same change, because that policy is
+    # default-deny on ingress and its existing 8024 rule only admits the
+    # host-networked postfix flannel CIDR. Without that reciprocal rule LMTP
+    # delivery fails closed; see the runbook pre-apply gate.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mailman-core
+      ports:
+        - protocol: TCP
+          port: 8024
