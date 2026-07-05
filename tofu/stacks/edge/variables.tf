@@ -109,7 +109,7 @@ variable "forms_dns_enabled" {
     README.md "forms DNS enable sequence".
   EOT
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "alias_redirect_target" {
