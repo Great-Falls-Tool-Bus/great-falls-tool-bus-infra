@@ -225,6 +225,34 @@ resource "cloudflare_dns_record" "alias_dkim" {
   ttl     = 1
 }
 
+# --- forms.latoolb.us — contact-form ingress tunnel CNAME (TIN-2420) ---------
+# Path B go-live: the site contact form POSTs to the intake handler, which
+# is fronted by Anubis and served out of the cluster over the SHARED
+# honey-ingress Cloudflare Tunnel. This record points the form origin
+# hostname at that tunnel's cname target so the proxied edge answers and
+# the tunnel carries the request to the in-cluster handler.
+#
+# Tunnel cname target da3ffda2-68ee-46d1-aa55-ec8dae2bd471.cfargotunnel.com
+# is the shared honey-ingress tunnel per the blahaj recon in
+# Great-Falls-Tool-Bus/blahaj-infra-boundary PR #908 (honey-ingress tunnel
+# id da3ffda2-68ee-46d1-aa55-ec8dae2bd471). Proxied so the tunnel route and
+# Anubis gate front the handler and TLS terminates at the edge.
+#
+# Gated behind var.forms_dns_enabled (default false — same fail-closed shape
+# as var.mail_dns_enabled): merging this changes NOTHING (no-op plan) until
+# the flag is flipped, keeping activation an operator-reviewable plan/apply
+# (dispatch-apply doctrine, D6) rather than a merge side effect.
+resource "cloudflare_dns_record" "alias_forms" {
+  count = var.forms_dns_enabled ? 1 : 0
+
+  zone_id = data.cloudflare_zone.alias.zone_id
+  name    = "forms.${local.alias_domain}"
+  type    = "CNAME"
+  content = "da3ffda2-68ee-46d1-aa55-ec8dae2bd471.cfargotunnel.com"
+  proxied = true
+  ttl     = 1
+}
+
 resource "cloudflare_ruleset" "alias_redirect" {
   zone_id = data.cloudflare_zone.alias.zone_id
   name    = "GFTB alias redirect"

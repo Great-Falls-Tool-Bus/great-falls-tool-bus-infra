@@ -92,6 +92,26 @@ variable "mail_dkim_txt" {
   default     = "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAysrM9OU25XpwMPRfJoXLEnYSO64eJM36hzAhTOkk/GtgGI1yf7Xz/DIEtuYP73xe0pR4j9gS/e5feUvauqUnXaFVhQEGpac0ewL31mHDlfDepudLwYXC7vNrX1nkTYBmEhbHh9JKXMRbDOt57USQUAlHFtdZg/paRKGn2m85xQUUUMQ1PoIqgBIjKcue/HsqaPUSbIxEIFl5JkhczWF64gtqP3Il0JyPmSGGlGsXCTRkyNx0DHEah4pOkghoNgv0Gsve6mg/dI4jN/sqPAfq8/1Y2KeJMTl/IGPhC23JdZRo3rAq8PGeuY8rjcyZV3h8hV/GU5ROvX/AoUz6HREg3QIDAQAB"
 }
 
+variable "forms_dns_enabled" {
+  description = <<-EOT
+    Master gate for the forms.latoolb.us contact-form ingress CNAME
+    (TIN-2420 Path B). When true, forms.latoolb.us is a PROXIED CNAME to
+    the shared honey-ingress Cloudflare Tunnel cname target
+    da3ffda2-68ee-46d1-aa55-ec8dae2bd471.cfargotunnel.com (tunnel id per
+    Great-Falls-Tool-Bus/blahaj-infra-boundary PR #908 recon), routing the
+    site form POST through the tunnel to the in-cluster intake handler
+    behind the Anubis gate.
+
+    Defaults FALSE (fail-closed, mirroring var.mail_dns_enabled's original
+    shape): merging the record changes nothing until this flag is flipped
+    in a follow-up, so activation stays an operator-reviewable plan/apply
+    (dispatch-apply doctrine, D6), not a merge side effect. Flip sequence:
+    README.md "forms DNS enable sequence".
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "alias_redirect_target" {
   description = <<-EOT
     301 target for latoolb.us + www.latoolb.us. Defaults to the raw
