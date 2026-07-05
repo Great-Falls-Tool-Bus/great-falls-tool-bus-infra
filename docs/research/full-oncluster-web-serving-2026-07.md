@@ -50,14 +50,14 @@ inviable under private repos (ADR 0007 / site PR #74).
 
 ### 1a. What MI actually does (cited)
 
-MassageIthaca is a two-source-of-truth system — `Jesssullivan/MassageIthaca`
+MassageIthaca is a two-source-of-truth system — the MassageIthaca app repo
 (app + container) and `tinyland-inc/blahaj` (infra/tofu/k8s/tunnel) — and it is
 the clean reference for full on-cluster web serving:
 
 | Layer | Mechanism | Citation |
 |---|---|---|
-| Adapter | SvelteKit `@sveltejs/adapter-node` (a long-running Node HTTP server, **not** `adapter-static`); build emits `build/index.js` | `Jesssullivan/MassageIthaca:svelte.config.js` |
-| Artifact | multi-stage OCI image: builder runs `pnpm run build` (`CONTAINER=1`); prod stage copies `build/` + `static/`, installs `--prod`, runs non-root uid/gid 1001 under dumb-init, `EXPOSE 3000`, `CMD ["node","build/index.js"]`, HEALTHCHECK on `/`. Published `ghcr.io/jesssullivan/massageithaca:sha-<commit>` | `MassageIthaca:ContainerFile`, `.github/workflows/docker-ghcr.yml` |
+| Adapter | SvelteKit `@sveltejs/adapter-node` (a long-running Node HTTP server, **not** `adapter-static`); build emits `build/index.js` | `MassageIthaca:svelte.config.js` |
+| Artifact | multi-stage OCI image: builder runs `pnpm run build` (`CONTAINER=1`); prod stage copies `build/` + `static/`, installs `--prod`, runs non-root uid/gid 1001 under dumb-init, `EXPOSE 3000`, `CMD ["node","build/index.js"]`, HEALTHCHECK on `/`. Published as a same-owner GHCR image | `MassageIthaca:ContainerFile`, `.github/workflows/docker-ghcr.yml` |
 | Deployment | `kubernetes_deployment_v1` in **blahaj** (not the app repo): containerPort 3000, RollingUpdate, liveness+readiness HTTP `GET /api/health`:3000, runAsNonRoot 1001, anti-affinity + topology-spread, PDB, prod `replicas=2` | `blahaj:tofu/stacks/massageithaca/main.tf`, `tofu/config/massageithaca-prod-honey.tfvars.json` |
 | Service | plain **ClusterIP** port 80 → targetPort 3000; internal DNS only, never internet-exposed | `blahaj:tofu/stacks/massageithaca/main.tf` (~L587) |
 | Public edge | in-cluster `cloudflared` named-token tunnel (`honey-ingress`, id `da3ffda2-68ee-46d1-aa55-ec8dae2bd471`), apex+www are PROXIED CNAMEs → `<id>.cfargotunnel.com`, forwarding to `http://massageithaca.massageithaca-prod.svc.cluster.local:80` | `blahaj:deploy/honey/retained-cloudflared.yaml`, `tofu/intent/massageithaca/public-edge-routes.json` (`active_production_routes`) |
@@ -188,7 +188,7 @@ surface out of the public repo.
    contract (site `0002`). Nothing in "build an image" requires a privileged
    credential in the public repo.
 2. **GHCR publish uses the ambient `GITHUB_TOKEN`.** MI publishes
-   `ghcr.io/jesssullivan/massageithaca` from its own same-org CI; GFTB publishes
+   its app image from its own same-owner CI; GFTB publishes
    `ghcr.io/great-falls-tool-bus/greatfallstoolbus.org` the same way. No
    cross-org secret, no long-lived PAT in the tree.
 3. **On-cluster serving lets the public repo RETIRE its one live CF credential.**
@@ -479,7 +479,7 @@ brief as reversing ADR 0003. Instead:
 - Linear: TIN-2537 (this brief's issue), TIN-2541 (live probe), TIN-2535 (preview ADR + operator
   scoping comment 2026-07-05), TIN-2528 (archive), ADR 0003 + ADR 0007
   (referenced), TIN-2385 / TIN-2382 / TIN-991 / TIN-2420.
-- `Jesssullivan/MassageIthaca`: `svelte.config.js`, `ContainerFile`,
+- MassageIthaca app repo: `svelte.config.js`, `ContainerFile`,
   `.github/workflows/docker-ghcr.yml`, `docs/deployment/overview.md`,
   `docs/deployment/ci-cd-pipeline.md`, `Caddyfile`,
   `scripts/check-k8s-prod-canary.mjs`.

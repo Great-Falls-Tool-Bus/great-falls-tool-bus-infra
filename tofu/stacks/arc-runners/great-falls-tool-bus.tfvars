@@ -1,6 +1,6 @@
 # Great-Falls-Tool-Bus (GFTB) owner overlay for the shared Honey ARC substrate.
 #
-# ORG SHAPE: unlike the personal-account jesssullivan overlay, GFTB registers
+# ORG SHAPE: unlike the older personal-account overlay, GFTB registers
 # ARC at the ORGANIZATION scope. One scale set serves every repo in the org,
 # so extra_runner_sets stays empty — no per-repo registration anchors.
 # The scale-set NAME is the ARC registration identity ONLY; workflows request
@@ -10,7 +10,7 @@
 # CONSERVATIVE CAPACITY POSTURE (TIN-2165/TIN-2234 pod-cap crunch): nix lane
 # only, max 4, min 0, no warm pool, docker/dind lanes OFF. Sting placement +
 # the dedicated compute-expansion toleration mirror the tinyland-goo-nix
-# anchor shape in jesssullivan-infra (honey is pod-count full; sting carries
+# anchor shape in the older personal-account overlay (honey is pod-count full; sting carries
 # the dedicated.tinyland.dev/compute-expansion taint).
 
 cluster_context       = "honey"

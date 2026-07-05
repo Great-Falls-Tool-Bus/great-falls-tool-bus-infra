@@ -1,9 +1,8 @@
 # Great-Falls-Tool-Bus Implementation Overlay
 
 This repository is the Great-Falls-Tool-Bus (GFTB) owner overlay for the shared
-Honey substrate. It is the organization counterpart to
-`Jesssullivan/jesssullivan-infra` (personal) and the third owner overlay
-overall.
+Honey substrate. It is the organization counterpart to the older
+personal-account overlay and the third owner overlay overall.
 
 ## What This Repo Owns
 
@@ -26,8 +25,8 @@ GFTB is a GitHub organization, so ARC registers at the ORG scope:
 App is installed org-wide (all repositories), which makes the single
 `great-falls-tool-bus-nix` scale set reachable from every GFTB repo. There is
 no repo-scoped registration anchor and no per-repo `extra_runner_sets` entry.
-The personal-account anchor pattern in the jesssullivan overlay exists only
-because personal accounts lack org-level registration.
+The personal-account anchor pattern exists only because personal accounts lack
+org-level registration.
 
 Workflows use shared labels such as `tinyland-nix`. Reachability is solved by
 this overlay's GitHub App installation and ARC registration, not by minting

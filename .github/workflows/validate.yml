@@ -4,7 +4,7 @@ name: Validate Overlay
 # resolves ONLY through the great-falls-tool-bus-nix scale set that this
 # overlay's ARC stack provisions. Until the first operator-machine
 # `just arc-apply` succeeds, these jobs queue unpicked. tinyland-nix (not
-# tinyland-nix-heavy, which the jesssullivan template used): GFTB provisions
+# tinyland-nix-heavy, used by older overlays): GFTB provisions
 # only the nix lane, and labels resolve through this org's own scale sets.
 
 on:
@@ -144,28 +144,24 @@ jobs:
           nix develop ../GloriousFlywheel#ci -c bash -lc '
             set -euo pipefail
 
-            overlay_root="$(pwd)"
-            gf_core="${GF_CORE_PATH}"
-            arc_tf_data_dir=""
-            trap "rm -rf \"${arc_tf_data_dir}\"" EXIT
+            echo "::group::public operator surface"
+            just public-surface
+            echo "::endgroup::"
 
             echo "::group::runner taxonomy"
-            python3 scripts/validate-overlay-runner-taxonomy.py tofu/stacks/arc-runners/great-falls-tool-bus.tfvars
-            bash scripts/test-overlay-runner-taxonomy.sh
+            just taxonomy
+            just taxonomy-selftest
             echo "::endgroup::"
 
             echo "::group::mail CRs"
             just mail-cr-validate
             echo "::endgroup::"
 
-            echo "::group::ARC tofu fmt"
-            tofu fmt -check tofu/stacks/arc-runners/great-falls-tool-bus.tfvars
+            echo "::group::ARC fmt"
+            just arc-fmt-check
             echo "::endgroup::"
 
-            echo "::group::ARC tofu validate"
-            arc_tf_data_dir="$(mktemp -d -t great-falls-tool-bus-infra-tofu-data.XXXXXX)"
-            cd "${gf_core}/tofu/stacks/arc-runners"
-            TF_DATA_DIR="${arc_tf_data_dir}" tofu init -backend=false >/tmp/great-falls-tool-bus-infra-arc-init.log
-            TF_DATA_DIR="${arc_tf_data_dir}" tofu validate
+            echo "::group::ARC validate"
+            just arc-validate
             echo "::endgroup::"
           '

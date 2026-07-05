@@ -112,7 +112,7 @@ authorize P2.
    `Great-Falls-Tool-Bus/greatfallstoolbus.org` builds and publishes the
    multi-stage `adapter-node` OCI image to same-org GHCR via the **ambient
    `GITHUB_TOKEN`** (no long-lived PAT, no cross-org secret), exactly as MI's
-   `docker-ghcr.yml` publishes `ghcr.io/jesssullivan/massageithaca:sha-<commit>`.
+   `docker-ghcr.yml` publishes a same-owner GHCR image.
    The GFTB image is
    `ghcr.io/great-falls-tool-bus/greatfallstoolbus.org:sha-<commit>`. Trigger
    the site's container-GHCR build for the commit you intend to serve.

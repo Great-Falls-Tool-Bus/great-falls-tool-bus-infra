@@ -16,7 +16,7 @@ data:
   # during Django settings import; keep public identity on SERVE_FROM_DOMAIN.
   MAILMAN_HOSTNAME: "mailman-core"
   SERVE_FROM_DOMAIN: "lists.latoolb.us"
-  MAILMAN_ADMIN_USER: "jess"
+  MAILMAN_ADMIN_USER: "keyholders-admin"
   MAILMAN_ADMIN_EMAIL: "keyholders@latoolb.us"
   # Core <-> web REST wiring. Core binds REST to the pod IP (not loopback), so
   # even with core+web co-located (TIN-2493) the web tier reaches REST through
