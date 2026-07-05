@@ -18,6 +18,7 @@ check:
     just secrets-scan-dir
     just taxonomy
     just mail-cr-validate
+    just form-stack-validate
     just arc-fmt-check
     just arc-validate
     just edge-fmt-check
@@ -385,3 +386,21 @@ list-stack-server-dry-run: list-stack-validate _mail-kubeconfig-inputs
 
 list-stack-apply: list-stack-server-dry-run
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ list_stack_dir }}
+
+# --- GFTB Anubis-protected form origin (TIN-2420) --------------------------
+# Apply-plane manifests for browser direct-submit contact/access intake. The
+# public site remains on mailto until this origin is routed and smoke-proven.
+
+form_stack_dir := "k8s/form/latoolb-us-production"
+
+form-stack-validate:
+    bash scripts/validate-form-stack.sh {{ form_stack_dir }}
+
+form-stack-render: form-stack-validate
+    kubectl kustomize {{ form_stack_dir }}
+
+form-stack-server-dry-run: form-stack-validate _mail-kubeconfig-inputs
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply --dry-run=server -k {{ form_stack_dir }}
+
+form-stack-apply: form-stack-server-dry-run
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ form_stack_dir }}

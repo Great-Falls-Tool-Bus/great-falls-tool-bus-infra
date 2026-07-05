@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: gftb-form-origin
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: gftb-form-origin
+    app.kubernetes.io/component: form-origin
+  annotations:
+    linear.app/issue: TIN-2420
+spec:
+  selector:
+    app.kubernetes.io/name: gftb-form-origin
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+

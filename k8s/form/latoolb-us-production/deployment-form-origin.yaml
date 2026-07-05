@@ -1,0 +1,151 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gftb-form-origin
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: gftb-form-origin
+    app.kubernetes.io/component: form-origin
+  annotations:
+    linear.app/issue: TIN-2420
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gftb-form-origin
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gftb-form-origin
+        app.kubernetes.io/component: form-origin
+      annotations:
+        linear.app/issue: TIN-2420
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: form-handler
+          image: python:3.13-alpine
+          imagePullPolicy: IfNotPresent
+          command: ["python", "/app/form_handler.py"]
+          ports:
+            - name: handler
+              containerPort: 5000
+          env:
+            - name: PORT
+              value: "5000"
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: SMTP_HOST
+              value: postfix.tinyland-dev-production.svc.cluster.local
+            - name: SMTP_PORT
+              value: "587"
+            - name: FORM_FROM_ADDRESS
+              value: form-intake@latoolb.us
+            - name: FORM_TO_ADDRESS
+              value: keyholders@latoolb.us
+            - name: FORM_RETURN_URL
+              value: https://greatfallstoolbus.org/contact?sent=1
+            - name: FORM_MAX_BODY_BYTES
+              value: "8192"
+            - name: FORM_SMTP_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: form-intake-smtp
+                  key: username
+            - name: FORM_SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: form-intake-smtp
+                  key: password
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: handler
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: handler
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: form-handler
+              mountPath: /app
+              readOnly: true
+        - name: anubis
+          image: ghcr.io/techarohq/anubis:v1.25.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: metrics
+              containerPort: 9090
+          env:
+            - name: BIND
+              value: ":8080"
+            - name: TARGET
+              value: http://127.0.0.1:5000
+            - name: POLICY_FNAME
+              value: /etc/anubis/policies.yaml
+            - name: SERVE_ROBOTS_TXT
+              value: "true"
+            - name: OG_PASSTHROUGH
+              value: "true"
+            - name: ED25519_PRIVATE_KEY_HEX
+              valueFrom:
+                secretKeyRef:
+                  name: gftb-form-anubis-key
+                  key: ed25519-private-key-hex
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: anubis-policy
+              mountPath: /etc/anubis
+              readOnly: true
+      volumes:
+        - name: form-handler
+          configMap:
+            name: gftb-form-handler
+        - name: anubis-policy
+          configMap:
+            name: gftb-form-anubis-policy

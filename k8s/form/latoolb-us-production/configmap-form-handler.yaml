@@ -1,0 +1,158 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gftb-form-handler
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: gftb-form-origin
+    app.kubernetes.io/component: form-handler
+  annotations:
+    linear.app/issue: TIN-2420
+data:
+  form_handler.py: |
+    from email.message import EmailMessage
+    from email.utils import formatdate, make_msgid, parseaddr
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import parse_qs
+    import html
+    import os
+    import smtplib
+    import ssl
+
+
+    SMTP_HOST = os.environ.get("SMTP_HOST", "postfix.tinyland-dev-production.svc.cluster.local")
+    SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+    SMTP_USERNAME = os.environ["FORM_SMTP_USERNAME"]
+    SMTP_PASSWORD = os.environ["FORM_SMTP_PASSWORD"]
+    FROM_ADDRESS = os.environ.get("FORM_FROM_ADDRESS", "form-intake@latoolb.us")
+    TO_ADDRESS = os.environ.get("FORM_TO_ADDRESS", "keyholders@latoolb.us")
+    RETURN_URL = os.environ.get("FORM_RETURN_URL", "https://greatfallstoolbus.org/contact?sent=1")
+    MAX_BODY = int(os.environ.get("FORM_MAX_BODY_BYTES", "8192"))
+
+
+    def valid_email(value):
+        name, addr = parseaddr(value)
+        return bool(addr) and addr == value.strip() and "@" in addr and "." in addr.rsplit("@", 1)[-1]
+
+
+    def first(params, key):
+        return params.get(key, [""])[0].strip()
+
+
+    def render_form(message=""):
+        notice = f"<p>{html.escape(message)}</p>" if message else ""
+        return f"""<!doctype html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Great Falls Tool Bus contact</title>
+      </head>
+      <body>
+        <main>
+          <h1>Contact the keyholders</h1>
+          {notice}
+          <form method="post" action="/contact">
+            <p><label>Name<br><input name="name" autocomplete="name" required></label></p>
+            <p><label>Email<br><input name="email" type="email" autocomplete="email" required></label></p>
+            <p><label>Message<br><textarea name="message" rows="8" required></textarea></label></p>
+            <p hidden><label>Website<br><input name="website" autocomplete="off" tabindex="-1"></label></p>
+            <button type="submit">Send</button>
+          </form>
+        </main>
+      </body>
+    </html>""".encode("utf-8")
+
+
+    class Handler(BaseHTTPRequestHandler):
+        server_version = "gftb-form-origin/0"
+
+        def log_message(self, fmt, *args):
+            # Avoid logging requester names, emails, or message bodies.
+            print("%s %s" % (self.command, self.path.split("?", 1)[0]), flush=True)
+
+        def send_text(self, code, text):
+            body = text.encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            if self.path == "/healthz":
+                self.send_text(200, "ok\n")
+                return
+            if self.path in ("/", "/contact"):
+                body = render_form()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            self.send_text(404, "not found\n")
+
+        def do_POST(self):
+            if self.path != "/contact":
+                self.send_text(404, "not found\n")
+                return
+
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            if length <= 0 or length > MAX_BODY:
+                self.send_text(400, "invalid request size\n")
+                return
+
+            raw = self.rfile.read(length).decode("utf-8", errors="replace")
+            params = parse_qs(raw, keep_blank_values=True)
+            if first(params, "website"):
+                # Honeypot: accept silently so bots cannot tune against the trap.
+                self.send_response(303)
+                self.send_header("Location", RETURN_URL)
+                self.end_headers()
+                return
+
+            name = first(params, "name")
+            email = first(params, "email")
+            message = first(params, "message")
+            if not name or len(name) > 120:
+                self.send_text(400, "name is required\n")
+                return
+            if not valid_email(email):
+                self.send_text(400, "valid email is required\n")
+                return
+            if not message or len(message) > 4000:
+                self.send_text(400, "message is required\n")
+                return
+
+            msg = EmailMessage()
+            msg["From"] = f"Great Falls Tool Bus <{FROM_ADDRESS}>"
+            msg["To"] = TO_ADDRESS
+            msg["Reply-To"] = email
+            msg["Subject"] = f"Tool Bus contact - {name[:80]}"
+            msg["Date"] = formatdate(localtime=False)
+            msg["Message-ID"] = make_msgid(domain="latoolb.us")
+            msg.set_content(
+                "A Great Falls Tool Bus contact/access request arrived.\n\n"
+                f"Name: {name}\n"
+                f"Email: {email}\n\n"
+                f"{message}\n"
+            )
+
+            context = ssl.create_default_context()
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as smtp:
+                smtp.ehlo()
+                smtp.starttls(context=context)
+                smtp.ehlo()
+                smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+                smtp.send_message(msg)
+
+            self.send_response(303)
+            self.send_header("Location", RETURN_URL)
+            self.end_headers()
+
+
+    if __name__ == "__main__":
+        port = int(os.environ.get("PORT", "5000"))
+        ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
+

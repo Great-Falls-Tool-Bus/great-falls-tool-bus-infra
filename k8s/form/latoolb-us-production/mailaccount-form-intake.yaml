@@ -1,0 +1,25 @@
+apiVersion: mail.tinyland.dev/v1alpha1
+kind: MailAccount
+metadata:
+  name: form-intake
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: gftb-form-smtp-account
+    app.kubernetes.io/component: submission-identity
+  annotations:
+    linear.app/issue: TIN-2420
+    blahaj.dev/substrate-contract: tenant-form-intake-smtp-v0
+    greatfallstoolbus.org/intent-source: k8s/form/latoolb-us-production
+spec:
+  # Submission identity for the Anubis-protected contact/access intake origin.
+  # This is not a human mailbox. The handler authenticates as this account to
+  # postfix.tinyland-dev-production.svc.cluster.local:587 (STARTTLS + SASL) and
+  # sends access/contact requests to the private keyholders role-list.
+  email: form-intake@latoolb.us
+  domainRef: latoolb-us
+  quota: 256
+  enabled: true
+  # No passwordSecretRef by overlay doctrine: the account controller generates
+  # the initial credential on first reconcile. The operator projects that
+  # generated password into the form-intake-smtp Secret consumed by the handler.
+

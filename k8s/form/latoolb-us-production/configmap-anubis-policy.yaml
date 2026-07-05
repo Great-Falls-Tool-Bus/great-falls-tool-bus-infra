@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gftb-form-anubis-policy
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: gftb-form-origin
+    app.kubernetes.io/component: anubis-policy
+  annotations:
+    linear.app/issue: TIN-2420
+data:
+  policies.yaml: |
+    bots:
+      - name: healthz
+        path_regex: ^/healthz$
+        action: ALLOW
+      - name: well-known
+        path_regex: ^/.well-known/.*$
+        action: ALLOW
+      - name: favicon
+        path_regex: ^/favicon.ico$
+        action: ALLOW
+      - name: robots-txt
+        path_regex: ^/robots.txt$
+        action: ALLOW
+      - name: anubis-assets
+        path_regex: ^/.within.website/.*
+        action: ALLOW
+      - name: generic-browser
+        user_agent_regex: Mozilla
+        action: CHALLENGE
+        challenge:
+          algorithm: fast
+          difficulty: 4
+    metrics:
+      bind: ":9090"
+      network: tcp
+    store:
+      backend: memory
+      parameters: {}
+

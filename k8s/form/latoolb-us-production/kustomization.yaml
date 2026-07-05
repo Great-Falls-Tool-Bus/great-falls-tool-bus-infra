@@ -1,0 +1,24 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: latoolb-us-production
+
+# TIN-2420: Anubis-protected direct-submit form origin for the Great Falls Tool
+# Bus contact/access intake path. This is the apply-plane half only. It does
+# not make the public site form live until the operator creates secrets, routes
+# forms.latoolb.us through the house tunnel, smoke-proves challenge
+# + POST behavior, and sets PUBLIC_GFTB_FORM_ENDPOINT in the site deploy lane.
+
+resources:
+  - mailaccount-form-intake.yaml
+  - configmap-form-handler.yaml
+  - configmap-anubis-policy.yaml
+  - deployment-form-origin.yaml
+  - service-form-origin.yaml
+  - networkpolicy.yaml
+
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/managed-by: great-falls-tool-bus-infra
+      app.kubernetes.io/part-of: great-falls-tool-bus
+      app.tinyland.dev/tenant: great-falls-tool-bus

@@ -1,0 +1,42 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gftb-form-origin
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: gftb-form-origin
+    app.kubernetes.io/component: form-origin
+  annotations:
+    linear.app/issue: TIN-2420
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: gftb-form-origin
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # Blahaj/house tunnel ingress reaches only the Anubis port. The handler is
+    # sidecar-local behind Anubis and has no direct Service exposure.
+    # TODO(TIN-2420): tighten namespaceSelector to the concrete cloudflared
+    # namespace label once the tunnel route is created.
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to: [] # DNS
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Outgoing submission -> substrate postfix 587 (STARTTLS + SASL).
+    # postfix is HOST-NETWORKED (hostIP 192.168.70.10 on honey), so egress must
+    # target the raw host LAN IP just like the certified list stack.
+    - to:
+        - ipBlock:
+            cidr: 192.168.70.10/32
+      ports:
+        - protocol: TCP
+          port: 587
+

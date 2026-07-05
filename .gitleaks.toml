@@ -20,6 +20,7 @@ regexes = [
   '''age1[a-z0-9]{58}''',
   '''\{\{\s*vault_[A-Za-z0-9_]+''',
   '''vault_[A-Za-z0-9_]+\s*[:=]\s*["']?\{\{''',
+  '''key:\s*ed25519-private-key-hex''',
 ]
 
 [[rules]]
