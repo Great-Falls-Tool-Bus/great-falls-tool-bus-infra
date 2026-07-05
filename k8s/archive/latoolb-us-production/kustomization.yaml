@@ -1,0 +1,32 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: latoolb-us-production
+
+# GFTB public-archive route (TIN-2528): a SECOND Anubis PoW gate
+# (anubis-archive) fronting the HyperKitty web tier (mailman-web Service) so
+# the PUBLIC discuss@ archive can ride the shared honey-ingress Cloudflare
+# Tunnel — anti-scrape, not auth. Reuses the proven TIN-2420 forms shape.
+#
+# DECLARE-ONLY. Nothing is exposed until ALL of the following, none of which
+# this kustomization performs:
+#   (1) the privacy pre-flight passes (keyholders@ archive_policy=private|never
+#       AND HyperKitty enforces it for anonymous users — see the packet's
+#       hard gate),
+#   (2) the Cloudflare tunnel public-hostname route is added (dashboard-side,
+#       out of band), and
+#   (3) var.archives_dns_enabled flips true in tofu/stacks/edge and a live
+#       round-trip smoke passes.
+# See docs/discuss-archive-packet.md and README.md.
+
+resources:
+  - configmap-anubis-policy.yaml
+  - deployment-anubis-archive.yaml
+  - service-anubis-archive.yaml
+  - networkpolicy.yaml
+
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/managed-by: great-falls-tool-bus-infra
+      app.kubernetes.io/part-of: great-falls-tool-bus
+      app.tinyland.dev/tenant: great-falls-tool-bus

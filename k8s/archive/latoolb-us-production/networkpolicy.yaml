@@ -1,0 +1,109 @@
+# NetworkPolicies for the TIN-2528 public-archive route, default-deny posture
+# (each selected pod becomes default-deny for the selected direction except
+# what is allowed here). Mirrors the TIN-2420 forms netpol shape. Enforced
+# legs:
+#
+#   tunnel(cloudflared) --8081--> anubis-archive --8000--> mailman-web tier
+#
+# TUNNEL-SOURCE FINDING (reused verbatim from the forms netpol, verified
+# read-only 2026-07-04): the house tunnel is cloudflared, a NON-host-networked
+# Deployment in the `cloudflared` namespace. Its pods carry flannel pod IPs,
+# so under rke2-canal (Calico policy + flannel VXLAN) cross-namespace
+# pod-to-pod traffic preserves the real pod source and a namespaceSelector on
+# the `cloudflared` namespace is the correct, tightest admission — no
+# ipBlock/SNAT workaround on this ingress leg. The cloudflared namespace has
+# only the default identity label kubernetes.io/metadata.name=cloudflared.
+# The tunnel is token-managed: the archive hostname -> anubis-archive:8081
+# route lives Cloudflare-side, not here.
+#   FALLBACK (documented, not applied): if a future CNI change SNATs
+#   cross-node pod traffic and the namespaceSelector stops matching, widen to
+#   `ipBlock: 10.244.0.0/16` (flannel pod CIDR). Prefer the namespaceSelector
+#   until a live round-trip proves otherwise.
+#
+# DECLARE-ONLY: nothing here is applied. See README.md.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: anubis-archive
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: anubis-archive
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: anubis-archive
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # Tunnel -> anubis-archive PoW gate on 8081. Source is the cloudflared
+    # namespace (non-host-networked pods; see the TUNNEL-SOURCE FINDING).
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cloudflared
+      ports:
+        - protocol: TCP
+          port: 8081
+  egress:
+    - to: [] # DNS
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # anubis-archive -> HyperKitty web tier only. IMPORTANT PORT SUBTLETY:
+    # the mailman-web Service is ClusterIP 8080 -> targetPort 8000, and it
+    # selects the mailman-core pod (the web container is co-located there,
+    # TIN-2493). NetworkPolicy egress evaluates the POST-DNAT destination —
+    # the real pod IP and its container port 8000 — NOT the Service's 8080.
+    # So this rule targets the mailman-core podSelector on 8000, even though
+    # Anubis dials http://mailman-web:8080. (Contrast the forms gate, whose
+    # Service port and targetPort are both 8080, so its egress rule reads 8080.)
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mailman-core
+      ports:
+        - protocol: TCP
+          port: 8000
+---
+# Reciprocal admission on the HyperKitty web tier. This is an ADDITIVE
+# NetworkPolicy (multiple policies selecting the same pod union their allows),
+# so it grants anubis-archive -> mailman-core:8000 WITHOUT editing the list
+# stack's own networkpolicy.yaml — the archive stack stays self-contained and
+# the list stack is not touched by this declare-only packet.
+#
+# WHY THIS IS NEEDED (and an operator follow-up it implies): the list stack's
+# mailman-core policy currently admits 8000 from `namespaceSelector: {}` — a
+# PLACEHOLDER (its own comment: "tighten to the cloudflared/ingress namespace
+# when the archive route is designed; nothing is exposed before round-trip
+# proof"). While that placeholder stands, 8000 is already (too broadly) open,
+# so this rule is redundant-but-harmless. The go-live checklist's tightening
+# step REPLACES that placeholder with a scoped rule; once tightened, THIS rule
+# is what keeps the anubis-archive -> web leg open. Declaring it now means the
+# tightening cannot accidentally fail the archive route closed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mailman-core-archive-ingress
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: mailman-core
+    app.tinyland.dev/route: discuss-archive
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mailman-core
+  policyTypes: [Ingress]
+  ingress:
+    # anubis-archive -> HyperKitty web tier on 8000 (the mailman-web Service's
+    # targetPort). Only the archive PoW gate may reach the web tier via this
+    # leg; the gate is not bypassable at the network layer once the list
+    # stack's `namespaceSelector: {}` placeholder is tightened.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: anubis-archive
+      ports:
+        - protocol: TCP
+          port: 8000

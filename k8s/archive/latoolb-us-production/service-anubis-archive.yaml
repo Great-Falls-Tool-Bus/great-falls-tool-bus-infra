@@ -1,0 +1,24 @@
+# ClusterIP the cloudflared tunnel targets for the archive hostname
+# (recommended: lists.latoolb.us — see docs/discuss-archive-packet.md).
+# anubis-archive is the ONLY component the tunnel reaches for this route; it
+# fronts the HyperKitty web tier (mailman-web Service). The tunnel
+# public-hostname -> this Service:8081 route is a Cloudflare-side config
+# (token-managed tunnel; the ingress map lives in the Cloudflare zero-trust
+# dashboard/API, NOT in this repo or a ConfigMap). Nothing is exposed until
+# that route is added AND the privacy pre-flight passes. See the README.
+apiVersion: v1
+kind: Service
+metadata:
+  name: anubis-archive
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: anubis-archive
+    app.kubernetes.io/component: pow-gate
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: anubis-archive
+  ports:
+    - name: http
+      port: 8081
+      targetPort: http
