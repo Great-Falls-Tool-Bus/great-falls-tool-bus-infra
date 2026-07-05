@@ -84,7 +84,6 @@ jobs:
             export GF_CORE_PATH=../GloriousFlywheel
             export GF_CORE_CI_PATH=../GloriousFlywheel#ci
             nix develop ../GloriousFlywheel#ci -c just mail-cr-validate
-            nix develop ../GloriousFlywheel#ci -c just mail-cr-render
 
   server:
     name: Server dry-run or apply

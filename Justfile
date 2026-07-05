@@ -18,6 +18,7 @@ check:
     just secrets-scan-dir
     just taxonomy
     just mail-cr-validate
+    just list-stack-validate
     just form-stack-validate
     just web-stack-validate
     just arc-fmt-check
@@ -352,9 +353,6 @@ mail_cr_dir := "k8s/mail/latoolb-us-production"
 mail-cr-validate:
     bash scripts/validate-mail-crs.sh {{ mail_cr_dir }}
 
-mail-cr-render: mail-cr-validate
-    kubectl kustomize {{ mail_cr_dir }}
-
 _mail-kubeconfig-inputs:
     test -n "${GFTB_MAIL_KUBECONFIG:-}" || { echo "Set GFTB_MAIL_KUBECONFIG to the namespace-scoped kubeconfig path"; exit 1; }
     test -f "${GFTB_MAIL_KUBECONFIG}"
@@ -379,9 +377,6 @@ list_stack_dir := "k8s/list/latoolb-us-production"
 list-stack-validate:
     bash scripts/validate-list-stack.sh {{ list_stack_dir }}
 
-list-stack-render: list-stack-validate
-    kubectl kustomize {{ list_stack_dir }}
-
 list-stack-server-dry-run: list-stack-validate _mail-kubeconfig-inputs
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply --dry-run=server -k {{ list_stack_dir }}
 
@@ -402,9 +397,6 @@ form_stack_dir := "k8s/form/latoolb-us-production"
 form-stack-validate:
     bash scripts/validate-form-stack.sh {{ form_stack_dir }}
 
-form-stack-render: form-stack-validate
-    kubectl kustomize {{ form_stack_dir }}
-
 form-stack-server-dry-run: form-stack-validate _mail-kubeconfig-inputs
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply --dry-run=server -k {{ form_stack_dir }}
 
@@ -424,6 +416,3 @@ web_stack_dir := "k8s/web/greatfallstoolbus-org-production"
 
 web-stack-validate:
     bash scripts/validate-web-stack.sh {{ web_stack_dir }}
-
-web-stack-render: web-stack-validate
-    kubectl kustomize {{ web_stack_dir }}

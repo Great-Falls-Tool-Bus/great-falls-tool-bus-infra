@@ -50,7 +50,7 @@ spec:
       # (verified 2026-07-04) and has been removed in favour of the env vars.
       containers:
         - name: mailman-core
-          image: ghcr.io/maxking/mailman-core:0.5
+          image: ghcr.io/maxking/mailman-core:0.5@sha256:cb8e412bb18d74480f996da68f46e92473b6103995e71bc5aeba139b255cc3d2
           ports:
             - name: lmtp
               containerPort: 8024
@@ -134,7 +134,7 @@ spec:
         # trust matches. Talks to core REST over the mailman-core Service (core
         # binds REST to the pod IP, not loopback, so keep the Service DNS name).
         - name: mailman-web
-          image: ghcr.io/maxking/mailman-web:0.5
+          image: ghcr.io/maxking/mailman-web:0.5@sha256:014726db85586fb53541f66f6ce964bf07e939791cfd5ffc796cd6d243696a18
           ports:
             - name: http
               # docker-mailman's uwsgi.ini exposes the HTTP socket on 8000;

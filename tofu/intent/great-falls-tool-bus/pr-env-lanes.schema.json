@@ -1,5 +1,5 @@
 {
-  "$comment": "DECLARE-ONLY — NOT APPLIED (TIN-2541). PR-env / reaper lane CONTRACT for GFTB on-cluster web previews, modeled on blahaj:tofu/intent/massageithaca/pr-env-lanes.schema.json and the blahaj/MI reaper lifecycle. This is a NAMES-ONLY, FAIL-CLOSED schema: `enabled` is false, no live GitHub token / kubeconfig / tunnel credential is referenced by value (names only), and no reaper workflow or CronJob is materialized. ADR docs/decisions/0001-pr-gated-ephemeral-preview-deploys.md RECOMMENDS Cloudflare Pages managed previews (Option A) and PARKS this on-cluster reaper (Option C) behind a live pod-headroom probe + TIN-991 route authority. This file records the parked contract so a future ADR has a grounded starting point; it authorizes nothing.",
+  "$comment": "DECLARE-ONLY — NOT APPLIED (TIN-2541). PR-env / reaper lane CONTRACT for GFTB on-cluster web previews, modeled on blahaj:tofu/intent/massageithaca/pr-env-lanes.schema.json and the blahaj/MI reaper lifecycle. This is a NAMES-ONLY, FAIL-CLOSED schema: `enabled` is false, no live GitHub token / kubeconfig / tunnel credential is referenced by value (names only), and no reaper workflow or CronJob is materialized. A 2026-07-05 live probe retired the old pod-headroom blocker; this lane remains parked because preview lifecycle and tunnel-route authority are not adopted for GFTB, and Cloudflare Pages already supplies Access-gated managed previews. This file records the parked contract so a future ADR has a grounded starting point; it authorizes nothing.",
   "schema_version": "0.1.0",
   "workload_name": "greatfallstoolbus-org",
   "cluster": "honey",
@@ -46,8 +46,11 @@
     "github_pr_read_token": "fine-grained read-only Pull Requests PAT for Great-Falls-Tool-Bus/greatfallstoolbus.org; NAME only, custody operator-side; not stored in this repo",
     "reaper_kubeconfig": "namespace-scoped SA kubeconfig; NAME only; protected environment; not stored in this repo"
   },
-  "pod_cap_constraint": {
-    "$comment": "The binding reason this lane is parked. Honey sits at ~103-104/110 pods (blahaj ADR 005) with a conservative posture (nix max 4, no warm pool). Each preview costs >= 1 web pod; N concurrent per-PR stacks physically cannot fit. Ephemeral-at-scale on-cluster is structurally excluded until a live headroom probe proves otherwise.",
-    "resolved_by": "a live `kubectl` pod count + a superseding ADR"
+  "preview_lane_status": {
+    "$comment": "PARKED. The 2026-07-05 live probe measured enough pod headroom for a replicas=2 production web deployment and retired the old ~103-104/110 honey blocker. This preview lane remains disabled because GFTB has not adopted per-PR on-cluster route automation or reaper ownership, and the managed Pages preview lane remains the approved default.",
+    "pod_headroom": "resolved by live read-only kubectl probe on 2026-07-05",
+    "route_authority": "not adopted for per-PR on-cluster hostnames",
+    "reaper_ownership": "not wired for this org",
+    "enabled": false
   }
 }

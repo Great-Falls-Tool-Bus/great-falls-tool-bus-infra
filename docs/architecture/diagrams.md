@@ -220,9 +220,10 @@ to `var.pages_host` (default `greatfallstoolbus-org.pages.dev`); the CF edge
 terminates TLS, then Cloudflare Access gates the surface via three self-hosted
 Access applications — apex, www, and an **account-level** app covering
 `greatfallstoolbus-org.pages.dev` + `*.greatfallstoolbus-org.pages.dev` — all
-sharing one allowlist policy (`var.access_allowed_emails`, `jess@sulliwood.org`
-today); an allowed request is served from the CF Pages origin, which is itself
-Access-gated by that account-level app. (b) `forms.latoolb.us` is a proxied
+sharing one allowlist policy (`var.access_allowed_emails`, supplied from
+protected operator custody); an allowed request is served from the CF Pages
+origin, which is itself Access-gated by that account-level app. (b)
+`forms.latoolb.us` is a proxied
 CNAME to the shared honey-ingress cloudflared tunnel
 (`da3ffda2-68ee-46d1-aa55-ec8dae2bd471.cfargotunnel.com`, gated
 `var.forms_dns_enabled`); the tunnel's public-hostname route
@@ -243,7 +244,7 @@ account-level `pages_dev` with `self_hosted_domains` = `greatfallstoolbus-org.pa
 + `*.greatfallstoolbus-org.pages.dev` at 103-114 — all binding the single
 `cloudflare_zero_trust_access_policy.web_apex_allow` at 122-134) and
 `tofu/stacks/edge/variables.tf` (`pages_host` default `greatfallstoolbus-org.pages.dev`
-26-41; `access_allowed_emails` default `["jess@sulliwood.org"]` 15-24). Forms
+26-41; `access_allowed_emails` required operator input 15-26). Forms
 CNAME: `tofu/stacks/edge/main.tf` `alias_forms` proxied CNAME ->
 `da3ffda2-68ee-46d1-aa55-ec8dae2bd471.cfargotunnel.com`, `count = var.forms_dns_enabled`
 (245-254); var at `variables.tf` 95-113. Alias redirect: `tofu/stacks/edge/main.tf`
@@ -267,7 +268,7 @@ flowchart TD
     subgraph cf["Cloudflare edge — CONFIG-BACKED (tofu/stacks/edge)"]
         webdns["greatfallstoolbus.org apex + www<br/>PROXIED CNAME to var.pages_host<br/>default greatfallstoolbus-org.pages.dev"]
         proxy["CF proxy: terminate TLS + orange-cloud<br/>proxied=true"]
-        access["CF Access gate REV-2<br/>3 self_hosted apps: apex / www / account-level *.pages.dev<br/>shared policy var.access_allowed_emails<br/>allowlist jess@sulliwood.org"]
+        access["CF Access gate REV-2<br/>3 self_hosted apps: apex / www / account-level *.pages.dev<br/>shared policy var.access_allowed_emails<br/>operator allowlist from protected env"]
         formsdns["forms.latoolb.us<br/>PROXIED CNAME to cfargotunnel<br/>da3ffda2-68ee-46d1-aa55-ec8dae2bd471.cfargotunnel.com<br/>gated var.forms_dns_enabled"]
         aliasdns["latoolb.us apex + www<br/>PROXIED A 192.0.2.1 (RFC 5737)<br/>301 ruleset to var.alias_redirect_target"]
     end
@@ -312,5 +313,4 @@ flowchart TD
   (`greatfallstoolbus.org`), not this overlay; this stack owns only the CNAME
   target and the Access gating.
 - `var.forms_dns_enabled` default is `true` in `variables.tf` (the forms CNAME
-  is live), though its own doc-comment still describes the original fail-closed
-  `false` shape — divergence noted, not resolved here.
+  is live after the 2026-07-05 route + smoke proof).

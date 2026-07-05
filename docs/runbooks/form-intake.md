@@ -100,10 +100,9 @@ the registered `latoolb.us` `MailDomain` already provides.
 just form-stack-validate    # invariants: digests, Anubis TARGET, LMTP :8024,
                             # CORS greatfallstoolbus.org, honeypot, netpol shape,
                             # server.py byte-compiles, no committed secret
-just form-stack-render      # kubectl kustomize
 ```
 
-The `form-crs.yml` lane runs both on PR/push. It is offline only; live server
+The `form-crs.yml` lane runs this on PR/push. It is offline only; live server
 dry-run/apply is a manual `workflow_dispatch` protected by the `mail`
 environment.
 

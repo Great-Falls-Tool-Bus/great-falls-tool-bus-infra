@@ -5,13 +5,9 @@ name: List Stack
 # only. Live server dry-run/apply is manual and protected by the `mail`
 # environment kubeconfig.
 #
-# RBAC NOTE (see docs/runbooks/list-bringup.md): the current
-# MAIL_APPLY_KUBECONFIG_B64 is scoped to mail.tinyland.dev CRs only and CANNOT
-# apply the workload objects (Deployment/Service/PVC/ConfigMap/NetworkPolicy).
-# The `apply` path here is wired for parity but will fail-closed on RBAC until
-# the substrate broadens the latoolb-us-production namespace grant (blahaj PR)
-# or a dedicated list-apply kubeconfig is provisioned. Kept explicit, not
-# pretended away.
+# RBAC NOTE (see docs/runbooks/list-bringup.md): workflow_dispatch apply must
+# run with the protected namespace-scoped workload kubeconfig. PR/push remains
+# offline validation only.
 
 on:
   pull_request:
@@ -93,7 +89,6 @@ jobs:
             export GF_CORE_PATH=../GloriousFlywheel
             export GF_CORE_CI_PATH=../GloriousFlywheel#ci
             nix develop ../GloriousFlywheel#ci -c just list-stack-validate
-            nix develop ../GloriousFlywheel#ci -c just list-stack-render
 
   server:
     name: Server dry-run or apply

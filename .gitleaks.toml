@@ -22,6 +22,16 @@ regexes = [
   '''vault_[A-Za-z0-9_]+\s*[:=]\s*["']?\{\{''',
 ]
 
+[[allowlists]]
+description = "Historical Kubernetes secretKeyRef key name, not secret material."
+regexTarget = "line"
+paths = [
+  '''^k8s/form/latoolb-us-production/deployment-form-origin\.yaml$''',
+]
+regexes = [
+  '''key:\s*ed25519-private-key-hex''',
+]
+
 [[rules]]
 id = "tinyland-cloudflare-api-token"
 description = "Cloudflare API token with cfat_ prefix"

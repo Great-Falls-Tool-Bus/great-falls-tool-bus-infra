@@ -79,22 +79,19 @@ system-critical CronJob).
 - **Pro:** full same-origin control; a real house serving pattern exists to copy;
   the blahaj reaper is a battle-tested teardown design (defense-in-depth,
   fail-safe on positive evidence only).
-- **Con:** it inherits all **three** 0003 blockers unchanged and adds a **fourth**:
-  1. **Pod cap.** Honey sits at ~103-104/110 pods with a deliberately conservative
-     posture (nix min 0 / max 4, no warm pool, docker/dind off — TIN-2165/2234).
-     ~6 pods of headroom. Each preview costs at least an Anubis + a server pod, so
-     N concurrent per-PR stacks **physically cannot fit**. Ephemeral-at-scale is
-     structurally excluded.
-  2. **Tunnel route is out-of-band.** The only on-cluster public route rides the
+- **Con:** the original pod-cap blocker was retired by the 2026-07-05 live probe
+  (honey 138/150, bumble 50/110, sting 96/200), but the preview lane still carries
+  three unresolved costs:
+  1. **Tunnel route is out-of-band.** The only on-cluster public route rides the
      shared honey-ingress cloudflared tunnel whose public-hostname routes are
      **Cloudflare dashboard / token-managed, not in git**; TIN-991 route authority
      is unfinished. There is no per-PR automation to mint a `pr-<n>` hostname —
      every one would be a manual operator dashboard action.
-  3. **No preview-namespace precedent.** The only namespace is
+  2. **No preview-namespace precedent.** The only namespace is
      `latoolb-us-production`; an on-cluster preview is net-new namespace + net-new
      route + net-new pods, with a sting-node SPOF (per house memory) in the reaper
      control path.
-  4. **Redundant.** CF Pages already provides Access-gated previews at zero pod
+  3. **Redundant.** CF Pages already provides Access-gated previews at zero pod
      cost and zero authority conflict; an on-cluster preview must beat a free,
      already-shipping incumbent, and does not.
 
@@ -104,9 +101,9 @@ CF Pages as the default preview channel for all PRs, **plus** a single long-live
 operator-gated on-cluster **staging namespace** (explicitly *not* per-PR
 ephemeral) reserved for the narrow case that genuinely needs same-origin / Anubis
 behavior — e.g. reviewing a form-integration change against the live Anubis chain.
-Squeezed into the ~6-pod headroom, competing for the scarce budget, only when the
-operator authorizes it. No per-PR on-cluster spin-up, so the pod-cap and
-tunnel-route constraints are met by having exactly one, hand-placed namespace.
+Only when the operator authorizes it. No per-PR on-cluster spin-up, so the
+tunnel-route and lifecycle constraints are met by having exactly one,
+hand-placed namespace.
 
 ## Decision (recommended) — **Option A**, with C's escape hatch parked
 
@@ -114,10 +111,9 @@ Adopt/extend the **Cloudflare Pages managed preview** (Option A): merge the
 TIN-2515 `dev`-default shadow deploy and, on operator ruling, enable per-PR preview
 deployments on the `greatfallstoolbus-org` Pages project, reusing the existing
 account-level `*.pages.dev` Access gate. **Do not build an on-cluster per-PR
-reaper.** It is blocked by the honey pod cap, the dashboard-managed tunnel-route
-constraint, and the missing preview-namespace precedent, and it is redundant with
-the incumbent — the same reasoning that decided 0003 for production, applied to
-previews.
+reaper.** The old honey pod-cap blocker is retired, but the
+dashboard-managed tunnel-route constraint and missing preview/reaper ownership
+remain, and the lane is redundant with the incumbent.
 
 Because GFTB has **no internal reaper**, this ADR does not "adopt ours" — it
 **adopts the external managed pattern** (CF Pages' dual-URL preview model) and
@@ -125,10 +121,9 @@ records the blahaj/MI on-cluster reaper as **the reference we deliberately decli
 to clone**, consistent with blahaj's own "legacy/transitional, do not clone" note.
 
 **Parked, not adopted (Option C):** if a same-origin/Anubis preview need is ever
-*proven* AND the 0003 blockers clear (real pod headroom confirmed by a fresh
-cluster count, and TIN-991 route authority brought under IaC so a hostname is not a
-manual dashboard op), a *single* operator-gated staging namespace — never per-PR —
-may be reconsidered in a future ADR. It is out of scope and unfunded here.
+*proven* AND TIN-991 route authority is brought under IaC so a hostname is not a
+manual dashboard op, a *single* operator-gated staging namespace — never per-PR —
+may be reconsidered in a future ADR. It is out of scope here.
 
 ## Phased, operator-gated rollout
 
@@ -154,12 +149,10 @@ may be reconsidered in a future ADR. It is out of scope and unfunded here.
   **Cost:** 0 pods, 0 new tunnel routes, 0 new Access apps, and the single
   account-scoped `Pages:Edit` token already sanctioned in 0003 (no new secret).
 - **On-cluster path (rejected), for the record.** Per preview ≥ Anubis + server
-  pod against ~6 pods of headroom; each per-PR hostname is a manual dashboard
-  route (TIN-991 unfinished); a correct reaper would need the full blahaj
+  pod; each per-PR hostname is a manual dashboard route (TIN-991 unfinished); a correct reaper would need the full blahaj
   triple-leg (PR-close dispatch → 4h GH-Actions TTL reaper → in-cluster
   system-critical backstop CronJob) plus exposure to the sting-node SPOF. Net:
-  high operational cost and structurally capped concurrency, for a capability CF
-  Pages already provides for free.
+  high operational cost for a capability CF Pages already provides for free.
 
 ## DECLARE-ONLY skeleton note (NOT applied)
 

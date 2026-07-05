@@ -50,7 +50,6 @@ evidence, and citations.
 
 ```bash
 just form-stack-validate
-just form-stack-render
 GFTB_MAIL_KUBECONFIG=/path/to/form-apply.kubeconfig just form-stack-server-dry-run
 GFTB_MAIL_KUBECONFIG=/path/to/form-apply.kubeconfig just form-stack-apply
 ```

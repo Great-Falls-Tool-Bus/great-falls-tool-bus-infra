@@ -73,15 +73,10 @@ spec:
 # stack's own networkpolicy.yaml — the archive stack stays self-contained and
 # the list stack is not touched by this declare-only packet.
 #
-# WHY THIS IS NEEDED (and an operator follow-up it implies): the list stack's
-# mailman-core policy currently admits 8000 from `namespaceSelector: {}` — a
-# PLACEHOLDER (its own comment: "tighten to the cloudflared/ingress namespace
-# when the archive route is designed; nothing is exposed before round-trip
-# proof"). While that placeholder stands, 8000 is already (too broadly) open,
-# so this rule is redundant-but-harmless. The go-live checklist's tightening
-# step REPLACES that placeholder with a scoped rule; once tightened, THIS rule
-# is what keeps the anubis-archive -> web leg open. Declaring it now means the
-# tightening cannot accidentally fail the archive route closed.
+# WHY THIS IS NEEDED: the list stack's mailman-core policy admits the house
+# cloudflared namespace for the tunnel leg. This additive rule admits only the
+# archive PoW gate pod to the web tier, so tightening the tunnel leg cannot
+# accidentally fail the archive route closed.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -98,8 +93,7 @@ spec:
   ingress:
     # anubis-archive -> HyperKitty web tier on 8000 (the mailman-web Service's
     # targetPort). Only the archive PoW gate may reach the web tier via this
-    # leg; the gate is not bypassable at the network layer once the list
-    # stack's `namespaceSelector: {}` placeholder is tightened.
+    # leg; the gate is not bypassable at the network layer.
     - from:
         - podSelector:
             matchLabels:

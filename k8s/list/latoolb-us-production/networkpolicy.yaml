@@ -58,10 +58,12 @@ spec:
     # standalone mailman-web policy (TIN-2493): the web tier is now a container
     # in THIS pod, and the house tunnel ingress reaches it on 8000 (the
     # mailman-web Service DNATs its external 8080 -> targetPort 8000).
-    # PLACEHOLDER selector — tighten to the cloudflared/ingress namespace when
-    # the archive route is designed; nothing is exposed before round-trip proof.
+    # Tight to the house cloudflared namespace; the archive Anubis route adds a
+    # separate podSelector admission for anubis-archive -> 8000.
     - from:
-        - namespaceSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cloudflared
       ports:
         - protocol: TCP
           port: 8000

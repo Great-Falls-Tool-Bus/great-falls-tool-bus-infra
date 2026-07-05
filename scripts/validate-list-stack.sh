@@ -96,6 +96,12 @@ fi
 if ! grep -REq "image:\s*\S+" "${dir}"; then
   fail "no container images found; expected mailman-core, mailman-web, postgres"
 fi
+while IFS= read -r line; do
+  case "${line}" in
+  *"@sha256:"*) : ;;
+  *) fail "image not pinned by immutable digest: ${line}" ;;
+  esac
+done < <(grep -REh "^\s*image:\s*\S+" "${dir}")
 
 # --- Storage class must be explicit -----------------------------------------
 # Honey has no default StorageClass. A missing storageClassName passed offline
@@ -153,6 +159,11 @@ if yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "mailman-web") |
 fi
 web_np_port="$(yq -r 'select(.metadata.name == "mailman-core") | .spec.ingress[].ports[] | select(.port == 8000) | .port' "${dir}/networkpolicy.yaml")"
 assert_eq "${web_np_port}" "8000" "web HTTP ingress (8000) folded into the mailman-core NetworkPolicy"
+if grep -q "namespaceSelector: {}" "${dir}/networkpolicy.yaml"; then
+  fail "mailman web ingress must not admit every namespace; scope it to cloudflared plus explicit archive gate podSelectors"
+fi
+grep -q "kubernetes.io/metadata.name: cloudflared" "${dir}/networkpolicy.yaml" \
+  || fail "mailman web ingress must admit only the cloudflared namespace for the tunnel leg"
 
 # The mailman-web Service must still front the web container, now by selecting
 # the combined mailman-core pod on targetPort 8000 (external 8080 unchanged).
@@ -164,4 +175,4 @@ assert_eq "${web_svc_target}" "8000" "mailman-web Service targetPort (web contai
 # --- Full render must succeed ----------------------------------------------
 kubectl kustomize "${dir}" >/dev/null
 
-echo "list stack validation passed: mailman-core LMTP :8024, submission 587+STARTTLS, lists-bounces@latoolb.us, no committed secrets"
+echo "list stack validation passed: mailman-core LMTP :8024, submission 587+STARTTLS, lists-bounces@latoolb.us, image digests pinned, no committed secrets"

@@ -169,11 +169,13 @@ jobs:
               -chdir=../GloriousFlywheel/tofu/stacks/arc-runners \
               show -json "$(pwd)/.tofu-plans/arc-runners.tfplan" \
               > .tofu-plans/arc-runners.tfplan.json
+            nix develop ../GloriousFlywheel#ci -c just arc-plan-show \
+              > .tofu-plans/arc-runners.plan.txt
             {
               echo "## GFTB ARC runners plan"
               echo ""
               echo '```'
-              nix develop ../GloriousFlywheel#ci -c just arc-plan-show
+              cat .tofu-plans/arc-runners.plan.txt
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
 
@@ -203,15 +205,16 @@ jobs:
               print(f"has-destroy={str(has_destroy).lower()}", file=output)
           PY
 
-      - name: Upload plan artifacts
+      # Match edge-plan.yml: never upload OpenTofu plan binaries or show -json
+      # output. Plan binaries/JSON can carry sensitive values; the text plan
+      # redacts them and the apply step uses the in-job plan.
+      - name: Upload plan text artifact
         if: steps.secrets.outputs.arc-deploy-secrets-present == 'true'
         continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
-          name: gftb-arc-runners-tfplan
-          path: |
-            overlay/.tofu-plans/arc-runners.tfplan
-            overlay/.tofu-plans/arc-runners.tfplan.json
+          name: gftb-arc-runners-plan-text
+          path: overlay/.tofu-plans/arc-runners.plan.txt
           retention-days: 7
 
       - name: Guard destructive plan

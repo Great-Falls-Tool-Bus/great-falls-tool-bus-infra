@@ -66,9 +66,10 @@ Per-PR ephemeral previews are **parked**, not adopted — ADR 0001 recommends
 Cloudflare Pages managed previews instead (already Access-gated, zero pod cost).
 The on-cluster reaper contract is recorded fail-closed in
 `pr-env-lane.md` + `pr-env-lanes.schema.json` (`enabled:false`) so a future ADR
-has a grounded start. The binding blocker is honey's pod cap (~6 pods headroom);
-resolving it needs a live headroom probe. **No reaper workflow or CronJob is
-committed live** and **no live token is wired** (names only).
+has a grounded start. The old honey pod-cap blocker is retired by the live probe
+below; this remains parked because GFTB has not adopted per-PR on-cluster route
+automation or reaper ownership. **No reaper workflow or CronJob is committed
+live** and **no live token is wired** (names only).
 
 ## Live probe — 2026-07-05 (honey rke2, read-only kubectl)
 
@@ -131,7 +132,6 @@ A cutover still replaces the placeholder pin, creates the namespace, flips
 
 ```bash
 just web-stack-validate     # invariant checks + `kubectl kustomize` render
-just web-stack-render       # print the rendered manifests (still applies nothing)
 ```
 
 There is intentionally **no** `web-stack-apply` recipe: applying this skeleton is

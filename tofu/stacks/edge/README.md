@@ -14,8 +14,8 @@ they exist as **console-created zones on the house Cloudflare account**
   0003 cutover was executed 2026-07-03 and the cutover value committed
   as the default in PR #15 — see "`pages_host` cutover" below)
 - gates the apex behind a Cloudflare Access application + allow policy
-  (allowlist `jess@sulliwood.org`; Alex/Kate/Joe are a one-line
-  `access_allowed_emails` expansion) — packet row (g) REV-2
+  (`access_allowed_emails` supplied from the protected edge environment; no
+  personal allowlist addresses are committed) — packet row (g) REV-2
 - serves the `latoolb.us` root+`www` 301 redirect ruleset; the target is
   `var.alias_redirect_target`, defaulting to the raw Pages project URL
   (`https://great-falls-tool-bus.github.io/greatfallstoolbus.org/`) and
@@ -27,10 +27,10 @@ they exist as **console-created zones on the house Cloudflare account**
   `var.mail_dns_enabled` (default `true` after D11 closed self-hosted)
   — see "mail DNS enable
   sequence" below
-- stages the `forms.latoolb.us` contact-form ingress CNAME → the shared
+- manages the live `forms.latoolb.us` contact-form ingress CNAME → the shared
   honey-ingress Cloudflare Tunnel (proxied), gated behind
-  `var.forms_dns_enabled` (default `false`, fail-closed) — TIN-2420 Path
-  B; see "`forms.latoolb.us` DNS enable sequence" below
+  `var.forms_dns_enabled` (default `true` after the 2026-07-05 route + smoke
+  proof) — TIN-2420 Path B; see "`forms.latoolb.us` DNS enable sequence" below
 - stages the `lists.latoolb.us` public-archive ingress CNAME → the SAME
   shared honey-ingress Cloudflare Tunnel (proxied), gated behind
   `var.archives_dns_enabled` (default `false`, fail-closed) — TIN-2528;
@@ -94,15 +94,16 @@ CNAME to that tunnel's cname target
 `da3ffda2-68ee-46d1-aa55-ec8dae2bd471.cfargotunnel.com` (tunnel id per
 `Great-Falls-Tool-Bus/blahaj-infra-boundary` PR #908 recon).
 
-Staged in `main.tf` gated behind `var.forms_dns_enabled`
-(default `false`, fail-closed — merging changes nothing until flipped).
-Enable sequence:
+Staged in `main.tf` gated behind `var.forms_dns_enabled`. This gate is now
+**active by default** because the route, handler, LMTP fan-out, and live smoke
+were proven before the default flipped. Enable or rollback sequence:
 
 1. `latoolb.us` NS cutover to Cloudflare completes and the zone is live
    (shared with the mail enable sequence, step 1 above).
 2. The honey-ingress tunnel has an ingress route for `forms.latoolb.us`
    fronting the Anubis-gated intake handler (substrate side).
-3. `var.forms_dns_enabled` flips to `true` in a follow-up change.
+3. `var.forms_dns_enabled` is set to `true` for activation, or `false` for
+   rollback.
 4. PR-plan (this repo's normal `edge-plan.yml` PR flow) then
    `workflow_dispatch action=apply` (dispatch-apply doctrine, D6) — no
    direct apply.
