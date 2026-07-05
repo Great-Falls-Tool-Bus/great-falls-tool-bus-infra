@@ -385,3 +385,26 @@ list-stack-server-dry-run: list-stack-validate _mail-kubeconfig-inputs
 
 list-stack-apply: list-stack-server-dry-run
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ list_stack_dir }}
+
+# --- GFTB contact-intake stack (TIN-2420 Path B) ----------------------------
+# Anubis PoW gate -> stdlib form-handler -> LMTP inject to keyholders@latoolb.us
+# (the list fans out to every keyholder; LMTP needs no SMTP credential).
+# Deployed overlay-side into latoolb-us-production. Checked-in validation is
+# offline. Live server dry-run/apply needs a namespace-scoped kubeconfig with
+# WORKLOAD verbs (same RBAC caveat as the list stack — see
+# docs/runbooks/form-intake.md). Nothing is exposed until the Cloudflare tunnel
+# public-hostname route is added (dashboard-side) and a live smoke passes.
+
+form_stack_dir := "k8s/form/latoolb-us-production"
+
+form-stack-validate:
+    bash scripts/validate-form-stack.sh {{ form_stack_dir }}
+
+form-stack-render: form-stack-validate
+    kubectl kustomize {{ form_stack_dir }}
+
+form-stack-server-dry-run: form-stack-validate _mail-kubeconfig-inputs
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply --dry-run=server -k {{ form_stack_dir }}
+
+form-stack-apply: form-stack-server-dry-run
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ form_stack_dir }}

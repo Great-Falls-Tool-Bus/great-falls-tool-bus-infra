@@ -40,6 +40,20 @@ spec:
       ports:
         - protocol: TCP
           port: 8024
+    # form-handler -> LMTP 8024 (TIN-2420 Path B contact intake). The handler is
+    # an in-namespace pod (NOT host-networked), so admit it by podSelector — the
+    # reciprocal of the handler's egress rule in k8s/form/.../networkpolicy.yaml.
+    # The ipBlock rule above is scoped to the honey-node flannel CIDR for the
+    # host-networked postfix leg and must NOT be relied on for the handler, which
+    # may schedule on any node (e.g. 10.244.2.0/24 on sting). Without this rule
+    # the contact form's LMTP injection fails closed.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: form-handler
+      ports:
+        - protocol: TCP
+          port: 8024
     # Web UI (Postorius/HyperKitty) HTTP 8000. Folded in from the retired
     # standalone mailman-web policy (TIN-2493): the web tier is now a container
     # in THIS pod, and the house tunnel ingress reaches it on 8000 (the
