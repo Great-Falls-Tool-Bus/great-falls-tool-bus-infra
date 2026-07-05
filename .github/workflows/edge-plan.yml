@@ -4,12 +4,11 @@ name: Edge Zone Stack
 # tofu/stacks/edge (console-created zones, zone-scoped token), apply only
 # via manual workflow_dispatch action=apply — the same operator-gated
 # chassis as deploy-arc-runners.yml. The job binds to the protected `edge`
-# environment, whose only secret is the zone-scoped Cloudflare token
-# CLOUDFLARE_API_TOKEN_GFTB_ZONES (name only here; mint + rotation:
-# docs/runbooks/edge-token-and-zones.md). FAIL-SOFT: until that secret
-# exists (the token is minted late in the runbook), PR/push runs skip
-# green with a notice — the house skip-green idiom; manual action=apply
-# fails closed instead.
+# environment, which holds the zone-scoped Cloudflare token plus the
+# operator-custody Access allowlist JSON (names only here; mint + rotation:
+# docs/runbooks/edge-token-and-zones.md). FAIL-SOFT: until those secrets
+# exist, PR/push runs skip green with a notice — the house skip-green idiom;
+# manual action=apply fails closed instead.
 #
 # BOOTSTRAP NOTE: runs on `tinyland-nix`, which for the GFTB org resolves
 # only through this overlay's own scale set — see README.md Bootstrap.
@@ -238,6 +237,7 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.ARC_RUNNERS_RUSTFS_ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_SECRET_KEY }}
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN_GFTB_ZONES }}
+          TF_VAR_access_allowed_emails: ${{ secrets.ACCESS_ALLOWED_EMAILS_JSON }}
           # Wire the dispatch input through to the just-level destroy guard
           # so allow_destroy=true is honored end-to-end (the workflow-level
           # Guard step above already gated it).
