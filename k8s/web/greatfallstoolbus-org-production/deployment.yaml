@@ -1,0 +1,155 @@
+# DECLARE-ONLY — NOT APPLIED (TIN-2541).
+#
+# GFTB on-cluster web serving skeleton, mirroring the proven MassageIthaca
+# full-on-cluster pattern (SvelteKit adapter-node -> OCI image on GHCR -> K8s
+# Deployment behind a ClusterIP Service -> in-cluster cloudflared tunnel edge;
+# see blahaj:tofu/stacks/massageithaca/main.tf and this repo's
+# docs/decisions/0001-pr-gated-ephemeral-preview-deploys.md).
+#
+# This manifest is a PLAN-ONLY skeleton. It is FAIL-CLOSED on three independent
+# axes so that even an accidental `kubectl apply` runs nothing and serves
+# nothing:
+#   1. replicas: 0            — no pod is ever scheduled from this file as-is.
+#   2. image: a non-resolvable PLACEHOLDER (no digest, not on any registry) —
+#      the operator pins a real ghcr.io/great-falls-tool-bus/greatfallstoolbus.org
+#      digest in the PRIVATE overlay at cutover; the public app repo owns the
+#      image build (ambient GITHUB_TOKEN, same-org GHCR), never the pin.
+#   3. the target namespace greatfallstoolbus-org-production DOES NOT EXIST and
+#      is intentionally NOT created by this stack (no Namespace object here).
+#
+# Nothing about a public route lives here: the honey-ingress cloudflared tunnel
+# public-hostname route is Cloudflare dashboard / token-managed (TIN-991), never
+# in git. See ../README.md and ../../tofu/intent/great-falls-tool-bus/
+# web-oncluster-route.json (dns_enabled=false, route_enabled=false).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: greatfallstoolbus-org
+  namespace: greatfallstoolbus-org-production
+  labels:
+    app.kubernetes.io/name: greatfallstoolbus-org
+    app.kubernetes.io/component: web
+    app.kubernetes.io/part-of: great-falls-tool-bus
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  # FAIL-CLOSED: zero replicas. A real cutover flips this to 2 (MI prod shape)
+  # in an operator-gated pin bump, never in this declare-only skeleton.
+  replicas: 0
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: greatfallstoolbus-org
+      app.kubernetes.io/component: web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: greatfallstoolbus-org
+        app.kubernetes.io/component: web
+        app.kubernetes.io/part-of: great-falls-tool-bus
+    spec:
+      terminationGracePeriodSeconds: 15
+      # Pod-level hardening mirrors MI (non-root uid/gid 1001 under adapter-node).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      # Node placement (all declare-only; replicas:0 means nothing schedules).
+      #
+      # Live-probe grounding (honey rke2, 2026-07-05, read-only kubectl): pod
+      # headroom is honey 138/150 (12 free — honey was EXPANDED to 150, not the
+      # ~110-cap ADR 0003 assumed), bumble 50/110 (60 free), sting 96/200
+      # (104 free); ~176 free cluster-wide. A replicas:2 web Deployment fits
+      # trivially, but honey is the TIGHTEST node, so at cutover we PREFER
+      # bumble/sting for the serving pods and keep honey as spillover.
+      #
+      # Serving SPOF is NONE at the pod/node layer: 3-node cluster, node-anti-
+      # affinity spreads the 2 replicas across distinct hosts, and on node loss
+      # they reschedule (same posture the live cloudflared replicas:2 already
+      # runs). The only genuine SPOF is SITE-LEVEL (one on-prem /24: honey
+      # .70.10, bumble .11, sting .12) — the honest availability tradeoff vs a
+      # global CDN, already accepted by MI in production and fronted+cached by
+      # Cloudflare; the named mitigation is a warm CF-Pages standby (ADR 0007).
+      # The "sting SPOF" ADR 0003 cites is CI-RUNNER concentration (all ARC/nix
+      # runners on sting) — a deploy-velocity concern, not a serving risk.
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            # Keep off control-plane.
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: DoesNotExist
+            # Prefer the roomy worker nodes (bumble/sting); honey is tightest
+            # (12 free) so it stays spillover, not first choice.
+            - weight: 50
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values: ["bumble", "sting"]
+        # Spread the (future) replicas across distinct nodes so a single node
+        # loss never takes serving fully down — no node-SPOF.
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: greatfallstoolbus-org
+                    app.kubernetes.io/component: web
+      containers:
+        - name: greatfallstoolbus-org
+          # PLACEHOLDER — deliberately not a real, resolvable, digest-pinned
+          # reference. The declare-only guard (scripts/validate-web-stack.sh)
+          # FAILS if this is ever replaced with an @sha256: digest in-tree: the
+          # real pin belongs in an operator-gated PRIVATE-overlay bump at cutover,
+          # not in this skeleton.
+          image: ghcr.io/great-falls-tool-bus/greatfallstoolbus.org:PLACEHOLDER-DECLARE-ONLY-NOT-APPLIED
+          imagePullPolicy: IfNotPresent
+          command: ["node", "build/index.js"]
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: "3000"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3

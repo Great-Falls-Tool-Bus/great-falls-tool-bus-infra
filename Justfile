@@ -19,6 +19,7 @@ check:
     just taxonomy
     just mail-cr-validate
     just form-stack-validate
+    just web-stack-validate
     just arc-fmt-check
     just arc-validate
     just edge-fmt-check
@@ -409,3 +410,20 @@ form-stack-server-dry-run: form-stack-validate _mail-kubeconfig-inputs
 
 form-stack-apply: form-stack-server-dry-run
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ form_stack_dir }}
+
+# --- GFTB on-cluster web serving skeleton (TIN-2541) ------------------------
+# DECLARE-ONLY. SvelteKit adapter-node -> ClusterIP 80->3000 -> honey-ingress
+# cloudflared tunnel, mirroring the proven MassageIthaca full-on-cluster pattern.
+# NOTHING IS APPLIED: the Deployment ships replicas:0 with a non-resolvable
+# placeholder image, the namespace is not created, and the tunnel route is
+# dashboard/token-managed (never in git; TIN-991). There is deliberately NO
+# web-stack-apply recipe — applying this skeleton is not a supported operation;
+# a cutover is operator-gated under a superseding hosting ADR. See k8s/web/README.md.
+
+web_stack_dir := "k8s/web/greatfallstoolbus-org-production"
+
+web-stack-validate:
+    bash scripts/validate-web-stack.sh {{ web_stack_dir }}
+
+web-stack-render: web-stack-validate
+    kubectl kustomize {{ web_stack_dir }}

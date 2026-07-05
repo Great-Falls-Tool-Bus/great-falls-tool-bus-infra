@@ -1,0 +1,53 @@
+{
+  "$comment": "DECLARE-ONLY — NOT APPLIED (TIN-2541). PR-env / reaper lane CONTRACT for GFTB on-cluster web previews, modeled on blahaj:tofu/intent/massageithaca/pr-env-lanes.schema.json and the blahaj/MI reaper lifecycle. This is a NAMES-ONLY, FAIL-CLOSED schema: `enabled` is false, no live GitHub token / kubeconfig / tunnel credential is referenced by value (names only), and no reaper workflow or CronJob is materialized. ADR docs/decisions/0001-pr-gated-ephemeral-preview-deploys.md RECOMMENDS Cloudflare Pages managed previews (Option A) and PARKS this on-cluster reaper (Option C) behind a live pod-headroom probe + TIN-991 route authority. This file records the parked contract so a future ADR has a grounded starting point; it authorizes nothing.",
+  "schema_version": "0.1.0",
+  "workload_name": "greatfallstoolbus-org",
+  "cluster": "honey",
+  "enabled": false,
+  "recommended_alternative": "Cloudflare Pages managed per-PR previews under *.greatfallstoolbus-org.pages.dev (already Access-gated account-wide; zero pods, zero new tunnel routes). See ADR 0001 Option A.",
+  "default_ttl_hours": 72,
+  "domain": "greatfallstoolbus.org",
+  "image_repository": "ghcr.io/great-falls-tool-bus/greatfallstoolbus.org",
+  "namespace_pattern": "^greatfallstoolbus-org-pr-[1-9][0-9]*$",
+  "label_contract": {
+    "$comment": "The blahaj reaper selects on these labels; teardown fires only on POSITIVE evidence (TTL passed OR PR confirmed closed). `unknown` never destroys.",
+    "app.tinyland.dev/lifecycle": "pr-ephemeral",
+    "app.tinyland.dev/auto-expire": "true",
+    "app.tinyland.dev/expires-epoch": "<unix-ts>",
+    "app.tinyland.dev/pr-number": "<n>"
+  },
+  "teardown_model": {
+    "$comment": "Three-leg defense-in-depth, mirroring blahaj (do NOT clone live — blahaj's own docs mark it legacy/transitional, TIN-2023/TIN-2027). Every leg here is DECLARED, none is WIRED.",
+    "leg_1_pr_close_dispatch": {
+      "trigger": "PR closed/merged repository_dispatch",
+      "state": "not-wired",
+      "note": "would delete the pr-<n> namespace's workloads to free pod slots"
+    },
+    "leg_2_ttl_reaper_workflow": {
+      "trigger": "scheduled GitHub Actions reaper (e.g. every 4h)",
+      "state": "not-wired",
+      "toggle": "PREVIEW_REAPER_ENABLED",
+      "toggle_default": false,
+      "note": "would select on the label_contract and destroy only on TTL-passed OR confirmed-closed; bounded by --max-destroys; a fine-grained read-only Pull Requests PAT is referenced BY NAME only (never inlined): github-pr-read-token"
+    },
+    "leg_3_incluster_backstop_cronjob": {
+      "trigger": "in-cluster system-critical CronJob (runner-independent)",
+      "state": "not-wired",
+      "suspend_default": true,
+      "note": "would tolerate the compute-expansion taint so it runs when the runner pool is saturated; models blahaj:deploy/honey/massageithaca-pr-lane-backstop-reaper.yaml"
+    }
+  },
+  "guards": {
+    "namespace_regex_must_match": "^greatfallstoolbus-org-pr-[1-9][0-9]*$",
+    "never_touch": "greatfallstoolbus-org-production (production namespace is structurally excluded from every reaper selector)",
+    "fail_safe": "destroy only on positive evidence; a single ambiguous PR-state lookup falls back to TTL-only; a total GitHub API outage or a missing/placeholder token fails the reaper LOUD (never silently green)"
+  },
+  "secrets_named_only": {
+    "github_pr_read_token": "fine-grained read-only Pull Requests PAT for Great-Falls-Tool-Bus/greatfallstoolbus.org; NAME only, custody operator-side; not stored in this repo",
+    "reaper_kubeconfig": "namespace-scoped SA kubeconfig; NAME only; protected environment; not stored in this repo"
+  },
+  "pod_cap_constraint": {
+    "$comment": "The binding reason this lane is parked. Honey sits at ~103-104/110 pods (blahaj ADR 005) with a conservative posture (nix max 4, no warm pool). Each preview costs >= 1 web pod; N concurrent per-PR stacks physically cannot fit. Ephemeral-at-scale on-cluster is structurally excluded until a live headroom probe proves otherwise.",
+    "resolved_by": "a live `kubectl` pod count + a superseding ADR"
+  }
+}

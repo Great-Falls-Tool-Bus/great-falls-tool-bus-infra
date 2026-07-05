@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: greatfallstoolbus-org-production
+
+# DECLARE-ONLY — NOT APPLIED (TIN-2541). GFTB on-cluster web serving skeleton
+# (SvelteKit adapter-node -> ClusterIP -> cloudflared tunnel), mirroring the MI
+# full-on-cluster pattern. `kubectl kustomize` MUST render this cleanly (the
+# CI/`just check` guard renders it), but NOTHING is applied: the Deployment
+# ships replicas:0 with a non-resolvable placeholder image, the namespace is not
+# created here, and no tunnel public-hostname route exists in git (it is
+# dashboard/token-managed; TIN-991). See ../README.md.
+
+resources:
+  - deployment.yaml
+  - service.yaml
+  - networkpolicy.yaml
+
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/managed-by: great-falls-tool-bus-infra
+      app.kubernetes.io/part-of: great-falls-tool-bus
+      app.tinyland.dev/tenant: great-falls-tool-bus

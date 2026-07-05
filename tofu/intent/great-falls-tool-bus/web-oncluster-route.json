@@ -1,0 +1,42 @@
+{
+  "$comment": "DECLARE-ONLY — NOT APPLIED (TIN-2541). Route INTENT for GFTB on-cluster web serving, mirroring the shape of blahaj:tofu/intent/massageithaca/public-edge-routes.json but fail-closed: every enablement flag is false, and the tunnel public-hostname route is Cloudflare dashboard/token-managed (TIN-991), NOT created from this file. This is the PRIVATE overlay apply-plane intent; the public site repo carries ZERO route/endpoint/secret material. No live tunnel UUID or credential is inlined here — the real cfargotunnel target and zone binding live in the operator-gated edge stack (tofu/stacks/edge*) and the cloudflared dashboard.",
+  "route_contract_version": "0.1.0",
+  "workload_name": "greatfallstoolbus-org",
+  "cluster": "honey",
+  "applied": false,
+  "dns_enabled": false,
+  "route_enabled": false,
+  "zone": "greatfallstoolbus.org",
+  "dns_provider": "cloudflare",
+  "tunnel": {
+    "name": "honey-ingress",
+    "management": "cloudflare-dashboard-token-managed",
+    "cname_target": "PLACEHOLDER.cfargotunnel.com",
+    "note": "The honey-ingress tunnel is the shared house connector (blahaj:deploy/honey/retained-cloudflared.yaml). Its public-hostname routes are dashboard/token-managed (TIN-991). The real <tunnel-id>.cfargotunnel.com target is NOT inlined here; an operator adds the route out of band at cutover."
+  },
+  "authority": {
+    "dns_zone_owner": "great-falls-tool-bus-infra:tofu/stacks/edge-dns (zone-scoped token cloudflare-api-token-gftb-zones; TIN-2385)",
+    "route_mutation_policy": "operator-gated; no CI auto-applier for durable single-service routes (TIN-991)",
+    "cloudflare_credential": "protected `edge` environment only; never in this repo tree, never in the public site repo"
+  },
+  "planned_route": {
+    "$comment": "What a cutover WOULD declare. Present for review only; enable_* stays false until a superseding hosting ADR + a live pod-headroom probe authorize it.",
+    "hostname": "greatfallstoolbus.org",
+    "exposure": "cloudflare-tunnel",
+    "origin_service": "http://greatfallstoolbus-org.greatfallstoolbus-org-production.svc.cluster.local:80",
+    "namespace": "greatfallstoolbus-org-production",
+    "tls": "terminates at the Cloudflare edge (proxied); origin hop tunnel->Service is plain in-cluster HTTP, exactly as MI",
+    "dns_record": {
+      "type": "CNAME",
+      "name": "greatfallstoolbus.org",
+      "target": "PLACEHOLDER.cfargotunnel.com",
+      "proxied": true,
+      "enabled": false
+    },
+    "access": {
+      "provider": "cloudflare-access",
+      "posture": "gate is dashboard-managed; declare-only skeleton mints no Access app"
+    }
+  },
+  "supersedes_nothing": "ADR 0003 (site repo) keeps static production on CF Pages. This route intent is the fail-closed skeleton a superseding on-cluster hosting ADR (TIN-2537 research brief) would build on; it changes no live posture."
+}
