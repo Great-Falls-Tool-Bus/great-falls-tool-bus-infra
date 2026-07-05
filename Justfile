@@ -18,6 +18,7 @@ check:
     just secrets-scan-dir
     just taxonomy
     just mail-cr-validate
+    just form-stack-validate
     just arc-fmt-check
     just arc-validate
     just edge-fmt-check
