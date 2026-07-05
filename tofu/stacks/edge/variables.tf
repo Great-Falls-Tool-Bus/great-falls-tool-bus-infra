@@ -139,7 +139,7 @@ variable "archives_dns_enabled" {
     "archives DNS enable sequence" and docs/discuss-archive-packet.md.
   EOT
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "alias_redirect_target" {
