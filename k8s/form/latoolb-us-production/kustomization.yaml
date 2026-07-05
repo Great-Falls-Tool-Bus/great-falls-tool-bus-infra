@@ -13,6 +13,7 @@ resources:
   - configmap-form-handler.yaml
   - deployment-form-handler.yaml
   - service-form-handler.yaml
+  - configmap-anubis-policy.yaml
   - deployment-anubis.yaml
   - service-anubis.yaml
   - networkpolicy.yaml

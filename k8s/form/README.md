@@ -39,9 +39,14 @@ These manifests intentionally do **not** contain:
 - a built/pushed container image (the handler is stdlib `server.py` mounted from
   a ConfigMap onto the digest-pinned upstream `python:3.12-alpine`)
 
-Images are pinned by digest. Anti-bot is layered: Anubis PoW is the primary gate
-(only Anubis is tunnel-reachable), with an in-process per-client token bucket
-(5/min) and a honeypot field as defense-in-depth.
+Images are pinned by digest. Anti-bot is layered and split by surface: the
+Anubis bot policy (`configmap-anubis-policy.yaml`, mounted via `POLICY_FNAME`)
+**ALLOWs** the `/api/contact` JSON route — a cross-origin `fetch()` POST cannot
+solve Anubis's browser proof-of-work, so the route is allowlisted and guarded by
+the handler's per-client token bucket (5/min), honeypot field, validation, and
+CORS — while the **browsing surface stays CHALLENGEd** (founding row `f`). See
+`docs/runbooks/form-intake.md` for the policy rationale, the challenge-vs-fetch
+evidence, and citations.
 
 ```bash
 just form-stack-validate
