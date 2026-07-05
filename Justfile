@@ -17,6 +17,7 @@ default:
 check:
     just secrets-scan-dir
     just public-surface
+    just public-pii
     just taxonomy
     just mail-cr-validate
     just list-stack-validate
@@ -41,6 +42,11 @@ secrets-scan:
 # tofu/kubectl copy-paste snippets.
 public-surface:
     python3 scripts/validate-public-operator-surface.py
+
+# Keep public-ready surfaces free of personal PII while allowing role/list
+# addresses and example domains.
+public-pii:
+    python3 scripts/validate-public-pii-surface.py
 
 # Generate changelog (git-cliff)
 changelog:
