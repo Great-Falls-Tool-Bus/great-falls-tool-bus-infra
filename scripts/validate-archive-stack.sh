@@ -144,25 +144,26 @@ if grep -REn "^\s*(password|smtp_pass|SECRET_KEY|token)\s*:\s*['\"]?[A-Za-z0-9+/
 fi
 
 # --- Full render must succeed AND produce exactly the declared 5 resources ----
+# Probe the rendered stream with grep, NOT a multi-document yq filter: kubectl
+# kustomize emits one YAML doc per resource with a column-0 `kind:` and a
+# 2-space metadata block, and yq flavors differ in how they format multi-doc
+# output (mikefarah interleaves `---` separators, kislyuk does not), so grep is
+# the portable, flavor-independent probe here.
 render="$(kubectl kustomize "${dir}")"
-rendered_ids="$(echo "${render}" | yq -r '[.kind, .metadata.name] | join("/")' | sort)"
-expected_ids="$(printf '%s\n' \
-  "ConfigMap/anubis-archive-policy" \
-  "Deployment/anubis-archive" \
-  "NetworkPolicy/anubis-archive" \
-  "NetworkPolicy/mailman-core-archive-ingress" \
-  "Service/anubis-archive" | sort)"
-if [ "${rendered_ids}" != "${expected_ids}" ]; then
-  echo "ERROR: rendered resource set mismatch" >&2
-  echo "got:" >&2
-  echo "${rendered_ids}" >&2
-  echo "want:" >&2
-  echo "${expected_ids}" >&2
-  exit 1
-fi
-# Every rendered resource must land in the target namespace.
-while IFS= read -r ns; do
-  assert_eq "${ns}" "latoolb-us-production" "rendered resource namespace"
-done < <(echo "${render}" | yq -r '.metadata.namespace')
+
+assert_eq "$(printf '%s\n' "${render}" | grep -c '^kind:')" "5" "rendered resource count"
+assert_eq "$(printf '%s\n' "${render}" | grep -c '^kind: ConfigMap$')" "1" "rendered ConfigMap count"
+assert_eq "$(printf '%s\n' "${render}" | grep -c '^kind: Service$')" "1" "rendered Service count"
+assert_eq "$(printf '%s\n' "${render}" | grep -c '^kind: Deployment$')" "1" "rendered Deployment count"
+assert_eq "$(printf '%s\n' "${render}" | grep -c '^kind: NetworkPolicy$')" "2" "rendered NetworkPolicy count"
+
+# Every rendered resource must carry the target namespace (kustomize sets it on
+# all 5; the string appears nowhere else in the render).
+assert_eq "$(printf '%s\n' "${render}" | grep -Ec '^  namespace: latoolb-us-production$')" "5" "rendered resources in namespace latoolb-us-production"
+
+# Each declared resource identity must be present (metadata.name at 2-space indent).
+for n in anubis-archive-policy anubis-archive mailman-core-archive-ingress; do
+  printf '%s\n' "${render}" | grep -qE "^  name: ${n}$" || fail "rendered set missing metadata.name ${n}"
+done
 
 echo "archive stack validation passed: Anubis PoW gate (CHALLENGE browsing surface + mbox /export before crawler ALLOWs, NO /api ALLOW) -> HyperKitty web tier http://mailman-web:8080 (egress pod :8000), Service :8081, digests pinned, 5 resources in latoolb-us-production, no committed secrets"
