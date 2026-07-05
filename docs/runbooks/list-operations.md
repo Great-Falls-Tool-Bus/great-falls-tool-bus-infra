@@ -13,8 +13,8 @@ REST API 3.1) in namespace `latoolb-us-production`, context `honey`.
 ## 1. Mental model: two lists, one engine
 
 One GNU Mailman 3 stack in `latoolb-us-production` hosts **two** lists on the
-same engine. Both are owned by `jess@sulliwood.org`, who is the first member and
-first owner of each.
+same engine. Both are owned by the bootstrap operator account, which is the
+first member and first owner of each.
 
 | List | Role | archive_policy | subscription_policy | default_nonmember_action | advertised |
 | --- | --- | --- | --- | --- | --- |

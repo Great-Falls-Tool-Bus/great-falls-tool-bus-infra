@@ -3,33 +3,30 @@
 > **Status: PARKED, not adopted. Nothing wired. No live token.** ADR
 > [`docs/decisions/0001-pr-gated-ephemeral-preview-deploys.md`](../../docs/decisions/0001-pr-gated-ephemeral-preview-deploys.md)
 > recommends **Cloudflare Pages managed previews** (Option A) and parks this
-> on-cluster reaper (Option C) behind a live pod-headroom probe + TIN-991 route
-> authority. This note records the parked contract; it authorizes nothing.
+> on-cluster reaper (Option C). The live pod-headroom probe cleared the old
+> capacity blocker; route authority and reaper ownership remain unadopted. This
+> note records the parked contract; it authorizes nothing.
 
 ## Why parked (not built)
 
-An on-cluster per-PR reaper inherits all three ADR-0003 blockers unchanged and
-adds a fourth (redundancy):
+An on-cluster per-PR reaper remains parked for three reasons:
 
-1. **Pod cap.** Honey sits at ~103–104/110 pods with a deliberately conservative
-   posture (nix max 4, no warm pool). ~6 pods of headroom. Each preview costs
-   ≥ 1 web pod; N concurrent per-PR stacks **physically cannot fit**.
-2. **Tunnel route is out-of-band.** Every `pr-<n>` hostname would be a manual
+1. **Tunnel route is out-of-band.** Every `pr-<n>` hostname would be a manual
    Cloudflare dashboard action (TIN-991); there is no per-PR route automation.
-3. **No preview-namespace precedent** on-cluster; net-new namespace + route +
+2. **No preview-namespace adoption** on-cluster; net-new namespace + route +
    pods, with a sting-node SPOF in the reaper control path.
-4. **Redundant.** CF Pages already gives Access-gated previews at zero pod cost.
+3. **Redundant.** CF Pages already gives Access-gated previews at zero pod cost.
 
 The house reaper itself lives in `tinyland-inc/blahaj` and its own docs mark it
 **legacy/transitional — do not clone** (TIN-2023/TIN-2027 successor contract).
 GFTB has no reaper of its own, so this is not "reuse ours."
 
-## Live probe — 2026-07-05 (annotates the blockers; un-parks nothing)
+## Live probe — 2026-07-05 (retires capacity blocker; un-parks nothing)
 
 A read-only `kubectl` probe of the honey rke2 cluster re-grounded the blockers
 above. This is annotation, **not** a rewrite of ADR 0003 and **not** an un-park:
 
-- **Blocker 1 (pod cap) is now stale.** honey is **138/150** (12 free — the pod
+- **The old pod-cap blocker is now stale.** honey is **138/150** (12 free — the pod
   cap was **expanded to 150**, so the "~103–104/110, ~6 free" figure is
   obsolete), bumble **50/110** (60 free), sting **96/200** (104 free);
   **~176 free cluster-wide**. Room for a bounded preview lane class now exists —
@@ -45,8 +42,8 @@ above. This is annotation, **not** a rewrite of ADR 0003 and **not** an un-park:
   (`blahaj:deploy/honey/massageithaca-pr-lane-backstop-reaper.yaml`) stamps and
   selects on — so this parked contract is a faithful mirror, not a guess.
 
-Blockers 2 (out-of-band tunnel route / TIN-991) and 3/4 (namespace precedent,
-CF-Pages redundancy) are unchanged; the lane stays `enabled: false`.
+Route authority, preview namespace/reaper ownership, and CF-Pages redundancy are
+unchanged; the lane stays `enabled: false`.
 
 ## The parked contract (declared, not wired)
 
@@ -82,11 +79,11 @@ Modeled on the blahaj/MI reaper lifecycle. The machine-readable form is
 
 ## Un-parking checklist (future ADR, not this change)
 
-- [ ] Live `kubectl` pod-headroom count proving room for a preview lane class.
+- [x] Live `kubectl` pod-headroom count proving room for a preview lane class
+      (2026-07-05).
 - [ ] TIN-991 route authority under IaC so a `pr-<n>` hostname is not a manual
       dashboard op.
-- [ ] A superseding ADR authorizing a *bounded* on-cluster preview lane
-      (never per-PR-unbounded, given the pod cap).
+- [ ] A superseding ADR authorizing a bounded on-cluster preview lane.
 - [ ] Provision the named secrets in protected environments.
 
 Until all four clear, previews are the managed CF Pages channel and this lane

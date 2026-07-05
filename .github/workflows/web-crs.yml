@@ -4,9 +4,9 @@ name: Web Stack
 # adapter-node -> ClusterIP 80->3000 -> honey-ingress cloudflared tunnel,
 # mirroring the MassageIthaca full-on-cluster pattern).
 #
-# This workflow is VALIDATION-ONLY. It renders the manifests with
-# `kubectl kustomize` and enforces the fail-closed invariants (replicas 0,
-# placeholder image, no namespace, no secret, fail-closed route/reaper intent).
+# This workflow is VALIDATION-ONLY. It runs the repo validator, including the
+# render check, and enforces the fail-closed invariants (replicas 0, placeholder
+# image, no namespace, no secret, fail-closed route/reaper intent).
 # There is intentionally NO server-dry-run/apply job: applying this skeleton is
 # not a supported operation. A live cutover is operator-gated under a superseding
 # hosting ADR, out of band. See k8s/web/README.md and
@@ -81,4 +81,3 @@ jobs:
             export GF_CORE_PATH=../GloriousFlywheel
             export GF_CORE_CI_PATH=../GloriousFlywheel#ci
             nix develop ../GloriousFlywheel#ci -c just web-stack-validate
-            nix develop ../GloriousFlywheel#ci -c just web-stack-render

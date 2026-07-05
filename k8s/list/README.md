@@ -34,12 +34,10 @@ Secrets are referenced by name only and are operator-owned (see
 
 ```bash
 just list-stack-validate
-just list-stack-render
 GFTB_MAIL_KUBECONFIG=/path/to/list-apply.kubeconfig just list-stack-server-dry-run
 GFTB_MAIL_KUBECONFIG=/path/to/list-apply.kubeconfig just list-stack-apply
 ```
 
-> **DRAFT — reviewable, not applied.** Every pre-apply verification item
-> (image digests, controller secret wiring, node CIDRs, the RBAC scope of the
-> apply kubeconfig) is listed in `docs/runbooks/list-bringup.md`. Do not apply
-> until they are resolved.
+> **Applied stack, operator-gated changes only.** The first bring-up happened
+> on 2026-07-04. Future changes must pass `just list-stack-validate`, then
+> server dry-run and apply through the protected namespace-scoped kubeconfig.

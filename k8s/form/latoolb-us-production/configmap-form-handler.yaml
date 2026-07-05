@@ -14,9 +14,10 @@
 #   - Reply-To: the visitor's address; X-GFTB-Form: contact
 #   - CORS: ONLY https://greatfallstoolbus.org (the static site origin)
 #
-# Anti-abuse is layered: Anubis PoW fronts this handler (only anubis may reach
-# :8080, see networkpolicy.yaml); the in-process token bucket and honeypot are
-# defense-in-depth, not the primary gate.
+# Anti-abuse is layered: browsers still hit an Anubis challenge, while the
+# fetch() JSON route is allowlisted and relies on the handler's token bucket,
+# honeypot, validation, and CORS. The token bucket keys on Cloudflare's
+# trusted visitor-IP header, never a client-supplied forwarding value.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -109,12 +110,15 @@ data:
 
 
     def _client_key(handler: "Handler") -> str:
-        # Behind Anubis + cloudflared the socket peer is a proxy, so prefer the
-        # left-most X-Forwarded-For hop for per-visitor fairness. Spoofable, but
-        # this bucket is defense-in-depth behind the PoW gate, not the gate.
-        xff = handler.headers.get("X-Forwarded-For", "")
-        if xff:
-            return xff.split(",")[0].strip()
+        # The JSON route is intentionally allowlisted in Anubis so browser
+        # fetch() can work. Do not trust client-supplied forwarding headers
+        # here: non-browser clients can forge them. Cloudflare sets
+        # CF-Connecting-IP before the
+        # request enters the tunnel; if it is absent, fall back to the socket
+        # peer, which is safe but coarser.
+        cf_ip = handler.headers.get("CF-Connecting-IP", "").strip()
+        if cf_ip:
+            return cf_ip
         return handler.client_address[0]
 
 

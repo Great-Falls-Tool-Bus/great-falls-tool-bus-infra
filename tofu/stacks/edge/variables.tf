@@ -16,11 +16,12 @@ variable "access_allowed_emails" {
   description = <<-EOT
     Email allowlist for the Cloudflare Access application gating the
     greatfallstoolbus.org apex (packet row g REV-2: gated until public
-    un-gating is deliberately flipped). Expansion to Alex/Kate/Joe is a
-    one-line append here — no new resources.
+    un-gating is deliberately flipped). Supply this at plan/apply time from
+    protected operator custody, for example:
+    TF_VAR_access_allowed_emails='["operator@example.org"]'. Do not commit
+    personal allowlist addresses.
   EOT
   type        = list(string)
-  default     = ["jess@sulliwood.org"]
 }
 
 variable "pages_host" {
@@ -102,11 +103,11 @@ variable "forms_dns_enabled" {
     site form POST through the tunnel to the in-cluster intake handler
     behind the Anubis gate.
 
-    Defaults FALSE (fail-closed, mirroring var.mail_dns_enabled's original
-    shape): merging the record changes nothing until this flag is flipped
-    in a follow-up, so activation stays an operator-reviewable plan/apply
-    (dispatch-apply doctrine, D6), not a merge side effect. Flip sequence:
-    README.md "forms DNS enable sequence".
+    ACTIVE since 2026-07-05: the route, handler, LMTP fan-out, and live smoke
+    passed before this default flipped. Keep this true only while those proofs
+    remain current; rollback is an operator-reviewed plan/apply that sets this
+    false and removes the CNAME. Activation/rollback sequence: README.md
+    "forms.latoolb.us DNS enable sequence".
   EOT
   type        = bool
   default     = true

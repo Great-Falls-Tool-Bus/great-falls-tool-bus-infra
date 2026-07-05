@@ -135,6 +135,10 @@ echo "${server_src}" | grep -q "do_OPTIONS" || fail "server.py must handle the C
 echo "${server_src}" | grep -q "website" || fail "server.py must read the 'website' honeypot field"
 echo "${server_src}" | grep -q "honeypot" || fail "server.py must implement the honeypot path"
 echo "${server_src}" | grep -q "TokenBucket" || fail "server.py must implement the per-client token bucket"
+echo "${server_src}" | grep -q "CF-Connecting-IP" || fail "server.py must key rate limits from Cloudflare's trusted visitor-IP header"
+if echo "${server_src}" | grep -Eq 'headers\.get\("X-Forwarded-For"'; then
+  fail "server.py must not trust spoofable X-Forwarded-For for rate-limit keys"
+fi
 echo "${server_src}" | grep -q "smtplib.LMTP" || fail "server.py must deliver via smtplib.LMTP (no SMTP credential)"
 echo "${server_src}" | grep -q "/healthz" || fail "server.py must serve GET /healthz for probes"
 echo "${server_src}" | grep -q "X-GFTB-Form" || fail "server.py must set the X-GFTB-Form header"

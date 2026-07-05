@@ -274,15 +274,12 @@ exposed). Belt and suspenders; the version floor is the real fix.
   (TIN-2493 co-location). The archive route adds anonymous read/search traffic
   *when exposed*; the search backend (Whoosh/Xapian) is the cost to watch, hence
   the export-challenge (§5) and the `/search` rate-limit advice (§6.7).
-- **NetworkPolicy follow-up (operator, list stack):** the list stack's
-  `mailman-core` policy currently admits web-tier `8000` from
-  `namespaceSelector: {}` — its own comment flags this as a PLACEHOLDER to
-  "tighten to the cloudflared/ingress namespace when the archive route is
-  designed." This packet declares the tight reciprocal
+- **NetworkPolicy admission:** the list stack's `mailman-core` policy admits
+  web-tier `8000` from the house `cloudflared` namespace for the tunnel leg.
+  This packet declares the tight reciprocal
   (`mailman-core-archive-ingress`, admits `anubis-archive` pod → `8000`) as an
-  additive policy, so the placeholder can be safely removed/tightened without
-  failing the archive route closed. Tightening the placeholder is a go-live
-  step (§8), performed on the list stack, not here.
+  additive policy, so the archive PoW gate remains reachable without reopening
+  the web tier to every namespace.
 
 ## 8. Ordered go-live checklist (OPERATOR-GATED steps marked ⛔)
 
@@ -297,10 +294,9 @@ fail-closed.
 3. ⛔ **[operator]** Confirm / set HyperKitty hardening §6 items 1–8 on the
    mailman-web tier (version ≥ 1.3.8; hide-private-lists; signup disabled;
    mbox-export off; robots/search rate-limit at edge; Django hygiene).
-4. ⛔ **[operator]** Apply the `k8s/archive/...` stack
-   (`kustomize build | kubectl apply`), then tighten the list stack's
-   `namespaceSelector: {}` placeholder to the cloudflared namespace (the
-   additive reciprocal declared here keeps the leg open through the change).
+4. ⛔ **[operator]** Apply the `k8s/archive/...` stack. The list stack already
+   admits only the cloudflared namespace for the tunnel leg; the additive
+   reciprocal declared here keeps `anubis-archive -> 8000` open.
 5. ⛔ **[operator]** Add the Cloudflare tunnel **public-hostname route**
    `lists.latoolb.us` → `anubis-archive:8081` (dashboard/API, out of band).
 6. ⛔ **[operator — HARD PRIVACY GATE]** Run the §4 privacy pre-flight

@@ -86,7 +86,7 @@ resource "cloudflare_dns_record" "web_pages_verification" {
 }
 
 # REV-2 note: the Cloudflare Access application + policy that gate the
-# apex (allow jess@sulliwood.org, expandable) are added to THIS stack when
+# apex are added to THIS stack when
 # the operator picks REV-2 path A (runbook step 1) — they are not
 # pre-authored here because path B (gated CF preview host on an existing
 # house zone) needs no resources in this stack at all.

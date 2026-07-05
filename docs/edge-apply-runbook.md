@@ -57,8 +57,8 @@ zone for either.
 ## 1. REV-2 path decision (operator; blocks everything below)
 
 Row (g) REV-2: the live apex serves **GATED behind Cloudflare Access**
-(allow `jess@sulliwood.org`, expandable to Alex/Kate/Joe) until public
-un-gating is deliberately flipped. Access requires the apex hostname
+(operator allowlist supplied from protected custody) until public un-gating is
+deliberately flipped. Access requires the apex hostname
 proxied on a Cloudflare zone, so pick one:
 
 - **Path A (move the web zone to CF, this stack).** Set

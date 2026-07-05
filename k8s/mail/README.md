@@ -24,7 +24,6 @@ Useful commands:
 
 ```bash
 just mail-cr-validate
-just mail-cr-render
 GFTB_MAIL_KUBECONFIG=/path/to/latoolb-us-production.kubeconfig just mail-cr-server-dry-run
 GFTB_MAIL_KUBECONFIG=/path/to/latoolb-us-production.kubeconfig just mail-cr-apply
 ```

@@ -23,7 +23,7 @@ transport/`extraDomains` entries.
 > Bound on `local-path-retain`, and `mailman-postgres`, `mailman-core`, and
 > `mailman-web` are Ready. `keyholders@latoolb.us` exists in Mailman with
 > private archive policy, moderated subscription, accepted non-member posts, and
-> no public advertisement. Jess is the first owner/member. The keyholders
+> no public advertisement. The bootstrap operator is the first owner/member. The keyholders
 > recipient-scoped substrate transport is active: inbound mail reaches Mailman
 > over LMTP, then fans out through authenticated `lists-bounces@latoolb.us`
 > submission. Remaining proof is the strict artifact set: received headers with
@@ -51,8 +51,8 @@ check.
    enforces the same class of rule `validate-mail-crs.sh` enforces for
    `MailDomain` (no operator-only field committed): it asserts no
    `passwordSecretRef` on the `lists-bounces` `MailAccount` (lines 49-52),
-   the LMTP port/host, and the SMTP submission host/port, then runs
-   `kubectl kustomize`. It is wired into `list-crs.yml` on every PR/push
+   the LMTP port/host, and the SMTP submission host/port, then runs the render
+   check. It is wired into `list-crs.yml` on every PR/push
    touching `k8s/list/**` and it already passed in CI ("Validate list
    stack", pass, 3m13s).
 5. **Server dry-run before apply. CLEARED FOR CURRENT MANIFEST SHAPE.** The
@@ -153,7 +153,7 @@ and replace the tags with immutable `@sha256:` digests in the Deployments.
 
 ## Bring-up order
 
-1. `just list-stack-validate` (offline invariants + `kubectl kustomize`).
+1. `just list-stack-validate` (offline invariants + render check).
 2. If PVCs are not yet bound, apply the storageClassName fix and confirm the
    three PVCs bind.
 3. Wait for `mailman-postgres`, then `mailman-core` to be Ready (order enforced
@@ -173,7 +173,7 @@ and replace the tags with immutable `@sha256:` digests in the Deployments.
 
 ## Round-trip smoke (proof)
 
-1. Subscribe a test address (or Jess) to `keyholders@latoolb.us` via Postorius.
+1. Subscribe an operator-controlled test address to `keyholders@latoolb.us` via Postorius.
 2. Send a message **to** `keyholders@latoolb.us` from an external mailbox.
    - Confirms the substrate MX → transport-map → `mailman-core` LMTP :8024
      incoming leg.
@@ -200,8 +200,8 @@ A future `discuss@latoolb.us` list can carry the public archive semantics.
 
 ## First-tester plan (merged PR #27 to a subscribed external tester)
 
-Ordered steps from a merged PR #27 to `jess@sulliwood.org` (plus a second
-external address) subscribed to `keyholders@latoolb.us`, with a round-trip list
+Ordered steps from a merged PR #27 to an operator-controlled test address (plus
+a second external address) subscribed to `keyholders@latoolb.us`, with a round-trip list
 message and a private/members-only HyperKitty archive entry or archive-disabled
 proof. Each step is tagged with who executes it.
 
@@ -214,13 +214,11 @@ proof. Each step is tagged with who executes it.
 3. **[done 2026-07-04]** Created `keyholders@latoolb.us` in Mailman with
    `archive_policy=private`, `subscription_policy=moderate`,
    `default_nonmember_action=accept`, and `advertised=False`.
-4. **[operator]** Confirm the pinned image versions and replace the
-   `maxking/docker-mailman` tags with `@sha256` digests (Component pins,
-   above).
-5. **[agent]** `just list-stack-validate` (already passing) then
-   `just list-stack-render` to confirm the kustomize build is still clean
-   after any manifest changes.
-6. **[done 2026-07-04]** Added Jess as first owner/member.
+4. **[done 2026-07-05]** Replaced the `maxking/docker-mailman` and Postgres
+   image tags with immutable `@sha256` digests (Component pins, above).
+5. **[agent]** `just list-stack-validate` to confirm invariants and render
+   shape stay clean after any manifest changes.
+6. **[done 2026-07-04]** Added the bootstrap operator as first owner/member.
 7. **[done 2026-07-04]** Activated the recipient-scoped substrate transport for
     the `keyholders@` family; the plain mailbox path is retired for that
     address family.

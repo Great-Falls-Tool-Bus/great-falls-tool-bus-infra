@@ -9,10 +9,9 @@
 #                          proxied (CF Pages since the ADR 0003 cutover,
 #                          executed 2026-07-03 — see variables.tf)
 #   latoolb.us             root+www 301 redirect ruleset (variable target)
-# Mail DNS (MX/SPF/DMARC/DKIM) is staged below, ALL gated behind
-# var.mail_dns_enabled (default false — no-op plan) pending TIN-2379
-# mail-crs apply + D11 (mail target, blahaj relay ADR 010 vs. Google
-# Workspace, OPEN 2026-07-03).
+# Mail DNS (MX/SPF/DMARC/DKIM) is managed below, gated behind
+# var.mail_dns_enabled (default true after D11 closed self-hosted and TIN-2379
+# mail CRs applied).
 
 locals {
   web_domain   = "greatfallstoolbus.org"
@@ -60,7 +59,7 @@ resource "cloudflare_dns_record" "web_www" {
 # --- Access gate for the apex (packet row g REV-2) ---------------------------
 # The live apex serves GATED behind Cloudflare Access until public
 # un-gating is deliberately flipped. Allowlist: var.access_allowed_emails
-# (jess@sulliwood.org today; Alex/Kate/Joe are a one-line expansion).
+# supplied from protected operator custody, not committed.
 
 resource "cloudflare_zero_trust_access_application" "web_apex" {
   zone_id          = data.cloudflare_zone.web.zone_id
@@ -238,10 +237,10 @@ resource "cloudflare_dns_record" "alias_dkim" {
 # id da3ffda2-68ee-46d1-aa55-ec8dae2bd471). Proxied so the tunnel route and
 # Anubis gate front the handler and TLS terminates at the edge.
 #
-# Gated behind var.forms_dns_enabled (default false — same fail-closed shape
-# as var.mail_dns_enabled): merging this changes NOTHING (no-op plan) until
-# the flag is flipped, keeping activation an operator-reviewable plan/apply
-# (dispatch-apply doctrine, D6) rather than a merge side effect.
+# Gated behind var.forms_dns_enabled. The default is true only after the
+# 2026-07-05 route + live smoke proof; set false for operator-reviewed rollback.
+# The tunnel route is Cloudflare-dashboard/token-managed and is NOT represented
+# in this stack.
 resource "cloudflare_dns_record" "alias_forms" {
   count = var.forms_dns_enabled ? 1 : 0
 
