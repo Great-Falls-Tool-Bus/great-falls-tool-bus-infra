@@ -1,0 +1,220 @@
+name: Web Stack Apply
+
+# APPLY companion to the declare-only VALIDATE workflow web-crs.yml (TIN-2543,
+# authorized by ADR docs/decisions/0008-oncluster-web-serving.md; procedure in
+# docs/runbooks/oncluster-web-cutover.md). web-crs.yml validates the parked
+# k8s/web skeleton and NEVER applies; THIS workflow is the single operator
+# dispatch that cuts greatfallstoolbus.org over to on-cluster serving (SvelteKit
+# adapter-node -> ClusterIP 80->3000 -> honey-ingress cloudflared tunnel),
+# mirroring the mail-crs.yml / edge-plan.yml apply chassis (runs-on tinyland-nix,
+# GF-core checkout, protected environment, fail-closed secret gate).
+#
+# FAIL-CLOSED, OPERATOR-DISPATCH-ONLY:
+#   * No push/PR triggers. workflow_dispatch only.
+#   * A required `confirm` input must equal the sentinel `apply`; any other value
+#     aborts before the cluster is touched.
+#   * Requires the GF core read credential gate AND the operator-minted
+#     web-apply-kubeconfig, stored as WEB_APPLY_KUBECONFIG_B64 in the protected
+#     `web-apply` environment. Absent either => ::error:: + exit; nothing applies.
+#     The kubeconfig is a namespace-scoped ServiceAccount able to apply the
+#     greatfallstoolbus-org-production workload objects ONLY; apply fails closed
+#     on RBAC until the operator mints that SA (k8s/web/secrets.contract.yaml).
+#   * The image digest is NOT committed: the operator passes the resolved
+#     ghcr.io/great-falls-tool-bus/greatfallstoolbus.org:sha-<commit> reference
+#     (ideally @sha256:<digest>) as the `image` input at dispatch (runbook P2),
+#     so the public tree stays declare-only. scripts/validate-web-stack.sh keeps
+#     the k8s/web overlay at replicas:0 + placeholder image + no namespace.
+#
+# WHAT IT APPLIES (runbook P3): kubectl-apply the workload kustomization
+# (Deployment + Service + NetworkPolicy) into the ALREADY-PROVISIONED
+# greatfallstoolbus-org-production namespace (the web-apply SA is namespace-scoped
+# and cannot create namespaces), pin the operator-supplied image, flip replicas
+# 0 -> N, wait for the rollout, and report the in-cluster health gate. The live
+# kubectl mutation lives in the audited `just web-stack-apply` recipe, not inline
+# here (the public-operator-surface contract keeps workflows calling Justfile
+# recipes, never raw kubectl apply).
+#
+# OUT OF SCOPE, still SEPARATE operator steps: the cloudflared public-hostname
+# route (runbook P5, dashboard/token-managed), the apex+www DNS flip CF Pages ->
+# tunnel (runbook P6, via edge-plan.yml action=apply), and the CF Pages
+# decommission (runbook P7). This workflow moves NOTHING public: up to and
+# including its health gate the site is still served by CF Pages.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type 'apply' to authorize the on-cluster web cutover. Any other value aborts (fail-closed)."
+        required: true
+        default: ""
+        type: string
+      image:
+        description: "Digest-pinned image to serve, e.g. ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:<digest> (operator-resolved at runbook P2; never committed)."
+        required: true
+        default: ""
+        type: string
+      replicas:
+        description: "Replica count to scale to at cutover (MassageIthaca production shape is 2)."
+        required: false
+        default: "2"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never cancel an in-flight apply; serialize cutover dispatches per ref.
+  group: web-stack-apply-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  GF_CORE_REF: 2281b576bce0e8dd776a047b84e7464f5b508a62
+  HAS_GF_CORE_DEPLOY_KEY: ${{ secrets.GF_CORE_DEPLOY_KEY != '' }}
+  HAS_GF_CORE_READ_TOKEN: ${{ secrets.GF_CORE_READ_TOKEN != '' }}
+  HAS_WEB_APPLY_KUBECONFIG: ${{ secrets.WEB_APPLY_KUBECONFIG_B64 != '' }}
+
+jobs:
+  apply:
+    name: Apply web stack (on-cluster cutover)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: tinyland-nix
+    # The web-apply kubeconfig secret lives ONLY in this protected `web-apply`
+    # environment, not at repository scope (mirrors mail-crs.yml `mail` and
+    # edge-plan.yml `edge`). Required-reviewer branch policies are a GitHub
+    # paid-plan feature not available on this free community org; the effective
+    # apply gate is workflow_dispatch + confirm=apply + the fail-closed secret
+    # gate below (operator decision 2026-07-03, see edge-plan.yml).
+    environment: web-apply
+    timeout-minutes: 30
+    steps:
+      - name: Confirm apply intent (fail-closed sentinel)
+        run: |
+          if [[ "${{ github.event.inputs.confirm }}" != "apply" ]]; then
+            echo "::error::Refusing to apply: set confirm=apply to authorize the on-cluster web cutover (fail-closed, operator-dispatch-only)."
+            exit 1
+          fi
+
+      - name: Require GloriousFlywheel core read credential
+        run: |
+          if [[ "${HAS_GF_CORE_DEPLOY_KEY}" != "true" && "${HAS_GF_CORE_READ_TOKEN}" != "true" ]]; then
+            echo "::error::GF_CORE_DEPLOY_KEY or GF_CORE_READ_TOKEN is required."
+            exit 1
+          fi
+
+      - name: Require web-apply kubeconfig secret
+        run: |
+          if [[ "${HAS_WEB_APPLY_KUBECONFIG}" != "true" ]]; then
+            echo "::error::WEB_APPLY_KUBECONFIG_B64 is required in the protected web-apply environment; it is the namespace-scoped SA kubeconfig that applies the greatfallstoolbus-org-production workload. Mint the SA + RBAC and provision the secret before dispatch (k8s/web/secrets.contract.yaml, docs/runbooks/oncluster-web-cutover.md)."
+            exit 1
+          fi
+
+      - name: Validate image input (digest-pinned, not the placeholder)
+        env:
+          WEB_APPLY_IMAGE: ${{ github.event.inputs.image }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${WEB_APPLY_IMAGE}" ]]; then
+            echo "::error::image input is required (the operator-resolved GHCR reference to serve)."
+            exit 1
+          fi
+          case "${WEB_APPLY_IMAGE}" in
+            *PLACEHOLDER*)
+              echo "::error::refusing the declare-only PLACEHOLDER image; supply the real operator-resolved GHCR reference."
+              exit 1
+              ;;
+          esac
+          case "${WEB_APPLY_IMAGE}" in
+            *@sha256:*) : ;;
+            *) echo "::warning::image is not digest-pinned (@sha256:<digest>); a tag is mutable. Prefer the resolved digest (runbook P2)." ;;
+          esac
+
+      - name: Checkout overlay
+        uses: actions/checkout@v6
+        with:
+          path: overlay
+
+      - name: Checkout GloriousFlywheel core with deploy key
+        if: env.HAS_GF_CORE_DEPLOY_KEY == 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: tinyland-inc/GloriousFlywheel
+          ref: ${{ env.GF_CORE_REF }}
+          path: GloriousFlywheel
+          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
+
+      - name: Checkout GloriousFlywheel core with read token
+        if: env.HAS_GF_CORE_DEPLOY_KEY != 'true' && env.HAS_GF_CORE_READ_TOKEN == 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: tinyland-inc/GloriousFlywheel
+          ref: ${{ env.GF_CORE_REF }}
+          path: GloriousFlywheel
+          token: ${{ secrets.GF_CORE_READ_TOKEN }}
+
+      - name: Materialize web-apply kubeconfig
+        env:
+          WEB_APPLY_KUBECONFIG_B64: ${{ secrets.WEB_APPLY_KUBECONFIG_B64 }}
+        run: |
+          set -euo pipefail
+          kubeconfig="${RUNNER_TEMP}/web-apply.kubeconfig"
+          printf '%s' "${WEB_APPLY_KUBECONFIG_B64}" | base64 -d > "${kubeconfig}"
+          chmod 600 "${kubeconfig}"
+          echo "WEB_APPLY_KUBECONFIG=${kubeconfig}" >> "$GITHUB_ENV"
+
+      # The web-apply kubeconfig points the API server at the cluster tailnet
+      # address (100.x:6443); the on-cluster tinyland-nix runner reaches it over
+      # Tailscale like other cluster ops. If tailnet egress is unavailable, the
+      # in-cluster fallback is to rewrite the server to
+      # https://kubernetes.default.svc (the config set-cluster rewrite mail-crs.yml
+      # performs); it is intentionally left off here because the tailnet path is
+      # the supported route for this SA kubeconfig.
+      - name: Server dry-run (workload apply)
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        env:
+          WEB_APPLY_IMAGE: ${{ github.event.inputs.image }}
+          WEB_APPLY_REPLICAS: ${{ github.event.inputs.replicas }}
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            export GF_CORE_PATH=../GloriousFlywheel
+            export GF_CORE_CI_PATH=../GloriousFlywheel#ci
+            nix develop ../GloriousFlywheel#ci -c just web-stack-server-dry-run
+
+      - name: Apply cutover (namespace exists; pin image, flip replicas 0 -> N)
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        env:
+          WEB_APPLY_IMAGE: ${{ github.event.inputs.image }}
+          WEB_APPLY_REPLICAS: ${{ github.event.inputs.replicas }}
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            export GF_CORE_PATH=../GloriousFlywheel
+            export GF_CORE_CI_PATH=../GloriousFlywheel#ci
+            nix develop ../GloriousFlywheel#ci -c just web-stack-apply
+
+      - name: In-cluster health gate (rollout + /health readiness)
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            export GF_CORE_PATH=../GloriousFlywheel
+            export GF_CORE_CI_PATH=../GloriousFlywheel#ci
+            nix develop ../GloriousFlywheel#ci -c just web-stack-health | tee "${RUNNER_TEMP}/web-health.txt"
+            {
+              echo "## GFTB web stack apply"
+              echo ""
+              echo "On-cluster health gate (readiness == GET /health :3000 per replica):"
+              echo ""
+              echo '```'
+              cat "${RUNNER_TEMP}/web-health.txt"
+              echo '```'
+              echo ""
+              echo "Public cutover is NOT done: the cloudflared route (P5), apex+www DNS flip (P6), and CF Pages decommission (P7) remain separate operator steps."
+            } >> "$GITHUB_STEP_SUMMARY"

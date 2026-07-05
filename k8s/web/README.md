@@ -108,10 +108,10 @@ and "TIN-991 / sting SPOF" premises are retired above — routes are
 dashboard-managed *process* (not infeasibility; MI proves it) and the sting SPOF
 is CI-runner, not serving.
 
-## Deploy path (reference — NOT wired by this change)
+## Deploy path (apply plane wired via web-stack.yml; tree stays parked)
 
-At cutover the intended path reuses MI's proven machinery unchanged; this
-skeleton adds **no new deploy tooling**. Two supported routes:
+At cutover the intended path reuses MI's proven machinery unchanged. Two
+supported routes:
 
 1. **tofu CI/CD gitops (house pattern).** The GFTB overlay
    (`great-falls-tool-bus-infra`) is applied via `tinyland-inc/ci-templates`
@@ -134,7 +134,14 @@ A cutover still replaces the placeholder pin, creates the namespace, flips
 just web-stack-validate     # invariant checks + `kubectl kustomize` render
 ```
 
-There is intentionally **no** `web-stack-apply` recipe: applying this skeleton is
-not a supported operation. A cutover replaces the placeholder pin, creates the
-namespace, flips `replicas`, and adds the tunnel route — all operator-gated, all
-authorized by a superseding hosting ADR, none of it in this change.
+The operator-gated cutover now has a real apply plane: `just web-stack-apply`
+(with `just web-stack-server-dry-run` and `just web-stack-health`) runs ONLY
+through [`.github/workflows/web-stack.yml`](../../.github/workflows/web-stack.yml)
+(`workflow_dispatch` + `confirm=apply`, the protected `web-apply` environment,
+the operator-supplied `image` input). It does **not** un-park this skeleton: the
+pin arrives at dispatch (never committed), `replicas` are flipped imperatively
+post-apply, the namespace and `web-apply` SA/RBAC are minted by the operator out
+of band (the SA cannot create namespaces), and the tunnel route stays
+dashboard-managed. `scripts/validate-web-stack.sh` still guards this
+declare-only tree (`replicas: 0` + placeholder image + no namespace), and the
+DNS flip (P6) plus CF Pages decommission (P7) remain separate operator steps.
