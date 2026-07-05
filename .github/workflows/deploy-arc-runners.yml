@@ -48,7 +48,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   GF_CORE_REF: 2281b576bce0e8dd776a047b84e7464f5b508a62
   HAS_GF_CORE_DEPLOY_KEY: ${{ secrets.GF_CORE_DEPLOY_KEY != '' }}
   HAS_GF_CORE_READ_TOKEN: ${{ secrets.GF_CORE_READ_TOKEN != '' }}
