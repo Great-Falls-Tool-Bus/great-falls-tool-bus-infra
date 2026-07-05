@@ -3,9 +3,9 @@
 # on the house Cloudflare account (same-account + zone-scoped token per
 # TIN-2385); this stack only LOOKS THEM UP by name and manages records,
 # the apex Access application/policy, and the alias redirect ruleset.
-# Sibling stack tofu/stacks/edge-dns/ remains the fail-closed zone-CREATING
-# variant (packet row g REVISED + REV-2); the two stacks never both apply
-# record resources — see README.md.
+# Superseded sibling stack tofu/stacks/edge-dns/ remains an archived,
+# fail-closed zone-creating reference (packet row g REVISED + REV-2); the
+# two stacks never both apply record resources — see README.md.
 
 terraform {
   required_version = ">= 1.6.0"

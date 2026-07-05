@@ -23,8 +23,6 @@ check:
     just web-stack-validate
     just arc-fmt-check
     just arc-validate
-    just edge-fmt-check
-    just edge-validate
     just edge-zones-fmt-check
     just edge-zones-validate
     just substrate-boundary-selftest
@@ -144,6 +142,10 @@ arc-plan-show:
     test -f .tofu-plans/arc-runners.tfplan
     nix develop "{{ gf_core_ci }}" -c tofu -chdir="{{ gf_core }}/tofu/stacks/arc-runners" show -no-color "$(pwd)/.tofu-plans/arc-runners.tfplan"
 
+_arc-plan-json:
+    test -f .tofu-plans/arc-runners.tfplan
+    nix develop "{{ gf_core_ci }}" -c tofu -chdir="{{ gf_core }}/tofu/stacks/arc-runners" show -json "$(pwd)/.tofu-plans/arc-runners.tfplan" > .tofu-plans/arc-runners.tfplan.json
+
 arc-plan-destroy-check:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -178,86 +180,6 @@ arc-apply: arc-plan-destroy-check
 
 arc-enrollment-plan: enrollment-preflight arc-init arc-plan
     @echo "Review with just arc-plan-show before running just arc-apply."
-
-# --- edge/DNS apply plane (tofu/stacks/edge-dns; TIN-2360 row c amended) ----
-# Local stack (no GF-core chdir): the GFTB edge/DNS apply plane consuming the
-# site repo's declare-only intent. Fail-closed: both manage_* toggles default
-# false, so the default plan is empty (packet row g REVISED + REV-2).
-
-edge_stack := "tofu/stacks/edge-dns"
-edge_tfvars := "tofu/stacks/edge-dns/great-falls-tool-bus.tfvars"
-edge_backend := env_var_or_default("EDGE_BACKEND", "tofu/backend/honey-edge-dns.s3.hcl")
-
-edge-fmt-check:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if command -v tofu >/dev/null 2>&1; then
-        tofu fmt -check -recursive {{ edge_stack }}
-    else
-        nix develop "{{ gf_core_ci }}" -c tofu fmt -check -recursive {{ edge_stack }}
-    fi
-
-edge-validate:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    tf_data_dir="$(mktemp -d -t great-falls-tool-bus-infra-edge-tofu-data.XXXXXX)"
-    trap 'rm -rf "${tf_data_dir}"' EXIT
-    if command -v tofu >/dev/null 2>&1; then
-        TF_DATA_DIR="${tf_data_dir}" tofu -chdir={{ edge_stack }} init -backend=false >/tmp/great-falls-tool-bus-infra-edge-init.log
-        TF_DATA_DIR="${tf_data_dir}" tofu -chdir={{ edge_stack }} validate
-    else
-        nix develop "{{ gf_core_ci }}" -c bash -lc 'TF_DATA_DIR="'"${tf_data_dir}"'" tofu -chdir={{ edge_stack }} init -backend=false >/tmp/great-falls-tool-bus-infra-edge-init.log && TF_DATA_DIR="'"${tf_data_dir}"'" tofu -chdir={{ edge_stack }} validate'
-    fi
-
-edge-init:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    backend="{{ edge_backend }}"
-    test -f "${backend}"
-    if [[ "${backend}" != /* ]]; then
-        backend="$(pwd)/${backend}"
-    fi
-    tofu -chdir={{ edge_stack }} init -reconfigure -backend-config="${backend}"
-
-edge-plan:
-    mkdir -p .tofu-plans
-    tofu -chdir={{ edge_stack }} plan -var-file="$(pwd)/{{ edge_tfvars }}" -out="$(pwd)/.tofu-plans/edge-dns.tfplan"
-
-edge-plan-show:
-    test -f .tofu-plans/edge-dns.tfplan
-    tofu -chdir={{ edge_stack }} show -no-color "$(pwd)/.tofu-plans/edge-dns.tfplan"
-
-edge-plan-destroy-check:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    test -f .tofu-plans/edge-dns.tfplan
-    plan_json="$(mktemp "${TMPDIR:-/tmp}/gftb-edge-plan.XXXXXX.json")"
-    trap 'rm -f "${plan_json}"' EXIT
-    tofu -chdir={{ edge_stack }} show -json "$(pwd)/.tofu-plans/edge-dns.tfplan" > "${plan_json}"
-    if python3 - "${plan_json}" <<'PY'
-    import json
-    import sys
-    from pathlib import Path
-
-    plan = json.loads(Path(sys.argv[1]).read_text())
-    for change in plan.get("resource_changes", []):
-        if "delete" in change.get("change", {}).get("actions", []):
-            sys.exit(0)
-    sys.exit(1)
-    PY
-    then
-        if [ "${ALLOW_EDGE_DESTROY:-}" = "1" ]; then
-            echo "WARNING: destructive edge-dns plan allowed because ALLOW_EDGE_DESTROY=1"
-        else
-            echo "ERROR: destructive edge-dns plan detected. Review just edge-plan-show and record the decision before apply."
-            exit 1
-        fi
-    fi
-    echo "edge-dns plan destroy guard passed."
-
-edge-apply: edge-plan-destroy-check
-    test -f .tofu-plans/edge-dns.tfplan
-    tofu -chdir={{ edge_stack }} apply "$(pwd)/.tofu-plans/edge-dns.tfplan"
 
 # --- edge zone stack (tofu/stacks/edge; TIN-2378 prep + TIN-2385) -----------
 # Console-created zones on the house CF account, looked up by name with a
@@ -305,6 +227,13 @@ edge-zones-init:
 edge-zones-plan:
     mkdir -p .tofu-plans
     tofu -chdir={{ edge_zones_stack }} plan -out="$(pwd)/.tofu-plans/edge.tfplan"
+
+_edge-zones-plan-json:
+    test -f .tofu-plans/edge.tfplan
+    tofu -chdir={{ edge_zones_stack }} show -json "$(pwd)/.tofu-plans/edge.tfplan" > .tofu-plans/edge.tfplan.json
+
+_edge-zones-plan-text:
+    @tofu -chdir={{ edge_zones_stack }} plan -no-color
 
 edge-zones-plan-show:
     test -f .tofu-plans/edge.tfplan

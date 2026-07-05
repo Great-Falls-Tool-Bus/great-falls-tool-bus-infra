@@ -16,9 +16,11 @@ TIN-2385 realization of that path), the substrate-boundary memo
 ADR (greatfallstoolbus.org `docs/decisions/0003`). Secret **names
 only**, no values, ever.
 
-Sibling runbook: [`docs/edge-apply-runbook.md`](../edge-apply-runbook.md)
-(the pre-TIN-2385 `edge-dns/` stack, zone-creating + fail-closed). When
-this runbook executes, that stack's `manage_*` toggles stay `false`, see the stack README for the reconciliation rules.
+Archived sibling reference:
+[`docs/edge-apply-runbook.md`](../edge-apply-runbook.md) documents the
+pre-TIN-2385 `edge-dns/` stack. It is no longer in the Justfile operator
+surface. When this runbook executes, that stack's `manage_*` toggles stay
+`false`; the live lane is `just edge-zones-*`.
 
 ## Registrar facts (whois, captured 2026-07-02, TIN-2378 open question)
 
@@ -37,9 +39,9 @@ not a second vendor to manage.
 Cloudflare dashboard → house account → **Add a site**, once for
 `greatfallstoolbus.org` and once for `latoolb.us` (Free plan; skip the
 record-import wizard, records are managed by `tofu/stacks/edge/`, and
-DreamHost currently serves zero records on both zones per the
-edge-apply-runbook step-0 baseline). Each zone sits `pending` and shows
-its two assigned Cloudflare nameservers, note them for step 4.
+DreamHost served zero records on both zones at the 2026-07-02 baseline).
+Each zone sits `pending` and shows its two assigned Cloudflare nameservers,
+note them for step 4.
 
 Posture note (TIN-2385): default is **same-account + zone-scoped token**, the blast radius control is the token scope, not a separate account.
 An entirely separate GFTB Cloudflare account is a possible stricter
@@ -147,11 +149,10 @@ Access gate is verified working (then flip it to
 
 Rollback-era note (GH Pages): the pre-ADR-0003 sequence required the
 site repo's `static/CNAME` + `BASE_PATH=""` precondition merged before
-the apex pointed at GH Pages, and the GitHub **org verified-domain TXT**
-record (`docs/edge-apply-runbook.md` verification-TXT step) to bind
-`greatfallstoolbus.org` to the org. Leave that TXT record in place, it
-is harmless, and it keeps the GH Pages origin a working rollback target
-(`pages_host` flip back to the default, step 5).
+the apex pointed at GH Pages, plus the GitHub **org verified-domain TXT**
+record binding `greatfallstoolbus.org` to the org. Leave that TXT record
+in place; it is harmless, and it keeps the GH Pages origin a working rollback
+target (`pages_host` flip back to the default, step 5).
 
 ## 5. CF Pages cutover sequence (ADR 0003, operator-approved 2026-07-03)
 

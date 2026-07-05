@@ -176,15 +176,9 @@ kubectl --context honey -n greatfallstoolbus-org-production \
   get pods -o wide   # expect 2 Running, spread across bumble/sting
 ```
 
-**Rollback:** scale back to zero and/or delete the namespace — nothing public
-depends on it yet (P5 has not run):
-
-```bash
-kubectl --context honey -n greatfallstoolbus-org-production \
-  scale deploy/greatfallstoolbus-org --replicas=0
-# full backout:
-kubectl --context honey delete namespace greatfallstoolbus-org-production
-```
+**Rollback:** scale back to zero and/or remove the namespace through the
+private cluster operations lane — nothing public depends on it yet (P5 has not
+run). Do not copy destructive cluster commands out of this public runbook.
 
 The parked overlay in git is unchanged by a rollback; re-park by discarding the
 private-overlay cutover branch.
@@ -264,9 +258,10 @@ No DNS has moved, so removing the route fully backs out P5.
 **this overlay's edge stack** (`tofu/stacks/edge*`, zone-scoped token per
 TIN-2385) — **not** blahaj. Flip the apex + www records from the CF Pages CNAME
 to the tunnel CNAME target (`<honey-ingress-tunnel-id>.cfargotunnel.com`,
-proxied), following the edge apply flow in
-[`docs/edge-apply-runbook.md`](../edge-apply-runbook.md) (the `edge-plan.yml`
-`workflow_dispatch action=apply`, protected `edge` environment).
+proxied), following the live edge apply flow in
+[`docs/runbooks/edge-token-and-zones.md`](edge-token-and-zones.md) and
+`edge-plan.yml` `workflow_dispatch action=apply` (protected `edge`
+environment).
 
 Per **ADR 0007**, **keep the CF Pages project as a warm standby** — do **not**
 delete it at P6. Leave the Pages build wired and green; only the DNS records
@@ -384,10 +379,10 @@ stacks sit behind. No kubeconfig value, token, or digest appears in this repo.
 For both routes, the P6 DNS flip is **not** a blahaj action: apex+www records
 are owned by this overlay's `tofu/stacks/edge*` (zero-scoped token
 `cloudflare-api-token-gftb-zones`, `edge` environment). It runs through the
-`edge-plan.yml` `workflow_dispatch action=apply` / `docs/edge-apply-runbook.md`,
-independent of the workload apply. blahaj declares only the in-cluster Service +
-tunnel-ingress NetworkPolicy; the public-hostname route (P5) is
-dashboard/token-managed (TIN-991).
+`edge-plan.yml` `workflow_dispatch action=apply` lane, independent of the
+workload apply. blahaj declares only the in-cluster Service + tunnel-ingress
+NetworkPolicy; the public-hostname route (P5) is dashboard/token-managed
+(TIN-991).
 
 ---
 

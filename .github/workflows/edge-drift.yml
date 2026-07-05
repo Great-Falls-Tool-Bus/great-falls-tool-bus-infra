@@ -33,6 +33,7 @@ env:
   HAS_GF_CORE_DEPLOY_KEY: ${{ secrets.GF_CORE_DEPLOY_KEY != '' }}
   HAS_GF_CORE_READ_TOKEN: ${{ secrets.GF_CORE_READ_TOKEN != '' }}
   HAS_CLOUDFLARE_API_TOKEN_GFTB_ZONES: ${{ secrets.CLOUDFLARE_API_TOKEN_GFTB_ZONES != '' }}
+  HAS_ACCESS_ALLOWED_EMAILS_JSON: ${{ secrets.ACCESS_ALLOWED_EMAILS_JSON != '' }}
   HAS_ARC_RUNNERS_RUSTFS_ACCESS_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_ACCESS_KEY != '' }}
   HAS_ARC_RUNNERS_RUSTFS_SECRET_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_SECRET_KEY != '' }}
 
@@ -59,6 +60,10 @@ jobs:
           fi
           if [ "${HAS_CLOUDFLARE_API_TOKEN_GFTB_ZONES}" != "true" ]; then
             echo "::notice::CLOUDFLARE_API_TOKEN_GFTB_ZONES is not configured in the edge environment; skipping edge drift plan (token mint is a runbook step — docs/runbooks/edge-token-and-zones.md)."
+            missing_edge=1
+          fi
+          if [ "${HAS_ACCESS_ALLOWED_EMAILS_JSON}" != "true" ]; then
+            echo "::notice::ACCESS_ALLOWED_EMAILS_JSON is not configured in the edge environment; skipping edge drift plan (Access allowlist is operator-custody PII, not committed)."
             missing_edge=1
           fi
           if [ "${HAS_ARC_RUNNERS_RUSTFS_ACCESS_KEY}" != "true" ]; then
@@ -112,6 +117,7 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.ARC_RUNNERS_RUSTFS_ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_SECRET_KEY }}
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN_GFTB_ZONES }}
+          TF_VAR_access_allowed_emails: ${{ secrets.ACCESS_ALLOWED_EMAILS_JSON }}
         with:
           push-cache: "false"
           command: |
@@ -122,8 +128,7 @@ jobs:
             nix develop ../GloriousFlywheel#ci -c just edge-zones-init
             # Deliberately NO -out=: the zero-diff gate needs only the text; a
             # persisted plan binary is secret-bearing and apply-able.
-            nix develop ../GloriousFlywheel#ci -c tofu \
-              -chdir=tofu/stacks/edge plan -no-color \
+            nix develop ../GloriousFlywheel#ci -c just _edge-zones-plan-text \
               | tee edge-drift-plan.txt
 
       - name: Assert zero-diff plan (No changes.)

@@ -36,7 +36,8 @@ Grounded mermaid diagrams (mail flow, network/ports, planes, Bazel/GF) live in
   (documented substrate fact, NOT wired into the primary lane yet; see the
   executor-flip note in the tfvars)
 - State: bucket `tofu-state`, key prefix `great-falls-tool-bus-infra`
-  (`arc-runners/` and `edge-dns/` state keys)
+  (`arc-runners/` and live `edge/` state keys; `edge-dns/` is a
+  superseded fail-closed reference key)
 - Core pin: `2281b576bce0e8dd776a047b84e7464f5b508a62` (GloriousFlywheel
   `origin/main`, refreshed 2026-07-02 from the overlay-authoring pin
   `7072ce2e`, PR #3, preflight next-action #1). Tracking main was chosen over
@@ -59,21 +60,7 @@ Private credentials stay outside Git:
 ## Edge/DNS apply plane (TIN-2360 row c, amended 2026-07-02)
 
 Beyond ARC tenancy, this overlay is the **canonical apply home for the
-GFTB edge**: [`tofu/stacks/edge-dns/`](tofu/stacks/edge-dns/README.md)
-consumes the public site repo's declare-only intent
-(`greatfallstoolbus.org` `tofu/{dns,mail}-intent/`), the tenant sops+age
-lane lives under [`secrets/`](secrets/README.md) (distinct GFTB
-recipient, row d), and the CF/DreamHost apply steps are
-[`docs/edge-apply-runbook.md`](docs/edge-apply-runbook.md). The DNS
-cutover chain (TIN-2378 → TIN-2379 → TIN-2380) executes from sessions in
-this repo, not from `tinyland-inc/blahaj`, which stays the house's
-replaceable IaC layer consumed as a service (`relay.tinyland.dev`, honey
-mail stack, ARC controller). Fail-closed default: the stack's `manage_*`
-toggles are off (packet row g REVISED + REV-2, DreamHost stays DNS
-authority; only the gated apex may move to CF), so `just edge-plan` is
-empty until the operator picks the REV-2 path.
-
-The TIN-2385 realization of that path is
+GFTB edge**. The live TIN-2385 stack is
 [`tofu/stacks/edge/`](tofu/stacks/edge/README.md): zones added
 **console-side** to the house CF account, looked up by name with a
 **zone-scoped** token (protected `edge` environment secret
@@ -82,8 +69,12 @@ apex/www records, the REV-2 Access gate, and the `latoolb.us` 301
 redirects (no mail records, TIN-2379). Console/registrar steps:
 [`docs/runbooks/edge-token-and-zones.md`](docs/runbooks/edge-token-and-zones.md);
 CI plan/apply chassis: `.github/workflows/edge-plan.yml` (skip-green
-until the token secret exists). The two edge stacks never both apply;
-see the stack README's reconciliation rules.
+until the protected edge secrets exist).
+
+[`tofu/stacks/edge-dns/`](tofu/stacks/edge-dns/README.md) is retained only
+as the superseded pre-TIN-2385, fail-closed reference. It is not in the
+Justfile operator menu and must not be applied while the live edge stack
+owns the zone surface.
 
 ## Mail CR apply plane (TIN-2379)
 

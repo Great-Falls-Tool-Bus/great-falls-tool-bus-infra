@@ -6,8 +6,8 @@
 terraform {
   required_version = ">= 1.6.0"
 
-  # Configured via -backend-config=tofu/backend/honey-edge-dns.s3.hcl
-  # (just edge-init). State coordinates only — no credentials.
+  # Configured via -backend-config=tofu/backend/honey-edge-dns.s3.hcl.
+  # Archived reference only; no public Justfile recipe currently initializes it.
   backend "s3" {}
 
   required_providers {

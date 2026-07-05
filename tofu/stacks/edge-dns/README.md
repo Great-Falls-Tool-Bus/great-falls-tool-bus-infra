@@ -1,4 +1,9 @@
-# `tofu/stacks/edge-dns/` — GFTB edge/DNS apply plane
+# `tofu/stacks/edge-dns/` — superseded GFTB edge/DNS reference
+
+This stack is retained as the pre-TIN-2385 fail-closed reference only. The
+live edge apply plane is [`../edge/`](../edge/README.md) and its public
+operator recipes are `just edge-zones-*`. Do not apply this stack while the
+live `edge/` stack owns the Cloudflare zone surface.
 
 This stack is the **apply-plane consumption** of the declare-only intent
 published by the public site repo
@@ -43,22 +48,10 @@ What remains house-plane (consumed as *services*, by reference):
 
 ## Operating it
 
-```bash
-just edge-fmt-check     # formatting
-just edge-validate      # init -backend=false + validate (no state, no creds)
-just edge-init          # backend: tofu/backend/honey-edge-dns.s3.hcl
-just edge-plan          # needs CLOUDFLARE_API_TOKEN + TF_VAR_cloudflare_account_id
-just edge-plan-show
-just edge-apply         # destroy-checked, ALLOW_EDGE_DESTROY-gated
-```
-
-Apply is operator-gated and follows
-[`docs/edge-apply-runbook.md`](../../docs/edge-apply-runbook.md), which
-starts with the REV-2 path decision (path A: web zone → CF + Access-gated
-apex, managed by this stack; path B: gated CF preview host on an existing
-house zone — nothing to apply here). Credentials are referenced **by name
-only** and resolve from the tenant sops lane (`secrets/README.md`); the
-DreamHost API is read-only capture here, never mutation.
+There is no public Justfile lane for this stack. The repo intentionally exposes
+only the live `edge-zones-*` recipes for the current Cloudflare zone surface.
+If an operator ever needs to resurrect this stack, first record a superseding
+decision and reintroduce recipes in a dedicated PR with a fresh plan proof.
 
 Execution-time values (verification TXT, DKIM selector/public key, DMARC
 rua) stay `null`/commented in `great-falls-tool-bus.tfvars` until minted —

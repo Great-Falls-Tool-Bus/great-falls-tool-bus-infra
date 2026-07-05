@@ -15,7 +15,7 @@
     "note": "The honey-ingress tunnel is the shared house connector (blahaj:deploy/honey/retained-cloudflared.yaml). Its public-hostname routes are dashboard/token-managed (TIN-991). The real <tunnel-id>.cfargotunnel.com target is NOT inlined here; an operator adds the route out of band at cutover."
   },
   "authority": {
-    "dns_zone_owner": "great-falls-tool-bus-infra:tofu/stacks/edge-dns (zone-scoped token cloudflare-api-token-gftb-zones; TIN-2385)",
+    "dns_zone_owner": "great-falls-tool-bus-infra:tofu/stacks/edge (zone-scoped token cloudflare-api-token-gftb-zones; TIN-2385)",
     "route_mutation_policy": "operator-gated; no CI auto-applier for durable single-service routes (TIN-991)",
     "cloudflare_credential": "protected `edge` environment only; never in this repo tree, never in the public site repo"
   },
