@@ -1,0 +1,29 @@
+# DECLARE-ONLY — NOT APPLIED (TIN-2541).
+#
+# Plain ClusterIP, port 80 -> targetPort 3000 (adapter-node), internal DNS only
+# and never internet-exposed directly. This mirrors MI's Service exactly
+# (blahaj:tofu/stacks/massageithaca/main.tf ~L587): the ONLY public path is the
+# in-cluster cloudflared tunnel forwarding to
+# http://greatfallstoolbus-org.greatfallstoolbus-org-production.svc.cluster.local:80
+# — and that tunnel route is dashboard/token-managed, declared fail-closed in
+# ../../tofu/intent/great-falls-tool-bus/web-oncluster-route.json, never here.
+apiVersion: v1
+kind: Service
+metadata:
+  name: greatfallstoolbus-org
+  namespace: greatfallstoolbus-org-production
+  labels:
+    app.kubernetes.io/name: greatfallstoolbus-org
+    app.kubernetes.io/component: web
+    app.kubernetes.io/part-of: great-falls-tool-bus
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: greatfallstoolbus-org
+    app.kubernetes.io/component: web
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

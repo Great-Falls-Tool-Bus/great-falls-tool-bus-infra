@@ -1,0 +1,104 @@
+# DECLARE-ONLY — NOT APPLIED (TIN-2541).
+#
+# Default-deny ingress posture with explicit allows, mirroring MI
+# (blahaj:tofu/stacks/massageithaca/main.tf: default-deny-ingress + per-source
+# allows) and the house form-stack doctrine (k8s/form/.../networkpolicy.yaml:
+# the tunnel source is the non-host-networked `cloudflared` namespace, so a
+# namespaceSelector on kubernetes.io/metadata.name=cloudflared is the tightest
+# correct admission — no ipBlock/SNAT workaround needed on that leg).
+#
+# The web pod's ONLY public path is: cloudflared (tunnel) --3000--> this pod.
+# Prometheus scrape is admitted from the tinyland-dev-production monitoring
+# namespace on 3000. Egress is least-privilege: DNS only (the adapter-node app
+# serves static+prerendered content and needs no outbound data plane in this
+# skeleton; a cutover adds explicit allows for any real backend).
+#
+# FAIL-CLOSED note: these policies select on the web pod labels. Because the
+# Deployment ships replicas:0 and the namespace is not created by this stack,
+# NOTHING is admitted or served until an operator materializes the namespace,
+# pins a real image, and flips replicas — none of which this file does.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: greatfallstoolbus-org-production
+  labels:
+    app.kubernetes.io/part-of: great-falls-tool-bus
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cloudflared-tunnel-ingress
+  namespace: greatfallstoolbus-org-production
+  labels:
+    app.kubernetes.io/name: greatfallstoolbus-org
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: greatfallstoolbus-org
+      app.kubernetes.io/component: web
+  policyTypes: [Ingress]
+  ingress:
+    # Public edge hop: the in-cluster cloudflared tunnel (non-host-networked
+    # pods in the `cloudflared` namespace) forwards solved traffic to :3000.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cloudflared
+      ports:
+        - protocol: TCP
+          port: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-scrape
+  namespace: greatfallstoolbus-org-production
+  labels:
+    app.kubernetes.io/name: greatfallstoolbus-org
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: greatfallstoolbus-org
+      app.kubernetes.io/component: web
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: tinyland-dev-production
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-dns
+  namespace: greatfallstoolbus-org-production
+  labels:
+    app.kubernetes.io/name: greatfallstoolbus-org
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: greatfallstoolbus-org
+      app.kubernetes.io/component: web
+  policyTypes: [Egress]
+  egress:
+    - to: [] # cluster DNS only
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

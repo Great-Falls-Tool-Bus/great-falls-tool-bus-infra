@@ -1,0 +1,84 @@
+name: Web Stack
+
+# TIN-2541: GFTB on-cluster web serving DECLARE-ONLY skeleton (SvelteKit
+# adapter-node -> ClusterIP 80->3000 -> honey-ingress cloudflared tunnel,
+# mirroring the MassageIthaca full-on-cluster pattern).
+#
+# This workflow is VALIDATION-ONLY. It renders the manifests with
+# `kubectl kustomize` and enforces the fail-closed invariants (replicas 0,
+# placeholder image, no namespace, no secret, fail-closed route/reaper intent).
+# There is intentionally NO server-dry-run/apply job: applying this skeleton is
+# not a supported operation. A live cutover is operator-gated under a superseding
+# hosting ADR, out of band. See k8s/web/README.md and
+# docs/decisions/0001-pr-gated-ephemeral-preview-deploys.md.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/web-crs.yml"
+      - "Justfile"
+      - "k8s/web/**"
+      - "scripts/validate-web-stack.sh"
+      - "tofu/intent/great-falls-tool-bus/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/web-crs.yml"
+      - "Justfile"
+      - "k8s/web/**"
+      - "scripts/validate-web-stack.sh"
+      - "tofu/intent/great-falls-tool-bus/**"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  GF_CORE_REF: 2281b576bce0e8dd776a047b84e7464f5b508a62
+  HAS_GF_CORE_DEPLOY_KEY: ${{ secrets.GF_CORE_DEPLOY_KEY != '' }}
+  HAS_GF_CORE_READ_TOKEN: ${{ secrets.GF_CORE_READ_TOKEN != '' }}
+
+jobs:
+  validate:
+    name: Validate web stack (declare-only)
+    runs-on: tinyland-nix
+    steps:
+      - name: Require GloriousFlywheel core read credential
+        run: |
+          if [[ "${HAS_GF_CORE_DEPLOY_KEY}" != "true" && "${HAS_GF_CORE_READ_TOKEN}" != "true" ]]; then
+            echo "::error::GF_CORE_DEPLOY_KEY or GF_CORE_READ_TOKEN is required."
+            exit 1
+          fi
+      - name: Checkout overlay
+        uses: actions/checkout@v6
+        with:
+          path: overlay
+      - name: Checkout GloriousFlywheel core with deploy key
+        if: env.HAS_GF_CORE_DEPLOY_KEY == 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: tinyland-inc/GloriousFlywheel
+          ref: ${{ env.GF_CORE_REF }}
+          path: GloriousFlywheel
+          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
+      - name: Checkout GloriousFlywheel core with read token
+        if: env.HAS_GF_CORE_DEPLOY_KEY != 'true' && env.HAS_GF_CORE_READ_TOKEN == 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: tinyland-inc/GloriousFlywheel
+          ref: ${{ env.GF_CORE_REF }}
+          path: GloriousFlywheel
+          token: ${{ secrets.GF_CORE_READ_TOKEN }}
+      - name: Validate manifests
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            export GF_CORE_PATH=../GloriousFlywheel
+            export GF_CORE_CI_PATH=../GloriousFlywheel#ci
+            nix develop ../GloriousFlywheel#ci -c just web-stack-validate
+            nix develop ../GloriousFlywheel#ci -c just web-stack-render

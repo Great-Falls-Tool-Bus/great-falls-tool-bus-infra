@@ -1,0 +1,119 @@
+# DECLARE-ONLY — NOT APPLIED (TIN-2541).
+#
+# GFTB on-cluster web serving skeleton, mirroring the proven MassageIthaca
+# full-on-cluster pattern (SvelteKit adapter-node -> OCI image on GHCR -> K8s
+# Deployment behind a ClusterIP Service -> in-cluster cloudflared tunnel edge;
+# see blahaj:tofu/stacks/massageithaca/main.tf and this repo's
+# docs/decisions/0001-pr-gated-ephemeral-preview-deploys.md).
+#
+# This manifest is a PLAN-ONLY skeleton. It is FAIL-CLOSED on three independent
+# axes so that even an accidental `kubectl apply` runs nothing and serves
+# nothing:
+#   1. replicas: 0            — no pod is ever scheduled from this file as-is.
+#   2. image: a non-resolvable PLACEHOLDER (no digest, not on any registry) —
+#      the operator pins a real ghcr.io/great-falls-tool-bus/greatfallstoolbus.org
+#      digest in the PRIVATE overlay at cutover; the public app repo owns the
+#      image build (ambient GITHUB_TOKEN, same-org GHCR), never the pin.
+#   3. the target namespace greatfallstoolbus-org-production DOES NOT EXIST and
+#      is intentionally NOT created by this stack (no Namespace object here).
+#
+# Nothing about a public route lives here: the honey-ingress cloudflared tunnel
+# public-hostname route is Cloudflare dashboard / token-managed (TIN-991), never
+# in git. See ../README.md and ../../tofu/intent/great-falls-tool-bus/
+# web-oncluster-route.json (dns_enabled=false, route_enabled=false).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: greatfallstoolbus-org
+  namespace: greatfallstoolbus-org-production
+  labels:
+    app.kubernetes.io/name: greatfallstoolbus-org
+    app.kubernetes.io/component: web
+    app.kubernetes.io/part-of: great-falls-tool-bus
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  # FAIL-CLOSED: zero replicas. A real cutover flips this to 2 (MI prod shape)
+  # in an operator-gated pin bump, never in this declare-only skeleton.
+  replicas: 0
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: greatfallstoolbus-org
+      app.kubernetes.io/component: web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: greatfallstoolbus-org
+        app.kubernetes.io/component: web
+        app.kubernetes.io/part-of: great-falls-tool-bus
+    spec:
+      terminationGracePeriodSeconds: 15
+      # Pod-level hardening mirrors MI (non-root uid/gid 1001 under adapter-node).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      # Keep off control-plane; tolerate compute-expansion so a cutover can land
+      # on sting if honey is full (matches the house capacity posture).
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: DoesNotExist
+      containers:
+        - name: greatfallstoolbus-org
+          # PLACEHOLDER — deliberately not a real, resolvable, digest-pinned
+          # reference. The declare-only guard (scripts/validate-web-stack.sh)
+          # FAILS if this is ever replaced with an @sha256: digest in-tree: the
+          # real pin belongs in an operator-gated PRIVATE-overlay bump at cutover,
+          # not in this skeleton.
+          image: ghcr.io/great-falls-tool-bus/greatfallstoolbus.org:PLACEHOLDER-DECLARE-ONLY-NOT-APPLIED
+          imagePullPolicy: IfNotPresent
+          command: ["node", "build/index.js"]
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: "3000"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
