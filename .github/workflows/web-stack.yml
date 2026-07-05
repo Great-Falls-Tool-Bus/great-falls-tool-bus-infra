@@ -68,7 +68,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   GF_CORE_REF: 2281b576bce0e8dd776a047b84e7464f5b508a62
   HAS_GF_CORE_DEPLOY_KEY: ${{ secrets.GF_CORE_DEPLOY_KEY != '' }}
   HAS_GF_CORE_READ_TOKEN: ${{ secrets.GF_CORE_READ_TOKEN != '' }}
@@ -180,8 +179,8 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH=../GloriousFlywheel#ci
-            nix develop ../GloriousFlywheel#ci -c just web-stack-server-dry-run
+            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            nix develop "${GF_CORE_CI_PATH}" -c just web-stack-server-dry-run
 
       - name: Apply cutover (namespace exists; pin image, flip replicas 0 -> N)
         uses: ./GloriousFlywheel/.github/actions/nix-job
@@ -194,8 +193,8 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH=../GloriousFlywheel#ci
-            nix develop ../GloriousFlywheel#ci -c just web-stack-apply
+            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            nix develop "${GF_CORE_CI_PATH}" -c just web-stack-apply
 
       - name: In-cluster health gate (rollout + /health readiness)
         uses: ./GloriousFlywheel/.github/actions/nix-job
@@ -205,8 +204,8 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH=../GloriousFlywheel#ci
-            nix develop ../GloriousFlywheel#ci -c just web-stack-health | tee "${RUNNER_TEMP}/web-health.txt"
+            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            nix develop "${GF_CORE_CI_PATH}" -c just web-stack-health | tee "${RUNNER_TEMP}/web-health.txt"
             {
               echo "## GFTB web stack apply"
               echo ""
