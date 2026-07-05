@@ -87,8 +87,8 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH=../GloriousFlywheel#ci
-            nix develop ../GloriousFlywheel#ci -c just form-stack-validate
+            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            nix develop "${GF_CORE_CI_PATH}" -c just form-stack-validate
 
   server:
     name: Server dry-run or apply
@@ -155,12 +155,12 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH=../GloriousFlywheel#ci
+            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
             if [ -n "${KUBERNETES_SERVICE_HOST:-}" ]; then
-              cluster_name="$(nix develop ../GloriousFlywheel#ci -c kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" config view --minify -o jsonpath='{.contexts[0].context.cluster}')"
-              nix develop ../GloriousFlywheel#ci -c kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" config set-cluster "${cluster_name}" --server=https://kubernetes.default.svc >/dev/null
+              cluster_name="$(nix develop "${GF_CORE_CI_PATH}" -c kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" config view --minify -o jsonpath='{.contexts[0].context.cluster}')"
+              nix develop "${GF_CORE_CI_PATH}" -c kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" config set-cluster "${cluster_name}" --server=https://kubernetes.default.svc >/dev/null
             fi
-            nix develop ../GloriousFlywheel#ci -c just form-stack-server-dry-run
+            nix develop "${GF_CORE_CI_PATH}" -c just form-stack-server-dry-run
       - name: Apply
         if: github.event.inputs.action == 'apply'
         uses: ./GloriousFlywheel/.github/actions/nix-job
@@ -170,5 +170,5 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH=../GloriousFlywheel#ci
-            nix develop ../GloriousFlywheel#ci -c just form-stack-apply
+            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            nix develop "${GF_CORE_CI_PATH}" -c just form-stack-apply

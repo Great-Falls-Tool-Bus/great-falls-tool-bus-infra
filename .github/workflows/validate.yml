@@ -127,6 +127,7 @@ jobs:
 
           cd overlay
           export GF_CORE_PATH=../GloriousFlywheel
+          export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
 
           echo "::group::secrets scan"
           nix develop . -c gitleaks dir --config .gitleaks.toml --redact --verbose .
@@ -141,7 +142,7 @@ jobs:
           heartbeat_pid="$!"
           trap 'kill "${heartbeat_pid}" 2>/dev/null || true' EXIT
 
-          nix develop ../GloriousFlywheel#ci -c bash -lc '
+          nix develop "${GF_CORE_CI_PATH}" -c bash -lc '
             set -euo pipefail
 
             echo "::group::public operator surface"

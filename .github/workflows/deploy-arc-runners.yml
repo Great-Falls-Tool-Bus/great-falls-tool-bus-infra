@@ -147,10 +147,10 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH=../GloriousFlywheel#ci
+            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
             if [ -n "${KUBERNETES_SERVICE_HOST:-}" ]; then
               export GF_IN_CLUSTER_API_SERVER="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT_HTTPS:-443}"
-              nix develop ../GloriousFlywheel#ci -c bash -lc '
+              nix develop "${GF_CORE_CI_PATH}" -c bash -lc '
                 set -euo pipefail
                 context="honey"
                 cluster_name="$(kubectl --kubeconfig "${ARC_RUNNERS_KUBECONFIG}" config view -o "jsonpath={.contexts[?(@.name==\"${context}\")].context.cluster}")"
@@ -163,10 +163,10 @@ jobs:
               '
             fi
             export TF_VAR_k8s_config_path="${ARC_RUNNERS_KUBECONFIG}"
-            nix develop ../GloriousFlywheel#ci -c just arc-init
-            nix develop ../GloriousFlywheel#ci -c just arc-plan
-            nix develop ../GloriousFlywheel#ci -c just _arc-plan-json
-            nix develop ../GloriousFlywheel#ci -c just arc-plan-show \
+            nix develop "${GF_CORE_CI_PATH}" -c just arc-init
+            nix develop "${GF_CORE_CI_PATH}" -c just arc-plan
+            nix develop "${GF_CORE_CI_PATH}" -c just _arc-plan-json
+            nix develop "${GF_CORE_CI_PATH}" -c just arc-plan-show \
               > .tofu-plans/arc-runners.plan.txt
             {
               echo "## GFTB ARC runners plan"
@@ -182,7 +182,8 @@ jobs:
         run: |
           set -euo pipefail
           cd overlay
-          nix develop ../GloriousFlywheel#ci -c python3 - <<'PY'
+          export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+          nix develop "${GF_CORE_CI_PATH}" -c python3 - <<'PY'
           import json
           import os
           from pathlib import Path
@@ -242,10 +243,10 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH=../GloriousFlywheel#ci
+            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
             export TF_VAR_k8s_config_path="${ARC_RUNNERS_KUBECONFIG}"
-            nix develop ../GloriousFlywheel#ci -c just arc-plan-destroy-check
-            nix develop ../GloriousFlywheel#ci -c just arc-apply
+            nix develop "${GF_CORE_CI_PATH}" -c just arc-plan-destroy-check
+            nix develop "${GF_CORE_CI_PATH}" -c just arc-apply
 
       - name: Verify GFTB primary runner caps
         if: >-
@@ -257,7 +258,8 @@ jobs:
           set -euo pipefail
           cd overlay
           export KUBECONFIG="${ARC_RUNNERS_KUBECONFIG}"
-          nix develop ../GloriousFlywheel#ci -c python3 - <<'PY'
+          export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+          nix develop "${GF_CORE_CI_PATH}" -c python3 - <<'PY'
           import json
           import subprocess
           import sys
