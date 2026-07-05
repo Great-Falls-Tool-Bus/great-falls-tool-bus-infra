@@ -24,6 +24,30 @@ The house reaper itself lives in `tinyland-inc/blahaj` and its own docs mark it
 **legacy/transitional — do not clone** (TIN-2023/TIN-2027 successor contract).
 GFTB has no reaper of its own, so this is not "reuse ours."
 
+## Live probe — 2026-07-05 (annotates the blockers; un-parks nothing)
+
+A read-only `kubectl` probe of the honey rke2 cluster re-grounded the blockers
+above. This is annotation, **not** a rewrite of ADR 0003 and **not** an un-park:
+
+- **Blocker 1 (pod cap) is now stale.** honey is **138/150** (12 free — the pod
+  cap was **expanded to 150**, so the "~103–104/110, ~6 free" figure is
+  obsolete), bumble **50/110** (60 free), sting **96/200** (104 free);
+  **~176 free cluster-wide**. Room for a bounded preview lane class now exists —
+  but adopting one still needs a superseding ADR (the un-park checklist below).
+- **Reaper confirmed healthy.** The in-cluster backstop this lane models —
+  kube-system CronJob `massageithaca-pr-lane-backstop-reaper` — is **Active**
+  (`*/10`, ran ~5m ago, **not** suspended). Live `tinyland-dev-pr-*` lanes carry
+  correct **future-dated `expires-epoch` TTLs**; one lane ~80 min past TTL but
+  still Active is **within normal operation** (full GH reaper 4h cycle + 6h
+  backstop hard-delete grace) — expected latency, **not** a leak.
+- **Label/TTL contract matches live.** The label set and `expires-epoch` TTL
+  semantics declared below are exactly what the live blahaj reaper
+  (`blahaj:deploy/honey/massageithaca-pr-lane-backstop-reaper.yaml`) stamps and
+  selects on — so this parked contract is a faithful mirror, not a guess.
+
+Blockers 2 (out-of-band tunnel route / TIN-991) and 3/4 (namespace precedent,
+CF-Pages redundancy) are unchanged; the lane stays `enabled: false`.
+
 ## The parked contract (declared, not wired)
 
 Modeled on the blahaj/MI reaper lifecycle. The machine-readable form is

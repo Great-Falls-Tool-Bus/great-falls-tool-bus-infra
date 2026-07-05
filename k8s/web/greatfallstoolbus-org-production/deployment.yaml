@@ -60,16 +60,52 @@ spec:
         fsGroup: 1001
         seccompProfile:
           type: RuntimeDefault
-      # Keep off control-plane; tolerate compute-expansion so a cutover can land
-      # on sting if honey is full (matches the house capacity posture).
+      # Node placement (all declare-only; replicas:0 means nothing schedules).
+      #
+      # Live-probe grounding (honey rke2, 2026-07-05, read-only kubectl): pod
+      # headroom is honey 138/150 (12 free — honey was EXPANDED to 150, not the
+      # ~110-cap ADR 0003 assumed), bumble 50/110 (60 free), sting 96/200
+      # (104 free); ~176 free cluster-wide. A replicas:2 web Deployment fits
+      # trivially, but honey is the TIGHTEST node, so at cutover we PREFER
+      # bumble/sting for the serving pods and keep honey as spillover.
+      #
+      # Serving SPOF is NONE at the pod/node layer: 3-node cluster, node-anti-
+      # affinity spreads the 2 replicas across distinct hosts, and on node loss
+      # they reschedule (same posture the live cloudflared replicas:2 already
+      # runs). The only genuine SPOF is SITE-LEVEL (one on-prem /24: honey
+      # .70.10, bumble .11, sting .12) — the honest availability tradeoff vs a
+      # global CDN, already accepted by MI in production and fronted+cached by
+      # Cloudflare; the named mitigation is a warm CF-Pages standby (ADR 0007).
+      # The "sting SPOF" ADR 0003 cites is CI-RUNNER concentration (all ARC/nix
+      # runners on sting) — a deploy-velocity concern, not a serving risk.
       affinity:
         nodeAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
+            # Keep off control-plane.
             - weight: 100
               preference:
                 matchExpressions:
                   - key: node-role.kubernetes.io/control-plane
                     operator: DoesNotExist
+            # Prefer the roomy worker nodes (bumble/sting); honey is tightest
+            # (12 free) so it stays spillover, not first choice.
+            - weight: 50
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values: ["bumble", "sting"]
+        # Spread the (future) replicas across distinct nodes so a single node
+        # loss never takes serving fully down — no node-SPOF.
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: greatfallstoolbus-org
+                    app.kubernetes.io/component: web
       containers:
         - name: greatfallstoolbus-org
           # PLACEHOLDER — deliberately not a real, resolvable, digest-pinned
