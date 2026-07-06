@@ -42,24 +42,25 @@
 # also 403s anonymous reads of that private list regardless, so it is
 # defense-in-depth, not the only control.
 #
-# PATH-PREFIX CORRECTION: HyperKitty's public browsing surface is path-based
-# under `/archives/list/<list>@<domain>/...`, NOT `/hyperkitty/list/...`. The
-# `/hyperkitty` segment names the Django app's INTERNAL archiver-POST endpoint
-# only (see HYPERKITTY_URL=http://127.0.0.1:8000/hyperkitty in
-# k8s/list/.../configmap-mailman.yaml — a loopback callback, never a
-# browser-facing URL). The real shape is already load-bearing elsewhere in this
-# repo: docs/runbooks/list-bringup.md fixes it as
-# `https://lists.latoolb.us/archives/list/keyholders@latoolb.us/` (TIN-2380),
-# docs/discuss-archive-packet.md's live probes curl
-# `archives/list/discuss@latoolb.us/...`, and this very policy's own
-# mbox-export rule below is validated (scripts/validate-archive-stack.sh)
-# against the probe path
-# `/archives/list/discuss@latoolb.us/export/discuss.mbox.gz`. The ALLOWs below
-# use `/archives/list/discuss@latoolb.us/...` so the exemption actually matches
-# live requests instead of silently never firing.
+# PATH PREFIX — LIVE-VERIFIED 2026-07-06: this deployment mounts HyperKitty's
+# public browsing surface at `/hyperkitty/list/<list>@<domain>/...`, NOT at
+# `/archives/list/...`:
+#   - https://lists.latoolb.us/hyperkitty/list/discuss@latoolb.us/  -> 200
+#   - https://lists.latoolb.us/archives/list/discuss@latoolb.us/    -> 404
+#   - the archive page's own export links point at
+#     /hyperkitty/list/discuss@latoolb.us/export/*.mbox.gz
+#   - Django's URL reverse in the live pod returns /hyperkitty/list/... — the
+#     /hyperkitty mount is the PUBLIC serving prefix here, not merely the
+#     loopback archiver-POST callback (HYPERKITTY_URL); site PR #108 exists
+#     precisely because /archives/ 404s.
+# Earlier revisions of docs/runbooks/list-bringup.md and
+# docs/discuss-archive-packet.md presented `/archives/list/...` as the public
+# path; those were stale and are corrected alongside this policy. The
+# mbox-export CHALLENGE regex below is start-unanchored (`/export/...`), so it
+# matches the /hyperkitty export paths regardless of mount prefix.
 #
 # THE EXPORT WRINKLE: HyperKitty exposes a per-list gzipped-mbox export under
-# `/archives/list/<list>/export/<name>.mbox.gz`. Anonymous bulk-pulling the
+# `/hyperkitty/list/<list>/export/<name>.mbox.gz`. Anonymous bulk-pulling the
 # whole archive as mbox is the main cost/abuse vector on an open archive
 # (large streamed responses + DB pressure). The prepended rule CHALLENGEs the
 # export path for ALL user agents, placed BEFORE the crawler ALLOWs (and before
@@ -101,12 +102,12 @@ data:
         },
         {
           "name": "hyperkitty-discuss-list-overview",
-          "path_regex": "^/archives/list/discuss@latoolb\\.us/$",
+          "path_regex": "^/hyperkitty/list/discuss@latoolb\\.us/$",
           "action": "ALLOW"
         },
         {
           "name": "hyperkitty-discuss-thread-permalinks",
-          "path_regex": "^/archives/list/discuss@latoolb\\.us/thread/.*$",
+          "path_regex": "^/hyperkitty/list/discuss@latoolb\\.us/thread/.*$",
           "action": "ALLOW"
         },
         {

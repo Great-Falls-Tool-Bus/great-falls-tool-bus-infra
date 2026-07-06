@@ -190,13 +190,15 @@ and replace the tags with immutable `@sha256:` digests in the Deployments.
 Per TIN-2380, the private keyholders archive, if enabled, is served at:
 
 ```text
-https://lists.latoolb.us/archives/list/keyholders@latoolb.us/
+https://lists.latoolb.us/hyperkitty/list/keyholders@latoolb.us/
 ```
 
-HyperKitty is mounted at `/hyperkitty` inside `mailman-web`; the house tunnel
-route exposes it under the `/archives` prefix (the docker-mailman nginx
-convention). This keyholders archive must require membership/login or stay off.
-A future `discuss@latoolb.us` list can carry the public archive semantics.
+HyperKitty is mounted at `/hyperkitty` inside `mailman-web`, and that IS the
+public serving prefix — there is no `/archives` rewrite in this deployment
+(live-verified 2026-07-06: `/hyperkitty/list/...` answers 200, `/archives/list/...`
+404s; Django's URL reverse emits `/hyperkitty/list/...`). This keyholders
+archive must require membership/login or stay off. A future
+`discuss@latoolb.us` list can carry the public archive semantics.
 
 ## First-tester plan (merged PR #27 to a subscribed external tester)
 
@@ -228,7 +230,7 @@ proof. Each step is tagged with who executes it.
 9. **[agent/tester]** Collect the durable strict-proof artifact set: received
     message headers (`DKIM-Signature: d=latoolb.us` and provider auth pass) and
     the private/member-visible HyperKitty archive entry at
-    `https://lists.latoolb.us/archives/list/keyholders@latoolb.us/`, or a
+    `https://lists.latoolb.us/hyperkitty/list/keyholders@latoolb.us/`, or a
     recorded archive-off/member-only proof.
 
 The transport cutover was the point of no return for the current plain mailbox

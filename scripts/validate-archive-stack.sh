@@ -105,7 +105,11 @@ test "${challenge_present}" -ge 1 || fail "policy must keep a CHALLENGE rule for
 # path, and that CHALLENGE must be ordered BEFORE the crawler ALLOWs so even an
 # allowlisted crawler must solve a PoW to bulk-export (which a headless crawler
 # cannot). Rules evaluate top-to-bottom, first terminal match wins.
-export_probe="/archives/list/discuss@latoolb.us/export/discuss.mbox.gz"
+# The probe uses the live-verified /hyperkitty/ public mount prefix (the
+# archive page's own export links point there; /archives/ 404s on this
+# deployment, verified 2026-07-06). The export regex is start-unanchored so it
+# matches under either prefix, but the probe should mirror a real request.
+export_probe="/hyperkitty/list/discuss@latoolb.us/export/discuss.mbox.gz"
 export_challenge_matches="$(echo "${policy_json}" | jq -r --arg p "${export_probe}" '[.bots[] | select(.action == "CHALLENGE" and .path_regex != null and (.path_regex as $r | $p | test($r)))] | length')"
 test "${export_challenge_matches}" -ge 1 || fail "policy must CHALLENGE the HyperKitty mbox export path (/export/*.mbox[.gz]) to block anonymous bulk export"
 export_idx="$(echo "${policy_json}" | jq -r --arg p "${export_probe}" 'first(.bots | to_entries[] | select(.value.action == "CHALLENGE" and .value.path_regex != null and (.value.path_regex as $r | $p | test($r))) | .key)')"
@@ -120,11 +124,13 @@ test "${export_idx}" -lt "${crawler_allow_idx}" || fail "the mbox export CHALLEN
 # exemption to exactly the two read surfaces (list overview, thread
 # permalinks) plus /static/* (needed so the "ungated" page isn't unstyled),
 # and pin that the exemption does NOT leak onto the private keyholders@ list.
-overview_probe="/archives/list/discuss@latoolb.us/"
+# All probes use the live-verified /hyperkitty/ public mount prefix (see the
+# export probe note above).
+overview_probe="/hyperkitty/list/discuss@latoolb.us/"
 overview_allow_matches="$(echo "${policy_json}" | jq -r --arg p "${overview_probe}" '[.bots[] | select(.action == "ALLOW" and .path_regex != null and (.path_regex as $r | $p | test($r)))] | length')"
 test "${overview_allow_matches}" -ge 1 || fail "policy must ALLOW the discuss@ list-overview path (deep-link read-path exemption)"
 
-thread_probe="/archives/list/discuss@latoolb.us/thread/abc123def456/"
+thread_probe="/hyperkitty/list/discuss@latoolb.us/thread/abc123def456/"
 thread_allow_matches="$(echo "${policy_json}" | jq -r --arg p "${thread_probe}" '[.bots[] | select(.action == "ALLOW" and .path_regex != null and (.path_regex as $r | $p | test($r)))] | length')"
 test "${thread_allow_matches}" -ge 1 || fail "policy must ALLOW discuss@ thread permalinks (deep-link read-path exemption)"
 
@@ -137,11 +143,11 @@ test "${static_allow_matches}" -ge 1 || fail "policy must ALLOW /static/* (else 
 # the private archive's PoW gate would be bypassed by this exemption (HyperKitty
 # itself still 403s anonymous keyholders@ reads, but the gate should not rely
 # on that alone).
-keyholders_overview_probe="/archives/list/keyholders@latoolb.us/"
+keyholders_overview_probe="/hyperkitty/list/keyholders@latoolb.us/"
 keyholders_overview_allow_matches="$(echo "${policy_json}" | jq -r --arg p "${keyholders_overview_probe}" '[.bots[] | select(.action == "ALLOW" and .path_regex != null and (.path_regex as $r | $p | test($r)))] | length')"
 test "${keyholders_overview_allow_matches}" -eq 0 || fail "the read-path exemption must not ALLOW the keyholders@ list overview (private-list PoW bypass)"
 
-keyholders_thread_probe="/archives/list/keyholders@latoolb.us/thread/abc123def456/"
+keyholders_thread_probe="/hyperkitty/list/keyholders@latoolb.us/thread/abc123def456/"
 keyholders_thread_allow_matches="$(echo "${policy_json}" | jq -r --arg p "${keyholders_thread_probe}" '[.bots[] | select(.action == "ALLOW" and .path_regex != null and (.path_regex as $r | $p | test($r)))] | length')"
 test "${keyholders_thread_allow_matches}" -eq 0 || fail "the read-path exemption must not ALLOW keyholders@ thread permalinks (private-list PoW bypass)"
 

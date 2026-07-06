@@ -116,7 +116,7 @@ honey-ingress Cloudflare Tunnel, fronted by a second Anubis PoW gate
 is the archive-origin hostname: a **proxied** CNAME to the same tunnel cname
 target as `forms.latoolb.us`. Hostname is `lists.` (not `archives.`) because
 the HyperKitty archive URL shape is already `https://lists.latoolb.us/
-archives/list/<list>@latoolb.us/` (TIN-2380) and one HyperKitty instance
+hyperkitty/list/<list>@latoolb.us/` (TIN-2380) and one HyperKitty instance
 serves every list off that one host — see `docs/discuss-archive-packet.md`.
 
 Staged in `main.tf` gated behind `var.archives_dns_enabled` (default
