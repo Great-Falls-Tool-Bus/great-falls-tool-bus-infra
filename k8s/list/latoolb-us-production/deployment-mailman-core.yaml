@@ -224,6 +224,28 @@ spec:
                 secretKeyRef:
                   name: mailman-app
                   key: MAILMAN_ADMIN_PASSWORD
+            # Django outbound email (Postorius signup/confirmation, list
+            # notifications). settings.py maps SMTP_USE_TLS -> EMAIL_USE_TLS and
+            # SMTP_HOST_USER/PASSWORD -> EMAIL_HOST_USER/PASSWORD. SMTP_HOST/PORT
+            # come from the shared mailman-env ConfigMap (postfix submission,
+            # :587). Without STARTTLS the submission service rejects with
+            # "530 Must issue a STARTTLS command first" and every Postorius
+            # signup 500s (verified live 2026-07-06). The core container already
+            # sends correctly via its own SMTP_SECURE_MODE=starttls path; this
+            # gives the web tier the same STARTTLS + SASL auth, reusing the
+            # lists-bounces-smtp submission identity.
+            - name: SMTP_USE_TLS
+              value: "true"
+            - name: SMTP_HOST_USER
+              valueFrom:
+                secretKeyRef:
+                  name: lists-bounces-smtp
+                  key: username
+            - name: SMTP_HOST_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: lists-bounces-smtp
+                  key: password
           volumeMounts:
             - name: web-data
               mountPath: /opt/mailman-web-data
