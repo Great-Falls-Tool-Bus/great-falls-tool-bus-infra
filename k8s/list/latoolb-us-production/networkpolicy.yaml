@@ -73,10 +73,9 @@ spec:
     #     REQUEST-TIME fetch post-cutover (TIN-2543).
     # Both are scoped by the auto-applied kubernetes.io/metadata.name namespace
     # label (never the empty all-namespaces selector). This admits only READ
-    # traffic to the
-    # public web tier; the private keyholders@ archive is enforced by HyperKitty
-    # itself (403), not by this leg, and the site data plane sources discuss@
-    # ONLY and hard-fails on any other list id.
+    # traffic to the public web tier; the private keyholders@ archive is
+    # enforced by HyperKitty itself (403), not by this leg, and the site data
+    # plane sources discuss@ ONLY and hard-fails on any other list id.
     - from:
         - namespaceSelector:
             matchLabels:
