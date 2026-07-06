@@ -135,6 +135,19 @@ spec:
         # binds REST to the pod IP, not loopback, so keep the Service DNS name).
         - name: mailman-web
           image: ghcr.io/maxking/mailman-web:0.5@sha256:014726db85586fb53541f66f6ce964bf07e939791cfd5ffc796cd6d243696a18
+          # The image's stock uwsgi.ini has NO static-map: docker-mailman assumes
+          # a fronting webserver serves /static from the shared volume. This
+          # deployment has none (Anubis proxies straight to uwsgi :8000), so
+          # /static/** fell through to Django -> HTML 404s and the public archive
+          # rendered bare-text (verified live 2026-07-06, TIN-2528). Override CMD
+          # only (args; the docker-entrypoint.sh setup still runs) to add the
+          # static-map for the collectstatic output dir.
+          args:
+            - uwsgi
+            - --ini
+            - /opt/mailman-web/uwsgi.ini
+            - --static-map
+            - /static=/opt/mailman-web-data/static
           ports:
             - name: http
               # docker-mailman's uwsgi.ini exposes the HTTP socket on 8000;
@@ -167,8 +180,13 @@ spec:
             # 127.0.0.1 into Django ALLOWED_HOSTS so IP-host loopback requests
             # (probes, diagnostics) pass; the archive POST itself uses Host:
             # localhost which the image whitelists for the archiving API.
+            # The Service FQDN is included so in-cluster REST consumers (the
+            # greatfallstoolbus.org build-time /discuss fetch, TIN-2528) can dial
+            # the Service DNS name without a Host-header override: without it
+            # Django 400s (verified live 2026-07-06: ALLOWED_HOSTS lacked the
+            # FQDN; Host: mailman-web -> 200, Host: <FQDN> -> 400).
             - name: DJANGO_ALLOWED_HOSTS
-              value: "127.0.0.1"
+              value: "127.0.0.1,mailman-web.latoolb-us-production.svc.cluster.local"
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
