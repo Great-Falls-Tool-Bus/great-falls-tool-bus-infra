@@ -102,3 +102,42 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
+---
+# DISCUSS-SNAPSHOT READER egress (greatfallstoolbus.org data plane, ADR 0010).
+# Post-cutover (TIN-2543, prerender flipped off) the adapter-node site pod does
+# the REQUEST-TIME fetch of the PUBLIC discuss@ archive from the HyperKitty web
+# tier in latoolb-us-production. This is the reciprocal of the mailman-core
+# web-tier ingress allowance for this namespace (list stack networkpolicy.yaml).
+#
+# PORT SUBTLETY (same as the archive gate leg): the app dials the mailman-web
+# Service on 8080, but NetworkPolicy egress evaluates the POST-DNAT destination
+# — the mailman-core pod's real container port 8000 — so this rule targets the
+# mailman-core podSelector on 8000, NOT the Service's 8080. Scoped to that one
+# pod in that one namespace; no 0.0.0.0/0, no broad egress. Until cutover this
+# is inert (the Deployment ships replicas:0). Build-time prerender fetches do
+# NOT use this rule (they run in arc-runners, not this pod).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-discuss-archive
+  namespace: greatfallstoolbus-org-production
+  labels:
+    app.kubernetes.io/name: greatfallstoolbus-org
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: greatfallstoolbus-org
+      app.kubernetes.io/component: web
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: latoolb-us-production
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mailman-core
+      ports:
+        - protocol: TCP
+          port: 8000

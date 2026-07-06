@@ -60,10 +60,32 @@ spec:
     # mailman-web Service DNATs its external 8080 -> targetPort 8000).
     # Tight to the house cloudflared namespace; the archive Anubis route adds a
     # separate podSelector admission for anubis-archive -> 8000.
+    #
+    # DISCUSS-SNAPSHOT READERS (greatfallstoolbus.org data plane, ADR 0010):
+    # the on-site /discuss route reads the PUBLIC discuss@ archive over the
+    # HyperKitty REST API on this same web tier. Two consumers are admitted as
+    # additional peers on THIS SAME 8000 rule (kept as one rule so the port
+    # assertion in validate-list-stack.sh stays exact — do not split into a
+    # second 8000 ingress rule):
+    #   - arc-runners: the tinyland-nix CI runner does the BUILD-TIME prerender
+    #     fetch (prerender=true today).
+    #   - greatfallstoolbus-org-production: the adapter-node site pod does the
+    #     REQUEST-TIME fetch post-cutover (TIN-2543).
+    # Both are scoped by the auto-applied kubernetes.io/metadata.name namespace
+    # label (never the empty all-namespaces selector). This admits only READ
+    # traffic to the public web tier; the private keyholders@ archive is
+    # enforced by HyperKitty itself (403), not by this leg, and the site data
+    # plane sources discuss@ ONLY and hard-fails on any other list id.
     - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: cloudflared
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: arc-runners
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: greatfallstoolbus-org-production
       ports:
         - protocol: TCP
           port: 8000
