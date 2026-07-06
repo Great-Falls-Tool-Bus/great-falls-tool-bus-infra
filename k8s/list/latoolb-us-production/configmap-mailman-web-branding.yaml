@@ -1,0 +1,203 @@
+# GFTB LIGHT branding for the HyperKitty archive at lists.latoolb.us (TIN-2561).
+#
+# Intent: "brand enough to survive a deep-link" — NOT a restyle. HyperKitty is
+# the fallback / deep-link surface behind the primary greatfallstoolbus.org
+# /discuss reader; when a visitor crosses the Anubis gate into the raw archive
+# the page should read as Great Falls Tool Bus, not default Mailman.
+#
+# Mechanism (verified live in the pinned maxking/mailman-web:0.5 image — pod
+# app.kubernetes.io/name=mailman-core, container mailman-web, 2026-07-06):
+#   - HyperKitty 1.3.12 base.html ships three intentionally-empty include points
+#     overridable via Django TEMPLATES['DIRS'] precedence (no fork, no
+#     collectstatic/compress):
+#       hyperkitty/headers.html -> injected before </head> (base.html:26)
+#       hyperkitty/top.html     -> injected after <body>   (base.html:31)
+#       hyperkitty/bottom.html  -> injected before </body> (base.html:247)
+#   - settings.py ends with `from settings_local import *` (line 418); we ship a
+#     settings_local.py that prepends our mounted template dir to
+#     TEMPLATES[0]['DIRS'] and touches nothing else.
+#   - The stylesheet is a real file served by uwsgi via a second --static-map,
+#     mirroring the existing /static override in the mailman-web container args
+#     (no collectstatic needed).
+#
+# Wiring lives in deployment-mailman-core.yaml (mailman-web container): this
+# ConfigMap is mounted read-only at /opt/mailman-web-branding and that dir is put
+# on PYTHONPATH so `settings_local` resolves. Rollback = drop the volume/mount,
+# the PYTHONPATH env, and the /brand --static-map arg; the image reverts to stock
+# HyperKitty, untouched.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mailman-web-branding
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: mailman-web
+    app.kubernetes.io/component: branding
+data:
+  # Imported by the stock settings.py via `from settings_local import *`
+  # (settings.py:418). Placed on PYTHONPATH at /opt/mailman-web-branding. Its
+  # sole job is to prepend our mounted template dir so the hyperkitty/*.html
+  # overrides below win over the app defaults via Django's filesystem loader.
+  settings_local.py: |
+    # GFTB LIGHT branding local settings (TIN-2561). Prepend the mounted brand
+    # template dir to the HyperKitty template search path; touch nothing else.
+    from settings import TEMPLATES
+
+    _BRANDING_TEMPLATES = "/opt/mailman-web-branding/templates"
+    if _BRANDING_TEMPLATES not in TEMPLATES[0]["DIRS"]:
+        TEMPLATES[0]["DIRS"] = [_BRANDING_TEMPLATES, *TEMPLATES[0]["DIRS"]]
+
+  # Injected before </head> (base.html:26). Light-mode brand accents only; the
+  # stylesheet is the real gftb-brand.css file in this ConfigMap, served by uwsgi
+  # at /brand via --static-map, so no collectstatic/compress step is required.
+  headers.html: |
+    {# GFTB brand — injected before </head> (HyperKitty base.html:26). TIN-2561. #}
+    <meta name="theme-color" content="#d76039" />
+    <link rel="stylesheet" href="/brand/gftb-brand.css" type="text/css" media="all" />
+
+  # Injected after <body> (base.html:31). The GREAT FALLS TOOL BUS wordmark
+  # (text only, no image asset) plus a route back to the primary reader.
+  top.html: |
+    {# GFTB brand bar — injected at top of <body> (HyperKitty base.html:31). #}
+    <div class="gftb-brandbar">
+      <a class="gftb-brandbar__wordmark" href="https://greatfallstoolbus.org">GREAT FALLS TOOL BUS</a>
+      <a class="gftb-brandbar__back" href="https://greatfallstoolbus.org/discuss">&larr; back to greatfallstoolbus.org</a>
+    </div>
+
+  # Injected before </body> (base.html:247). Restrained provenance line keeping
+  # the fallback archive tied back to the site.
+  bottom.html: |
+    {# GFTB brand footer — injected before </body> (HyperKitty base.html:247). #}
+    <footer class="gftb-brandfoot">
+      <span class="gftb-brandfoot__mark">GREAT FALLS TOOL BUS</span>
+      <span class="gftb-brandfoot__note"
+        >Mailing-list archive &middot;
+        <a href="https://greatfallstoolbus.org/discuss">read on greatfallstoolbus.org</a></span
+      >
+    </footer>
+
+  # Served by uwsgi at /brand/gftb-brand.css (see the --static-map in the
+  # mailman-web container args). Loaded last in <head> via headers.html, so
+  # equal-specificity rules win without heavy !important use.
+  gftb-brand.css: |
+    /* GFTB LIGHT branding for the HyperKitty archive (TIN-2561).
+     *
+     * Scope: "brand enough to survive a deep-link", NOT a restyle. Light-mode
+     * only; we do not fight Bootstrap 5 (HyperKitty 1.3.12 ships Bootstrap 5).
+     * Restrained accents echo the greatfallstoolbus.org warm palette (omux
+     * theme, burnt orange hue 38): content link color, .btn-primary, the
+     * #navbar-main background, and the injected brand bar/footer. Every element
+     * this sheet touches gets zero border-radius (house canon).
+     *
+     * Palette (static-hex approximations of the site's src OKLCH tokens):
+     *   primary-500 oklch(0.63 0.16 38)   #d76039  accent / button / borders
+     *   primary-600 oklch(0.55 0.14 38)   #b44e2e  content link text
+     *   primary-700 oklch(0.47 0.12 38)   #913e23  link hover / active
+     *   surface-50  oklch(0.97 0.005 60)  #f8f4f2  warm cream (bars, navbar)
+     *   surface-900 oklch(0.20 0.010 60)  #1a1512  warm ink (wordmark)
+     */
+
+    /* Bootstrap 5 link tokens — brand the default <a> without touching chrome. */
+    :root {
+      --bs-link-color: #b44e2e;
+      --bs-link-hover-color: #913e23;
+      --bs-link-color-rgb: 180, 78, 46;
+      --bs-link-hover-color-rgb: 145, 62, 35;
+    }
+
+    /* Content links only. Nav, brand, dropdown, pagination and buttons keep
+       their own Bootstrap colors so navigation affordances stay legible. */
+    a:not(.btn):not(.nav-link):not(.navbar-brand):not(.dropdown-item):not(.page-link) {
+      color: #b44e2e;
+    }
+    a:not(.btn):not(.nav-link):not(.navbar-brand):not(.dropdown-item):not(.page-link):hover,
+    a:not(.btn):not(.nav-link):not(.navbar-brand):not(.dropdown-item):not(.page-link):focus {
+      color: #913e23;
+    }
+
+    /* Primary buttons -> burnt orange, via Bootstrap 5's own component vars. */
+    .btn-primary {
+      --bs-btn-bg: #d76039;
+      --bs-btn-border-color: #d76039;
+      --bs-btn-hover-bg: #b44e2e;
+      --bs-btn-hover-border-color: #b44e2e;
+      --bs-btn-active-bg: #913e23;
+      --bs-btn-active-border-color: #913e23;
+      --bs-btn-disabled-bg: #d76039;
+      --bs-btn-disabled-border-color: #d76039;
+      border-radius: 0;
+    }
+
+    /* Sticky navbar: subtle warm cream (stock #navbar-main is transparent, which
+       bleeds page content through when scrolled) + a burnt-orange ring line that
+       echoes the site's saturn-nav bottom edge. Text stays Bootstrap dark. */
+    #navbar-main {
+      background-color: #f8f4f2;
+      border-bottom: 2px solid #d76039;
+      border-radius: 0;
+    }
+
+    /* ===== Injected brand bar (top.html) ===== */
+    .gftb-brandbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 0.5rem 1rem;
+      padding: 0.6rem 1rem;
+      background-color: #f8f4f2;
+      border-bottom: 2px solid #d76039;
+      border-radius: 0;
+      font-family: Georgia, "Times New Roman", serif;
+    }
+    .gftb-brandbar__wordmark,
+    .gftb-brandbar__wordmark:hover,
+    .gftb-brandbar__wordmark:focus {
+      color: #1a1512;
+      font-weight: 700;
+      font-size: 1rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      text-decoration: none;
+    }
+    .gftb-brandbar__back {
+      color: #b44e2e;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      font-size: 0.85rem;
+      text-decoration: none;
+    }
+    .gftb-brandbar__back:hover,
+    .gftb-brandbar__back:focus {
+      color: #913e23;
+      text-decoration: underline;
+    }
+
+    /* ===== Injected brand footer (bottom.html) ===== */
+    .gftb-brandfoot {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 0.35rem 0.75rem;
+      margin-top: 2rem;
+      padding: 1rem;
+      border-top: 2px solid #d76039;
+      border-radius: 0;
+      color: #1a1512;
+      font-size: 0.85rem;
+    }
+    .gftb-brandfoot__mark {
+      font-family: Georgia, "Times New Roman", serif;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+    .gftb-brandfoot__note {
+      color: #5c534d;
+    }
+    .gftb-brandfoot__note a {
+      color: #b44e2e;
+    }
+    .gftb-brandfoot__note a:hover,
+    .gftb-brandfoot__note a:focus {
+      color: #913e23;
+    }

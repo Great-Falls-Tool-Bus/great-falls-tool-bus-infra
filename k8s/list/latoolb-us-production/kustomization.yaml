@@ -16,6 +16,9 @@ resources:
   - mailaccount-lists-bounces.yaml
   - pvcs.yaml
   - configmap-mailman.yaml
+  # LIGHT branding overrides for the HyperKitty archive fallback surface
+  # (TIN-2561): templates + stylesheet + settings_local, mounted into mailman-web.
+  - configmap-mailman-web-branding.yaml
   - deployment-postgres.yaml
   - service-postgres.yaml
   # mailman-core + mailman-web are co-located in one pod (TIN-2493), so the
