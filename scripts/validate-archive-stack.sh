@@ -8,8 +8,11 @@ set -euo pipefail
 # manifests fails CI before any apply. Where the archive stack differs from the
 # forms stack, the assertions differ with it: the archive route is a PURE
 # BROWSING surface (no form-handler tier, no LMTP, no server.py, and no
-# /api/contact ALLOW carve-out), and it adds an anti-bulk-export CHALLENGE on
-# HyperKitty's mbox /export/ path. Never contacts a cluster; never needs a secret.
+# /api/contact ALLOW carve-out), it adds an anti-bulk-export CHALLENGE on
+# HyperKitty's mbox /export/ path, and (post-TIN-2559) it carries a narrow
+# read-path exemption ALLOWing the discuss@ list overview, discuss@ thread
+# permalinks, and /static/* — scoped away from the private keyholders@ list.
+# Never contacts a cluster; never needs a secret.
 
 dir="${1:?usage: validate-archive-stack.sh <manifest-dir>}"
 anubis_deploy="${dir}/deployment-anubis-archive.yaml"
@@ -110,6 +113,44 @@ crawler_allow_idx="$(echo "${policy_json}" | jq -r 'first(.bots | to_entries[] |
 test -n "${crawler_allow_idx}" || fail "policy must ALLOW at least one search-engine crawler (the discuss@ archive is intentionally indexable)"
 test "${export_idx}" -lt "${crawler_allow_idx}" || fail "the mbox export CHALLENGE must be ordered before the crawler ALLOW rules (else an allowlisted crawler bypasses the export gate)"
 
+# --- Read-path exemption: discuss@ list overview + thread permalinks --------
+# The public on-site /discuss reader (TIN-2559) now serves this same content
+# ungated, so PoW on HyperKitty's own read paths for discuss@ adds no
+# confidentiality — only a deep-link interstitial. These assertions pin the
+# exemption to exactly the two read surfaces (list overview, thread
+# permalinks) plus /static/* (needed so the "ungated" page isn't unstyled),
+# and pin that the exemption does NOT leak onto the private keyholders@ list.
+overview_probe="/archives/list/discuss@latoolb.us/"
+overview_allow_matches="$(echo "${policy_json}" | jq -r --arg p "${overview_probe}" '[.bots[] | select(.action == "ALLOW" and .path_regex != null and (.path_regex as $r | $p | test($r)))] | length')"
+test "${overview_allow_matches}" -ge 1 || fail "policy must ALLOW the discuss@ list-overview path (deep-link read-path exemption)"
+
+thread_probe="/archives/list/discuss@latoolb.us/thread/abc123def456/"
+thread_allow_matches="$(echo "${policy_json}" | jq -r --arg p "${thread_probe}" '[.bots[] | select(.action == "ALLOW" and .path_regex != null and (.path_regex as $r | $p | test($r)))] | length')"
+test "${thread_allow_matches}" -ge 1 || fail "policy must ALLOW discuss@ thread permalinks (deep-link read-path exemption)"
+
+static_probe="/static/hyperkitty/css/hyperkitty.css"
+static_allow_matches="$(echo "${policy_json}" | jq -r --arg p "${static_probe}" '[.bots[] | select(.action == "ALLOW" and .path_regex != null and (.path_regex as $r | $p | test($r)))] | length')"
+test "${static_allow_matches}" -ge 1 || fail "policy must ALLOW /static/* (else the exempted page renders unstyled behind a challenge-cookie-less asset fetch)"
+
+# Defense-in-depth: the read-path ALLOWs must be scoped to discuss@ ONLY. If
+# any of the same ALLOW rules also matched the equivalent keyholders@ paths,
+# the private archive's PoW gate would be bypassed by this exemption (HyperKitty
+# itself still 403s anonymous keyholders@ reads, but the gate should not rely
+# on that alone).
+keyholders_overview_probe="/archives/list/keyholders@latoolb.us/"
+keyholders_overview_allow_matches="$(echo "${policy_json}" | jq -r --arg p "${keyholders_overview_probe}" '[.bots[] | select(.action == "ALLOW" and .path_regex != null and (.path_regex as $r | $p | test($r)))] | length')"
+test "${keyholders_overview_allow_matches}" -eq 0 || fail "the read-path exemption must not ALLOW the keyholders@ list overview (private-list PoW bypass)"
+
+keyholders_thread_probe="/archives/list/keyholders@latoolb.us/thread/abc123def456/"
+keyholders_thread_allow_matches="$(echo "${policy_json}" | jq -r --arg p "${keyholders_thread_probe}" '[.bots[] | select(.action == "ALLOW" and .path_regex != null and (.path_regex as $r | $p | test($r)))] | length')"
+test "${keyholders_thread_allow_matches}" -eq 0 || fail "the read-path exemption must not ALLOW keyholders@ thread permalinks (private-list PoW bypass)"
+
+# The export CHALLENGE must still win over the new read-path ALLOWs for the
+# export probe specifically (mutually exclusive path shapes today, but this
+# guards a future regex edit from accidentally shadowing the export gate).
+export_still_challenged="$(echo "${policy_json}" | jq -r --arg p "${export_probe}" '[.bots[] | select(.action == "ALLOW" and .path_regex != null and (.path_regex as $r | $p | test($r)))] | length')"
+test "${export_still_challenged}" -eq 0 || fail "no ALLOW rule (including the new read-path exemption) may match the mbox export path"
+
 # --- NetworkPolicy doctrine: gate not bypassable, egress least-privilege -----
 # Anubis ingress is from the cloudflared tunnel namespace on 8081.
 anubis_ns_src="$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "anubis-archive") | .spec.ingress[].from[].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]' "${netpol}")"
@@ -166,4 +207,4 @@ for n in anubis-archive-policy anubis-archive mailman-core-archive-ingress; do
   printf '%s\n' "${render}" | grep -qE "^  name: ${n}$" || fail "rendered set missing metadata.name ${n}"
 done
 
-echo "archive stack validation passed: Anubis PoW gate (CHALLENGE browsing surface + mbox /export before crawler ALLOWs, NO /api ALLOW) -> HyperKitty web tier http://mailman-web:8080 (egress pod :8000), Service :8081, digests pinned, 5 resources in latoolb-us-production, no committed secrets"
+echo "archive stack validation passed: Anubis PoW gate (CHALLENGE browsing surface + mbox /export before crawler ALLOWs, NO /api ALLOW, discuss@ list/thread + /static read-path exemption scoped away from keyholders@) -> HyperKitty web tier http://mailman-web:8080 (egress pod :8000), Service :8081, digests pinned, 5 resources in latoolb-us-production, no committed secrets"

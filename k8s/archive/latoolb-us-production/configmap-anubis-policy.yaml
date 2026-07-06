@@ -1,14 +1,16 @@
 # TIN-2528 — Anubis bot policy for the PUBLIC discuss@ archive route.
 #
 # This is the upstream v1.13.0 default policy with the forms-specific
-# `/api/contact` ALLOW REMOVED (there is no API on this route) and ONE rule
-# PREPENDED: an anti-bulk-export CHALLENGE on HyperKitty's mbox export path.
+# `/api/contact` ALLOW REMOVED (there is no API on this route), ONE rule
+# PREPENDED (an anti-bulk-export CHALLENGE on HyperKitty's mbox export path),
+# and — as of the read-path exemption below — three ALLOW rules for the
+# discuss@ list-overview page, its thread permalinks, and static assets.
 #
 # HOW THIS DIFFERS FROM THE FORMS POLICY (k8s/form/.../configmap-anubis-policy):
 #   - The forms route needed an ALLOW carve-out because a cross-origin JSON
 #     fetch() cannot solve a browser PoW challenge. The archive is a pure
-#     BROWSING surface, so no such carve-out exists: every human-browser
-#     request is CHALLENGEd exactly as founding row `f` decided.
+#     BROWSING surface, so that carve-out does not apply here; the read-path
+#     ALLOWs below exist for a different reason (see next section).
 #   - Search-engine crawlers (Googlebot/Bingbot/Qwant) stay ALLOWed. The
 #     discuss@ archive is intentionally public, so indexing it is desirable;
 #     an operator who wants the archive UN-indexed flips those three to DENY
@@ -16,20 +18,68 @@
 #     PRIVATE keyholders@ archive regardless — HyperKitty returns 403/404 for
 #     a private list to any anonymous client, allowlisted crawler or not.
 #
+# READ-PATH EXEMPTION (deep-link de-interstitial, post-TIN-2559): the on-site
+# `/discuss` reader (greatfallstoolbus.org/discuss, TIN-2559) now serves the
+# SAME discuss@ thread content ungated, straight from the in-cluster HyperKitty
+# REST API. That means PoW on HyperKitty's own READ paths for this list no
+# longer buys any confidentiality — the content is already public and already
+# reachable without solving a challenge — so gating them only cost a deep-link
+# interstitial for anyone who lands on a lists.latoolb.us permalink (shared
+# link, search result, RSS reader, etc.). The three ALLOWs below remove that
+# interstitial for exactly the discuss@ read surfaces and nothing else:
+#   - the discuss@ list-overview page (`hyperkitty-discuss-list-overview`)
+#   - discuss@ thread permalinks (`hyperkitty-discuss-thread-permalinks`),
+#     i.e. the deep-link targets that get shared/indexed
+#   - `/static/*` (`hyperkitty-static-assets`) — required alongside the above:
+#     without it, a challenge-cookie-less request for the page's CSS/JS still
+#     gets CHALLENGEd and the "ungated" page renders unstyled/broken.
+# The gate's REMAINING purpose — bulk-abuse / load protection — is preserved:
+# the mbox-export CHALLENGE below is untouched, and every other path (list
+# search, feeds, admin, pagination edges, the keyholders@ list, etc.) still
+# falls through to the generic browser CHALLENGE. keyholders@ paths are NOT
+# matched by these ALLOWs (the regexes are scoped to the literal
+# `discuss@latoolb.us` path segment) and remain challenged as before; HyperKitty
+# also 403s anonymous reads of that private list regardless, so it is
+# defense-in-depth, not the only control.
+#
+# PATH-PREFIX CORRECTION: HyperKitty's public browsing surface is path-based
+# under `/archives/list/<list>@<domain>/...`, NOT `/hyperkitty/list/...`. The
+# `/hyperkitty` segment names the Django app's INTERNAL archiver-POST endpoint
+# only (see HYPERKITTY_URL=http://127.0.0.1:8000/hyperkitty in
+# k8s/list/.../configmap-mailman.yaml — a loopback callback, never a
+# browser-facing URL). The real shape is already load-bearing elsewhere in this
+# repo: docs/runbooks/list-bringup.md fixes it as
+# `https://lists.latoolb.us/archives/list/keyholders@latoolb.us/` (TIN-2380),
+# docs/discuss-archive-packet.md's live probes curl
+# `archives/list/discuss@latoolb.us/...`, and this very policy's own
+# mbox-export rule below is validated (scripts/validate-archive-stack.sh)
+# against the probe path
+# `/archives/list/discuss@latoolb.us/export/discuss.mbox.gz`. The ALLOWs below
+# use `/archives/list/discuss@latoolb.us/...` so the exemption actually matches
+# live requests instead of silently never firing.
+#
 # THE EXPORT WRINKLE: HyperKitty exposes a per-list gzipped-mbox export under
 # `/archives/list/<list>/export/<name>.mbox.gz`. Anonymous bulk-pulling the
 # whole archive as mbox is the main cost/abuse vector on an open archive
 # (large streamed responses + DB pressure). The prepended rule CHALLENGEs the
-# export path for ALL user agents, placed BEFORE the crawler ALLOWs, so even
-# an allowlisted crawler must solve a PoW to hit /export — which a headless
-# crawler cannot, blocking automated bulk export while a human can still solve
-# and download. Rules are evaluated top-to-bottom, first terminal match wins.
+# export path for ALL user agents, placed BEFORE the crawler ALLOWs (and before
+# the new read-path ALLOWs, which don't match `/export/` anyway — their
+# path_regex is anchored to the list-overview and thread-permalink shapes
+# only), so even an allowlisted crawler must solve a PoW to hit /export — which
+# a headless crawler cannot, blocking automated bulk export while a human can
+# still solve and download. Rules are evaluated top-to-bottom, first terminal
+# match wins.
 #
 # FORMAT: v1.13.0 parses the policy as JSON only (cmd/anubis/policy.go decodes
 # with encoding/json). Rule fields at v1.13.0: name / user_agent_regex /
 # path_regex / action. path_regex matches r.URL.Path only (no method matcher
-# at this version). See k8s/form/.../configmap-anubis-policy.yaml for the
-# format provenance notes.
+# at this version — same constraint already noted in
+# k8s/form/.../configmap-anubis-policy.yaml for the /api/contact ALLOW). That
+# means the three new read-path ALLOWs are path-scoped only, not GET-scoped;
+# this is acceptable because HyperKitty's list-overview and thread views are
+# read-only display endpoints that only ever respond to GET, exactly the same
+# reasoning already applied to the forms carve-out. See
+# k8s/form/.../configmap-anubis-policy.yaml for the format provenance notes.
 #
 # DECLARE-ONLY: nothing here is applied. See README.md.
 apiVersion: v1
@@ -48,6 +98,21 @@ data:
           "name": "hyperkitty-mbox-export",
           "path_regex": "/export/.*\\.mbox(\\.gz)?$",
           "action": "CHALLENGE"
+        },
+        {
+          "name": "hyperkitty-discuss-list-overview",
+          "path_regex": "^/archives/list/discuss@latoolb\\.us/$",
+          "action": "ALLOW"
+        },
+        {
+          "name": "hyperkitty-discuss-thread-permalinks",
+          "path_regex": "^/archives/list/discuss@latoolb\\.us/thread/.*$",
+          "action": "ALLOW"
+        },
+        {
+          "name": "hyperkitty-static-assets",
+          "path_regex": "^/static/.*$",
+          "action": "ALLOW"
         },
         {
           "name": "amazonbot",

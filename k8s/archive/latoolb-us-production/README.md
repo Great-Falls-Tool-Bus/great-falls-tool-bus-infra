@@ -43,7 +43,7 @@ resource here by design (same posture as the forms route; see
 | --- | --- |
 | `deployment-anubis-archive.yaml` | The PoW gate. Image digest-pinned; `TARGET=http://mailman-web:8080`. |
 | `service-anubis-archive.yaml` | ClusterIP :8081 the tunnel targets. |
-| `configmap-anubis-policy.yaml` | Bot policy: browsers CHALLENGEd, crawlers allowlisted, mbox `/export/` CHALLENGEd to block bulk pulls. |
+| `configmap-anubis-policy.yaml` | Bot policy: browsers CHALLENGEd, crawlers allowlisted, mbox `/export/` CHALLENGEd to block bulk pulls, discuss@ list overview + thread permalinks + `/static/*` ALLOWed (read-path exemption, TIN-2559) scoped away from keyholders@. |
 | `networkpolicy.yaml` | cloudflared ns → `anubis-archive:8081`; `anubis-archive` → `mailman-core:8000`; plus an additive reciprocal admission on the web tier. |
 | `kustomization.yaml` | Overlay wiring + house labels. |
 
