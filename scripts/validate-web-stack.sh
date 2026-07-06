@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# DECLARE-ONLY guard for the GFTB on-cluster web serving skeleton (TIN-2541).
-# Asserts the FAIL-CLOSED invariants so a regression that would make the
-# skeleton accidentally applyable/serving fails CI before any apply. Never
+# DISPATCH-GATED declare-only guard for the GFTB on-cluster web workload
+# (TIN-2543, ADR 0010). Asserts the invariants so a regression that would open
+# the public path or auto-apply on merge fails CI before any apply. Never
 # contacts a cluster; never needs a secret.
 #
-# Mirrors the shape of scripts/validate-form-stack.sh, but where the form stack
-# is a LIVE workload (asserts digest pins), this stack is DECLARE-ONLY and
-# asserts the opposite: replicas 0, a NON-digest placeholder image, no
-# Namespace, no Secret, no live tunnel route.
+# ADR 0010 flips this stack to the executing-cutover shape: like the form stack
+# it now asserts a digest-pinned image and the running replica count (2). The
+# declare-only guarantee moves to the still-closed axes — NO Namespace object, NO
+# Secret, and a fail-closed tunnel route + reaper intent — so merging applies
+# nothing and routes no public traffic (the only apply is the dispatch-gated
+# web-stack.yml).
 
 dir="${1:?usage: validate-web-stack.sh <manifest-dir>}"
 web_root="$(cd "${dir}/.." && pwd)"
@@ -37,24 +39,24 @@ for f in "${deploy}" "${svc}" "${netpol}" "${kustomization}" \
   require_file "${f}"
 done
 
-# --- FAIL-CLOSED axis 1: replicas MUST be 0 ----------------------------------
+# --- axis 1: replicas MUST be the ADR 0010 cutover shape (2) ------------------
+# ADR 0010 §5 step 3 flips 0 -> 2. Merging still applies nothing (web-crs.yml is
+# validate-only; the only apply is the dispatch-gated web-stack.yml).
 replicas="$(yq -r 'select(.kind == "Deployment") | .spec.replicas' "${deploy}")"
-assert_eq "${replicas}" "0" "Deployment replicas (declare-only fail-closed)"
+assert_eq "${replicas}" "2" "Deployment replicas (ADR 0010 cutover shape)"
 
-# --- FAIL-CLOSED axis 2: image is a NON-digest PLACEHOLDER --------------------
-# The opposite of the form stack: a real, resolvable, digest-pinned image in
-# this tree would mean the skeleton became applyable. Forbid @sha256: digests on
-# any actual `image:` line (comments explaining the guard are exempt) and require
-# the explicit PLACEHOLDER marker.
-while IFS= read -r line; do
-  case "${line}" in
-  *"@sha256:"*) fail "declare-only stack must NOT carry a digest-pinned (@sha256:) image; the real pin is an operator-gated private-overlay bump at cutover: ${line}" ;;
-  esac
-done < <(grep -REh "^\s*image:\s*\S+" "${dir}")
+# --- axis 2: web image is a digest-pinned production reference ----------------
+# ADR 0010 makes on-prem the host; the manifest carries the real digest-pinned
+# image as the declarative record (web-stack.yml overrides it with the operator-
+# resolved digest at dispatch). Require the org GHCR repo pinned by @sha256: and
+# forbid the retired declare-only PLACEHOLDER marker.
 web_image="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "greatfallstoolbus-org") | .image' "${deploy}")"
 case "${web_image}" in
-*PLACEHOLDER*NOT-APPLIED*) : ;;
-*) fail "web image must be the declare-only PLACEHOLDER (…PLACEHOLDER-DECLARE-ONLY-NOT-APPLIED); got '${web_image}'" ;;
+*PLACEHOLDER*) fail "web image must be a real digest-pinned reference, not the retired PLACEHOLDER: '${web_image}'" ;;
+esac
+case "${web_image}" in
+ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:*) : ;;
+*) fail "web image must be ghcr.io/great-falls-tool-bus/greatfallstoolbus.org pinned by @sha256:<digest>; got '${web_image}'" ;;
 esac
 
 # --- FAIL-CLOSED axis 3: this stack creates NO Namespace ---------------------
@@ -121,4 +123,4 @@ fi
 # --- Full render must succeed (parse-only; never applies) --------------------
 kubectl kustomize "${dir}" >/dev/null
 
-echo "web stack validation passed: DECLARE-ONLY (replicas 0, placeholder image, no namespace), adapter-node ClusterIP 80->3000 with /health probes, default-deny + cloudflared-only public ingress, route+reaper fail-closed, no committed secrets"
+echo "web stack validation passed: DISPATCH-GATED declare-only (replicas 2, digest-pinned image, no namespace, apply is dispatch-only), adapter-node ClusterIP 80->3000 with /health probes, default-deny + cloudflared-only public ingress, route+reaper fail-closed, no committed secrets"
