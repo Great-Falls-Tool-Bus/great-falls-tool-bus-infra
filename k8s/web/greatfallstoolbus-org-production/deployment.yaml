@@ -1,26 +1,35 @@
-# DECLARE-ONLY — NOT APPLIED (TIN-2541).
+# DECLARE-ONLY (dispatch-gated) — NOTHING APPLIES ON MERGE (TIN-2543, ADR 0010).
 #
-# GFTB on-cluster web serving skeleton, mirroring the proven MassageIthaca
+# GFTB on-cluster web serving workload, mirroring the proven MassageIthaca
 # full-on-cluster pattern (SvelteKit adapter-node -> OCI image on GHCR -> K8s
 # Deployment behind a ClusterIP Service -> in-cluster cloudflared tunnel edge;
 # see blahaj:tofu/stacks/massageithaca/main.tf and this repo's
 # docs/decisions/0001-pr-gated-ephemeral-preview-deploys.md).
 #
-# This manifest is a PLAN-ONLY skeleton. It is FAIL-CLOSED on three independent
-# axes so that even an accidental `kubectl apply` runs nothing and serves
-# nothing:
-#   1. replicas: 0            — no pod is ever scheduled from this file as-is.
-#   2. image: a non-resolvable PLACEHOLDER (no digest, not on any registry) —
-#      the operator pins a real ghcr.io/great-falls-tool-bus/greatfallstoolbus.org
-#      digest in the PRIVATE overlay at cutover; the public app repo owns the
-#      image build (ambient GITHUB_TOKEN, same-org GHCR), never the pin.
-#   3. the target namespace greatfallstoolbus-org-production DOES NOT EXIST and
-#      is intentionally NOT created by this stack (no Namespace object here).
+# ADR 0010 rules on-prem the production host and moves this stack from a parked
+# fail-closed skeleton to the EXECUTING cutover (ADR 0010 §5 step 3: scale the
+# web Deployment 0 -> 2). This manifest now carries the REAL cutover shape — a
+# digest-pinned production image and replicas: 2 — so it is no longer inert. It
+# stays DECLARE-ONLY in the honest sense that MERGING APPLIES NOTHING; the safety
+# is the apply GATE plus the still-closed public path, not an inert manifest:
+#   1. No CI applies on merge. web-crs.yml is validation-only; the ONLY apply is
+#      web-stack.yml, which is workflow_dispatch + confirm=apply + a protected
+#      web-apply-environment kubeconfig gate (fail-closed on all three).
+#   2. This stack creates NO Namespace object. greatfallstoolbus-org-production is
+#      provisioned out of band; the web-apply SA is namespace-scoped and cannot
+#      create it (no Namespace object here — validate-web-stack.sh enforces this).
+#   3. No public traffic reaches it on merge: the honey-ingress cloudflared tunnel
+#      public-hostname route and apex/www DNS stay fail-closed=false in
+#      ../../tofu/intent/great-falls-tool-bus/web-oncluster-route.json (TIN-991,
+#      Cloudflare dashboard / token-managed, never in git). See ../README.md.
+#   4. No Secret ships here (the GHCR pull secret is operator-provisioned in the
+#      namespace, never committed).
 #
-# Nothing about a public route lives here: the honey-ingress cloudflared tunnel
-# public-hostname route is Cloudflare dashboard / token-managed (TIN-991), never
-# in git. See ../README.md and ../../tofu/intent/great-falls-tool-bus/
-# web-oncluster-route.json (dns_enabled=false, route_enabled=false).
+# At dispatch web-stack.yml still `kubectl set image` / patches replicas from the
+# operator-supplied inputs, so the SERVED digest is whatever the operator resolves
+# at runbook P2 — which will be the PUBLIC_ARCHIVE_LIVE rebuild
+# (greatfallstoolbus.org PR #111), SUPERSEDING the pin below before the actual
+# dispatch. The pin below is the declarative record of the current main image.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -32,9 +41,11 @@ metadata:
     app.kubernetes.io/part-of: great-falls-tool-bus
     app.tinyland.dev/lifecycle: declare-only
 spec:
-  # FAIL-CLOSED: zero replicas. A real cutover flips this to 2 (MI prod shape)
-  # in an operator-gated pin bump, never in this declare-only skeleton.
-  replicas: 0
+  # ADR 0010 §5 step 3: replicas 2 (MassageIthaca production shape). Nothing
+  # schedules on merge — apply is operator-dispatch-only via web-stack.yml
+  # (workflow_dispatch + confirm=apply + protected web-apply env kubeconfig).
+  # Anti-affinity spreads the 2 replicas across distinct nodes (see below).
+  replicas: 2
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -60,7 +71,8 @@ spec:
         fsGroup: 1001
         seccompProfile:
           type: RuntimeDefault
-      # Node placement (all declare-only; replicas:0 means nothing schedules).
+      # Node placement. Nothing schedules on merge (apply is dispatch-gated); at
+      # cutover the 2 replicas prefer the roomy nodes and spread across hosts.
       #
       # Live-probe grounding (honey rke2, 2026-07-05, read-only kubectl): pod
       # headroom is honey 138/150 (12 free — honey was EXPANDED to 150, not the
@@ -108,12 +120,14 @@ spec:
                     app.kubernetes.io/component: web
       containers:
         - name: greatfallstoolbus-org
-          # PLACEHOLDER — deliberately not a real, resolvable, digest-pinned
-          # reference. The declare-only guard (scripts/validate-web-stack.sh)
-          # FAILS if this is ever replaced with an @sha256: digest in-tree: the
-          # real pin belongs in an operator-gated PRIVATE-overlay bump at cutover,
-          # not in this skeleton.
-          image: ghcr.io/great-falls-tool-bus/greatfallstoolbus.org:PLACEHOLDER-DECLARE-ONLY-NOT-APPLIED
+          # Digest-pinned production image (ADR 0010 §5). Built from
+          # greatfallstoolbus.org main @ 592dd86 (PR #109) by container-ghcr.yml.
+          # This is the current-main digest and a DECLARATIVE record only: at
+          # cutover web-stack.yml `kubectl set image` overrides it with the
+          # operator-resolved digest (runbook P2), which will be the
+          # PUBLIC_ARCHIVE_LIVE rebuild landing from greatfallstoolbus.org PR #111
+          # — that rebuild BUMPS this digest before the actual dispatch.
+          image: ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:3d4f066387b4234420392f0881e7c99eaf215016a99e7987f3980b52fe0c1c5e
           imagePullPolicy: IfNotPresent
           command: ["node", "build/index.js"]
           ports:
