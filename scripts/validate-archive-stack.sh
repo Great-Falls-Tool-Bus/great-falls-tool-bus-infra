@@ -8,8 +8,11 @@ set -euo pipefail
 # manifests fails CI before any apply. Where the archive stack differs from the
 # forms stack, the assertions differ with it: the archive route is a PURE
 # BROWSING surface (no form-handler tier, no LMTP, no server.py, and no
-# /api/contact ALLOW carve-out), and it adds an anti-bulk-export CHALLENGE on
-# HyperKitty's mbox /export/ path. Never contacts a cluster; never needs a secret.
+# /api/contact ALLOW carve-out), it adds an anti-bulk-export CHALLENGE on
+# HyperKitty's mbox /export/ path, and (post-TIN-2559) it carries a narrow
+# read-path exemption ALLOWing the discuss@ list overview, discuss@ thread
+# permalinks, and /static/* — scoped away from the private keyholders@ list.
+# Never contacts a cluster; never needs a secret.
 
 dir="${1:?usage: validate-archive-stack.sh <manifest-dir>}"
 anubis_deploy="${dir}/deployment-anubis-archive.yaml"
@@ -102,13 +105,57 @@ test "${challenge_present}" -ge 1 || fail "policy must keep a CHALLENGE rule for
 # path, and that CHALLENGE must be ordered BEFORE the crawler ALLOWs so even an
 # allowlisted crawler must solve a PoW to bulk-export (which a headless crawler
 # cannot). Rules evaluate top-to-bottom, first terminal match wins.
-export_probe="/archives/list/discuss@latoolb.us/export/discuss.mbox.gz"
+# The probe uses the live-verified /hyperkitty/ public mount prefix (the
+# archive page's own export links point there; /archives/ 404s on this
+# deployment, verified 2026-07-06). The export regex is start-unanchored so it
+# matches under either prefix, but the probe should mirror a real request.
+export_probe="/hyperkitty/list/discuss@latoolb.us/export/discuss.mbox.gz"
 export_challenge_matches="$(echo "${policy_json}" | jq -r --arg p "${export_probe}" '[.bots[] | select(.action == "CHALLENGE" and .path_regex != null and (.path_regex as $r | $p | test($r)))] | length')"
 test "${export_challenge_matches}" -ge 1 || fail "policy must CHALLENGE the HyperKitty mbox export path (/export/*.mbox[.gz]) to block anonymous bulk export"
 export_idx="$(echo "${policy_json}" | jq -r --arg p "${export_probe}" 'first(.bots | to_entries[] | select(.value.action == "CHALLENGE" and .value.path_regex != null and (.value.path_regex as $r | $p | test($r))) | .key)')"
 crawler_allow_idx="$(echo "${policy_json}" | jq -r 'first(.bots | to_entries[] | select(.value.action == "ALLOW" and .value.user_agent_regex != null) | .key)')"
 test -n "${crawler_allow_idx}" || fail "policy must ALLOW at least one search-engine crawler (the discuss@ archive is intentionally indexable)"
 test "${export_idx}" -lt "${crawler_allow_idx}" || fail "the mbox export CHALLENGE must be ordered before the crawler ALLOW rules (else an allowlisted crawler bypasses the export gate)"
+
+# --- Read-path exemption: discuss@ list overview + thread permalinks --------
+# The public on-site /discuss reader (TIN-2559) now serves this same content
+# ungated, so PoW on HyperKitty's own read paths for discuss@ adds no
+# confidentiality — only a deep-link interstitial. These assertions pin the
+# exemption to exactly the two read surfaces (list overview, thread
+# permalinks) plus /static/* (needed so the "ungated" page isn't unstyled),
+# and pin that the exemption does NOT leak onto the private keyholders@ list.
+# All probes use the live-verified /hyperkitty/ public mount prefix (see the
+# export probe note above).
+overview_probe="/hyperkitty/list/discuss@latoolb.us/"
+overview_allow_matches="$(echo "${policy_json}" | jq -r --arg p "${overview_probe}" '[.bots[] | select(.action == "ALLOW" and .path_regex != null and (.path_regex as $r | $p | test($r)))] | length')"
+test "${overview_allow_matches}" -ge 1 || fail "policy must ALLOW the discuss@ list-overview path (deep-link read-path exemption)"
+
+thread_probe="/hyperkitty/list/discuss@latoolb.us/thread/abc123def456/"
+thread_allow_matches="$(echo "${policy_json}" | jq -r --arg p "${thread_probe}" '[.bots[] | select(.action == "ALLOW" and .path_regex != null and (.path_regex as $r | $p | test($r)))] | length')"
+test "${thread_allow_matches}" -ge 1 || fail "policy must ALLOW discuss@ thread permalinks (deep-link read-path exemption)"
+
+static_probe="/static/hyperkitty/css/hyperkitty.css"
+static_allow_matches="$(echo "${policy_json}" | jq -r --arg p "${static_probe}" '[.bots[] | select(.action == "ALLOW" and .path_regex != null and (.path_regex as $r | $p | test($r)))] | length')"
+test "${static_allow_matches}" -ge 1 || fail "policy must ALLOW /static/* (else the exempted page renders unstyled behind a challenge-cookie-less asset fetch)"
+
+# Defense-in-depth: the read-path ALLOWs must be scoped to discuss@ ONLY. If
+# any of the same ALLOW rules also matched the equivalent keyholders@ paths,
+# the private archive's PoW gate would be bypassed by this exemption (HyperKitty
+# itself still 403s anonymous keyholders@ reads, but the gate should not rely
+# on that alone).
+keyholders_overview_probe="/hyperkitty/list/keyholders@latoolb.us/"
+keyholders_overview_allow_matches="$(echo "${policy_json}" | jq -r --arg p "${keyholders_overview_probe}" '[.bots[] | select(.action == "ALLOW" and .path_regex != null and (.path_regex as $r | $p | test($r)))] | length')"
+test "${keyholders_overview_allow_matches}" -eq 0 || fail "the read-path exemption must not ALLOW the keyholders@ list overview (private-list PoW bypass)"
+
+keyholders_thread_probe="/hyperkitty/list/keyholders@latoolb.us/thread/abc123def456/"
+keyholders_thread_allow_matches="$(echo "${policy_json}" | jq -r --arg p "${keyholders_thread_probe}" '[.bots[] | select(.action == "ALLOW" and .path_regex != null and (.path_regex as $r | $p | test($r)))] | length')"
+test "${keyholders_thread_allow_matches}" -eq 0 || fail "the read-path exemption must not ALLOW keyholders@ thread permalinks (private-list PoW bypass)"
+
+# The export CHALLENGE must still win over the new read-path ALLOWs for the
+# export probe specifically (mutually exclusive path shapes today, but this
+# guards a future regex edit from accidentally shadowing the export gate).
+export_still_challenged="$(echo "${policy_json}" | jq -r --arg p "${export_probe}" '[.bots[] | select(.action == "ALLOW" and .path_regex != null and (.path_regex as $r | $p | test($r)))] | length')"
+test "${export_still_challenged}" -eq 0 || fail "no ALLOW rule (including the new read-path exemption) may match the mbox export path"
 
 # --- NetworkPolicy doctrine: gate not bypassable, egress least-privilege -----
 # Anubis ingress is from the cloudflared tunnel namespace on 8081.
@@ -166,4 +213,4 @@ for n in anubis-archive-policy anubis-archive mailman-core-archive-ingress; do
   printf '%s\n' "${render}" | grep -qE "^  name: ${n}$" || fail "rendered set missing metadata.name ${n}"
 done
 
-echo "archive stack validation passed: Anubis PoW gate (CHALLENGE browsing surface + mbox /export before crawler ALLOWs, NO /api ALLOW) -> HyperKitty web tier http://mailman-web:8080 (egress pod :8000), Service :8081, digests pinned, 5 resources in latoolb-us-production, no committed secrets"
+echo "archive stack validation passed: Anubis PoW gate (CHALLENGE browsing surface + mbox /export before crawler ALLOWs, NO /api ALLOW, discuss@ list/thread + /static read-path exemption scoped away from keyholders@) -> HyperKitty web tier http://mailman-web:8080 (egress pod :8000), Service :8081, digests pinned, 5 resources in latoolb-us-production, no committed secrets"

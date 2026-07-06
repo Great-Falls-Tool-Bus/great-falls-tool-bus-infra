@@ -96,11 +96,11 @@ packet. See §7 for the placeholder it implies tightening.
 
 1. **It is already the documented archive host.** `list-bringup.md`
    "HyperKitty private archive URL shape" (TIN-2380) fixes the archive URL as
-   `https://lists.latoolb.us/archives/list/keyholders@latoolb.us/`. Picking
+   `https://lists.latoolb.us/hyperkitty/list/keyholders@latoolb.us/`. Picking
    `archives.` would contradict a URL already written into the runbook and any
    links that follow it.
 2. **One host serves the whole engine, not one archive.** HyperKitty routes
-   every list path-based under `/archives/list/<list>@latoolb.us/` off a single
+   every list path-based under `/hyperkitty/list/<list>@latoolb.us/` off a single
    web tier. `discuss@` and `keyholders@` are two paths on the **same** host.
    `lists.` names the engine honestly; `archives.` implies a per-archive host
    that does not exist and would mis-suggest that `discuss@` is isolated from
@@ -153,14 +153,17 @@ operator runs, from a machine with read-only `kubectl --context honey`:
 kubectl -n latoolb-us-production port-forward svc/mailman-web 8080:8080 &
 
 # 2. Probe the PRIVATE list as a fully anonymous client across EVERY surface.
-#    Every one of these MUST be 403/404/redirect-to-login (NOT 200):
+#    Every one of these MUST be 403/404/redirect-to-login (NOT 200).
+#    NOTE the /hyperkitty/ prefix: it is the live public mount (verified
+#    2026-07-06; /archives/list/... 404s on this deployment, which would make
+#    these probes vacuously "pass" while testing nothing):
 private_list="keyholders@latoolb.us"
 for u in \
-  "archives/list/${private_list}/" \
-  "archives/list/${private_list}/latest" \
-  "archives/list/${private_list}/feed/" \
-  "archives/list/${private_list}/export/${private_list}.mbox.gz" \
-  "archives/list/${private_list}/search/?q=access" ; do
+  "hyperkitty/list/${private_list}/" \
+  "hyperkitty/list/${private_list}/latest" \
+  "hyperkitty/list/${private_list}/feed/" \
+  "hyperkitty/list/${private_list}/export/${private_list}.mbox.gz" \
+  "hyperkitty/list/${private_list}/search/?q=access" ; do
     printf '%-72s ' "$u"
     curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: lists.latoolb.us' \
       "http://127.0.0.1:8080/$u"
@@ -168,7 +171,7 @@ done
 
 # 3. Confirm the PUBLIC list DOES render anonymously (expect 200):
 curl -s -o /dev/null -w 'discuss html  %{http_code}\n' -H 'Host: lists.latoolb.us' \
-  "http://127.0.0.1:8080/archives/list/discuss@latoolb.us/"
+  "http://127.0.0.1:8080/hyperkitty/list/discuss@latoolb.us/"
 
 # 4. Confirm the version floor: HyperKitty >= 1.3.8 (the RSS-feed leak fix).
 kubectl -n latoolb-us-production exec deploy/mailman-core -c mailman-web -- \
@@ -308,7 +311,7 @@ fail-closed.
    `edge-plan.yml`, then `workflow_dispatch action=apply` (D6 dispatch-apply —
    no direct apply).
 8. ⛔ **[operator]** Live round-trip smoke: anonymous `https://lists.latoolb.us/
-   archives/list/discuss@latoolb.us/` renders behind the Anubis challenge;
+   hyperkitty/list/discuss@latoolb.us/` renders behind the Anubis challenge;
    re-run the §4 private probes against the **public** hostname (belt and
    suspenders — private surfaces must still 403 from the internet). Canary the
    Anubis pod + search latency.
