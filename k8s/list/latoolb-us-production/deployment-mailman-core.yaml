@@ -148,6 +148,11 @@ spec:
             - /opt/mailman-web/uwsgi.ini
             - --static-map
             - /static=/opt/mailman-web-data/static
+            # LIGHT branding (TIN-2561): serve the mounted brand stylesheet from
+            # the mailman-web-branding ConfigMap the same way as /static above —
+            # uwsgi offload, no collectstatic. headers.html links /brand/gftb-brand.css.
+            - --static-map
+            - /brand=/opt/mailman-web-branding/static
           ports:
             - name: http
               # docker-mailman's uwsgi.ini exposes the HTTP socket on 8000;
@@ -165,6 +170,13 @@ spec:
             # tier at import time when lists.latoolb.us had no DNS.
             - name: MAILMAN_HOST_IP
               value: "127.0.0.1"
+            # LIGHT branding (TIN-2561): put the read-only branding mount on the
+            # Python path so the stock settings.py `from settings_local import *`
+            # (settings.py:418) resolves our settings_local.py, which prepends
+            # /opt/mailman-web-branding/templates to TEMPLATES[0]['DIRS'] so the
+            # hyperkitty/headers.html + top.html + bottom.html overrides win.
+            - name: PYTHONPATH
+              value: /opt/mailman-web-branding
             # Core binds REST to the POD IP (not loopback), and the Service
             # hairpin is broken under rke2-canal/flannel (hairpin-mode off:
             # verified live 2026-07-04, service-DNAT-to-self SYNs never return,
@@ -215,6 +227,10 @@ spec:
           volumeMounts:
             - name: web-data
               mountPath: /opt/mailman-web-data
+            # LIGHT branding (TIN-2561): templates + stylesheet + settings_local.
+            - name: web-branding
+              mountPath: /opt/mailman-web-branding
+              readOnly: true
           resources:
             requests:
               cpu: 100m
@@ -243,3 +259,20 @@ spec:
         - name: web-data
           persistentVolumeClaim:
             claimName: mailman-web-data
+        # LIGHT branding (TIN-2561): mounted read-only at /opt/mailman-web-branding.
+        # settings_local.py lands at the mount root (on PYTHONPATH); the templates
+        # and stylesheet land under templates/hyperkitty/ and static/.
+        - name: web-branding
+          configMap:
+            name: mailman-web-branding
+            items:
+              - key: settings_local.py
+                path: settings_local.py
+              - key: headers.html
+                path: templates/hyperkitty/headers.html
+              - key: top.html
+                path: templates/hyperkitty/top.html
+              - key: bottom.html
+                path: templates/hyperkitty/bottom.html
+              - key: gftb-brand.css
+                path: static/gftb-brand.css
