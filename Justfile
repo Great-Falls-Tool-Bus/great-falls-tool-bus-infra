@@ -434,3 +434,50 @@ web-stack-health:
       exit 1
     fi
     echo "web stack health gate passed"
+
+# Env (delivered by web-stack.yml on the CD path; never baked):
+#   CI_GREEN_SHA   the commit SHA to gate on (client_payload.sha)
+#   CI_GREEN_REPO  owner/name of the site repo (default the GFTB site repo)
+#   GH_TOKEN       read-only token; the site repo is PUBLIC so its CI run metadata
+#                  is world-readable — a token with actions:read on it (or the
+#                  ambient GITHUB_TOKEN) is sufficient. NOT a cluster credential.
+#   CI_GREEN_TIMEOUT_SECONDS  how long to wait for CI to conclude (default 1200).
+#
+# CD "merge on green" gate: verify SITE ci.yml concluded success before cutover.
+web-cd-ci-green-gate:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${CI_GREEN_SHA:?CI_GREEN_SHA is required (the site commit to gate on; client_payload.sha)}"
+    site_repo="${CI_GREEN_REPO:-Great-Falls-Tool-Bus/greatfallstoolbus.org}"
+    : "${GH_TOKEN:?GH_TOKEN is required (read-only token with actions:read on ${site_repo})}"
+    # Fail fast with a clear message if the token cannot even read the site repo,
+    # rather than looping until timeout on an auth error.
+    if ! gh api "repos/${site_repo}" --jq '.full_name' >/dev/null 2>&1; then
+      echo "::error::CI-green gate: GH_TOKEN cannot read ${site_repo}. Provision a read-only token with actions:read on the (public) site repo — GF_CORE_READ_TOKEN or a minimal PAT — or rely on the ambient GITHUB_TOKEN. Fail-closed."
+      exit 1
+    fi
+    echo "CI-green gate: waiting for ${site_repo} ci.yml @ ${CI_GREEN_SHA} to conclude..."
+    deadline=$(( SECONDS + ${CI_GREEN_TIMEOUT_SECONDS:-1200} ))
+    while :; do
+      run_json="$(gh api "repos/${site_repo}/actions/workflows/ci.yml/runs?head_sha=${CI_GREEN_SHA}&event=push&per_page=1" 2>/dev/null || true)"
+      status="$(printf '%s' "${run_json}" | jq -r '.workflow_runs[0].status // "missing"')"
+      conclusion="$(printf '%s' "${run_json}" | jq -r '.workflow_runs[0].conclusion // ""')"
+      if [[ "${status}" == "completed" ]]; then
+        if [[ "${conclusion}" == "success" ]]; then
+          echo "CI-green gate PASSED: ci.yml concluded success for ${CI_GREEN_SHA}."
+          exit 0
+        fi
+        echo "::error::CI-green gate FAILED: ci.yml for ${CI_GREEN_SHA} concluded '${conclusion}' (not success). Refusing to deploy (merge-on-green)."
+        exit 1
+      fi
+      if [[ "${status}" == "missing" ]]; then
+        echo "  no ci.yml push run found yet for ${CI_GREEN_SHA}; waiting..."
+      else
+        echo "  ci.yml status=${status}; waiting..."
+      fi
+      if (( SECONDS >= deadline )); then
+        echo "::error::CI-green gate TIMEOUT: ci.yml for ${CI_GREEN_SHA} did not conclude success within ${CI_GREEN_TIMEOUT_SECONDS:-1200}s (last status='${status}'). Fail-closed."
+        exit 1
+      fi
+      sleep 20
+    done
