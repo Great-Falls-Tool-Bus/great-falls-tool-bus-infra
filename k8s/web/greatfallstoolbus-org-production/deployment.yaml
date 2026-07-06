@@ -121,13 +121,13 @@ spec:
       containers:
         - name: greatfallstoolbus-org
           # Digest-pinned production image (ADR 0010 §5). Built from
-          # greatfallstoolbus.org main @ 592dd86 (PR #109) by container-ghcr.yml.
-          # This is the current-main digest and a DECLARATIVE record only: at
+          # greatfallstoolbus.org main @ 1112a93 (PR #111: /health probe +
+          # PUBLIC_ARCHIVE_LIVE baked into the node image) by container-ghcr.yml
+          # run 28762450649 — this image serves /health for the probes below and
+          # surfaces /discuss archive-live. Still a DECLARATIVE record: at
           # cutover web-stack.yml `kubectl set image` overrides it with the
-          # operator-resolved digest (runbook P2), which will be the
-          # PUBLIC_ARCHIVE_LIVE rebuild landing from greatfallstoolbus.org PR #111
-          # — that rebuild BUMPS this digest before the actual dispatch.
-          image: ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:3d4f066387b4234420392f0881e7c99eaf215016a99e7987f3980b52fe0c1c5e
+          # operator-resolved digest (runbook P2); as of this pin the two match.
+          image: ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:31cace27c5cd3e51ad4411100c83fb9019f74c9885535a916be5e5f333c929c3
           imagePullPolicy: IfNotPresent
           command: ["node", "build/index.js"]
           ports:
