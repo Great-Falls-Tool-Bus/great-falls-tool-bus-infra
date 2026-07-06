@@ -58,6 +58,21 @@ on:
         required: false
         default: "2"
         type: string
+  # CONTINUOUS DEPLOYMENT trigger (merge-on-green == live). The SITE repo
+  # greatfallstoolbus.org fires this repository_dispatch from its
+  # container-ghcr.yml AFTER a green push-to-main image build+push. The site
+  # SIGNALS; this infra repo APPLIES — the security boundary is unchanged: the
+  # site never holds cluster/edge creds, and every fail-closed gate below still
+  # runs. client_payload contract (must match the SITE signal job):
+  #   image     ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:<digest>
+  #   sha       the main-branch commit SHA that produced the image
+  #   replicas  desired replica count (string; default "2")
+  # Before applying, the CD path GATES ON CI GREEN: it verifies the SITE repo's
+  # ci.yml run for `sha` concluded success (web-cd-ci-green-gate). The manual
+  # workflow_dispatch path above is preserved intact for rollback/override to an
+  # arbitrary prior digest.
+  repository_dispatch:
+    types: [web-image-published]
 
 permissions:
   contents: read
@@ -76,7 +91,7 @@ env:
 jobs:
   apply:
     name: Apply web stack (on-cluster cutover)
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'repository_dispatch'
     runs-on: tinyland-nix
     # The web-apply kubeconfig secret lives ONLY in this protected `web-apply`
     # environment, not at repository scope (mirrors mail-crs.yml `mail` and
@@ -87,7 +102,43 @@ jobs:
     environment: web-apply
     timeout-minutes: 30
     steps:
+      - name: Resolve deploy parameters (manual dispatch vs CD signal)
+        # Normalize the two trigger shapes into one set of job env vars consumed
+        # by every downstream step, so the apply chassis stays single-sourced.
+        # workflow_dispatch -> github.event.inputs.*; repository_dispatch (CD) ->
+        # github.event.client_payload.*.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_IMAGE: ${{ github.event.inputs.image }}
+          DISPATCH_REPLICAS: ${{ github.event.inputs.replicas }}
+          CD_IMAGE: ${{ github.event.client_payload.image }}
+          CD_SHA: ${{ github.event.client_payload.sha }}
+          CD_REPLICAS: ${{ github.event.client_payload.replicas }}
+        run: |
+          set -euo pipefail
+          if [[ "${EVENT_NAME}" == "repository_dispatch" ]]; then
+            image="${CD_IMAGE}"
+            replicas="${CD_REPLICAS:-2}"
+            sha="${CD_SHA}"
+            mode="cd"
+          else
+            image="${DISPATCH_IMAGE}"
+            replicas="${DISPATCH_REPLICAS:-2}"
+            sha=""
+            mode="manual"
+          fi
+          {
+            echo "WEB_APPLY_IMAGE=${image}"
+            echo "WEB_APPLY_REPLICAS=${replicas}"
+            echo "WEB_APPLY_SHA=${sha}"
+            echo "WEB_DEPLOY_MODE=${mode}"
+          } >> "${GITHUB_ENV}"
+          echo "Deploy mode: ${mode}; replicas: ${replicas}; image: ${image:-<unset>}"
+
       - name: Confirm apply intent (fail-closed sentinel)
+        # Manual operator path only. The CD path's authorization is the CI-green
+        # gate below (merge-on-green), not this typed sentinel.
+        if: github.event_name == 'workflow_dispatch'
         run: |
           if [[ "${{ github.event.inputs.confirm }}" != "apply" ]]; then
             echo "::error::Refusing to apply: set confirm=apply to authorize the on-cluster web cutover (fail-closed, operator-dispatch-only)."
@@ -110,7 +161,7 @@ jobs:
 
       - name: Validate image input (digest-pinned, not the placeholder)
         env:
-          WEB_APPLY_IMAGE: ${{ github.event.inputs.image }}
+          WEB_APPLY_IMAGE: ${{ env.WEB_APPLY_IMAGE }}
         run: |
           set -euo pipefail
           if [[ -z "${WEB_APPLY_IMAGE}" ]]; then
@@ -151,6 +202,27 @@ jobs:
           path: GloriousFlywheel
           token: ${{ secrets.GF_CORE_READ_TOKEN }}
 
+      # CD-only "merge on green" gate. Runs BEFORE any cluster touch (dry-run /
+      # apply below): the deploy proceeds only if the SITE repo's ci.yml for the
+      # dispatched commit concluded success. Read-only cross-repo check via the
+      # infra devshell (gh + jq); the site repo is PUBLIC so its CI run metadata
+      # is world-readable — GF_CORE_READ_TOKEN is used when present, else the
+      # ambient GITHUB_TOKEN suffices. The manual workflow_dispatch path skips
+      # this gate (its authorization is confirm=apply).
+      - name: CI-green gate (SITE ci.yml success for this commit) [CD only]
+        if: github.event_name == 'repository_dispatch'
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        env:
+          GH_TOKEN: ${{ secrets.GF_CORE_READ_TOKEN != '' && secrets.GF_CORE_READ_TOKEN || secrets.GITHUB_TOKEN }}
+          CI_GREEN_SHA: ${{ github.event.client_payload.sha }}
+          CI_GREEN_REPO: ${{ github.repository_owner }}/greatfallstoolbus.org
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            nix develop . -c just web-cd-ci-green-gate
+
       - name: Materialize web-apply kubeconfig
         env:
           WEB_APPLY_KUBECONFIG_B64: ${{ secrets.WEB_APPLY_KUBECONFIG_B64 }}
@@ -171,8 +243,8 @@ jobs:
       - name: Server dry-run (workload apply)
         uses: ./GloriousFlywheel/.github/actions/nix-job
         env:
-          WEB_APPLY_IMAGE: ${{ github.event.inputs.image }}
-          WEB_APPLY_REPLICAS: ${{ github.event.inputs.replicas }}
+          WEB_APPLY_IMAGE: ${{ env.WEB_APPLY_IMAGE }}
+          WEB_APPLY_REPLICAS: ${{ env.WEB_APPLY_REPLICAS }}
         with:
           push-cache: "false"
           command: |
@@ -185,8 +257,8 @@ jobs:
       - name: Apply cutover (namespace exists; pin image, flip replicas 0 -> N)
         uses: ./GloriousFlywheel/.github/actions/nix-job
         env:
-          WEB_APPLY_IMAGE: ${{ github.event.inputs.image }}
-          WEB_APPLY_REPLICAS: ${{ github.event.inputs.replicas }}
+          WEB_APPLY_IMAGE: ${{ env.WEB_APPLY_IMAGE }}
+          WEB_APPLY_REPLICAS: ${{ env.WEB_APPLY_REPLICAS }}
         with:
           push-cache: "false"
           command: |
