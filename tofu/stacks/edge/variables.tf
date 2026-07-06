@@ -27,18 +27,24 @@ variable "access_allowed_emails" {
 variable "pages_host" {
   description = <<-EOT
     Host the greatfallstoolbus.org apex + www CNAMEs point at (both
-    CF-proxied; the apex is CF-flattened). Default is the LIVE CF Pages
-    project host: the ADR 0003 cutover (site repo docs/decisions/0003,
-    operator-approved 2026-07-03) was EXECUTED 2026-07-03 — the default
-    was flipped to greatfallstoolbus-org.pages.dev (this repo PR #15)
-    and apex + www now serve from CF Pages behind the REV-2 Access
-    gate. Rollback is a one-line change back to the GitHub Pages host
-    (great-falls-tool-bus.github.io) or a TF_VAR_pages_host override at
+    CF-proxied; the apex is CF-flattened). Default is the ON-CLUSTER
+    origin: the shared honey-ingress Cloudflare Tunnel cname target,
+    routing to the adapter-node web Deployment in
+    greatfallstoolbus-org-production (site ADR 0010 + Amendment 1;
+    cutover 2026-07-06 — web-stack apply run 28767572897 put 2/2
+    replicas Ready on /health, and the tunnel carries public hostnames
+    for apex + www -> the web Service). The REV-2 Access gate is
+    host-scoped and unaffected by this origin change. History: ADR 0003
+    pointed this at CF Pages (greatfallstoolbus-org.pages.dev,
+    2026-07-03, PR #15); ADR 0010 retires the Pages lane. Rollback is a
+    one-line change back to greatfallstoolbus-org.pages.dev (while the
+    Pages project still exists) or a TF_VAR_pages_host override at
     apply time — sequencing and verify matrix:
-    docs/runbooks/edge-token-and-zones.md step 5.
+    docs/runbooks/edge-token-and-zones.md step 5. (Variable name kept
+    for continuity; renaming to web_origin_host is a follow-up.)
   EOT
   type        = string
-  default     = "greatfallstoolbus-org.pages.dev"
+  default     = "da3ffda2-68ee-46d1-aa55-ec8dae2bd471.cfargotunnel.com"
 }
 
 variable "mail_dns_enabled" {

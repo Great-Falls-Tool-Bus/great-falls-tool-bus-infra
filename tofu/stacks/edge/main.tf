@@ -6,8 +6,9 @@
 #
 # Record surface (site repo tofu/dns-intent reconciled to TIN-2378):
 #   greatfallstoolbus.org  apex CNAME (CF-flattened) + www -> var.pages_host,
-#                          proxied (CF Pages since the ADR 0003 cutover,
-#                          executed 2026-07-03 — see variables.tf)
+#                          proxied (the honey-ingress tunnel / on-cluster web
+#                          Deployment since the ADR 0010 cutover, 2026-07-06;
+#                          CF Pages 2026-07-03..06 — see variables.tf)
 #   latoolb.us             root+www 301 redirect ruleset (variable target)
 # Mail DNS (MX/SPF/DMARC/DKIM) is managed below, gated behind
 # var.mail_dns_enabled (default true after D11 closed self-hosted and TIN-2379
