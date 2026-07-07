@@ -1,0 +1,279 @@
+name: K8s Stack Drift (zero-diff where applicable)
+
+# Scheduled, read-only drift-check lane for the namespace-scoped k8s workload
+# stacks (k8s/{mail,list,form,archive,web}): every 12h it diffs LIVE cluster
+# state against the committed manifests via `kubectl diff -k` (server-side,
+# NO apply) -- mirroring edge-drift.yml's zero-diff philosophy for
+# tofu/stacks/edge, applied here to the Kubernetes CR/workload stacks instead
+# of Tofu state.
+#
+# mail/list/form/archive are TRUE zero-diff stacks: nothing patches them
+# imperatively after `just <stack>-apply` runs, so any diff IS real drift and
+# FAILS the gate (hard error), same as edge-drift.yml's "assert zero-diff".
+#
+# web is DIFFERENT, by design, and is deliberately NOT held to the same bar:
+# k8s/web/greatfallstoolbus-org-production stays parked in git (replicas:0,
+# placeholder image -- scripts/validate-web-stack.sh guards this) while the
+# live on-cluster cutover state carries the operator-resolved image digest and
+# replicas:2, patched in IMPERATIVELY by `just web-stack-apply`
+# (docs/runbooks/oncluster-web-cutover.md P3), not by `apply -k`. A diff there
+# is EXPECTED, not drift, so the web job reports its diff (step summary +
+# artifact) but never fails the workflow on it. See Justfile
+# `_k8s-drift-check` for the full rationale.
+#
+# CREDENTIALS: reuses the SAME namespace-scoped kubeconfig secrets the
+# existing apply lanes already use -- no new secret is introduced here.
+#   * WEB_APPLY_KUBECONFIG_B64, protected `web-apply` environment (web-stack.yml)
+#   * MAIL_APPLY_KUBECONFIG_B64 / GFTB_MAIL_KUBECONFIG_B64, protected `mail`
+#     environment (mail-crs.yml / list-crs.yml / form-crs.yml / archive-stack.yml)
+# `kubectl diff` needs only read (get/list) RBAC on the stack's own resources --
+# a strict subset of what the apply-scoped kubeconfig already grants, so no new
+# permission is requested either. Runs on the same self-hosted `tinyland-nix`
+# runner (on-cluster/tailnet reachable) every other apply/validate workflow in
+# this repo uses. Like edge-drift.yml, this fails SOFT (skip, not red) when an
+# environment secret is absent -- the runbook mints these late.
+
+on:
+  schedule:
+    # Every 12 hours, offset from edge-drift.yml's 00:00/12:00 so the two
+    # scheduled drift lanes don't contend for the same tinyland-nix runners.
+    - cron: "0 6,18 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: k8s-stack-drift-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GF_CORE_REF: 2281b576bce0e8dd776a047b84e7464f5b508a62
+  HAS_GF_CORE_DEPLOY_KEY: ${{ secrets.GF_CORE_DEPLOY_KEY != '' }}
+  HAS_GF_CORE_READ_TOKEN: ${{ secrets.GF_CORE_READ_TOKEN != '' }}
+
+jobs:
+  mail-stacks-drift:
+    name: Assert zero-diff (mail, list, form, archive)
+    runs-on: tinyland-nix
+    timeout-minutes: 20
+    # Same protected `mail` environment mail-crs.yml / list-crs.yml /
+    # form-crs.yml / archive-stack.yml already bind for their server/apply jobs.
+    environment: mail
+    env:
+      HAS_MAIL_KUBECONFIG: ${{ secrets.MAIL_APPLY_KUBECONFIG_B64 != '' || secrets.GFTB_MAIL_KUBECONFIG_B64 != '' }}
+    steps:
+      - name: Check mail-environment kubeconfig secret
+        id: secrets
+        run: |
+          if [ "${HAS_MAIL_KUBECONFIG}" != "true" ]; then
+            echo "::notice::MAIL_APPLY_KUBECONFIG_B64 (or GFTB_MAIL_KUBECONFIG_B64) is not configured in the protected mail environment; skipping the mail/list/form/archive drift check (fail-soft -- the runbook mints this secret late, same idiom as mail-crs.yml)."
+            echo "kubeconfig-present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "kubeconfig-present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Require GloriousFlywheel core read credential
+        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        run: |
+          if [[ "${HAS_GF_CORE_DEPLOY_KEY}" != "true" && "${HAS_GF_CORE_READ_TOKEN}" != "true" ]]; then
+            echo "::error::GF_CORE_DEPLOY_KEY or GF_CORE_READ_TOKEN is required."
+            exit 1
+          fi
+
+      - name: Checkout overlay
+        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        uses: actions/checkout@v6
+        with:
+          path: overlay
+
+      - name: Checkout GloriousFlywheel core with deploy key
+        if: >-
+          steps.secrets.outputs.kubeconfig-present == 'true'
+          && env.HAS_GF_CORE_DEPLOY_KEY == 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: tinyland-inc/GloriousFlywheel
+          ref: ${{ env.GF_CORE_REF }}
+          path: GloriousFlywheel
+          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
+
+      - name: Checkout GloriousFlywheel core with read token
+        if: >-
+          steps.secrets.outputs.kubeconfig-present == 'true'
+          && env.HAS_GF_CORE_DEPLOY_KEY != 'true'
+          && env.HAS_GF_CORE_READ_TOKEN == 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: tinyland-inc/GloriousFlywheel
+          ref: ${{ env.GF_CORE_REF }}
+          path: GloriousFlywheel
+          token: ${{ secrets.GF_CORE_READ_TOKEN }}
+
+      - name: Materialize namespace kubeconfig
+        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        env:
+          MAIL_APPLY_KUBECONFIG_B64: ${{ secrets.MAIL_APPLY_KUBECONFIG_B64 }}
+          GFTB_MAIL_KUBECONFIG_B64: ${{ secrets.GFTB_MAIL_KUBECONFIG_B64 }}
+        run: |
+          set -euo pipefail
+          kubeconfig="${RUNNER_TEMP}/gftb-mail.kubeconfig"
+          if [[ -n "${MAIL_APPLY_KUBECONFIG_B64:-}" ]]; then
+            kubeconfig_b64="${MAIL_APPLY_KUBECONFIG_B64}"
+          else
+            kubeconfig_b64="${GFTB_MAIL_KUBECONFIG_B64}"
+          fi
+          printf '%s' "${kubeconfig_b64}" | base64 -d > "${kubeconfig}"
+          chmod 600 "${kubeconfig}"
+          echo "GFTB_MAIL_KUBECONFIG=${kubeconfig}" >> "$GITHUB_ENV"
+
+      - name: Drift check -- mail CRs
+        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            export GF_CORE_PATH=../GloriousFlywheel
+            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            nix develop "${GF_CORE_CI_PATH}" -c just mail-cr-drift-check
+
+      - name: Drift check -- list stack
+        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            export GF_CORE_PATH=../GloriousFlywheel
+            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            nix develop "${GF_CORE_CI_PATH}" -c just list-stack-drift-check
+
+      - name: Drift check -- form stack
+        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            export GF_CORE_PATH=../GloriousFlywheel
+            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            nix develop "${GF_CORE_CI_PATH}" -c just form-stack-drift-check
+
+      - name: Drift check -- archive stack
+        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            export GF_CORE_PATH=../GloriousFlywheel
+            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            nix develop "${GF_CORE_CI_PATH}" -c just archive-stack-drift-check
+
+      - name: Upload drift artifacts
+        if: always() && steps.secrets.outputs.kubeconfig-present == 'true'
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: gftb-mail-stacks-drift
+          path: |
+            overlay/mail-cr-drift.txt
+            overlay/list-stack-drift.txt
+            overlay/form-stack-drift.txt
+            overlay/archive-stack-drift.txt
+          if-no-files-found: ignore
+          retention-days: 7
+
+  web-stack-drift:
+    name: Report web-stack diff (informational; parked skeleton diverges by design)
+    runs-on: tinyland-nix
+    timeout-minutes: 20
+    # Same protected `web-apply` environment web-stack.yml already binds.
+    environment: web-apply
+    env:
+      HAS_WEB_APPLY_KUBECONFIG: ${{ secrets.WEB_APPLY_KUBECONFIG_B64 != '' }}
+    steps:
+      - name: Check web-apply kubeconfig secret
+        id: secrets
+        run: |
+          if [ "${HAS_WEB_APPLY_KUBECONFIG}" != "true" ]; then
+            echo "::notice::WEB_APPLY_KUBECONFIG_B64 is not configured in the protected web-apply environment; skipping the web-stack diff report (fail-soft)."
+            echo "kubeconfig-present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "kubeconfig-present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Require GloriousFlywheel core read credential
+        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        run: |
+          if [[ "${HAS_GF_CORE_DEPLOY_KEY}" != "true" && "${HAS_GF_CORE_READ_TOKEN}" != "true" ]]; then
+            echo "::error::GF_CORE_DEPLOY_KEY or GF_CORE_READ_TOKEN is required."
+            exit 1
+          fi
+
+      - name: Checkout overlay
+        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        uses: actions/checkout@v6
+        with:
+          path: overlay
+
+      - name: Checkout GloriousFlywheel core with deploy key
+        if: >-
+          steps.secrets.outputs.kubeconfig-present == 'true'
+          && env.HAS_GF_CORE_DEPLOY_KEY == 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: tinyland-inc/GloriousFlywheel
+          ref: ${{ env.GF_CORE_REF }}
+          path: GloriousFlywheel
+          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
+
+      - name: Checkout GloriousFlywheel core with read token
+        if: >-
+          steps.secrets.outputs.kubeconfig-present == 'true'
+          && env.HAS_GF_CORE_DEPLOY_KEY != 'true'
+          && env.HAS_GF_CORE_READ_TOKEN == 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: tinyland-inc/GloriousFlywheel
+          ref: ${{ env.GF_CORE_REF }}
+          path: GloriousFlywheel
+          token: ${{ secrets.GF_CORE_READ_TOKEN }}
+
+      - name: Materialize web-apply kubeconfig
+        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        env:
+          WEB_APPLY_KUBECONFIG_B64: ${{ secrets.WEB_APPLY_KUBECONFIG_B64 }}
+        run: |
+          set -euo pipefail
+          kubeconfig="${RUNNER_TEMP}/web-apply.kubeconfig"
+          printf '%s' "${WEB_APPLY_KUBECONFIG_B64}" | base64 -d > "${kubeconfig}"
+          chmod 600 "${kubeconfig}"
+          echo "WEB_APPLY_KUBECONFIG=${kubeconfig}" >> "$GITHUB_ENV"
+
+      - name: Diff report -- web stack (never fails; see header)
+        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            export GF_CORE_PATH=../GloriousFlywheel
+            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            nix develop "${GF_CORE_CI_PATH}" -c just web-stack-drift-check
+
+      - name: Upload drift artifact
+        if: always() && steps.secrets.outputs.kubeconfig-present == 'true'
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: gftb-web-stack-drift
+          path: overlay/web-stack-drift.txt
+          if-no-files-found: ignore
+          retention-days: 7
