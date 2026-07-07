@@ -1,10 +1,18 @@
-# GFTB on-cluster web serving — DECLARE-ONLY skeleton (TIN-2541)
+# GFTB on-cluster web serving — LIVE production stack (TIN-2541)
 
-> **NOTHING IN THIS DIRECTORY IS APPLIED.** This is a plan-only skeleton that
-> `kubectl kustomize` renders cleanly (the `just check` guard enforces that) but
-> that serves nothing and mutates no cluster, DNS, or route. Every enablement
-> axis is fail-closed. Bringing any of it live is an explicit, operator-gated
-> action authorized by a *superseding* hosting ADR — not by this stack.
+> **THIS STACK IS LIVE.** The GFTB web app is served **fully on-cluster** from
+> this overlay: `deployment.yaml` runs `replicas: 2` on a digest-pinned
+> production image, and `greatfallstoolbus.org` apex + www have served from it
+> over the shared honey-ingress Cloudflare Tunnel since the **2026-07-06
+> cutover** (SvelteKit `adapter-node` behind `Service greatfallstoolbus-org:80`).
+> These manifests are the declared source of truth for that live surface.
+> Changes here are **NOT auto-applied on merge**: apply is a manual
+> `workflow_dispatch` (`confirm=apply`, operator-supplied `image` input) on
+> [`.github/workflows/web-stack.yml`](../../.github/workflows/web-stack.yml) into
+> the protected `web-apply` environment (i.e. `just web-stack-apply`), which runs
+> the offline validate plus a server dry-run first. PR and push runs are offline
+> validation only. **Do not trust any leftover DECLARE-ONLY / "nothing is
+> applied" wording in this tree over this note.**
 
 ## What this is
 
@@ -29,7 +37,7 @@ visitor -> greatfallstoolbus.org (Cloudflare edge, TLS terminates here)
 
 | File | Role | Fail-closed posture |
 |---|---|---|
-| `greatfallstoolbus-org-production/deployment.yaml` | adapter-node web Deployment | `replicas: 0`; **placeholder** image (no digest, not on any registry); non-root 1001; read-only rootfs; `/health` probes on :3000 |
+| `greatfallstoolbus-org-production/deployment.yaml` | adapter-node web Deployment | **LIVE** (2026-07-06 cutover): `replicas: 2`; digest-pinned production image; non-root 1001; read-only rootfs; `/health` probes on :3000 |
 | `greatfallstoolbus-org-production/service.yaml` | ClusterIP 80→3000 | internal DNS only; never internet-exposed directly |
 | `greatfallstoolbus-org-production/networkpolicy.yaml` | default-deny + explicit allows | ingress only from the `cloudflared` namespace (:3000) and prometheus; egress DNS only |
 | `greatfallstoolbus-org-production/kustomization.yaml` | kustomize entrypoint | renders cleanly; creates **no** Namespace |
@@ -38,7 +46,13 @@ visitor -> greatfallstoolbus.org (Cloudflare edge, TLS terminates here)
 | `../../tofu/intent/great-falls-tool-bus/web-oncluster-route.json` | cloudflared route intent | `applied:false`, `dns_enabled:false`, `route_enabled:false` |
 | `../../tofu/intent/great-falls-tool-bus/pr-env-lanes.schema.json` | reaper lane contract | `enabled:false`; names-only |
 
-## The three fail-closed axes (why an accidental apply is inert)
+## The three fail-closed axes (declare-only-era history — superseded 2026-07-06)
+
+> **Superseded at the 2026-07-06 on-cluster cutover** (kept, not silently
+> rewritten, per the house dated-correction convention). Axes 1-2 no longer
+> hold: `deployment.yaml` now carries `replicas: 2` and a digest-pinned
+> production image. Axis 3 (this stack still creates no Namespace) holds. The
+> enumeration below records the pre-cutover skeleton posture for history.
 
 1. **`replicas: 0`** — no pod is scheduled from these manifests as-is.
 2. **Placeholder image** — `…/greatfallstoolbus.org:PLACEHOLDER-DECLARE-ONLY-NOT-APPLIED`
