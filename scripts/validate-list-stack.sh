@@ -170,7 +170,7 @@ fi
 # mailman-core-archive-ingress policy in the archive stack, not by this rule.
 # Forbid a cloudflared peer reappearing on THIS :8000 rule. Scope to that rule
 # only: cloudflared may legitimately appear on other rules or in other stacks.
-web_np_8000_ns_peers="$(yq -r 'select(.metadata.name == "mailman-core") | .spec.ingress[] | select(.ports[].port == 8000) | .from[].namespaceSelector.matchLabels["kubernetes.io/metadata.name"] // empty' "${dir}/networkpolicy.yaml")"
+web_np_8000_ns_peers="$(yq -r 'select(.metadata.name == "mailman-core") | .spec.ingress[] | select(.ports[].port == 8000) | .from[].namespaceSelector.matchLabels["kubernetes.io/metadata.name"] | select(. != null)' "${dir}/networkpolicy.yaml")"
 if echo "${web_np_8000_ns_peers}" | grep -qx "cloudflared"; then
   fail "cloudflared must not be admitted to the mailman-core web tier :8000 rule; the archive PoW gate is network-enforced (PR #77). The only public path is lists.latoolb.us -> anubis-archive:8081 -> mailman-core:8000 via the mailman-core-archive-ingress policy."
 fi
