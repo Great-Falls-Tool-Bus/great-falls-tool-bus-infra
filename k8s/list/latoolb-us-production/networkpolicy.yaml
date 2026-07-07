@@ -56,17 +56,26 @@ spec:
           port: 8024
     # Web UI (Postorius/HyperKitty) HTTP 8000. Folded in from the retired
     # standalone mailman-web policy (TIN-2493): the web tier is now a container
-    # in THIS pod, and the house tunnel ingress reaches it on 8000 (the
-    # mailman-web Service DNATs its external 8080 -> targetPort 8000).
-    # Tight to the house cloudflared namespace; the archive Anubis route adds a
-    # separate podSelector admission for anubis-archive -> 8000.
+    # in THIS pod (the mailman-web Service DNATs its external 8080 -> targetPort
+    # 8000).
+    #
+    # ARCHIVE PoW GATE IS NOW NETWORK-ENFORCED (PR #77 follow-through): the house
+    # cloudflared namespace is NO LONGER admitted to this :8000 rule, so the
+    # tunnel can no longer reach mailman-core:8000 directly. The anubis-archive
+    # proof-of-work gate is enforced at the network layer, not merely by
+    # tunnel-routing config. The ONLY public path to the web tier is now:
+    #     lists.latoolb.us -> anubis-archive:8081 -> mailman-core:8000
+    # where the final :8000 leg is admitted by the SEPARATE additive
+    # mailman-core-archive-ingress policy (anubis-archive podSelector) that lives
+    # in k8s/archive/latoolb-us-production/networkpolicy.yaml. That archive stack
+    # is self-contained and is not touched here.
     #
     # DISCUSS-SNAPSHOT READERS (greatfallstoolbus.org data plane, ADR 0010):
     # the on-site /discuss route reads the PUBLIC discuss@ archive over the
-    # HyperKitty REST API on this same web tier. Two consumers are admitted as
-    # additional peers on THIS SAME 8000 rule (kept as one rule so the port
-    # assertion in validate-list-stack.sh stays exact — do not split into a
-    # second 8000 ingress rule):
+    # HyperKitty REST API on this same web tier. The two remaining peers on THIS
+    # SAME 8000 rule are those read consumers (kept as one rule so the port
+    # assertion in validate-list-stack.sh stays exact; do not split into a second
+    # 8000 ingress rule):
     #   - arc-runners: the tinyland-nix CI runner does the BUILD-TIME prerender
     #     fetch (prerender=true today).
     #   - greatfallstoolbus-org-production: the adapter-node site pod does the
@@ -75,11 +84,9 @@ spec:
     # label (never the empty all-namespaces selector). This admits only READ
     # traffic to the public web tier; the private keyholders@ archive is
     # enforced by HyperKitty itself (403), not by this leg, and the site data
-    # plane sources discuss@ ONLY and hard-fails on any other list id.
+    # plane sources discuss@ ONLY and hard-fails on any other list id. These two
+    # read legs are unaffected by dropping the cloudflared peer.
     - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: cloudflared
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: arc-runners

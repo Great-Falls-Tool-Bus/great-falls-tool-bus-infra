@@ -160,10 +160,20 @@ fi
 web_np_port="$(yq -r 'select(.metadata.name == "mailman-core") | .spec.ingress[].ports[] | select(.port == 8000) | .port' "${dir}/networkpolicy.yaml")"
 assert_eq "${web_np_port}" "8000" "web HTTP ingress (8000) folded into the mailman-core NetworkPolicy"
 if grep -q "namespaceSelector: {}" "${dir}/networkpolicy.yaml"; then
-  fail "mailman web ingress must not admit every namespace; scope it to cloudflared plus explicit archive gate podSelectors"
+  fail "mailman web ingress must not admit every namespace; scope it to the explicit discuss-reader namespaceSelectors (arc-runners, greatfallstoolbus-org-production)"
 fi
-grep -q "kubernetes.io/metadata.name: cloudflared" "${dir}/networkpolicy.yaml" \
-  || fail "mailman web ingress must admit only the cloudflared namespace for the tunnel leg"
+# The archive PoW gate is now network-enforced (PR #77 follow-through): the
+# house cloudflared namespace must NOT be admitted directly to the mailman-core
+# web tier on :8000. The only public path is
+#   lists.latoolb.us -> anubis-archive:8081 -> mailman-core:8000
+# and that final leg is admitted by the SEPARATE additive
+# mailman-core-archive-ingress policy in the archive stack, not by this rule.
+# Forbid a cloudflared peer reappearing on THIS :8000 rule. Scope to that rule
+# only: cloudflared may legitimately appear on other rules or in other stacks.
+web_np_8000_ns_peers="$(yq -r 'select(.metadata.name == "mailman-core") | .spec.ingress[] | select(.ports[].port == 8000) | .from[].namespaceSelector.matchLabels["kubernetes.io/metadata.name"] | select(. != null)' "${dir}/networkpolicy.yaml")"
+if echo "${web_np_8000_ns_peers}" | grep -qx "cloudflared"; then
+  fail "cloudflared must not be admitted to the mailman-core web tier :8000 rule; the archive PoW gate is network-enforced (PR #77). The only public path is lists.latoolb.us -> anubis-archive:8081 -> mailman-core:8000 via the mailman-core-archive-ingress policy."
+fi
 
 # The mailman-web Service must still front the web container, now by selecting
 # the combined mailman-core pod on targetPort 8000 (external 8080 unchanged).
