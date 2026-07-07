@@ -164,7 +164,7 @@ data:
         },
         {
           "name": "ai-meta-externalagent",
-          "user_agent_regex": "Meta-ExternalAgent",
+          "user_agent_regex": "meta-externalagent",
           "action": "DENY"
         },
         {
