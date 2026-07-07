@@ -9,10 +9,13 @@ they exist as **console-created zones on the house Cloudflare account**
   ([`docs/runbooks/edge-token-and-zones.md`](../../docs/runbooks/edge-token-and-zones.md)
   step 1)
 - manages `greatfallstoolbus.org` apex CNAME (CF-flattened) + `www`
-  CNAME → `var.pages_host`, proxied — default
-  `greatfallstoolbus-org.pages.dev` (the LIVE CF Pages origin: the ADR
-  0003 cutover was executed 2026-07-03 and the cutover value committed
-  as the default in PR #15 — see "`pages_host` cutover" below)
+  CNAME → `var.pages_host`, proxied — default is now the on-cluster
+  honey-ingress tunnel cname (site ADR 0010, executed 2026-07-06; see
+  `variables.tf`'s `pages_host` description). The variable's original
+  default, `greatfallstoolbus-org.pages.dev` (the ADR 0003 CF Pages
+  cutover, executed 2026-07-03, PR #15 — see "`pages_host` cutover"
+  below), is **historical**: that Pages project is deleted (ADR 0010
+  Amendment 2, TIN-2560), so the hostname no longer resolves.
 - gates the apex behind a Cloudflare Access application + allow policy
   (`access_allowed_emails` supplied from the protected edge environment; no
   personal allowlist addresses are committed) — packet row (g) REV-2
@@ -43,7 +46,19 @@ EXACTLY these two zones, held as the protected-environment secret
 ([`secrets/README.md`](../../secrets/README.md)). No account id input:
 the account id the Access policy needs is read off the zone lookup.
 
-## `pages_host` cutover (ADR 0003 — EXECUTED 2026-07-03)
+## `pages_host` cutover (ADR 0003 — EXECUTED 2026-07-03; HISTORICAL, see below)
+
+> **Superseded 2026-07-06 by ADR 0010** (`docs/runbooks/oncluster-web-cutover.md`
+> P6): `var.pages_host`'s default moved from `greatfallstoolbus-org.pages.dev`
+> to the on-cluster honey-ingress tunnel cname. **Superseded again 2026-07-07
+> by ADR 0010 Amendment 2** (TIN-2560): the CF Pages project named below is
+> **deleted**, so the "rollback is a one-line flip" language two paragraphs
+> down no longer has a CF Pages target to flip to (a GH Pages rollback, if
+> ever needed, would first require re-standing up that publisher — it was
+> never deleted, only demoted, but has not been verified serving since this
+> section was written). The current rollback path is on-cluster: re-dispatch
+> `web-stack.yml` with a prior image digest (`docs/runbooks/oncluster-web-
+> cutover.md` P7).
 
 The apex + `www` targets are `var.pages_host`. The GH Pages → CF Pages
 flip was executed 2026-07-03: the CF Pages project exists with the

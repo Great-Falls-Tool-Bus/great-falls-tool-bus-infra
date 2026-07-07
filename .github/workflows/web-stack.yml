@@ -35,11 +35,16 @@ name: Web Stack Apply
 # here (the public-operator-surface contract keeps workflows calling Justfile
 # recipes, never raw kubectl apply).
 #
-# OUT OF SCOPE, still SEPARATE operator steps: the cloudflared public-hostname
-# route (runbook P5, dashboard/token-managed), the apex+www DNS flip CF Pages ->
-# tunnel (runbook P6, via edge-plan.yml action=apply), and the CF Pages
-# decommission (runbook P7). This workflow moves NOTHING public: up to and
-# including its health gate the site is still served by CF Pages.
+# OUT OF SCOPE for THIS workflow (handled by separate operator steps, all of
+# which have now RUN — see docs/runbooks/oncluster-web-cutover.md P5/P6/P7 and
+# ADR 0010 + Amendment 2, TIN-2560): the cloudflared public-hostname route
+# (P5, dashboard/token-managed), the apex+www DNS flip CF Pages -> tunnel (P6,
+# via edge-plan.yml action=apply), and the CF Pages project deletion (P7 --
+# executed 2026-07-06, run 28801030150; the project no longer exists). This
+# workflow's own apply-gate never touched any of those three; it only pins the
+# image and flips replicas on the already-live on-cluster origin. Rollback to a
+# prior image is re-dispatching THIS workflow with an earlier digest -- there
+# is no CF Pages fallback anymore.
 
 on:
   workflow_dispatch:
@@ -288,5 +293,5 @@ jobs:
               cat "${RUNNER_TEMP}/web-health.txt"
               echo '```'
               echo ""
-              echo "Public cutover is NOT done: the cloudflared route (P5), apex+www DNS flip (P6), and CF Pages decommission (P7) remain separate operator steps."
+              echo "This workflow only pins the image + flips replicas. The cloudflared route (P5), apex+www DNS flip (P6), and CF Pages decommission (P7) are separate operator steps -- already executed for the initial cutover (TIN-2543/TIN-2560); a rollback re-dispatch of this workflow does not redo them."
             } >> "$GITHUB_STEP_SUMMARY"

@@ -1,9 +1,27 @@
-# GFTB on-cluster web serving — phased cutover runbook
+# GFTB on-cluster web serving — phased cutover runbook (EXECUTED — kept as apply-wiring reference)
+
+> **STATUS (2026-07-07): this runbook's cutover has fully executed, and its
+> Pages-decommission phase (P7) is DONE, not a future decision.** ADR
+> [`greatfallstoolbus.org:docs/decisions/0010-on-prem-is-the-production-host.md`](https://github.com/Great-Falls-Tool-Bus/greatfallstoolbus.org/blob/main/docs/decisions/0010-on-prem-is-the-production-host.md)
+> (executed 2026-07-06, Amendment 2 2026-07-07) supersedes ADR 0008's
+> operator-gated framing below and ADR 0007's open-ended warm-standby framing:
+> the operator ruled to decommission Cloudflare Pages **now** rather than hold
+> it warm pending "a separate deliberate decision" (P7's original wording,
+> below). The `greatfallstoolbus-org` Cloudflare Pages project is **deleted**
+> (site PR #122/#123, TIN-2560, workflow run 28801030150 — see P7 for the full
+> account). This header and P1–P6 are kept as accurate wiring/apply reference
+> (the mechanics did not change); P7 is rewritten to state what actually
+> happened instead of what was originally deferred.
 
 Tracking: **TIN-2543**. Authorizing decision: **ADR
 [`greatfallstoolbus.org:docs/decisions/0008-oncluster-production-hosting.md`](https://github.com/Great-Falls-Tool-Bus/greatfallstoolbus.org/blob/main/docs/decisions/0008-oncluster-production-hosting.md)**
 (the superseding on-cluster hosting ADR; lives in the SITE repo, not this
-overlay). Warm-standby mitigation: **ADR
+overlay), itself executed and its Pages-decommission timing overridden by
+**ADR
+[`greatfallstoolbus.org:docs/decisions/0010-on-prem-is-the-production-host.md`](https://github.com/Great-Falls-Tool-Bus/greatfallstoolbus.org/blob/main/docs/decisions/0010-on-prem-is-the-production-host.md)**
+(also site repo — ruled the cutover 2026-07-06, then Amendment 2 ruled the
+Pages decommission 2026-07-07). Warm-standby mitigation, now closed out by ADR
+0010 Amendment 2: **ADR
 [`greatfallstoolbus.org:docs/decisions/0007-private-repos-rollback-gap.md`](https://github.com/Great-Falls-Tool-Bus/greatfallstoolbus.org/blob/main/docs/decisions/0007-private-repos-rollback-gap.md)**.
 Superseded snapshot: ADR
 [`greatfallstoolbus.org:docs/decisions/0003-hosting-and-remote-posture.md`](https://github.com/Great-Falls-Tool-Bus/greatfallstoolbus.org/blob/main/docs/decisions/0003-hosting-and-remote-posture.md).
@@ -18,10 +36,10 @@ Declare-only skeleton this operates: the
 > K8s `Deployment` behind a `ClusterIP` `Service` → in-cluster `cloudflared`
 > honey-ingress tunnel), mirroring the proven MassageIthaca pattern.
 >
-> The `k8s/web/` overlay stays **parked** (`replicas: 0`, placeholder image, no
-> namespace, no route) until an operator runs the phases below. Executing this
-> runbook is authorized **only** by ADR 0008; nothing here un-parks the overlay
-> in git.
+> The `k8s/web/` overlay is **no longer parked** — the cutover executed
+> (`replicas: 2`, a real digest pinned, the namespace and route live, apex/www
+> DNS on the tunnel). This section is retained as reference for how the wiring
+> works (e.g. a future rollback re-dispatch), not as a pending plan.
 
 ## Who does what
 
@@ -49,13 +67,14 @@ gated phase below.
 | P3 | Apply the k8s/web overlay (digest, replicas 0→2, namespace) | [OPERATOR] | the workload |
 | P4 | Verify in-cluster `/health` + Prometheus | [AGENT] read-only | nothing |
 | P5 | Add the cloudflared honey-ingress route | [OPERATOR] (dashboard/token) | the edge hop |
-| P6 | Flip apex + www DNS Pages → tunnel; keep Pages warm | [OPERATOR] | public traffic |
-| P7 | Soak, then later decommission Pages | [OPERATOR] | retires standby |
+| P6 | Flip apex + www DNS Pages → tunnel (~~keep Pages warm~~ DONE 2026-07-06) | [OPERATOR] | public traffic |
+| P7 | ~~Soak, then later decommission Pages~~ **Pages project DELETED 2026-07-06** (TIN-2560, ADR 0010 Amendment 2 — soak-then-decide was overridden) | [OPERATOR] | retired standby |
 
 Phases are strictly ordered. Do not start a phase until the prior phase's
-verify step is green. P5/P6 are the only phases that change public posture; up
-to and including P4 the site is still served by CF Pages and nothing public has
-moved.
+verify step is green. P5/P6 are the only phases that change public posture;
+**all seven phases, including P7, are now complete** — the description below
+of P5/P6 as "the only phases that change public posture" describes the
+original plan's phase boundaries, not a claim that P7 is still pending.
 
 ---
 
@@ -252,7 +271,7 @@ No DNS has moved, so removing the route fully backs out P5.
 
 ---
 
-## P6 — Flip apex + www DNS: CF Pages → tunnel (keep Pages warm)
+## P6 — Flip apex + www DNS: CF Pages → tunnel (kept Pages warm at the time; DONE 2026-07-06)
 
 **[OPERATOR].** This is the public cutover. `greatfallstoolbus.org` /
 `www.greatfallstoolbus.org` DNS authority for the serving records is owned by
@@ -281,33 +300,60 @@ curl -sSI https://greatfallstoolbus.org/ | head  # 200 from the on-cluster origi
 curl -sS  https://greatfallstoolbus.org/health   # 200 from adapter-node
 ```
 
-**Rollback (fast, single action):** repoint the apex+www CNAME back to the CF
-Pages target via the edge stack (`workflow_dispatch action=apply` with the
-reverted record) — Pages is still warm and serves immediately. This is the
-reason P7 defers Pages decommission until after soak.
+**Rollback (fast, single action) — HISTORICAL, no longer available:** at the
+time P6 executed, the documented rollback was to repoint the apex+www CNAME
+back to the CF Pages target via the edge stack (`workflow_dispatch
+action=apply` with the reverted record), because Pages was still warm and
+would have served immediately. **That rollback path does not exist anymore**:
+P7 below records that the operator deleted the Pages project on 2026-07-06,
+overriding the original "defer decommission until after soak" plan this
+sentence used to justify. See P7 for the current, real rollback.
 
 ---
 
-## P7 — Soak, then decommission Pages later
+## P7 — Pages decommissioned 2026-07-06 (was: "soak, then decommission later")
 
-**[OPERATOR].** Soak the on-cluster origin under real traffic (recommend at
-least one full weekly cycle). Watch: Prometheus `up`/latency/error-rate for the
-`greatfallstoolbus-org-production` targets, pod restart counts, and Cloudflare
-edge analytics. Keep CF Pages **warm** (built, green, DNS-reversible) for the
-entire soak — ADR 0007's mitigation only holds while Pages can still take the
-apex back in one DNS flip.
+**[OPERATOR].** This phase's original plan was: soak the on-cluster origin
+under real traffic for at least a full weekly cycle, watching Prometheus
+`up`/latency/error-rate for the `greatfallstoolbus-org-production` targets and
+pod restart counts, keep CF Pages **warm** for the entire soak (ADR 0007's
+mitigation held only while Pages could still take the apex back in one DNS
+flip), and only *after* a clean soak — as **"a separate deliberate
+decision"** — retire the Pages project.
 
-Only after a clean soak, and as a **separate deliberate decision**, retire the
-CF Pages production project (and its account-scoped Pages-Edit token per the
-ADR 0003 token doctrine). Retiring Pages also lets the **public app repo retire
-its one live CF Pages-Edit token** — the authority split (app repo owns
-behavior+image; private overlay owns pin+apply; blahaj is substrate) then keeps
-every privileged surface out of the public repo, which is the load-bearing
-TIN-2537 invariant.
+**The operator overrode that plan (ADR 0010 Amendment 2, TIN-2560, ruled
+2026-07-07: *"decommission now, align docs"*).** Rather than holding Pages warm
+through the originally-bounded ~2026-07-08 window, the project was deleted
+immediately once on-cluster serving was verified live, closing the window
+roughly a day early:
 
-**Rollback:** until Pages is decommissioned, P6 rollback still applies. After
-decommission, rollback means re-standing-up a Pages project from the public repo
-(minutes, not instant) — hence do not decommission until soak is clean.
+- Site PR #122 added a one-off, dispatch-only, name-confirm-gated GitHub
+  Actions workflow whose sole job was the deletion (fail-closed without the
+  repo's `Pages:Edit`-scoped secret).
+- Workflow run **28801030150** (2026-07-06T14:58Z) executed it: the Cloudflare
+  API `DELETE .../pages/projects/greatfallstoolbus-org` call returned
+  `{"success":true}` (job log: `Pages project greatfallstoolbus-org
+  deleted.`).
+- Site PR #123 removed the one-off workflow immediately after and recorded the
+  verification: `greatfallstoolbus-org.pages.dev` no longer resolves in DNS at
+  all; apex/`www` are healthy on the tunnel origin.
+- The public app repo's one live Cloudflare credential (the account-scoped
+  `Pages:Edit` token, ADR 0003 token doctrine) is retired along with the
+  project — the authority split (app repo owns behavior+image; private overlay
+  owns pin+apply; blahaj is substrate) now keeps every privileged surface out
+  of the public repo, the load-bearing TIN-2537 invariant.
+
+**Rollback, corrected:** the P6 rollback (repoint DNS back to the CF Pages
+target) **no longer applies — there is no Pages project to repoint to.** The
+current, real rollback is the on-cluster re-pin primitive: re-dispatch this
+repo's `web-stack.yml` workflow (`workflow_dispatch`, `confirm=apply`,
+`image=<prior known-good
+ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:<digest>>`) to roll
+the Deployment back to a previously-served image — "the manual
+`workflow_dispatch` path... preserved intact for rollback/override to an
+arbitrary prior digest" per that workflow's own header comment. Re-standing-up
+a Pages project from scratch is *not* the rollback story anymore; that option
+was deliberately foreclosed by this phase.
 
 ---
 
@@ -412,11 +458,16 @@ NetworkPolicy; the public-hostname route (P5) is dashboard/token-managed
   the tenant SOPS lane / protected GitHub environments / live cluster Secrets —
   never from this file, never committed.
 
-## Exit criteria
+## Exit criteria — MET (2026-07-06/07)
 
 On-cluster origin serving apex+www through the honey-ingress tunnel; both
 replicas `Ready` and spread across bumble/sting; `/health` `200` in-cluster and
-at the edge; Prometheus targets `up`; CF Pages retained warm and DNS-reversible
-through soak (ADR 0007); the public app repo's CF Pages-Edit token retired only
-after Pages decommission (P7). Until every phase is green and soaked, the
-single-DNS-flip rollback to CF Pages is the standing safety net.
+at the edge; Prometheus targets `up`. **Superseded from the original
+criteria:** "CF Pages retained warm and DNS-reversible through soak" and "the
+public app repo's CF Pages-Edit token retired only after Pages decommission"
+described the *plan*; ADR 0010 Amendment 2 overrode it — Pages is deleted and
+the token is retired as of 2026-07-06/07 (P7), not held pending a later
+decommission decision. The standing safety net is no longer "single-DNS-flip
+rollback to CF Pages" (that target no longer exists) — it is the on-cluster
+re-pin-previous-digest primitive via `web-stack.yml` (see P7's corrected
+rollback).

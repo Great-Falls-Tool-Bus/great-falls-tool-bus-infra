@@ -36,12 +36,19 @@ variable "pages_host" {
     for apex + www -> the web Service). The REV-2 Access gate is
     host-scoped and unaffected by this origin change. History: ADR 0003
     pointed this at CF Pages (greatfallstoolbus-org.pages.dev,
-    2026-07-03, PR #15); ADR 0010 retires the Pages lane. Rollback is a
-    one-line change back to greatfallstoolbus-org.pages.dev (while the
-    Pages project still exists) or a TF_VAR_pages_host override at
-    apply time — sequencing and verify matrix:
-    docs/runbooks/edge-token-and-zones.md step 5. (Variable name kept
-    for continuity; renaming to web_origin_host is a follow-up.)
+    2026-07-03, PR #15); ADR 0010 retired the Pages lane, and ADR 0010
+    Amendment 2 (TIN-2560, 2026-07-07) closed the cutover-rollback
+    window early -- the greatfallstoolbus-org Pages project itself is
+    DELETED (workflow run 28801030150, 2026-07-06). Flipping this
+    variable back to "greatfallstoolbus-org.pages.dev" is NOT a valid
+    rollback anymore -- that hostname resolves to nothing; doing so
+    would point the apex at a dead origin. The real rollback is
+    on-cluster: re-dispatch this repo's web-stack.yml
+    (workflow_dispatch, confirm=apply, image=<prior known-good
+    digest>) to roll the Deployment back to a previously-served image
+    -- sequencing: docs/runbooks/oncluster-web-cutover.md P7. (Variable
+    name kept for continuity; renaming to web_origin_host is a
+    follow-up.)
   EOT
   type        = string
   default     = "da3ffda2-68ee-46d1-aa55-ec8dae2bd471.cfargotunnel.com"
