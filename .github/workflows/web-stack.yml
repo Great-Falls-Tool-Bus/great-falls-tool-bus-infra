@@ -1,7 +1,8 @@
 name: Web Stack Apply
 
 # APPLY companion to the declare-only VALIDATE workflow web-crs.yml (TIN-2543,
-# authorized by ADR docs/decisions/0008-oncluster-web-serving.md; procedure in
+# authorized by ADR greatfallstoolbus.org:docs/decisions/0008-oncluster-production-hosting.md
+# -- lives in the SITE repo, not this overlay; procedure in
 # docs/runbooks/oncluster-web-cutover.md). web-crs.yml validates the parked
 # k8s/web skeleton and NEVER applies; THIS workflow is the single operator
 # dispatch that cuts greatfallstoolbus.org over to on-cluster serving (SvelteKit

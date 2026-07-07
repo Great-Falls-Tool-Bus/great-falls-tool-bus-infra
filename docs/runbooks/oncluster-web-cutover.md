@@ -1,11 +1,12 @@
 # GFTB on-cluster web serving — phased cutover runbook
 
 Tracking: **TIN-2543**. Authorizing decision: **ADR
-[`docs/decisions/0008-oncluster-web-serving.md`](../decisions/0008-oncluster-web-serving.md)**
-(the superseding on-cluster hosting ADR). Warm-standby mitigation: **ADR
-[`docs/decisions/0007-cf-pages-warm-standby.md`](../decisions/0007-cf-pages-warm-standby.md)**.
+[`greatfallstoolbus.org:docs/decisions/0008-oncluster-production-hosting.md`](https://github.com/Great-Falls-Tool-Bus/greatfallstoolbus.org/blob/main/docs/decisions/0008-oncluster-production-hosting.md)**
+(the superseding on-cluster hosting ADR; lives in the SITE repo, not this
+overlay). Warm-standby mitigation: **ADR
+[`greatfallstoolbus.org:docs/decisions/0007-private-repos-rollback-gap.md`](https://github.com/Great-Falls-Tool-Bus/greatfallstoolbus.org/blob/main/docs/decisions/0007-private-repos-rollback-gap.md)**.
 Superseded snapshot: ADR
-[`docs/decisions/0003-static-production-cf-pages.md`](../decisions/0003-static-production-cf-pages.md).
+[`greatfallstoolbus.org:docs/decisions/0003-hosting-and-remote-posture.md`](https://github.com/Great-Falls-Tool-Bus/greatfallstoolbus.org/blob/main/docs/decisions/0003-hosting-and-remote-posture.md).
 Declare-only skeleton this operates: the
 [`k8s/web/`](../../k8s/web/README.md) overlay landed in **PR #48**
 (TIN-2541).
