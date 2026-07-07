@@ -172,7 +172,40 @@ web_svc_target="$(yq -r '.spec.ports[] | select(.name == "http") | .targetPort' 
 assert_eq "${web_svc_selector}" "mailman-core" "mailman-web Service selector (co-located pod)"
 assert_eq "${web_svc_target}" "8000" "mailman-web Service targetPort (web container HTTP socket)"
 
+# --- Verified outbound TLS to the substrate postfix (#74) -------------------
+# Operator ruling 2026-07-07 (Option A): endpoint identity is authenticated,
+# not merely encrypted; NetworkPolicy-acceptance of an unverified context was
+# rejected. Guard the two clients so the CERT_NONE / SMTP_VERIFY_*=False
+# workaround cannot silently return. Both depend on a substrate pre-apply gate
+# (postfix presents a cert whose SAN covers the dialed service name, signed by
+# a CA delivered in the mail-substrate-ca Secret) — see the bring-up runbook.
+core_verify_hostname="$(yq -r 'select(.metadata.name == "mailman-core") | .spec.template.spec.containers[] | select(.name == "mailman-core") | .env[] | select(.name == "SMTP_VERIFY_HOSTNAME") | .value' "${core_deploy}")"
+core_verify_cert="$(yq -r 'select(.metadata.name == "mailman-core") | .spec.template.spec.containers[] | select(.name == "mailman-core") | .env[] | select(.name == "SMTP_VERIFY_CERT") | .value' "${core_deploy}")"
+assert_eq "${core_verify_hostname}" "True" "mailman-core SMTP_VERIFY_HOSTNAME must be True (endpoint auth on, #74)"
+assert_eq "${core_verify_cert}" "True" "mailman-core SMTP_VERIFY_CERT must be True (endpoint auth on, #74)"
+
+# Both containers must trust the substrate mail CA via SSL_CERT_FILE + mount.
+for c in mailman-core mailman-web; do
+  ssl_cert_file="$(yq -r "select(.metadata.name == \"mailman-core\") | .spec.template.spec.containers[] | select(.name == \"${c}\") | .env[] | select(.name == \"SSL_CERT_FILE\") | .value" "${core_deploy}")"
+  assert_eq "${ssl_cert_file}" "/etc/ssl/mail-substrate-ca/ca.crt" "${c} SSL_CERT_FILE must point at the mounted substrate mail CA (#74)"
+  ca_mount="$(yq -r "select(.metadata.name == \"mailman-core\") | .spec.template.spec.containers[] | select(.name == \"${c}\") | .volumeMounts[] | select(.name == \"mail-substrate-ca\") | .mountPath" "${core_deploy}")"
+  assert_eq "${ca_mount}" "/etc/ssl/mail-substrate-ca" "${c} must mount the mail-substrate-ca CA (#74)"
+done
+
+# The CA volume must be sourced from a named Secret (no committed cert material).
+ca_vol_secret="$(yq -r 'select(.metadata.name == "mailman-core") | .spec.template.spec.volumes[] | select(.name == "mail-substrate-ca") | .secret.secretName' "${core_deploy}")"
+assert_eq "${ca_vol_secret}" "mail-substrate-ca" "mail-substrate-ca volume must reference the operator-owned Secret by name (#74)"
+
+# The web branding ConfigMap must NOT reintroduce the unverified TLS backend.
+# Match code-shaped constructs (an assignment/class/definition), not the prose
+# that documents what was removed, so the guard survives explanatory comments.
+branding_file="${dir}/configmap-mailman-web-branding.yaml"
+require_file "${branding_file}"
+if grep -Eq "class[[:space:]]+InsecureTLSEmailBackend|verify_mode[[:space:]]*=[[:space:]]*ssl\.CERT_NONE|check_hostname[[:space:]]*=[[:space:]]*False|EMAIL_BACKEND[[:space:]]*=[[:space:]]*[\"'][^\"']*Insecure" "${branding_file}"; then
+  fail "mailman-web branding must not reintroduce the unverified TLS email backend (#74): no InsecureTLSEmailBackend class / verify_mode=ssl.CERT_NONE / check_hostname=False / EMAIL_BACKEND override to an insecure backend"
+fi
+
 # --- Full render must succeed ----------------------------------------------
 kubectl kustomize "${dir}" >/dev/null
 
-echo "list stack validation passed: mailman-core LMTP :8024, submission 587+STARTTLS, lists-bounces@latoolb.us, image digests pinned, no committed secrets"
+echo "list stack validation passed: mailman-core LMTP :8024, submission 587+STARTTLS VERIFIED (substrate mail CA), lists-bounces@latoolb.us, image digests pinned, no committed secrets"
