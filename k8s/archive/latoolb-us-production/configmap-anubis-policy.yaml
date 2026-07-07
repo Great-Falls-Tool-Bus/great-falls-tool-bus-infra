@@ -82,6 +82,20 @@
 # reasoning already applied to the forms carve-out. See
 # k8s/form/.../configmap-anubis-policy.yaml for the format provenance notes.
 #
+# CURATED AI-SCRAPER DENY (depth follow-up): the stock list only DENYs amazonbot
+# + the US-AI scraper. The block below adds explicit DENY rules for the well-known
+# commercial LLM crawler UA tokens (GPTBot, ClaudeBot, CCBot, Bytespider,
+# PerplexityBot, ...). It is placed AFTER the discuss@ read-path ALLOWs and the
+# feeds/robots.txt ALLOWs — so the deliberate read-path exemption above is left
+# intact (the discuss@ content is public and served ungated on
+# greatfallstoolbus.org/discuss, so denying AI readers there would buy nothing) —
+# and BEFORE the generic-browser CHALLENGE, so an AI crawler that hits any OTHER
+# still-gated path (archive root, list search, pagination, non-discuss lists)
+# gets a cheap 403 instead of a PoW interstitial, and a non-Mozilla AI UA that
+# would otherwise fall through to the default ALLOW is caught. Search indexers
+# (Googlebot/Bingbot/Qwant) stay ALLOWed; the mbox /export/ CHALLENGE and the
+# keyholders@ posture are unchanged.
+#
 # DECLARE-ONLY: nothing here is applied. See README.md.
 apiVersion: v1
 kind: ConfigMap
@@ -159,6 +173,91 @@ data:
           "name": "rss-readers",
           "path_regex": ".*\\.(rss|xml|atom|json)$",
           "action": "ALLOW"
+        },
+        {
+          "name": "ai-openai-gptbot",
+          "user_agent_regex": "GPTBot",
+          "action": "DENY"
+        },
+        {
+          "name": "ai-openai-searchbot",
+          "user_agent_regex": "OAI-SearchBot",
+          "action": "DENY"
+        },
+        {
+          "name": "ai-openai-chatgpt-user",
+          "user_agent_regex": "ChatGPT-User",
+          "action": "DENY"
+        },
+        {
+          "name": "ai-anthropic-claudebot",
+          "user_agent_regex": "ClaudeBot",
+          "action": "DENY"
+        },
+        {
+          "name": "ai-anthropic-ai",
+          "user_agent_regex": "anthropic-ai",
+          "action": "DENY"
+        },
+        {
+          "name": "ai-anthropic-claude-web",
+          "user_agent_regex": "Claude-Web",
+          "action": "DENY"
+        },
+        {
+          "name": "ai-perplexity-bot",
+          "user_agent_regex": "PerplexityBot",
+          "action": "DENY"
+        },
+        {
+          "name": "ai-perplexity-user",
+          "user_agent_regex": "Perplexity-User",
+          "action": "DENY"
+        },
+        {
+          "name": "ai-commoncrawl-ccbot",
+          "user_agent_regex": "CCBot",
+          "action": "DENY"
+        },
+        {
+          "name": "ai-bytedance-bytespider",
+          "user_agent_regex": "Bytespider",
+          "action": "DENY"
+        },
+        {
+          "name": "ai-meta-externalagent",
+          "user_agent_regex": "Meta-ExternalAgent",
+          "action": "DENY"
+        },
+        {
+          "name": "ai-diffbot",
+          "user_agent_regex": "Diffbot",
+          "action": "DENY"
+        },
+        {
+          "name": "ai-cohere",
+          "user_agent_regex": "cohere-ai",
+          "action": "DENY"
+        },
+        {
+          "name": "ai-imagesift",
+          "user_agent_regex": "ImagesiftBot",
+          "action": "DENY"
+        },
+        {
+          "name": "ai-omgili",
+          "user_agent_regex": "Omgilibot",
+          "action": "DENY"
+        },
+        {
+          "name": "ai-timpi",
+          "user_agent_regex": "Timpibot",
+          "action": "DENY"
+        },
+        {
+          "name": "ai-you",
+          "user_agent_regex": "YouBot",
+          "action": "DENY"
         },
         {
           "name": "lightpanda",

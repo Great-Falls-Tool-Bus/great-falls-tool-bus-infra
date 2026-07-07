@@ -23,6 +23,7 @@ check:
     just mail-cr-validate
     just list-stack-validate
     just form-stack-validate
+    just archive-stack-validate
     just web-stack-validate
     just arc-fmt-check
     just arc-validate
