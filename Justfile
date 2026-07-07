@@ -402,6 +402,12 @@ _web-apply-inputs:
     test -n "${WEB_APPLY_IMAGE:-}" || { echo "Set WEB_APPLY_IMAGE to the operator-resolved image reference"; exit 1; }
     case "${WEB_APPLY_IMAGE}" in *PLACEHOLDER*) echo "refusing the declare-only PLACEHOLDER image; supply the real operator-resolved reference"; exit 1 ;; esac
 
+# Lighter-weight input check for read-only commands (drift-check) that need
+# only the kubeconfig, not an image to pin.
+_web-apply-kubeconfig-only:
+    test -n "${WEB_APPLY_KUBECONFIG:-}" || { echo "Set WEB_APPLY_KUBECONFIG to the web-apply kubeconfig path"; exit 1; }
+    test -f "${WEB_APPLY_KUBECONFIG}"
+
 # Server-side dry-run of the workload apply against the live API (no mutation).
 web-stack-server-dry-run: web-stack-validate _web-apply-inputs
     kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply --dry-run=server -k {{ web_stack_dir }}
@@ -482,3 +488,63 @@ web-cd-ci-green-gate:
       fi
       sleep 20
     done
+
+# --- K8s stack drift check (read-only; scheduled by .github/workflows/k8s-stack-drift.yml) ---
+# `kubectl diff -k <dir>` against the LIVE cluster, namespace-scoped -- no
+# mutation. Reuses the SAME kubeconfig secrets the existing server-dry-run/apply
+# recipes above already require; no new credential is introduced. Exit code
+# semantics of `kubectl diff`: 0 = no drift, 1 = drift found, >1 = a real error
+# (bad kubeconfig, RBAC, API reachability).
+#
+# mail/list/form/archive are TRUE zero-diff stacks: nothing patches them
+# imperatively after their `*-apply` recipe runs, so ANY diff is real drift and
+# the check fails (fail_on_drift=true), mirroring edge-drift.yml's "assert
+# zero-diff" gate.
+#
+# web is NOT held to the same bar, by design: k8s/web/greatfallstoolbus-org-production
+# stays parked in git (replicas:0, placeholder image -- scripts/validate-web-stack.sh
+# guards this), while the live on-cluster cutover state carries the
+# operator-resolved image digest and replicas:2, patched in IMPERATIVELY by
+# web-stack-apply's `set image` / `patch` steps above (not by `apply -k`;
+# docs/runbooks/oncluster-web-cutover.md P3). A diff there is EXPECTED, not
+# drift, so web-stack-drift-check reports it (fail_on_drift=false) and never
+# fails the gate on it.
+_k8s-drift-check kubeconfig namespace dir label fail_on_drift:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    test -n "{{ kubeconfig }}" || { echo "kubeconfig path is required"; exit 1; }
+    test -f "{{ kubeconfig }}" || { echo "kubeconfig not found at {{ kubeconfig }}"; exit 1; }
+    kubectl --kubeconfig "{{ kubeconfig }}" --namespace {{ namespace }} diff -k {{ dir }} > "{{ label }}-drift.txt" 2>&1
+    rc=$?
+    cat "{{ label }}-drift.txt"
+    if [ "${rc}" -eq 0 ]; then
+      echo "{{ label }}: zero-diff (live cluster matches git)."
+      exit 0
+    elif [ "${rc}" -eq 1 ]; then
+      if [ "{{ fail_on_drift }}" = "true" ]; then
+        echo "::error::{{ label }} DRIFTED: live cluster state differs from the committed manifests. See {{ label }}-drift.txt (uploaded as a workflow artifact)."
+        exit 1
+      fi
+      echo "::warning::{{ label }} shows a diff against the parked skeleton -- EXPECTED by design (see the _k8s-drift-check header comment); not treated as a drift-gate failure."
+      exit 0
+    else
+      echo "::error::kubectl diff errored (rc=${rc}) probing {{ label }}."
+      exit "${rc}"
+    fi
+
+mail-cr-drift-check: _mail-kubeconfig-inputs
+    just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ mail_cr_dir }} mail-cr true
+
+list-stack-drift-check: _mail-kubeconfig-inputs
+    just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ list_stack_dir }} list-stack true
+
+form-stack-drift-check: _mail-kubeconfig-inputs
+    just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ form_stack_dir }} form-stack true
+
+archive-stack-drift-check: _mail-kubeconfig-inputs
+    just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ archive_stack_dir }} archive-stack true
+
+# fail_on_drift=false: see the _k8s-drift-check header -- the parked web
+# skeleton is expected to diverge from the live cutover state.
+web-stack-drift-check: _web-apply-kubeconfig-only
+    just _k8s-drift-check "${WEB_APPLY_KUBECONFIG}" {{ web_stack_ns }} {{ web_stack_dir }} web-stack false
