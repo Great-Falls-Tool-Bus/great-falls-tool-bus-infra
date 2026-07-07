@@ -145,11 +145,78 @@ and replace the tags with immutable `@sha256:` digests in the Deployments.
      and key `password` set to the controller-generated `MailAccount`
      credential. Project it from the account controller's output after the
      `lists-bounces` `MailAccount` reconciles; do not hand-mint it.
+   - `mail-substrate-ca` (#74): key `ca.crt` set to the substrate mail CA
+     (the self-signed "Blahaj Mail CA" root). Both mailman containers mount it
+     and set `SSL_CERT_FILE` so verified STARTTLS to postfix :587 trusts the
+     substrate endpoint. This is **public cert material, not a secret value**
+     (no private key). Create it from the substrate's own TLS Secret:
+
+     ```bash
+     # ca.crt lives in the substrate mail TLS Secret (blahaj tls-bootstrap.tf
+     # writes tls.crt/tls.key/ca.crt into mail-tinyland-dev-tls). Copy ONLY the
+     # CA cert into the tenant namespace; never copy tls.key.
+     kubectl --kubeconfig "$SUBSTRATE_KUBECONFIG" -n tinyland-dev-production \
+       get secret mail-tinyland-dev-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > /tmp/mail-substrate-ca.crt
+     kubectl --kubeconfig "$GFTB_MAIL_KUBECONFIG" -n latoolb-us-production \
+       create secret generic mail-substrate-ca --from-file=ca.crt=/tmp/mail-substrate-ca.crt
+     ```
+
+     `SSL_CERT_FILE` **replaces** the container's default OpenSSL trust set.
+     mailman-core's only TLS client op is this postfix hop, so a CA-only
+     `ca.crt` is safe there. If the web tier makes other verified-TLS calls,
+     build `ca.crt` as the substrate CA **concatenated with the image's system
+     roots** (`/etc/ssl/certs/ca-certificates.crt`) before creating the Secret.
 5. **Extra-config include hook.** `mailman-core` renders the `[mta]` block
    (STARTTLS + SASL + LMTP :8024) via an initContainer into an emptyDir mounted
    at `/etc/mailman-extra`, wired through `MM_EXTRA_CONFIG`. Confirm the pinned
    image honors `MM_EXTRA_CONFIG`; if not, mount the rendered
    `mailman-extra.cfg` at the image's actual include path (values unchanged).
+6. **Substrate SAN cert on postfix :587 (#74, substrate/blahaj change).**
+   Both mailman containers now VERIFY the postfix endpoint
+   (`SMTP_VERIFY_*=True` on core; stock verified Django backend on web —
+   operator ruling 2026-07-07, Option A; NetworkPolicy-acceptance rejected).
+   Verification fails **closed** unless the substrate postfix :587 submission
+   listener presents a certificate whose SAN set includes
+   `postfix.tinyland-dev-production.svc.cluster.local` (the exact name both
+   clients dial), signed by the CA delivered in the `mail-substrate-ca` Secret
+   (gate 4). This is a **substrate-owned** fact — nothing in this overlay can
+   substitute for it:
+   - blahaj `tofu/stacks/mail/tls-bootstrap.tf` already issues a self-signed
+     "Blahaj Mail CA" leaf whose `dns_names` include that service SAN and ships
+     its `ca.crt` in `mail-tinyland-dev-tls`. If that bootstrap cert is what
+     postfix presents on :587, this gate is already satisfied.
+   - blahaj `tofu/stacks/mail/certificates.tf` describes a cert-manager path
+     that overwrites the **same** Secret with a Let's Encrypt `*.tinyland.dev`
+     wildcard. A public wildcard CANNOT carry an internal `.svc.cluster.local`
+     SAN, so if that wildcard is live on :587 (the symptom #74 observed), the
+     substrate must either keep the SAN-bearing self-signed cert on the
+     submission listener, or add a private-CA cert-manager `Certificate`
+     carrying the service SAN and publish its `ca.crt`.
+   Verify before flipping (see "Verify submission TLS" below). Do not apply this
+   stack's #74 change until this gate and gate 4 both hold, or every list
+   fan-out and Postorius signup will fail on `SSLCertVerificationError`.
+
+## Verify submission TLS (#74)
+
+From inside the cluster (a debug pod in `latoolb-us-production`, or an ephemeral
+container in the mailman-core pod), confirm the presented cert covers the dialed
+name and chains to the mounted CA **before** applying the verification flip:
+
+```bash
+# SAN must list postfix.tinyland-dev-production.svc.cluster.local:
+openssl s_client -starttls smtp -connect postfix.tinyland-dev-production.svc.cluster.local:587 \
+  -servername postfix.tinyland-dev-production.svc.cluster.local </dev/null 2>/dev/null \
+  | openssl x509 -noout -text | grep -A1 'Subject Alternative Name'
+
+# Full verification against the CA that will land in mail-substrate-ca:
+openssl s_client -starttls smtp -connect postfix.tinyland-dev-production.svc.cluster.local:587 \
+  -servername postfix.tinyland-dev-production.svc.cluster.local \
+  -CAfile /etc/ssl/mail-substrate-ca/ca.crt -verify_return_error </dev/null
+```
+
+A clean `Verify return code: 0 (ok)` with the service name in the SAN means
+`SMTP_VERIFY_*=True` and the stock Django backend will succeed. After apply,
+the round-trip smoke below is the functional proof (fan-out + signup send).
 
 ## Bring-up order
 

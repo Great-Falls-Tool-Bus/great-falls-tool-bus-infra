@@ -70,9 +70,22 @@ spec:
             # Outgoing [mta] block: the entrypoint templates these into
             # mailman.cfg. Submit to the substrate postfix over 587 STARTTLS +
             # SASL as lists-bounces@ (the tenant's own submission identity).
-            # VERIFY_* off: the postfix cert is *.tinyland.dev and we connect by
-            # service DNS, so hostname/cert verification cannot match; the path
-            # is NetworkPolicy-scoped and TLS-encrypted regardless.
+            # VERIFY_* ON (#74, operator-ruled 2026-07-07): endpoint identity is
+            # authenticated, not just encrypted. NetworkPolicy-acceptance of an
+            # unverified context was rejected. This depends on two substrate
+            # (blahaj) facts, both hard pre-apply gates in the runbook:
+            #   (a) the postfix :587 listener presents a cert whose SAN covers
+            #       postfix.tinyland-dev-production.svc.cluster.local — the exact
+            #       name we dial (the blahaj tls-bootstrap self-signed leaf
+            #       already carries this SAN; a Let's Encrypt *.tinyland.dev
+            #       wildcard does NOT and must not be the 587 cert), and
+            #   (b) the CA that signs it is trusted here. That CA is a PRIVATE
+            #       (self-signed "Blahaj Mail CA") root, so it is NOT in the
+            #       system trust store; it is mounted from the operator-owned
+            #       mail-substrate-ca Secret and pointed to by SSL_CERT_FILE
+            #       below. Mailman core's SMTP client builds its TLS context with
+            #       ssl.create_default_context(), which honors SSL_CERT_FILE, so
+            #       smtp_verify_cert/hostname=yes verify against that CA.
             - name: SMTP_HOST
               value: postfix.tinyland-dev-production.svc.cluster.local
             - name: SMTP_PORT
@@ -80,9 +93,15 @@ spec:
             - name: SMTP_SECURE_MODE
               value: starttls
             - name: SMTP_VERIFY_HOSTNAME
-              value: "False"
+              value: "True"
             - name: SMTP_VERIFY_CERT
-              value: "False"
+              value: "True"
+            # Trust the substrate mail CA for the postfix submission hop.
+            # SSL_CERT_FILE REPLACES the default OpenSSL trust set for this
+            # container's create_default_context() uses; core's only TLS client
+            # op is this postfix hop, so pinning it to the substrate CA is safe.
+            - name: SSL_CERT_FILE
+              value: /etc/ssl/mail-substrate-ca/ca.crt
             - name: SMTP_HOST_USER
               valueFrom:
                 secretKeyRef:
@@ -111,6 +130,11 @@ spec:
           volumeMounts:
             - name: core-data
               mountPath: /opt/mailman
+            # Substrate mail CA (#74): trust anchor for verified STARTTLS to
+            # postfix :587. SSL_CERT_FILE (above) points at ca.crt here.
+            - name: mail-substrate-ca
+              mountPath: /etc/ssl/mail-substrate-ca
+              readOnly: true
           resources:
             requests:
               cpu: 100m
@@ -233,7 +257,11 @@ spec:
             # signup 500s (verified live 2026-07-06). The core container already
             # sends correctly via its own SMTP_SECURE_MODE=starttls path; this
             # gives the web tier the same STARTTLS + SASL auth, reusing the
-            # lists-bounces-smtp submission identity.
+            # lists-bounces-smtp submission identity. TLS is now VERIFIED (#74):
+            # the InsecureTLSEmailBackend/CERT_NONE override is dropped from
+            # settings_local.py, so Django uses its stock verified SMTP backend
+            # (ssl.create_default_context()). SSL_CERT_FILE below supplies the
+            # private substrate mail CA so that default context trusts postfix.
             - name: SMTP_USE_TLS
               value: "true"
             - name: SMTP_HOST_USER
@@ -246,12 +274,24 @@ spec:
                 secretKeyRef:
                   name: lists-bounces-smtp
                   key: password
+            # Trust the substrate mail CA for verified STARTTLS to postfix :587.
+            # SSL_CERT_FILE replaces the default OpenSSL trust set for this
+            # container's create_default_context() uses. If the web tier makes
+            # OTHER verified-TLS calls, the operator builds ca.crt as the
+            # substrate CA concatenated with the system roots (see runbook).
+            - name: SSL_CERT_FILE
+              value: /etc/ssl/mail-substrate-ca/ca.crt
           volumeMounts:
             - name: web-data
               mountPath: /opt/mailman-web-data
             # LIGHT branding (TIN-2561): templates + stylesheet + settings_local.
             - name: web-branding
               mountPath: /opt/mailman-web-branding
+              readOnly: true
+            # Substrate mail CA (#74): trust anchor for verified STARTTLS to
+            # postfix :587; SSL_CERT_FILE (above) points at ca.crt here.
+            - name: mail-substrate-ca
+              mountPath: /etc/ssl/mail-substrate-ca
               readOnly: true
           resources:
             requests:
@@ -281,6 +321,20 @@ spec:
         - name: web-data
           persistentVolumeClaim:
             claimName: mailman-web-data
+        # Substrate mail CA trust anchor (#74). Operator-owned Secret carrying
+        # the PRIVATE "Blahaj Mail CA" ca.crt (referenced by name only, no value
+        # in git; see docs/runbooks/list-bringup.md + secrets/README.md). Both
+        # containers mount it read-only and point SSL_CERT_FILE at ca.crt so the
+        # verified STARTTLS submission to postfix :587 (SMTP_VERIFY_*=True on
+        # core; stock verified Django backend on web) trusts the substrate cert.
+        # The pod fails closed if this Secret is absent, which enforces the
+        # pre-apply gate that the substrate SAN cert + CA are in place first.
+        - name: mail-substrate-ca
+          secret:
+            secretName: mail-substrate-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
         # LIGHT branding (TIN-2561): mounted read-only at /opt/mailman-web-branding.
         # settings_local.py lands at the mount root (on PYTHONPATH); the templates
         # and stylesheet land under templates/hyperkitty/ and static/.

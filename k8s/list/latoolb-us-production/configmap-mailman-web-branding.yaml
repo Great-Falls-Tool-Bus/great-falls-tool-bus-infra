@@ -48,28 +48,17 @@ data:
         TEMPLATES[0]["DIRS"] = [_BRANDING_TEMPLATES, *TEMPLATES[0]["DIRS"]]
 
     # Outbound email (Postorius signup/confirmation) over the in-cluster postfix
-    # submission service: STARTTLS is enabled (SMTP_USE_TLS, deployment env), but
-    # postfix presents a *.tinyland.dev certificate while Django connects by the
-    # postfix.tinyland-dev-production.svc.cluster.local service name, so default
-    # cert + hostname verification fails with SSLCertVerificationError and every
-    # signup 500s (verified live 2026-07-06). The core container takes the same
-    # posture for the identical reason (SMTP_VERIFY_CERT/HOSTNAME=False on its
-    # own mta path); the hop is NetworkPolicy-scoped and TLS-encrypted regardless.
-    # Django 4.2's SMTP backend calls starttls(context=self.ssl_context), so an
-    # unverified context on a backend subclass is the surgical fix (no image
-    # rebuild — this file is PYTHONPATH-imported via `from settings_local import *`).
-    import ssl
-    from django.core.mail.backends.smtp import EmailBackend as _SmtpEmailBackend
-
-    class InsecureTLSEmailBackend(_SmtpEmailBackend):
-        @property
-        def ssl_context(self):
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            return ctx
-
-    EMAIL_BACKEND = "settings_local.InsecureTLSEmailBackend"
+    # submission service uses Django's STOCK, VERIFIED SMTP backend — this file
+    # sets no email-backend override (#74, operator-ruled 2026-07-07). The
+    # unverified TLS backend that #68 added to unblock signup (it turned off
+    # certificate and hostname checks) is DROPPED: endpoint verification is back
+    # on. It works because (a) the substrate postfix :587 cert now carries a SAN
+    # for postfix.tinyland-dev-production.svc.cluster.local (the name Django
+    # dials) and (b) the deployment sets SSL_CERT_FILE on this container to the
+    # mounted private substrate mail CA, which ssl.create_default_context()
+    # honors — so Django's default backend verifies both chain and hostname.
+    # Trust wiring lives in deployment-mailman-core.yaml (mailman-web container),
+    # not here, keeping this file's sole job the branding template-dir prepend.
 
   # Injected before </head> (base.html:26). Light-mode brand accents only; the
   # stylesheet is the real gftb-brand.css file in this ConfigMap, served by uwsgi

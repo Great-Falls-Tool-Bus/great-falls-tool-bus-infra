@@ -21,6 +21,7 @@ README — ever.
 | `cf-account-id` | House Cloudflare account id | `TF_VAR_cloudflare_account_id`; site repo secret `CLOUDFLARE_ACCOUNT_ID` (wrangler) |
 | `dreamhost-api-key` | Registrar/DNS capture (`domain-list_domains`, `dns-list_records`); optionally `dns-add_record`/`dns-remove_record` for DreamHost-authority records if a future operator decision uses the API path — the API has no registration-NS mutation | `docs/runbooks/edge-token-and-zones.md` registrar capture / panel checks |
 | `latoolbus-dkim-private-key` | DKIM signing key for latoolb.us. **Carve-out:** custody is Blahaj substrate-side; this overlay records only `dkim-keys` / `latoolb.us.mail.key` and publishes the public TXT half through the edge stack. | mail substrate + GFTB edge DNS (TIN-2379); not stored in this repo |
+| `mail-substrate-ca` | **Public cert material, not a secret value** — the substrate mail CA `ca.crt` (the self-signed "Blahaj Mail CA" root, key `ca.crt`) that signs the postfix :587 STARTTLS cert. Namespace `latoolb-us-production` Secret, referenced by name only; created by the operator from the substrate `mail-tinyland-dev-tls` Secret's `ca.crt`. Trust anchor that lets mailman-core + mailman-web verify the postfix endpoint (#74). No private key here. | `deployment-mailman-core.yaml` (both containers, mounted at `/etc/ssl/mail-substrate-ca`, `SSL_CERT_FILE`) |
 
 Usage shape (operator machine, key in age custody):
 
