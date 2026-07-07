@@ -12,12 +12,14 @@ name: Archive Stack
 # run with the protected namespace-scoped workload kubeconfig. PR/push remains
 # offline validation only.
 #
-# DECLARE-ONLY POSTURE: applying this stack exposes nothing public on its own —
-# go-live still requires the privacy pre-flight to pass, the Cloudflare tunnel
-# public-hostname route to be added dashboard-side, and var.archives_dns_enabled
-# to flip true (see docs/discuss-archive-packet.md). This workflow only makes the
-# already-bootstrapped archive gate reconcilable like the form/web/mail/list
-# stacks.
+# LIVE POSTURE: this stack is applied and the public discuss@ archive is served
+# at lists.latoolb.us. Apply is NOT automatic on merge: it is a manual
+# workflow_dispatch (action=apply) gated on the protected `mail` environment (the
+# server job below runs `just archive-stack-apply`); PR and push runs are offline
+# validation only. Go-live also required the privacy pre-flight to pass, the
+# Cloudflare tunnel public-hostname route to be added dashboard-side, and the
+# archive DNS to be enabled (var.archives_dns_enabled), all of which now hold
+# (see docs/discuss-archive-packet.md).
 
 on:
   pull_request:

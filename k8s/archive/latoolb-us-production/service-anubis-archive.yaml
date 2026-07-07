@@ -1,11 +1,12 @@
 # ClusterIP the cloudflared tunnel targets for the archive hostname
-# (recommended: lists.latoolb.us — see docs/discuss-archive-packet.md).
+# (live hostname: lists.latoolb.us; see docs/discuss-archive-packet.md).
 # anubis-archive is the ONLY component the tunnel reaches for this route; it
 # fronts the HyperKitty web tier (mailman-web Service). The tunnel
 # public-hostname -> this Service:8081 route is a Cloudflare-side config
 # (token-managed tunnel; the ingress map lives in the Cloudflare zero-trust
-# dashboard/API, NOT in this repo or a ConfigMap). Nothing is exposed until
-# that route is added AND the privacy pre-flight passes. See the README.
+# dashboard/API, NOT in this repo or a ConfigMap). That route is now added and
+# live: the archive is served at lists.latoolb.us with the privacy pre-flight
+# satisfied. See the README.
 apiVersion: v1
 kind: Service
 metadata:

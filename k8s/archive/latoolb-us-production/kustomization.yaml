@@ -7,15 +7,17 @@ namespace: latoolb-us-production
 # the PUBLIC discuss@ archive can ride the shared honey-ingress Cloudflare
 # Tunnel — anti-scrape, not auth. Reuses the proven TIN-2420 forms shape.
 #
-# DECLARE-ONLY. Nothing is exposed until ALL of the following, none of which
-# this kustomization performs:
-#   (1) the privacy pre-flight passes (keyholders@ archive_policy=private|never
-#       AND HyperKitty enforces it for anonymous users — see the packet's
+# LIVE: this overlay is applied and the public discuss@ archive is exposed at
+# lists.latoolb.us. Apply is manual (workflow_dispatch action=apply into the
+# protected mail environment, i.e. just archive-stack-apply); merging changes
+# nothing on its own. Go-live required all three gates, which now hold:
+#   (1) the privacy pre-flight passed (keyholders@ archive_policy=private|never
+#       AND HyperKitty enforces it for anonymous users; see the packet's
 #       hard gate),
-#   (2) the Cloudflare tunnel public-hostname route is added (dashboard-side,
+#   (2) the Cloudflare tunnel public-hostname route was added (dashboard-side,
 #       out of band), and
-#   (3) var.archives_dns_enabled flips true in tofu/stacks/edge and a live
-#       round-trip smoke passes.
+#   (3) the archive DNS is enabled (var.archives_dns_enabled in tofu/stacks/edge)
+#       and a live round-trip smoke passed.
 # See docs/discuss-archive-packet.md and README.md.
 
 resources:
