@@ -352,10 +352,13 @@ form-stack-apply: form-stack-server-dry-run
 # Tunnel (anti-scrape, NOT auth). Faithful mirror of the form-stack recipes
 # above, pointed at k8s/archive. Deployed overlay-side into latoolb-us-production
 # and dry-run/applied with the SAME namespace-scoped mail kubeconfig (same RBAC
-# caveat as the form/list stacks). Checked-in validation is offline. DECLARE-ONLY:
-# applying it exposes nothing until the privacy pre-flight passes, the Cloudflare
-# tunnel public-hostname route is added (dashboard-side), and
-# var.archives_dns_enabled flips true. See
+# caveat as the form/list stacks). Checked-in validation is offline. LIVE: this
+# stack is applied and the public discuss@ archive is served at lists.latoolb.us.
+# Apply is manual (workflow_dispatch action=apply into the protected mail
+# environment, i.e. the archive-stack-apply recipe below); merging changes
+# nothing on its own. Go-live also required the privacy pre-flight, the Cloudflare
+# tunnel public-hostname route (dashboard-side), and the archive DNS enable
+# (var.archives_dns_enabled), all now satisfied. See
 # k8s/archive/latoolb-us-production/README.md and docs/discuss-archive-packet.md.
 
 archive_stack_dir := "k8s/archive/latoolb-us-production"

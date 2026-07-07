@@ -96,7 +96,10 @@
 # (Googlebot/Bingbot/Qwant) stay ALLOWed; the mbox /export/ CHALLENGE and the
 # keyholders@ posture are unchanged.
 #
-# DECLARE-ONLY: nothing here is applied. See README.md.
+# LIVE: this policy is applied and enforcing on the archive route serving
+# lists.latoolb.us. Changes here are applied via the manual archive-stack apply
+# into the protected mail environment (just archive-stack-apply), NOT
+# automatically on merge. See README.md.
 apiVersion: v1
 kind: ConfigMap
 metadata:

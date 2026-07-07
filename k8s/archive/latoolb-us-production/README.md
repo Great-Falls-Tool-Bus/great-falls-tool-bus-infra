@@ -1,8 +1,15 @@
 # `k8s/archive/latoolb-us-production/` — public discuss@ archive route (TIN-2528)
 
-**NOTHING IN THIS DIRECTORY IS APPLIED.** This is a declare-only design packet.
-No `kubectl apply`, no `kustomize build | kubectl apply`, no DNS enable has been
-run. Merging it changes nothing in any cluster.
+**THIS STACK IS LIVE.** The `anubis-archive` PoW gate is applied and running in
+`latoolb-us-production`, and the public `discuss@` archive is served over the
+honey-ingress Cloudflare Tunnel at `lists.latoolb.us` (real challenges solved,
+tunnel routed). These manifests are the declared source of truth for that live
+route. Changes here are NOT auto-applied on merge: apply is a manual
+`workflow_dispatch` (`action=apply`) on `.github/workflows/archive-stack.yml`
+into the protected `mail` environment (i.e. `just archive-stack-apply`), which
+runs the offline validate plus a server dry-run first. PR and push runs are
+offline validation only. Do not trust any leftover "nothing is applied" wording
+in this tree over this note.
 
 ## What this is
 
@@ -47,11 +54,11 @@ resource here by design (same posture as the forms route; see
 | `networkpolicy.yaml` | cloudflared ns → `anubis-archive:8081`; `anubis-archive` → `mailman-core:8000`; plus an additive reciprocal admission on the web tier. |
 | `kustomization.yaml` | Overlay wiring + house labels. |
 
-## Before anything is applied
+## Go-live gates (satisfied)
 
 See `docs/discuss-archive-packet.md` for the full decision packet and the
-ordered, operator-gated go-live checklist. In short, all three must hold and
-none is performed here: (1) the privacy pre-flight passes, (2) the Cloudflare
-tunnel public-hostname route is added dashboard-side, (3)
-`var.archives_dns_enabled` flips true in `tofu/stacks/edge` and a live
-round-trip smoke passes.
+ordered, operator-gated go-live checklist. Go-live required all three, which now
+hold: (1) the privacy pre-flight passed, (2) the Cloudflare tunnel
+public-hostname route was added dashboard-side, (3) the archive DNS is enabled
+(`var.archives_dns_enabled` in `tofu/stacks/edge`) and a live round-trip smoke
+passed. Re-verify these before any change that could widen exposure.

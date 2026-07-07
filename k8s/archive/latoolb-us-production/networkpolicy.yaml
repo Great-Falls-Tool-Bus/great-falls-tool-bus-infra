@@ -20,7 +20,10 @@
 #   `ipBlock: 10.244.0.0/16` (flannel pod CIDR). Prefer the namespaceSelector
 #   until a live round-trip proves otherwise.
 #
-# DECLARE-ONLY: nothing here is applied. See README.md.
+# LIVE: these NetworkPolicies are applied and enforcing the archive route on
+# lists.latoolb.us. Changes here are applied via the manual archive-stack apply
+# into the protected mail environment (just archive-stack-apply), NOT
+# automatically on merge. See README.md.
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -71,7 +74,7 @@ spec:
 # NetworkPolicy (multiple policies selecting the same pod union their allows),
 # so it grants anubis-archive -> mailman-core:8000 WITHOUT editing the list
 # stack's own networkpolicy.yaml — the archive stack stays self-contained and
-# the list stack is not touched by this declare-only packet.
+# the list stack is not touched by this archive stack.
 #
 # WHY THIS IS NEEDED: the list stack's mailman-core policy admits the house
 # cloudflared namespace for the tunnel leg. This additive rule admits only the

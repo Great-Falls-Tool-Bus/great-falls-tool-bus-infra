@@ -1,9 +1,14 @@
 # GFTB discuss@ public-archive decision packet (TIN-2528)
 
-Status: **DESIGN PACKET — DECLARE-ONLY. NOTHING APPLIED.** No `kubectl`, no
-`tofu apply`, no DNS enablement. Every new toggle defaults false / fail-closed.
-This branch is a branch + draft PR only. Go-live is gated on the **privacy
-pre-flight** below, which is a hard operator-gated step, not a formality.
+Status: **LIVE. APPLIED AND SERVING.** The `anubis-archive` gate is applied in
+`latoolb-us-production` and the public `discuss@` archive is served at
+`lists.latoolb.us` over the honey-ingress Cloudflare Tunnel. This document is
+retained as the decision record and operator runbook for that route. Apply is
+NOT automatic on merge: it is a manual `workflow_dispatch` (`action=apply`) into
+the protected `mail` environment (`just archive-stack-apply`); PR and push runs
+are offline validation only. The **privacy pre-flight** below was a hard
+operator-gated go-live step and has been satisfied; re-verify it before any
+change that could widen exposure.
 
 Tracking: TIN-2528. References: TIN-2498 (`discuss@` source/transport
 reconciliation, in progress), TIN-2493 (mailman-core/web co-location),
@@ -87,8 +92,8 @@ destination — the real pod IP and container port `8000`, not the Service's
 podSelector on **8000**, even though Anubis dials `http://mailman-web:8080`.
 The reciprocal admission on the web tier is declared as an **additive**
 NetworkPolicy in the archive stack (`mailman-core-archive-ingress`), so the
-list stack's own `networkpolicy.yaml` is not edited by this declare-only
-packet. See §7 for the placeholder it implies tightening.
+list stack's own `networkpolicy.yaml` is not edited by this archive
+stack. See §7 for the placeholder it implies tightening.
 
 ## 3. Hostname choice: `lists.latoolb.us` (recommended) over `archives.latoolb.us`
 
@@ -228,7 +233,7 @@ box. The hardening is about closing everything *else* on a now-public tier.
 Applied via the maxking image's documented `settings_local.py` hook
 (`/opt/mailman/web/settings_local.py`, auto-imported at the end of
 `settings.py`) unless noted. This list is **advisory for the operator** — it is
-substrate/image config, not part of this repo's declare-only manifests.
+substrate/image config, not part of this repo's applied archive manifests.
 
 1. **Version floor: HyperKitty ≥ 1.3.8** — the RSS/Atom feeds private-list
    leak fix (MR !362). Also picks up the CVE-2021-33038 / -35057 / -35058
@@ -285,10 +290,12 @@ exposed). Belt and suspenders; the version floor is the real fix.
   additive policy, so the archive PoW gate remains reachable without reopening
   the web tier to every namespace.
 
-## 8. Ordered go-live checklist (OPERATOR-GATED steps marked ⛔)
+## 8. Ordered go-live checklist (EXECUTED; OPERATOR-GATED steps marked ⛔)
 
-Nothing below is performed by this packet. Order matters; each gate is
-fail-closed.
+This checklist has been executed and the route is LIVE at `lists.latoolb.us`. It
+is retained below as the executed go-live record and the ordered re-run /
+rollback reference. Each gate is fail-closed; order still matters if the route is
+ever rebuilt.
 
 1. **[declare]** Merge this packet (branch → draft PR → review). Changes
    nothing: `var.archives_dns_enabled` default `false`, no manifests applied.
@@ -334,7 +341,7 @@ fail-closed.
 
 ---
 
-### Appendix — files in this packet (all declare-only)
+### Appendix: files in this stack (applied)
 
 - `docs/discuss-archive-packet.md` — this packet.
 - `k8s/archive/latoolb-us-production/` — `deployment-anubis-archive.yaml`,
