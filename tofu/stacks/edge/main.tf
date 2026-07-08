@@ -133,6 +133,57 @@ resource "cloudflare_zero_trust_access_policy" "web_apex_allow" {
   ]
 }
 
+# --- Google Workspace SSO identity provider (additive, inert by default) -----
+# Adds a Google Workspace ("google-apps") IdP to the CF Access account so the
+# operator can sign in with jess@sulliwood.org (which IS Google Workspace)
+# instead of the fragile 10-minute email One-Time-PIN. This is PURELY ADDITIVE
+# and INERT BY DEFAULT:
+#
+#   * count = var.enable_google_sso ? 1 : 0, and var.enable_google_sso defaults
+#     FALSE, so merging this changes NOTHING (no-op plan) until the operator
+#     opts in. Flip sequence: tofu/stacks/edge/README.md "Google Workspace SSO
+#     enable sequence" and docs/runbooks/cf-access-google-sso.md.
+#   * The existing account IdP set already has One-Time-PIN (onetimepin). The
+#     three self_hosted apps above (web_apex, web_www, pages_dev) leave
+#     allowed_idps unset (= [], meaning ALL IdPs allowed), so once this IdP
+#     exists BOTH Google and the OTP path keep working. The OTP path is never
+#     removed by this change.
+#   * client_id / client_secret come from operator-supplied edge-environment
+#     secrets fed as TF_VAR_google_sso_client_id / TF_VAR_google_sso_client_secret.
+#     They are declared as sensitive variables with default "" and are NEVER
+#     committed. With the flag false they are unused.
+#
+# Account-level to match the OTP IdP and the shared allow policy above: the
+# account id is read off the zone lookup, never committed.
+resource "cloudflare_zero_trust_access_identity_provider" "google_sso" {
+  count = var.enable_google_sso ? 1 : 0
+
+  account_id = data.cloudflare_zone.web.account.id
+  name       = "GFTB Google Workspace SSO"
+  type       = "google-apps"
+
+  config = {
+    client_id     = var.google_sso_client_id
+    client_secret = var.google_sso_client_secret
+    apps_domain   = var.google_sso_apps_domain
+  }
+}
+
+# OPTIONAL Google-only pinning (leave commented for the additive default).
+# By default allowed_idps is unset on web_apex / web_www / pages_dev, so both
+# Google and OTP work. If the operator later wants Google-ONLY (drop the OTP
+# fallback), set allowed_idps on each app to the Google IdP id, for example:
+#
+#   resource "cloudflare_zero_trust_access_application" "web_apex" {
+#     ...
+#     allowed_idps = var.enable_google_sso
+#       ? [cloudflare_zero_trust_access_identity_provider.google_sso[0].id]
+#       : []
+#   }
+#
+# Do this only as a deliberate follow-up once Google sign-in is verified
+# working, since pinning to a not-yet-created IdP would lock the operator out.
+
 # --- latoolb.us — redirect alias (role: redirect only in THIS stack) ---------
 # Proxied records exist solely so the redirect ruleset has something to
 # answer on; 192.0.2.1 is RFC 5737 documentation space — the proxy

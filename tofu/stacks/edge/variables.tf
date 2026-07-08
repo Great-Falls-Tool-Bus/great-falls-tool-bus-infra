@@ -169,3 +169,59 @@ variable "alias_redirect_target" {
   type        = string
   default     = "https://great-falls-tool-bus.github.io/greatfallstoolbus.org/"
 }
+
+variable "enable_google_sso" {
+  description = <<-EOT
+    Master gate for the Google Workspace SSO identity provider added to the
+    CF Access account in main.tf (cloudflare_zero_trust_access_identity_provider
+    "google_sso", type "google-apps"). Defaults FALSE (fail-closed): with it
+    false the IdP resource has count = 0, so merging changes NOTHING (no-op
+    plan). Flip to true ONLY after the operator has created the Google Cloud
+    OAuth 2.0 Web client and stored its id/secret in the edge-environment
+    secrets referenced by var.google_sso_client_id / var.google_sso_client_secret
+    (docs/runbooks/cf-access-google-sso.md; README.md "Google Workspace SSO
+    enable sequence"). Additive: the existing One-Time-PIN IdP and the apps'
+    empty allowed_idps mean BOTH Google and OTP work once this is enabled.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "google_sso_apps_domain" {
+  description = <<-EOT
+    Google Workspace primary domain the "google-apps" IdP restricts sign-in to.
+    Used only when var.enable_google_sso is true. Defaults to the operator's
+    Workspace domain sulliwood.org (jess@sulliwood.org). Set to a different
+    Workspace primary domain if the OAuth client belongs to another tenant.
+  EOT
+  type        = string
+  default     = "sulliwood.org"
+}
+
+variable "google_sso_client_id" {
+  description = <<-EOT
+    OAuth 2.0 client id of the Google Cloud "Web application" credential backing
+    the Google Workspace IdP. Supply at plan/apply time from operator custody as
+    the edge-environment secret GOOGLE_SSO_CLIENT_ID (fed as
+    TF_VAR_google_sso_client_id); on the operator machine, the sops-lane
+    credential google-sso-client-id. NEVER committed. "" (the default) plus
+    var.enable_google_sso = false means the IdP is not created.
+  EOT
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "google_sso_client_secret" {
+  description = <<-EOT
+    OAuth 2.0 client secret paired with var.google_sso_client_id. Supply at
+    plan/apply time from operator custody as the edge-environment secret
+    GOOGLE_SSO_CLIENT_SECRET (fed as TF_VAR_google_sso_client_secret); on the
+    operator machine, the sops-lane credential google-sso-client-secret. NEVER
+    committed. "" (the default) plus var.enable_google_sso = false means the IdP
+    is not created.
+  EOT
+  type        = string
+  sensitive   = true
+  default     = ""
+}
