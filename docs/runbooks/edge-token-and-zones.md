@@ -51,11 +51,21 @@ account first and do steps 1–3 there instead, the stack is
 account-agnostic (it reads the account id off the zone lookup, never
 from config).
 
-## 2. Mint the two API tokens (console)
+## 2. Mint the two API tokens
 
 Two tokens, two blast radii, never one token with both shapes.
-Dashboard → My Profile → API Tokens → **Create Custom Token**, once per
-token:
+Prefer **account-owned API tokens** for steady-state repo credentials.
+User-owned tokens are acceptable only as a temporary bootstrap path; rotate
+them into account-owned tokens once the lab admin lane can derive the narrow
+token shape.
+
+Current edge-token state, 2026-07-08: `CLOUDFLARE_API_TOKEN_GFTB_ZONES`
+is the account-owned token `gftb-zones-edge-2026-07-08-account`, derived via
+the lab Cloudflare admin token, installed into the protected `edge`
+environment, mirrored into the GFTB sops lane as
+`TF_VAR_cloudflare_api_token`, and verified against the two zones plus Access
+Identity Providers before apply. The previous broad user-owned
+`gftb-zones-edge` token was revoked after the replacement apply succeeded.
 
 ### 2a. Edge token (zone-scoped DNS/redirects + narrow account-scoped Access)
 
