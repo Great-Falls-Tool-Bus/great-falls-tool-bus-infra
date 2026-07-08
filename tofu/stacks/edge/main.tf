@@ -95,24 +95,71 @@ resource "cloudflare_zero_trust_access_application" "web_www" {
   }]
 }
 
-# CF Pages serves greatfallstoolbus-org.pages.dev (production + *.preview) on
-# Cloudflare's own zone, so it cannot be gated by a zone-bound Access app; this
-# is an ACCOUNT-level self_hosted app covering the pages.dev origin, sharing the
-# apex allowlist policy. Gates the last public surface during the REV-2 phase.
-# The app was created out-of-band on 2026-07-03 and adopted into state via a
-# one-time `import` block (run 28673911406); the import block has since been
-# removed (PR #18) — CI now manages the resource normally.
+# --- dev + preview gate (TIN-2535 DECOUPLE keystone) -------------------------
+# RETARGETED from the orphaned "GFTB pages.dev gate (REV-2)" Access application.
+# That app was created out-of-band 2026-07-03 (adopted into state via a one-time
+# import block, run 28673911406, removed in PR #18) to gate the CF Pages origin
+# greatfallstoolbus-org.pages.dev + *.preview. That origin DIED with the Pages
+# project (ADR 0010 Amendment 2, TIN-2560), leaving this app orphaned.
+#
+# Rather than DELETE it (which would drop the CF app AUD and its state), this
+# block RETARGETS the SAME account-level Access application in place onto the
+# dev + preview hostnames on the greatfallstoolbus.org zone. The Terraform
+# resource LABEL stays `pages_dev` for state continuity (renaming the label
+# would force a destroy+recreate and mint a fresh AUD); its role is now the
+# dev/preview gate. Account-level (not zone-bound) is kept as-is so the
+# self_hosted_domains change is an in-place update, never a replacement; an
+# account-level self_hosted app matches by hostname regardless of zone, so it
+# covers these greatfallstoolbus.org subdomains fine.
+#
+# One WILDCARD app covers unlimited PR preview hosts: Access matches by
+# hostname, orthogonal to DNS/tunnel, so *.preview.greatfallstoolbus.org gates
+# every future PR preview subdomain with no per-PR edge churn.
+#
+# DECOUPLE (the safety keystone): this app references its OWN policy
+# (dev_preview_allow -> the "GFTB dev team" group), NOT the shared
+# web_apex_allow. So when TIN-2421 opens the prod apex gate by dropping
+# web_apex / web_www / web_apex_allow, THIS dev/preview gate is untouched and
+# can NEVER be un-gated as a side effect. allowed_idps pins GitHub SSO (when
+# enabled) + One-Time-PIN; Google is deliberately absent (it authenticates
+# @sulliwood.org operators only, not the dev team).
+#
+# INERT TO LIVE TRAFFIC: dev.greatfallstoolbus.org and
+# *.preview.greatfallstoolbus.org have NO origins/DNS in this stack yet, so
+# gating them changes nothing currently served. Merging does not apply
+# (edge-plan.yml applies only on workflow_dispatch action=apply); a later gated
+# apply materializes the retarget. See docs/runbooks/cf-access-dev-preview-and-
+# github-sso.md.
+locals {
+  # allowed_idps for the dev+preview gate: GitHub SSO (when enabled) plus the
+  # always-present One-Time-PIN fallback; Google is deliberately never listed
+  # (it authenticates @sulliwood.org operators only, not the dev team). While
+  # GitHub SSO is disabled (the default) this is [] => ALL account IdPs allowed
+  # (OTP works), so the gate is never a lockout and the plan stays inert on this
+  # attribute. github_sso[*].id is a splat (safe when count = 0). Set
+  # var.onetimepin_idp_id to the account OTP IdP id when enabling GitHub SSO so
+  # OTP stays offered alongside GitHub.
+  dev_preview_allowed_idps = var.enable_github_sso ? compact(concat(
+    cloudflare_zero_trust_access_identity_provider.github_sso[*].id,
+    [var.onetimepin_idp_id],
+  )) : []
+}
+
 resource "cloudflare_zero_trust_access_application" "pages_dev" {
   account_id          = data.cloudflare_zone.web.account.id
-  name                = "GFTB pages.dev gate (REV-2)"
+  name                = "GFTB dev + preview gate"
   type                = "self_hosted"
-  self_hosted_domains = ["greatfallstoolbus-org.pages.dev", "*.greatfallstoolbus-org.pages.dev"]
+  self_hosted_domains = ["dev.greatfallstoolbus.org", "*.preview.greatfallstoolbus.org"]
   session_duration    = "24h"
 
+  # DECOUPLED policy — its own allowlist, not web_apex_allow (see above).
   policies = [{
-    id         = cloudflare_zero_trust_access_policy.web_apex_allow.id
+    id         = cloudflare_zero_trust_access_policy.dev_preview_allow.id
     precedence = 1
   }]
+
+  # GitHub SSO (when enabled) + One-Time-PIN fallback; never Google.
+  allowed_idps = local.dev_preview_allowed_idps
 }
 
 
@@ -133,6 +180,43 @@ resource "cloudflare_zero_trust_access_policy" "web_apex_allow" {
       }
     }
   ]
+}
+
+# --- dev/preview allowlist (TIN-2535 DECOUPLE keystone) ----------------------
+# A SEPARATE membership + policy pair backing the dev + preview gate, entirely
+# independent of web_apex_allow. This is the decouple: the prod apex retirement
+# (TIN-2421) drops web_apex / web_www / web_apex_allow, and because the
+# dev/preview gate rides THIS group + policy instead, that retirement can never
+# ungate dev or preview.
+#
+# The group holds the dev-team email membership (var.dev_preview_allowed_emails,
+# fed from the edge secret DEV_PREVIEW_ALLOWED_EMAILS_JSON, default "[]"); the
+# policy simply includes the group. Splitting membership (group) from decision
+# (policy) keeps the allowlist a single SSOT the operator edits in one place,
+# mirroring the ACCESS_ALLOWED_EMAILS_JSON custody pattern.
+resource "cloudflare_zero_trust_access_group" "gftb_dev_team" {
+  account_id = data.cloudflare_zone.web.account.id
+  name       = "GFTB dev team"
+
+  include = [
+    for email in var.dev_preview_allowed_emails : {
+      email = {
+        email = email
+      }
+    }
+  ]
+}
+
+resource "cloudflare_zero_trust_access_policy" "dev_preview_allow" {
+  account_id = data.cloudflare_zone.web.account.id
+  name       = "GFTB dev/preview allowlist"
+  decision   = "allow"
+
+  include = [{
+    group = {
+      id = cloudflare_zero_trust_access_group.gftb_dev_team.id
+    }
+  }]
 }
 
 # --- Google Workspace SSO identity provider (additive, inert by default) -----
@@ -168,6 +252,41 @@ resource "cloudflare_zero_trust_access_identity_provider" "google_sso" {
     client_id     = var.google_sso_client_id
     client_secret = var.google_sso_client_secret
     apps_domain   = var.google_sso_apps_domain
+  }
+}
+
+# --- GitHub SSO identity provider (additive, inert by default) ---------------
+# Adds a GitHub ("github") IdP to the CF Access account so DEV-TEAM members can
+# sign in to the dev + preview gate with their GitHub identity (the dev/preview
+# gate pins allowed_idps to this IdP + One-Time-PIN; it does NOT offer Google,
+# which is reserved for @sulliwood.org operators). EXACTLY MIRRORS the
+# google_sso pattern just above and is likewise PURELY ADDITIVE and INERT BY
+# DEFAULT:
+#
+#   * count = var.enable_github_sso ? 1 : 0, and var.enable_github_sso defaults
+#     FALSE, so merging this changes NOTHING (strict no-op plan on this IdP)
+#     until the operator opts in. Flip sequence: README.md "GitHub SSO enable
+#     sequence" and docs/runbooks/cf-access-dev-preview-and-github-sso.md.
+#   * With the flag false the dev/preview app's allowed_idps resolves to []
+#     (all account IdPs allowed, OTP works), so nothing is gated to a
+#     not-yet-created IdP and the operator cannot be locked out.
+#   * client_id / client_secret come from operator-supplied edge-environment
+#     secrets fed as TF_VAR_github_sso_client_id / TF_VAR_github_sso_client_secret.
+#     They are declared as sensitive variables with default "" and are NEVER
+#     committed. With the flag false they are unused.
+#
+# Account-level to match the OTP IdP, the Google IdP, and the shared groups /
+# policies above: the account id is read off the zone lookup, never committed.
+resource "cloudflare_zero_trust_access_identity_provider" "github_sso" {
+  count = var.enable_github_sso ? 1 : 0
+
+  account_id = data.cloudflare_zone.web.account.id
+  name       = "GFTB GitHub SSO"
+  type       = "github"
+
+  config = {
+    client_id     = var.github_sso_client_id
+    client_secret = var.github_sso_client_secret
   }
 }
 

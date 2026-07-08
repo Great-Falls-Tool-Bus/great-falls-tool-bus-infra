@@ -227,3 +227,85 @@ variable "google_sso_client_secret" {
   sensitive   = true
   default     = ""
 }
+
+variable "dev_preview_allowed_emails" {
+  description = <<-EOT
+    Email allowlist for the DECOUPLED Cloudflare Access application gating
+    dev.greatfallstoolbus.org + *.preview.greatfallstoolbus.org (TIN-2535
+    keystone). Feeds the "GFTB dev team" access group, which the
+    "GFTB dev/preview allowlist" policy includes. This is a SEPARATE lane from
+    var.access_allowed_emails (which gates the prod apex): retiring the apex
+    gate (TIN-2421) never touches this list. Supply at plan/apply time from
+    protected operator custody as the edge-environment secret
+    DEV_PREVIEW_ALLOWED_EMAILS_JSON (fed as TF_VAR_dev_preview_allowed_emails),
+    for example TF_VAR_dev_preview_allowed_emails='["dev@example.org"]'.
+    Defaults to [] (empty, inert): with no members the dev/preview gate admits
+    nobody until the operator populates the list. Do not commit personal
+    allowlist addresses.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
+variable "onetimepin_idp_id" {
+  description = <<-EOT
+    Cloudflare Access account IdP id for the built-in One-Time-PIN provider
+    (onetimepin). Used ONLY when var.enable_github_sso is true: the dev/preview
+    gate then pins allowed_idps to [GitHub SSO, this OTP id] so email OTP stays
+    offered as a fallback alongside GitHub. Leave "" (the default) while GitHub
+    SSO is disabled — allowed_idps is then [] (all account IdPs allowed) and
+    this value is unused. When enabling GitHub SSO, set this to the account's
+    onetimepin IdP id (read via the CF API / Zero Trust dashboard; NOT a
+    secret) so the operator is never locked out if GitHub sign-in misbehaves.
+    See docs/runbooks/cf-access-dev-preview-and-github-sso.md.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "enable_github_sso" {
+  description = <<-EOT
+    Master gate for the GitHub SSO identity provider added to the CF Access
+    account in main.tf (cloudflare_zero_trust_access_identity_provider
+    "github_sso", type "github"). Defaults FALSE (fail-closed): with it false
+    the IdP resource has count = 0, so merging changes NOTHING (strict no-op
+    plan on the IdP), EXACTLY mirroring var.enable_google_sso. Flip to true ONLY
+    after the operator has created the GitHub OAuth app (callback
+    https://sulliwood.cloudflareaccess.com/cdn-cgi/access/callback) and stored
+    its id/secret in the edge-environment secrets referenced by
+    var.github_sso_client_id / var.github_sso_client_secret, and set
+    var.onetimepin_idp_id (docs/runbooks/cf-access-dev-preview-and-github-sso.md;
+    README.md "GitHub SSO enable sequence"). When true, the dev/preview gate
+    offers GitHub + One-Time-PIN; the prod apex/www gates are untouched.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "github_sso_client_id" {
+  description = <<-EOT
+    OAuth client id of the GitHub OAuth app backing the GitHub SSO IdP. Supply
+    at plan/apply time from operator custody as the edge-environment secret
+    GITHUB_SSO_CLIENT_ID (fed as TF_VAR_github_sso_client_id); on the operator
+    machine, the sops-lane credential github-sso-client-id. NEVER committed.
+    "" (the default) plus var.enable_github_sso = false means the IdP is not
+    created.
+  EOT
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "github_sso_client_secret" {
+  description = <<-EOT
+    OAuth client secret paired with var.github_sso_client_id. Supply at
+    plan/apply time from operator custody as the edge-environment secret
+    GITHUB_SSO_CLIENT_SECRET (fed as TF_VAR_github_sso_client_secret); on the
+    operator machine, the sops-lane credential github-sso-client-secret. NEVER
+    committed. "" (the default) plus var.enable_github_sso = false means the IdP
+    is not created.
+  EOT
+  type        = string
+  sensitive   = true
+  default     = ""
+}
