@@ -57,18 +57,23 @@ Two tokens, two blast radii, never one token with both shapes.
 Dashboard → My Profile → API Tokens → **Create Custom Token**, once per
 token:
 
-### 2a. Zone-scoped token (the tofu stack's credential)
+### 2a. Edge token (zone-scoped DNS/redirects + narrow account-scoped Access)
 
-- Permissions, EXACTLY these three:
+- Permissions, EXACTLY these:
   - Zone → **DNS → Edit**
   - Zone → **Dynamic Redirect → Edit** (the redirect-rules ruleset
     phase; on older dashboards this appears under Config Rules /
     Zone Rulesets)
   - Zone → **Access: Apps and Policies → Edit**
+  - Account → **Access: Organizations, Identity Providers, and Groups → Edit**
+    (required for the Google Workspace SSO IdP; confirmed by apply run
+    `28960411059`, where the plan was clean but Cloudflare returned 403 on
+    `POST /access/identity_providers` without this permission)
 - Zone Resources: **Include → Specific zone →** `greatfallstoolbus.org`
   **and** `latoolb.us`, EXACTLY these two; never "All zones".
-- No account-level permission groups, no TTL-unbounded client IP
-  allowances beyond house norms.
+- Account Resources: **Include → Specific account →** the house account only,
+  for the Access permission above; never "All accounts".
+- No TTL-unbounded client IP allowances beyond house norms.
 
 ### 2b. Account-scoped Pages token (ADR 0003 doctrine extension, approved 2026-07-03)
 
@@ -81,14 +86,12 @@ token:
   redirects, and Access stay exclusively behind the zone-scoped token
   (2a) and its operator-gated apply plane.
 
-Caveat to verify at mint time (token 2a): the stack's Access **policy**
-is a reusable (account-level) API object even though the
-**application** is zone-level. If the first `just edge-zones-plan`/apply
-returns a 403 on the policy call, add the narrowest account-scope
-Access permission (Account → Access: Apps and Policies → Edit) to the
-**zone-scoped token (2a)**, scoped to the house account resource
-only, and record that exception here. Do not broaden any other
-permission, and never add it to the Pages token (2b).
+Caveat to verify at mint time (token 2a): the stack's Access policy and
+Google Workspace IdP are reusable account-level API objects even though the
+applications are zone-level. Keep the account-scope grants to the narrow
+Access groups listed above, scoped to the house account resource only. Do not
+broaden any other permission, and never add these Access grants to the Pages
+token (2b).
 
 ## 3. Store the tokens as GitHub secrets (operator)
 
