@@ -147,6 +147,15 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_SECRET_KEY }}
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN_GFTB_ZONES }}
           TF_VAR_access_allowed_emails: ${{ secrets.ACCESS_ALLOWED_EMAILS_JSON }}
+          # Google Workspace SSO IdP (inert by default). ENABLE_GOOGLE_SSO
+          # defaults to 'false' when the variable is unset, so plans stay a
+          # no-op until the operator sets the variable to 'true' AND stores the
+          # OAuth secrets below. Empty secrets expand to "" (the variable
+          # defaults), which with the flag false keeps the IdP uncreated.
+          # See docs/runbooks/cf-access-google-sso.md.
+          TF_VAR_enable_google_sso: ${{ vars.ENABLE_GOOGLE_SSO || 'false' }}
+          TF_VAR_google_sso_client_id: ${{ secrets.GOOGLE_SSO_CLIENT_ID }}
+          TF_VAR_google_sso_client_secret: ${{ secrets.GOOGLE_SSO_CLIENT_SECRET }}
         with:
           push-cache: "false"
           command: |
@@ -235,6 +244,10 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_SECRET_KEY }}
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN_GFTB_ZONES }}
           TF_VAR_access_allowed_emails: ${{ secrets.ACCESS_ALLOWED_EMAILS_JSON }}
+          # Google Workspace SSO IdP (inert by default; see the plan step).
+          TF_VAR_enable_google_sso: ${{ vars.ENABLE_GOOGLE_SSO || 'false' }}
+          TF_VAR_google_sso_client_id: ${{ secrets.GOOGLE_SSO_CLIENT_ID }}
+          TF_VAR_google_sso_client_secret: ${{ secrets.GOOGLE_SSO_CLIENT_SECRET }}
           # Wire the dispatch input through to the just-level destroy guard
           # so allow_destroy=true is honored end-to-end (the workflow-level
           # Guard step above already gated it).

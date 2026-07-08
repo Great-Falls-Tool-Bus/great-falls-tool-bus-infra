@@ -38,6 +38,12 @@ they exist as **console-created zones on the house Cloudflare account**
   shared honey-ingress Cloudflare Tunnel (proxied), gated behind
   `var.archives_dns_enabled` (default `false`, fail-closed) — TIN-2528;
   see "`lists.latoolb.us` archives DNS enable sequence" below
+- stages a Google Workspace SSO identity provider on the CF Access account
+  (`cloudflare_zero_trust_access_identity_provider` type `google-apps`),
+  gated behind `var.enable_google_sso` (default `false`, inert). Additive:
+  the apps keep `allowed_idps` empty, so once enabled BOTH Google and the
+  existing One-Time-PIN work - see "Google Workspace SSO enable sequence"
+  below and [`docs/runbooks/cf-access-google-sso.md`](../../docs/runbooks/cf-access-google-sso.md)
 
 Auth is exclusively `TF_VAR_cloudflare_api_token`: a token scoped to
 EXACTLY these two zones, held as the protected-environment secret
@@ -158,6 +164,47 @@ Enable sequence:
 
 Rollback: flip `var.archives_dns_enabled` back to `false` (plan/apply) and
 remove the `lists.latoolb.us` tunnel public-hostname route dashboard-side.
+
+## Google Workspace SSO enable sequence (declare-only; inert by default)
+
+The CF Access account today has exactly one IdP: One-Time-PIN
+(`onetimepin`), so operator sign-in relies on the fragile 10-minute email
+OTP. `main.tf` stages a Google Workspace IdP
+(`cloudflare_zero_trust_access_identity_provider.google_sso`, type
+`google-apps`, `apps_domain` = `var.google_sso_apps_domain`, default
+`sulliwood.org`) so `jess@sulliwood.org` can sign in with Google instead.
+
+This is PURELY ADDITIVE and INERT BY DEFAULT: it is gated behind
+`var.enable_google_sso` (default `false`, `count = 0`), so merging this
+changes nothing (no-op plan). The three self_hosted apps leave
+`allowed_idps` empty (all IdPs allowed), so enabling the IdP adds Google
+WITHOUT removing the OTP path - the OTP fallback keeps working throughout.
+
+Full operator procedure (Google Cloud OAuth client, redirect URI, secrets,
+verify): [`docs/runbooks/cf-access-google-sso.md`](../../docs/runbooks/cf-access-google-sso.md).
+Enable sequence:
+
+1. Operator creates a Google Cloud **OAuth 2.0 Client ID** of type **Web
+   application** with the authorized redirect URI
+   `https://sulliwood.cloudflareaccess.com/cdn-cgi/access/callback` (the CF
+   Access team-domain callback), and records the client id + secret.
+2. Operator stores those in the protected `edge` environment as the secrets
+   `GOOGLE_SSO_CLIENT_ID` / `GOOGLE_SSO_CLIENT_SECRET` (and, on the operator
+   machine, the sops-lane credentials `google-sso-client-id` /
+   `google-sso-client-secret`). Never committed.
+3. Operator sets the `edge` environment variable `ENABLE_GOOGLE_SSO` to
+   `true` (this feeds `TF_VAR_enable_google_sso`; unset stays `false`).
+4. PR-plan (`edge-plan.yml`) shows the single IdP create, then
+   `workflow_dispatch action=apply` (dispatch-apply doctrine, D6) - no
+   direct apply.
+5. Operator verifies Google sign-in at
+   `https://sulliwood.cloudflareaccess.com` (or any gated app); the OTP
+   option is still offered and still works.
+
+Rollback: set `ENABLE_GOOGLE_SSO` back to `false` (or unset it) and
+apply - the IdP is destroyed and only OTP remains. Google-ONLY pinning
+(dropping the OTP fallback) is a separate, deliberate follow-up documented
+inline in `main.tf` (`allowed_idps`), not part of this change.
 
 ## Relationship to `tofu/stacks/edge-dns/` (read before touching either)
 
