@@ -2,8 +2,10 @@ variable "cloudflare_api_token" {
   description = <<-EOT
     Cloudflare API token scoped to EXACTLY the two GFTB zones
     (greatfallstoolbus.org + latoolb.us): Zone:DNS:Edit, Zone:Dynamic
-    Redirect (Config Rules/Ruleset) Edit, Access: Apps and Policies Edit.
-    account-resource-scoped Access:Apps:Edit (never all-accounts). Fed as TF_VAR_cloudflare_api_token; in CI it is
+    Redirect (Config Rules/Ruleset) Edit, Access: Apps and Policies Edit, plus
+    house-account-scoped Access: Organizations, Identity Providers, and Groups:
+    Edit for the Google Workspace SSO IdP (never all-accounts). Fed as
+    TF_VAR_cloudflare_api_token; in CI it is
     the protected-environment secret CLOUDFLARE_API_TOKEN_GFTB_ZONES
     (docs/runbooks/edge-token-and-zones.md), on the operator machine the
     sops-lane credential cloudflare-api-token-gftb-zones. Never committed.
