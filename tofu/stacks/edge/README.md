@@ -44,6 +44,15 @@ they exist as **console-created zones on the house Cloudflare account**
   the apps keep `allowed_idps` empty, so once enabled BOTH Google and the
   existing One-Time-PIN work - see "Google Workspace SSO enable sequence"
   below and [`docs/runbooks/cf-access-google-sso.md`](../../docs/runbooks/cf-access-google-sso.md)
+- RETARGETS the orphaned pages.dev Access app into a **DECOUPLED dev + preview
+  gate** covering `dev.greatfallstoolbus.org` + `*.preview.greatfallstoolbus.org`
+  on its OWN allowlist (the `GFTB dev team` group + `GFTB dev/preview allowlist`
+  policy, fed by `var.dev_preview_allowed_emails`), NOT the shared
+  `web_apex_allow`, and stages a **GitHub SSO** identity provider
+  (`cloudflare_zero_trust_access_identity_provider` type `github`) gated behind
+  `var.enable_github_sso` (default `false`, inert, mirroring Google) — TIN-2535;
+  see "dev + preview DECOUPLE and GitHub SSO enable sequence" below and
+  [`docs/runbooks/cf-access-dev-preview-and-github-sso.md`](../../docs/runbooks/cf-access-dev-preview-and-github-sso.md)
 
 Auth is exclusively `TF_VAR_cloudflare_api_token`: a token scoped to
 EXACTLY these two zones, held as the protected-environment secret
@@ -206,6 +215,69 @@ Rollback: set `ENABLE_GOOGLE_SSO` back to `false` (or unset it) and
 apply - the IdP is destroyed and only OTP remains. Google-ONLY pinning
 (dropping the OTP fallback) is a separate, deliberate follow-up documented
 inline in `main.tf` (`allowed_idps`), not part of this change.
+
+## dev + preview DECOUPLE and GitHub SSO enable sequence (TIN-2535; inert by default)
+
+This is the **safety keystone** for opening the prod apex gate (TIN-2421).
+Today `web_apex`, `web_www`, and the (formerly pages.dev) third app all shared
+one allow policy, `web_apex_allow`. If they stayed coupled, the TIN-2421
+retirement of `web_apex` / `web_www` / `web_apex_allow` would risk un-gating
+dev and preview along with prod. This change **decouples** them:
+
+- The orphaned pages.dev app (its CF Pages origin died with TIN-2560) is
+  **RETARGETED in place** (Terraform label kept `pages_dev` for state
+  continuity; CF app **not** deleted) into the **dev + preview gate**:
+  `name = "GFTB dev + preview gate"`,
+  `self_hosted_domains = ["dev.greatfallstoolbus.org", "*.preview.greatfallstoolbus.org"]`.
+  One wildcard app gates every future PR preview host — Access matches by
+  hostname, orthogonal to DNS/tunnel.
+- That app references its **OWN** policy `dev_preview_allow` (decision `allow`),
+  which includes the `GFTB dev team` group. The group's membership is
+  `var.dev_preview_allowed_emails` (edge secret `DEV_PREVIEW_ALLOWED_EMAILS_JSON`,
+  default `[]`). It does **NOT** reference `web_apex_allow`. `web_apex` /
+  `web_www` stay on `web_apex_allow`; TIN-2421 retires those later without
+  touching the dev/preview app, policy, or group.
+- A **GitHub SSO** IdP (`cloudflare_zero_trust_access_identity_provider.github_sso`,
+  type `github`) is staged, gated `count = var.enable_github_sso ? 1 : 0`,
+  default `false` — EXACTLY mirroring `google_sso`. Merging is a **strict no-op**
+  on this IdP. The dev/preview app pins `allowed_idps` to **[GitHub SSO,
+  One-Time-PIN]** when enabled (Google is deliberately absent — it authenticates
+  `@sulliwood.org` operators only, not the dev team). While disabled,
+  `allowed_idps` resolves to `[]` (all IdPs allowed, OTP works) so no lockout.
+
+**INERT TO LIVE TRAFFIC:** `dev.` and `*.preview.` have no origins/DNS in this
+stack yet, so gating them changes nothing currently served. Full operator
+procedure (GitHub OAuth app, callback URI, secrets, verify, and the
+diff-proof-before-flip note for TIN-2421):
+[`docs/runbooks/cf-access-dev-preview-and-github-sso.md`](../../docs/runbooks/cf-access-dev-preview-and-github-sso.md).
+
+Enable sequence:
+
+1. Operator creates a **GitHub OAuth app** with the authorization callback URL
+   `https://sulliwood.cloudflareaccess.com/cdn-cgi/access/callback` (the CF
+   Access team-domain callback) and records the client id + secret.
+2. Operator stores those in the protected `edge` environment as the secrets
+   `GH_SSO_CLIENT_ID` / `GH_SSO_CLIENT_SECRET` (the `GH_` prefix is required —
+   GitHub reserves the `GITHUB_` prefix for secret/variable names), and, on the
+   operator machine, the sops-lane credentials `github-sso-client-id` /
+   `github-sso-client-secret`. Never committed.
+3. Operator populates the `edge` secret `DEV_PREVIEW_ALLOWED_EMAILS_JSON` with
+   the dev-team allowlist JSON, and sets the `edge` variable `ONETIMEPIN_IDP_ID`
+   to the account One-Time-PIN IdP id (so OTP stays offered alongside GitHub).
+4. Operator sets the `edge` variable `ENABLE_GITHUB_SSO` to `true`.
+5. PR-plan (`edge-plan.yml`) shows the IdP create + the dev/preview app pinning
+   its `allowed_idps`, then `workflow_dispatch action=apply` (dispatch-apply
+   doctrine, D6) — no direct apply.
+
+Rollback: set `ENABLE_GITHUB_SSO` back to `false` (or unset it) and apply — the
+IdP is destroyed and `allowed_idps` returns to `[]` (OTP only). The dev/preview
+app / policy / group remain (they are the decouple, not the SSO).
+
+**DIFF-PROOF BEFORE THE TIN-2421 FLIP:** before dropping the apex gate, a plan
+must show **ZERO changes** to `pages_dev` (the dev/preview app),
+`dev_preview_allow`, and `gftb_dev_team`. If any of those three show a diff when
+you touch the apex, the decouple has regressed — stop and reconcile before
+apply.
 
 ## Relationship to `tofu/stacks/edge-dns/` (read before touching either)
 

@@ -156,6 +156,19 @@ jobs:
           TF_VAR_enable_google_sso: ${{ vars.ENABLE_GOOGLE_SSO || 'false' }}
           TF_VAR_google_sso_client_id: ${{ secrets.GOOGLE_SSO_CLIENT_ID }}
           TF_VAR_google_sso_client_secret: ${{ secrets.GOOGLE_SSO_CLIENT_SECRET }}
+          # Dev/preview DECOUPLE allowlist + GitHub SSO IdP (TIN-2535, inert by
+          # default). DEV_PREVIEW_ALLOWED_EMAILS_JSON defaults to '[]' when
+          # unset, so the dev/preview group is empty (gate admits nobody) until
+          # the operator populates it. ENABLE_GITHUB_SSO defaults to 'false', so
+          # the GitHub IdP stays uncreated (strict no-op) exactly like Google.
+          # Secret names use the GH_ prefix because GitHub reserves 'GITHUB_' for
+          # secret/variable names. See
+          # docs/runbooks/cf-access-dev-preview-and-github-sso.md.
+          TF_VAR_dev_preview_allowed_emails: ${{ secrets.DEV_PREVIEW_ALLOWED_EMAILS_JSON || '[]' }}
+          TF_VAR_enable_github_sso: ${{ vars.ENABLE_GITHUB_SSO || 'false' }}
+          TF_VAR_onetimepin_idp_id: ${{ vars.ONETIMEPIN_IDP_ID || '' }}
+          TF_VAR_github_sso_client_id: ${{ secrets.GH_SSO_CLIENT_ID }}
+          TF_VAR_github_sso_client_secret: ${{ secrets.GH_SSO_CLIENT_SECRET }}
         with:
           push-cache: "false"
           command: |
@@ -248,6 +261,14 @@ jobs:
           TF_VAR_enable_google_sso: ${{ vars.ENABLE_GOOGLE_SSO || 'false' }}
           TF_VAR_google_sso_client_id: ${{ secrets.GOOGLE_SSO_CLIENT_ID }}
           TF_VAR_google_sso_client_secret: ${{ secrets.GOOGLE_SSO_CLIENT_SECRET }}
+          # Dev/preview DECOUPLE allowlist + GitHub SSO IdP (TIN-2535, inert by
+          # default; see the plan step). GH_ prefix on the secrets avoids the
+          # reserved GITHUB_ namespace.
+          TF_VAR_dev_preview_allowed_emails: ${{ secrets.DEV_PREVIEW_ALLOWED_EMAILS_JSON || '[]' }}
+          TF_VAR_enable_github_sso: ${{ vars.ENABLE_GITHUB_SSO || 'false' }}
+          TF_VAR_onetimepin_idp_id: ${{ vars.ONETIMEPIN_IDP_ID || '' }}
+          TF_VAR_github_sso_client_id: ${{ secrets.GH_SSO_CLIENT_ID }}
+          TF_VAR_github_sso_client_secret: ${{ secrets.GH_SSO_CLIENT_SECRET }}
           # Wire the dispatch input through to the just-level destroy guard
           # so allow_destroy=true is honored end-to-end (the workflow-level
           # Guard step above already gated it).
