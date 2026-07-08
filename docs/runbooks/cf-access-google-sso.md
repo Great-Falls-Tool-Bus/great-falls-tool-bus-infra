@@ -2,8 +2,8 @@
 
 **Declare-only companion to [`tofu/stacks/edge/`](../../tofu/stacks/edge/README.md)
 ("Google Workspace SSO enable sequence").** Adds a Google Workspace sign-in
-option to the Cloudflare Access edge stack so the operator
-(`jess@sulliwood.org`, which IS Google Workspace) can authenticate with Google
+option to the Cloudflare Access edge stack so the operator's `sulliwood.org`
+Workspace account can authenticate with Google
 instead of the fragile 10-minute email One-Time-PIN (OTP). The tofu is merged
 INERT: it does nothing until the operator supplies the Google OAuth client
 id/secret and flips the enable flag. This is ADDITIVE: the OTP path stays
@@ -21,8 +21,9 @@ values, ever.
   IdPs are allowed. So the moment a Google IdP exists, Google sign-in works AND
   the OTP option is still offered.
 - The shared allow policy `cloudflare_zero_trust_access_policy.web_apex_allow`
-  allows four emails including `jess@sulliwood.org`. Adding an IdP does NOT
-  change the allowlist: Google sign-in still only admits allowlisted emails.
+  allows the operator's Workspace mailbox plus the other approved addresses.
+  Adding an IdP does NOT change the allowlist: Google sign-in still only admits
+  allowlisted emails.
 
 ## What this change added (already merged, inert)
 
@@ -104,8 +105,8 @@ to a different Workspace primary domain.
 1. Open `https://sulliwood.cloudflareaccess.com` (or any gated app such as
    `https://greatfallstoolbus.org`). The Access login screen now offers
    **Google** in addition to the one-time PIN.
-2. Sign in with `jess@sulliwood.org` via Google. Because the email is on the
-   allowlist, Access admits you.
+2. Sign in with the operator Workspace account via Google. Because that mailbox
+   is on the allowlist, Access admits you.
 3. Confirm the **one-time PIN** option is STILL present and STILL works
    (sign in via OTP in a private window). Google is additive, not a
    replacement.

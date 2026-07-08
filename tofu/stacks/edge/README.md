@@ -172,7 +172,8 @@ The CF Access account today has exactly one IdP: One-Time-PIN
 OTP. `main.tf` stages a Google Workspace IdP
 (`cloudflare_zero_trust_access_identity_provider.google_sso`, type
 `google-apps`, `apps_domain` = `var.google_sso_apps_domain`, default
-`sulliwood.org`) so `jess@sulliwood.org` can sign in with Google instead.
+`sulliwood.org`) so the operator's Workspace account can sign in with Google
+instead.
 
 This is PURELY ADDITIVE and INERT BY DEFAULT: it is gated behind
 `var.enable_google_sso` (default `false`, `count = 0`), so merging this

@@ -191,8 +191,8 @@ variable "google_sso_apps_domain" {
   description = <<-EOT
     Google Workspace primary domain the "google-apps" IdP restricts sign-in to.
     Used only when var.enable_google_sso is true. Defaults to the operator's
-    Workspace domain sulliwood.org (jess@sulliwood.org). Set to a different
-    Workspace primary domain if the OAuth client belongs to another tenant.
+    Workspace domain sulliwood.org. Set to a different Workspace primary domain
+    if the OAuth client belongs to another tenant.
   EOT
   type        = string
   default     = "sulliwood.org"

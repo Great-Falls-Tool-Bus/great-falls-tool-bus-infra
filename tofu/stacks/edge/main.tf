@@ -15,8 +15,10 @@
 # mail CRs applied).
 
 locals {
-  web_domain   = "greatfallstoolbus.org"
-  alias_domain = "latoolb.us"
+  web_domain           = "greatfallstoolbus.org"
+  alias_domain         = "latoolb.us"
+  mail_dkim_txt_chunks = var.mail_dkim_txt == "" ? [] : regexall(".{1,255}", var.mail_dkim_txt)
+  mail_dkim_content    = join(" ", [for chunk in local.mail_dkim_txt_chunks : "\"${chunk}\""])
 }
 
 data "cloudflare_zone" "web" {
@@ -135,8 +137,8 @@ resource "cloudflare_zero_trust_access_policy" "web_apex_allow" {
 
 # --- Google Workspace SSO identity provider (additive, inert by default) -----
 # Adds a Google Workspace ("google-apps") IdP to the CF Access account so the
-# operator can sign in with jess@sulliwood.org (which IS Google Workspace)
-# instead of the fragile 10-minute email One-Time-PIN. This is PURELY ADDITIVE
+# operator can sign in with the allowlisted Workspace account instead of the
+# fragile 10-minute email One-Time-PIN. This is PURELY ADDITIVE
 # and INERT BY DEFAULT:
 #
 #   * count = var.enable_google_sso ? 1 : 0, and var.enable_google_sso defaults
@@ -272,7 +274,7 @@ resource "cloudflare_dns_record" "alias_dkim" {
   zone_id = data.cloudflare_zone.alias.zone_id
   name    = "mail._domainkey.${local.alias_domain}"
   type    = "TXT"
-  content = "\"${var.mail_dkim_txt}\""
+  content = local.mail_dkim_content
   ttl     = 1
 }
 
