@@ -88,22 +88,6 @@ jobs:
           echo "${tools_dir}" >> "${GITHUB_PATH}"
           echo "installed pinned flywheel-github-oidc-profile (sha256 ${actual})"
 
-      - name: Diagnose OIDC preconditions (temporary)
-        shell: bash
-        run: |
-          set -uo pipefail
-          echo "outer RUNNER_TEMP=${RUNNER_TEMP:-unset}"
-          ls -la "${RUNNER_TEMP}/gf-tools" 2>&1 || echo "tools dir missing"
-          echo "outer resolve:"; command -v flywheel-github-oidc-profile || echo "OUTER-NOTFOUND"
-          if [ -n "${GF_REAPI_TOKEN_EXCHANGE_ENDPOINT:-}" ]; then echo "OUTER-ENDPOINT-SET"; else echo "OUTER-ENDPOINT-UNSET"; fi
-          if command -v nix >/dev/null 2>&1; then
-            nix develop . --command bash -c '
-              echo "inner RUNNER_TEMP=${RUNNER_TEMP:-unset}"
-              echo "inner resolve:"; command -v flywheel-github-oidc-profile || echo "INNER-NOTFOUND"
-              if [ -n "${GF_REAPI_TOKEN_EXCHANGE_ENDPOINT:-}" ]; then echo "INNER-ENDPOINT-SET"; else echo "INNER-ENDPOINT-UNSET"; fi
-            '
-          fi
-
       - name: Cache-backed org-tenancy Bazel proof (read-only)
         shell: bash
         run: |
