@@ -1,0 +1,36 @@
+# Endpoint-free Bazel config for the org-tenancy cache-backed proof workspace.
+#
+# Cache and executor endpoint authority is NEVER in this file. The
+# scripts/gloriousflywheel-bazel.sh wrapper supplies --remote_cache and the
+# upload policy from validated runtime env (BAZEL_REMOTE_CACHE, exported on the
+# tinyland-nix runner by the fleet nix-setup, and GF_BAZEL_REMOTE_UPLOAD). This
+# file only declares the registry chain and cache-first behavior fragments.
+
+common --enable_bzlmod
+
+# House registry chain: tinyland-inc/bazel-registry first, then BCR.
+common --registry=https://raw.githubusercontent.com/tinyland-inc/bazel-registry/main/
+common --registry=https://bcr.bazel.build
+
+# No local disk cache: a cache hit in the flywheel lane must prove the REMOTE
+# shared cache, never an incidental local-disk hit (TIN-2119 real-attach
+# discipline). This proof workspace has no local-build-performance need.
+build --disk_cache=
+
+# Endpoint-free flywheel cache/executor behavior fragment (common:flywheel /
+# common:flywheel-executor). The wrapper selects --config=flywheel for
+# shared-cache-backed mode.
+try-import %workspace%/.bazelrc.flywheel
+
+# CI ergonomics for the proof lane.
+build:ci --remote_retries=3
+build:ci --color=no
+build:ci --curses=no
+
+# Cache-first, read-only shared-cache config, mirroring the site.scaffold
+# ci-cached shape. Never selects a remote executor (cache-first, TIN-1997
+# Option D).
+build:ci-cached --config=ci
+build:ci-cached --remote_upload_local_results=false
+build:ci-cached --remote_download_minimal
+build:ci-cached --remote_timeout=60

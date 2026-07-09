@@ -21,3 +21,8 @@ kubeconfig*
 *.swp
 *~
 .gstack/
+
+# Bazel convenience symlinks + lockfile for the org-tenancy cache proof workspace
+bazel-*
+bazel/flywheel-proof/bazel-*
+bazel/flywheel-proof/MODULE.bazel.lock
