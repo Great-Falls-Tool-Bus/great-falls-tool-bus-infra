@@ -166,6 +166,22 @@ and replace the tags with immutable `@sha256:` digests in the Deployments.
      `ca.crt` is safe there. If the web tier makes other verified-TLS calls,
      build `ca.crt` as the substrate CA **concatenated with the image's system
      roots** (`/etc/ssl/certs/ca-certificates.crt`) before creating the Secret.
+
+     **`SSL_CERT_FILE` does not reach mailman delivery (incident 2026-07-09).**
+     The mailman `out` runner runs with an environment that does not include
+     the container env, so it verified against the stock bundle and every list
+     send failed `CERTIFICATE_VERIFY_FAILED` from the moment the verification
+     flip was applied (first failure 2026-07-07 23:28 UTC; form posts to
+     `keyholders@latoolb.us` sat in the retry queue). Live proof: an exec shell
+     in the same container verified the postfix hop OK with `SSL_CERT_FILE`
+     set, and reproduced the runner's exact failure with `env -i`. The
+     env-independent anchor is a `subPath: ca.crt` mount over the image's
+     default OpenSSL cafile `/etc/ssl/cert.pem` on **both** containers (wired
+     in `deployment-mailman-core.yaml`). Public CAs remain trusted through the
+     hashed capath `/etc/ssl/certs`, which the subPath does not touch, so no
+     concatenated bundle is required. After applying, confirm the stuck queue
+     flushes: `tail /opt/mailman/var/logs/smtp.log` shows `... 0 failures` and
+     `ls /opt/mailman/var/queue/retry` empties.
 5. **Extra-config include hook.** `mailman-core` renders the `[mta]` block
    (STARTTLS + SASL + LMTP :8024) via an initContainer into an emptyDir mounted
    at `/etc/mailman-extra`, wired through `MM_EXTRA_CONFIG`. Confirm the pinned
