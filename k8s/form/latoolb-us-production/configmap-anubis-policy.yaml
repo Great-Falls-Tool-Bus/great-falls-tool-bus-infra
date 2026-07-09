@@ -33,8 +33,13 @@
 # method-scoped — acceptable because the handler rejects every method other than
 # POST/OPTIONS on that path and owns its own abuse controls.
 #
-# This is the upstream v1.13.0 default policy with ONE rule prepended: the
-# /api/contact ALLOW. Everything below it is the stock curated allow/deny list
+# This is the upstream v1.13.0 default policy with TWO rules prepended: the
+# /api/contact ALLOW and the /api/challenge ALLOW. The challenge GET issues an
+# ALTCHA proof-of-work puzzle and delivers no mail; the widget's cross-origin
+# fetch() cannot solve the Anubis HTML interstitial for the same reason the
+# contact POST cannot, so the same path-scoped ALLOW pattern applies. The
+# challenge endpoint's own abuse controls are the handler's global token bucket
+# and the no-store cache header. Everything below it is the stock curated allow/deny list
 # so bot posture and the browsing-surface challenge are unchanged.
 #
 # CURATED AI-SCRAPER DENY (depth follow-up): the stock list only DENYs amazonbot
@@ -65,6 +70,11 @@ data:
         {
           "name": "gftb-contact-api",
           "path_regex": "^/api/contact$",
+          "action": "ALLOW"
+        },
+        {
+          "name": "gftb-challenge-api",
+          "path_regex": "^/api/challenge$",
           "action": "ALLOW"
         },
         {
