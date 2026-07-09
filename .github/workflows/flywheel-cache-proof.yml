@@ -61,6 +61,33 @@ jobs:
             [ -d "${nixbin}" ] && echo "${nixbin}" >> "${GITHUB_PATH}"
           done
 
+      # Install the fleet token-exchange front door, pinned to the L5
+      # activation keystone commit and content-verified before it is trusted on
+      # PATH. The cache-proof driver locates flywheel-github-oidc-profile via
+      # command -v, so this step is what enables the OIDC exchange on the
+      # runner. A hash mismatch fails this step; the job stays continue-on-error
+      # for now, so this can never block CI during the soak.
+      - name: Install fleet OIDC front door (pinned)
+        shell: bash
+        env:
+          GF_OIDC_PROFILE_REF: df510574d17b85e7f15470caf3574fcabc4768f1
+          GF_OIDC_PROFILE_SHA256: 0aa1bb2b1814c28d6162fc91d5cb3201ecaa13775e94ab3571db776d5dcc3ba8
+        run: |
+          set -euo pipefail
+          tools_dir="${RUNNER_TEMP}/gf-tools"
+          dest="${tools_dir}/flywheel-github-oidc-profile"
+          url="https://raw.githubusercontent.com/tinyland-inc/GloriousFlywheel/${GF_OIDC_PROFILE_REF}/scripts/flywheel-github-oidc-profile.sh"
+          mkdir -p "${tools_dir}"
+          curl --fail --silent --show-error --location "${url}" --output "${dest}"
+          actual="$(sha256sum "${dest}" | awk '{ print $1 }')"
+          if [ "${actual}" != "${GF_OIDC_PROFILE_SHA256}" ]; then
+            echo "::error::flywheel-github-oidc-profile sha256 mismatch: expected ${GF_OIDC_PROFILE_SHA256}, got ${actual}"
+            exit 1
+          fi
+          chmod +x "${dest}"
+          echo "${tools_dir}" >> "${GITHUB_PATH}"
+          echo "installed pinned flywheel-github-oidc-profile (sha256 ${actual})"
+
       - name: Cache-backed org-tenancy Bazel proof (read-only)
         shell: bash
         run: |
