@@ -85,8 +85,12 @@ shared_runner_tolerations = [
 ]
 shared_runner_affinity = {}
 
+# Listeners are request-less ARC intake plumbing (no resource requests), so the
+# sting pod-cap rationale above applies to runner payloads only. Keep listeners
+# off sting after the 2026-07-09 total-intake outage (TIN-2455/TIN-2677;
+# mirrors GloriousFlywheel PR #1067).
 listener_node_selector = {
-  "capability.tinyland.dev/compute-expansion" = "true"
+  "kubernetes.io/hostname" = "bumble"
 }
 
 listener_tolerations = [
