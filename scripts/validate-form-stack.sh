@@ -126,24 +126,32 @@ assert_eq "${mail_from}" "form-intake@latoolb.us" "handler From identity (DMARC-
 # --- CORS locked to the static site origin (asserted in BOTH env and code) ---
 cors_env="$(yq -r 'select(.kind == "Deployment" and .metadata.name == "form-handler") | .spec.template.spec.containers[] | select(.name == "form-handler") | .env[] | select(.name == "FORM_ALLOWED_ORIGIN") | .value' "${handler_deploy}")"
 assert_eq "${cors_env}" "https://greatfallstoolbus.org" "CORS allowed origin (static site only)"
-server_src="$(yq -r '.data["server.py"]' "${handler_cm}")"
-echo "${server_src}" | grep -q "https://greatfallstoolbus.org" || fail "server.py must default the CORS origin to https://greatfallstoolbus.org"
-echo "${server_src}" | grep -q "Access-Control-Allow-Origin" || fail "server.py must emit CORS Access-Control-Allow-Origin"
-echo "${server_src}" | grep -q "do_OPTIONS" || fail "server.py must handle the CORS preflight (OPTIONS)"
+# server.py is extracted ONCE to a temp file and every code assertion greps that
+# file, rather than piping a ~20 KB shell variable through grep (that pattern
+# proved fragile under `set -o pipefail`). A missing/empty extraction fails
+# loudly here instead of masquerading as a later content assertion.
+tmp_src="$(mktemp -t gftb-form-server.XXXXXX.py)"
+trap 'rm -f "${tmp_src}"' EXIT
+yq -r '.data["server.py"]' "${handler_cm}" >"${tmp_src}"
+test -s "${tmp_src}" || fail "could not extract server.py from ${handler_cm}"
+
+grep -q "https://greatfallstoolbus.org" "${tmp_src}" || fail "server.py must default the CORS origin to https://greatfallstoolbus.org"
+grep -q "Access-Control-Allow-Origin" "${tmp_src}" || fail "server.py must emit CORS Access-Control-Allow-Origin"
+grep -q "do_OPTIONS" "${tmp_src}" || fail "server.py must handle the CORS preflight (OPTIONS)"
 
 # --- Honeypot + rate limit + LMTP present in the handler code ----------------
-echo "${server_src}" | grep -q "website" || fail "server.py must read the 'website' honeypot field"
-echo "${server_src}" | grep -q "honeypot" || fail "server.py must implement the honeypot path"
-echo "${server_src}" | grep -q "TokenBucket" || fail "server.py must implement the per-client token bucket"
-echo "${server_src}" | grep -q "CF-Connecting-IP" || fail "server.py must key rate limits from Cloudflare's trusted visitor-IP header"
-if echo "${server_src}" | grep -Eq 'headers\.get\("X-Forwarded-For"'; then
+grep -q "website" "${tmp_src}" || fail "server.py must read the 'website' honeypot field"
+grep -q "honeypot" "${tmp_src}" || fail "server.py must implement the honeypot path"
+grep -q "TokenBucket" "${tmp_src}" || fail "server.py must implement the per-client token bucket"
+grep -q "CF-Connecting-IP" "${tmp_src}" || fail "server.py must key rate limits from Cloudflare's trusted visitor-IP header"
+if grep -Eq 'headers\.get\("X-Forwarded-For"' "${tmp_src}"; then
   fail "server.py must not trust spoofable X-Forwarded-For for rate-limit keys"
 fi
-echo "${server_src}" | grep -q "smtplib.LMTP" || fail "server.py must deliver via smtplib.LMTP (no SMTP credential)"
-echo "${server_src}" | grep -q "/healthz" || fail "server.py must serve GET /healthz for probes"
-echo "${server_src}" | grep -q "X-GFTB-Form" || fail "server.py must set the X-GFTB-Form header"
+grep -q "smtplib.LMTP" "${tmp_src}" || fail "server.py must deliver via smtplib.LMTP (no SMTP credential)"
+grep -q "/healthz" "${tmp_src}" || fail "server.py must serve GET /healthz for probes"
+grep -q "X-GFTB-Form" "${tmp_src}" || fail "server.py must set the X-GFTB-Form header"
 # The handler must NOT open an SMTP submission with credentials.
-if echo "${server_src}" | grep -Eq "smtplib\.SMTP\b|\.login\("; then
+if grep -Eq "smtplib\.SMTP\b|\.login\(" "${tmp_src}"; then
   fail "server.py must inject via LMTP, not authenticated SMTP submission"
 fi
 
@@ -152,18 +160,18 @@ fi
 # per-submission proof: SHA-256 challenge + HMAC-SHA256 signature + signed
 # expiry, all stdlib so the zero-pip invariant holds. These greps fail CI if a
 # refactor drops any load-bearing piece of that gate.
-echo "${server_src}" | grep -q "/api/challenge" || fail "server.py must serve GET /api/challenge (ALTCHA issuance)"
-echo "${server_src}" | grep -q "altcha_new_challenge" || fail "server.py must implement the ALTCHA challenge issuer"
-echo "${server_src}" | grep -q "altcha_verify" || fail "server.py must implement ALTCHA verify"
-echo "${server_src}" | grep -q "ALTCHA_REQUIRED" || fail "server.py must gate enforcement on ALTCHA_REQUIRED"
-echo "${server_src}" | grep -q "hmac.compare_digest" || fail "server.py must compare the HMAC signature with hmac.compare_digest"
-echo "${server_src}" | grep -q "ALTCHA_MIN_SOLVE_SECONDS" || fail "server.py must implement the ALTCHA time-trap (min solve seconds)"
-echo "${server_src}" | grep -q "SeenSet" || fail "server.py must implement the one-time-use replay guard (SeenSet)"
-echo "${server_src}" | grep -q "GLOBAL_BUCKET" || fail "server.py must implement the global aggregate rate ceiling"
+grep -q "/api/challenge" "${tmp_src}" || fail "server.py must serve GET /api/challenge (ALTCHA issuance)"
+grep -q "altcha_new_challenge" "${tmp_src}" || fail "server.py must implement the ALTCHA challenge issuer"
+grep -q "altcha_verify" "${tmp_src}" || fail "server.py must implement ALTCHA verify"
+grep -q "ALTCHA_REQUIRED" "${tmp_src}" || fail "server.py must gate enforcement on ALTCHA_REQUIRED"
+grep -q "hmac.compare_digest" "${tmp_src}" || fail "server.py must compare the HMAC signature with hmac.compare_digest"
+grep -q "ALTCHA_MIN_SOLVE_SECONDS" "${tmp_src}" || fail "server.py must implement the ALTCHA time-trap (min solve seconds)"
+grep -q "SeenSet" "${tmp_src}" || fail "server.py must implement the one-time-use replay guard (SeenSet)"
+grep -q "GLOBAL_BUCKET" "${tmp_src}" || fail "server.py must implement the global aggregate rate ceiling"
 # The HMAC key must be read from the environment (Secret-sourced), never a literal.
-echo "${server_src}" | grep -q 'os.environ.get("ALTCHA_HMAC_KEY"' || fail "server.py must read ALTCHA_HMAC_KEY from the environment (Secret by name)"
+grep -q 'os.environ.get("ALTCHA_HMAC_KEY"' "${tmp_src}" || fail "server.py must read ALTCHA_HMAC_KEY from the environment (Secret by name)"
 # Enforce mode must fail closed when the key is absent (no silent accept-all).
-echo "${server_src}" | grep -q "refusing to start" || fail "server.py must fail closed when ALTCHA_REQUIRED is set but the key is absent"
+grep -q "refusing to start" "${tmp_src}" || fail "server.py must fail closed when ALTCHA_REQUIRED is set but the key is absent"
 
 # --- ALTCHA env wiring: flag defaults false, HMAC key from a Secret by name ---
 altcha_required="$(yq -r 'select(.kind == "Deployment" and .metadata.name == "form-handler") | .spec.template.spec.containers[] | select(.name == "form-handler") | .env[] | select(.name == "ALTCHA_REQUIRED") | .value' "${handler_deploy}")"
@@ -178,9 +186,7 @@ if [ "${altcha_secret_literal}" != "null" ]; then
 fi
 
 # --- The handler must byte-compile (catch a syntax slip before apply) --------
-tmp_src="$(mktemp -t gftb-form-server.XXXXXX.py)"
-trap 'rm -f "${tmp_src}"' EXIT
-yq -r '.data["server.py"]' "${handler_cm}" >"${tmp_src}"
+# Uses the same extracted file grepped above (see the CORS section).
 python3 -m py_compile "${tmp_src}" || fail "server.py does not byte-compile"
 
 # --- ALTCHA challenge/solve/verify round-trip (offline, no network/cluster) ---
