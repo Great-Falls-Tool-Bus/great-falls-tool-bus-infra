@@ -194,12 +194,17 @@ core_verify_cert="$(yq -r 'select(.metadata.name == "mailman-core") | .spec.temp
 assert_eq "${core_verify_hostname}" "True" "mailman-core SMTP_VERIFY_HOSTNAME must be True (endpoint auth on, #74)"
 assert_eq "${core_verify_cert}" "True" "mailman-core SMTP_VERIFY_CERT must be True (endpoint auth on, #74)"
 
-# Both containers must trust the substrate mail CA via SSL_CERT_FILE + mount.
+# Both containers must trust the substrate mail CA via SSL_CERT_FILE + mount,
+# AND via the env-independent /etc/ssl/cert.pem subPath overlay: the mailman
+# delivery runner does not inherit SSL_CERT_FILE (proven live 2026-07-09), so
+# the default-cafile mount is the trust anchor that actually reaches delivery.
 for c in mailman-core mailman-web; do
   ssl_cert_file="$(yq -r "select(.metadata.name == \"mailman-core\") | .spec.template.spec.containers[] | select(.name == \"${c}\") | .env[] | select(.name == \"SSL_CERT_FILE\") | .value" "${core_deploy}")"
   assert_eq "${ssl_cert_file}" "/etc/ssl/mail-substrate-ca/ca.crt" "${c} SSL_CERT_FILE must point at the mounted substrate mail CA (#74)"
-  ca_mount="$(yq -r "select(.metadata.name == \"mailman-core\") | .spec.template.spec.containers[] | select(.name == \"${c}\") | .volumeMounts[] | select(.name == \"mail-substrate-ca\") | .mountPath" "${core_deploy}")"
-  assert_eq "${ca_mount}" "/etc/ssl/mail-substrate-ca" "${c} must mount the mail-substrate-ca CA (#74)"
+  ca_dir_mount="$(yq -r "select(.metadata.name == \"mailman-core\") | .spec.template.spec.containers[] | select(.name == \"${c}\") | .volumeMounts[] | select(.name == \"mail-substrate-ca\" and .mountPath == \"/etc/ssl/mail-substrate-ca\") | .mountPath" "${core_deploy}")"
+  assert_eq "${ca_dir_mount}" "/etc/ssl/mail-substrate-ca" "${c} must mount the mail-substrate-ca CA dir (#74)"
+  ca_pem_subpath="$(yq -r "select(.metadata.name == \"mailman-core\") | .spec.template.spec.containers[] | select(.name == \"${c}\") | .volumeMounts[] | select(.name == \"mail-substrate-ca\" and .mountPath == \"/etc/ssl/cert.pem\") | .subPath" "${core_deploy}")"
+  assert_eq "${ca_pem_subpath}" "ca.crt" "${c} must overlay the default OpenSSL cafile with the substrate CA (env-independent runner trust, #74)"
 done
 
 # The CA volume must be sourced from a named Secret (no committed cert material).

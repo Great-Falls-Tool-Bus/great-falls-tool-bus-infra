@@ -97,9 +97,13 @@ spec:
             - name: SMTP_VERIFY_CERT
               value: "True"
             # Trust the substrate mail CA for the postfix submission hop.
-            # SSL_CERT_FILE REPLACES the default OpenSSL trust set for this
-            # container's create_default_context() uses; core's only TLS client
-            # op is this postfix hop, so pinning it to the substrate CA is safe.
+            # NOTE: SSL_CERT_FILE alone is NOT sufficient for core. Proven live
+            # 2026-07-09: the mailman `out` runner does not inherit this env
+            # (its handshake fails chain verify while an env'd exec shell in
+            # the same container verifies OK), so delivery ran on the stock
+            # bundle and every send failed CERTIFICATE_VERIFY_FAILED. The
+            # env-independent trust anchor is the cert.pem subPath mount below;
+            # this env is kept for exec shells and any env-inheriting client.
             - name: SSL_CERT_FILE
               value: /etc/ssl/mail-substrate-ca/ca.crt
             - name: SMTP_HOST_USER
@@ -134,6 +138,15 @@ spec:
             # postfix :587. SSL_CERT_FILE (above) points at ca.crt here.
             - name: mail-substrate-ca
               mountPath: /etc/ssl/mail-substrate-ca
+              readOnly: true
+            # Env-independent trust anchor (#74 follow-up): overlay the image's
+            # default OpenSSL cafile with the substrate CA so the mailman
+            # delivery runner (which does not inherit SSL_CERT_FILE; see env
+            # note above) verifies the postfix hop. Public CAs stay trusted via
+            # the hashed capath (/etc/ssl/certs, untouched by this subPath).
+            - name: mail-substrate-ca
+              mountPath: /etc/ssl/cert.pem
+              subPath: ca.crt
               readOnly: true
           resources:
             requests:
@@ -292,6 +305,14 @@ spec:
             # postfix :587; SSL_CERT_FILE (above) points at ca.crt here.
             - name: mail-substrate-ca
               mountPath: /etc/ssl/mail-substrate-ca
+              readOnly: true
+            # Env-independent trust anchor, mirrored from core (#74 follow-up):
+            # overlay the default OpenSSL cafile so any web-tier SMTP path that
+            # does not inherit SSL_CERT_FILE still verifies the postfix hop.
+            # Public CAs stay trusted via the hashed capath (/etc/ssl/certs).
+            - name: mail-substrate-ca
+              mountPath: /etc/ssl/cert.pem
+              subPath: ca.crt
               readOnly: true
           resources:
             requests:
