@@ -147,11 +147,46 @@ if echo "${server_src}" | grep -Eq "smtplib\.SMTP\b|\.login\("; then
   fail "server.py must inject via LMTP, not authenticated SMTP submission"
 fi
 
+# --- ALTCHA proof-of-work: challenge issuance + stdlib verify + hardening -----
+# The one route Anubis cannot gate (the cross-origin fetch POST) carries a
+# per-submission proof: SHA-256 challenge + HMAC-SHA256 signature + signed
+# expiry, all stdlib so the zero-pip invariant holds. These greps fail CI if a
+# refactor drops any load-bearing piece of that gate.
+echo "${server_src}" | grep -q "/api/challenge" || fail "server.py must serve GET /api/challenge (ALTCHA issuance)"
+echo "${server_src}" | grep -q "altcha_new_challenge" || fail "server.py must implement the ALTCHA challenge issuer"
+echo "${server_src}" | grep -q "altcha_verify" || fail "server.py must implement ALTCHA verify"
+echo "${server_src}" | grep -q "ALTCHA_REQUIRED" || fail "server.py must gate enforcement on ALTCHA_REQUIRED"
+echo "${server_src}" | grep -q "hmac.compare_digest" || fail "server.py must compare the HMAC signature with hmac.compare_digest"
+echo "${server_src}" | grep -q "ALTCHA_MIN_SOLVE_SECONDS" || fail "server.py must implement the ALTCHA time-trap (min solve seconds)"
+echo "${server_src}" | grep -q "SeenSet" || fail "server.py must implement the one-time-use replay guard (SeenSet)"
+echo "${server_src}" | grep -q "GLOBAL_BUCKET" || fail "server.py must implement the global aggregate rate ceiling"
+# The HMAC key must be read from the environment (Secret-sourced), never a literal.
+echo "${server_src}" | grep -q 'os.environ.get("ALTCHA_HMAC_KEY"' || fail "server.py must read ALTCHA_HMAC_KEY from the environment (Secret by name)"
+# Enforce mode must fail closed when the key is absent (no silent accept-all).
+echo "${server_src}" | grep -q "refusing to start" || fail "server.py must fail closed when ALTCHA_REQUIRED is set but the key is absent"
+
+# --- ALTCHA env wiring: flag defaults false, HMAC key from a Secret by name ---
+altcha_required="$(yq -r 'select(.kind == "Deployment" and .metadata.name == "form-handler") | .spec.template.spec.containers[] | select(.name == "form-handler") | .env[] | select(.name == "ALTCHA_REQUIRED") | .value' "${handler_deploy}")"
+assert_eq "${altcha_required}" "false" "ALTCHA_REQUIRED must default to false (deploy before the widget; flip in rollout step 3)"
+altcha_secret_name="$(yq -r 'select(.kind == "Deployment" and .metadata.name == "form-handler") | .spec.template.spec.containers[] | select(.name == "form-handler") | .env[] | select(.name == "ALTCHA_HMAC_KEY") | .valueFrom.secretKeyRef.name' "${handler_deploy}")"
+if [ -z "${altcha_secret_name}" ] || [ "${altcha_secret_name}" = "null" ]; then
+  fail "ALTCHA_HMAC_KEY must come from a Secret by name (valueFrom.secretKeyRef.name)"
+fi
+altcha_secret_literal="$(yq -r 'select(.kind == "Deployment" and .metadata.name == "form-handler") | .spec.template.spec.containers[] | select(.name == "form-handler") | .env[] | select(.name == "ALTCHA_HMAC_KEY") | .value' "${handler_deploy}")"
+if [ "${altcha_secret_literal}" != "null" ]; then
+  fail "ALTCHA_HMAC_KEY must NOT carry a literal value in git (Secret by name only); got '${altcha_secret_literal}'"
+fi
+
 # --- The handler must byte-compile (catch a syntax slip before apply) --------
 tmp_src="$(mktemp -t gftb-form-server.XXXXXX.py)"
 trap 'rm -f "${tmp_src}"' EXIT
 yq -r '.data["server.py"]' "${handler_cm}" >"${tmp_src}"
 python3 -m py_compile "${tmp_src}" || fail "server.py does not byte-compile"
+
+# --- ALTCHA challenge/solve/verify round-trip (offline, no network/cluster) ---
+# Exercises the exact server.py bytes: issue -> brute-force solve -> verify, plus
+# replay, tamper, time-trap, and expiry rejections. Never opens a socket.
+python3 "$(dirname "$0")/test-form-altcha.py" "${tmp_src}" || fail "ALTCHA offline round-trip test failed"
 
 # --- NetworkPolicy doctrine: gate not bypassable, egress least-privilege -----
 # Handler ingress is ONLY from the anubis pod.

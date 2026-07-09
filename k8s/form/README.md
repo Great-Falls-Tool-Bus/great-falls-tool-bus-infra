@@ -43,10 +43,13 @@ Images are pinned by digest. Anti-bot is layered and split by surface: the
 Anubis bot policy (`configmap-anubis-policy.yaml`, mounted via `POLICY_FNAME`)
 **ALLOWs** the `/api/contact` JSON route — a cross-origin `fetch()` POST cannot
 solve Anubis's browser proof-of-work, so the route is allowlisted and guarded by
-the handler's per-client token bucket (5/min), honeypot field, validation, and
-CORS — while the **browsing surface stays CHALLENGEd** (founding row `f`). See
-`docs/runbooks/form-intake.md` for the policy rationale, the challenge-vs-fetch
-evidence, and citations.
+the handler's own controls: an ALTCHA per-submission proof-of-work (SHA-256 +
+HMAC-SHA256, stdlib verify, gated by `ALTCHA_REQUIRED`), a per-client token
+bucket (5/min), a global aggregate ceiling, a signed time-trap, the honeypot
+field, validation, and CORS, while the **browsing surface stays CHALLENGEd**
+(founding row `f`). See `docs/runbooks/form-intake.md` for the policy rationale,
+the ALTCHA rollout and secret one-liner, the challenge-vs-fetch evidence, and
+citations.
 
 ```bash
 just form-stack-validate
