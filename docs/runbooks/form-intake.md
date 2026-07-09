@@ -75,6 +75,86 @@ Citations:
   JSON-only parser, field set, `r.URL.Path` matching, and the default policy we
   extend.
 
+## ALTCHA proof-of-work on /api/contact (per-submission proof)
+
+The Anubis ALLOW leaves the JSON POST with no human-presence proof (see "Bot
+policy" above). ALTCHA closes that: the client solves a small SHA-256
+proof-of-work and includes the solution in the same JSON body it already POSTs,
+and the handler verifies it before any LMTP inject. Verification is stdlib only
+(`hashlib` + `hmac` + `base64` + `json`), so the pod keeps its zero-pip,
+zero-supply-chain surface. No new image, service, or store.
+
+How it works, end to end:
+
+- `GET /api/challenge` issues a signed challenge `{algorithm, challenge, salt,
+  signature, maxnumber}`. The `salt` carries `expires` and `t` (issue time); the
+  `signature` is `HMAC-SHA256(key, challenge)`, so only this handler can mint a
+  valid challenge and the timing fields are tamper-evident (any edit changes the
+  challenge and breaks the signature).
+- The widget brute-forces `n` in `0..maxnumber` until `SHA-256(salt + n)`
+  equals `challenge`, then returns the base64 payload as the `altcha` field.
+- The handler recomputes the hash, checks the HMAC signature, checks the signed
+  expiry, applies a time-trap (rejects a solve faster than ~3s or older than the
+  expiry window), and rejects replays via an in-memory one-time-use set. A bad
+  proof is a `400`; it never reaches LMTP.
+
+Two rate ceilings back it up: the existing per-IP token bucket (5/min) plus a
+new global aggregate bucket (~30/min across all clients), so an IP-rotating
+flood still hits a single cap. Both counters and the replay set are exact at the
+single replica; a multi-replica move would need an external store (same caveat
+as the token bucket).
+
+### The HMAC key Secret (by name only)
+
+The verify key lives in a namespace Secret referenced BY NAME ONLY from
+`deployment-form-handler.yaml` (`valueFrom.secretKeyRef`, `optional: true`); no
+value is ever committed. It is recorded names-only in `secrets/README.md`.
+
+Mint it once (operator lane, workload-capable kubeconfig):
+
+```bash
+kubectl --kubeconfig "$GFTB_MAIL_KUBECONFIG" -n latoolb-us-production \
+  create secret generic form-altcha-hmac --from-literal=hmac-key="$(openssl rand -hex 32)"
+```
+
+Absent-key behavior is explicit and asymmetric (why `optional: true` is safe):
+
+- `ALTCHA_REQUIRED=false` and no key: the pod runs in a challenge-disabled
+  GRACE. `GET /api/challenge` returns `503` and the POST accepts legacy bodies,
+  so the handler can deploy BEFORE the Secret and the widget exist.
+- `ALTCHA_REQUIRED=true` and no key: the handler FAILS CLOSED at startup and
+  refuses to serve. A required proof that cannot be verified must never degrade
+  to accept-all; the loud failure surfaces the misconfiguration immediately.
+
+Rotate by replacing the Secret value in the operator lane and restarting the
+form-handler pod; in-flight challenges (up to the expiry window) become invalid,
+which is benign for a contact form.
+
+### Three-step rollout (deploy before enforce)
+
+`ALTCHA_REQUIRED` defaults to `false` so the handler and the site widget can
+land independently. Flip enforcement only after both are live.
+
+1. **Handler first.** Mint the `form-altcha-hmac` Secret (above), then
+   `just form-stack-apply`. The handler now serves challenges and verifies a
+   proof if one is present, but still accepts legacy posts (`ALTCHA_REQUIRED`
+   stays `false`). Nothing a visitor does breaks.
+2. **Widget next.** Merge the site repo PR (`greatfallstoolbus.org`), which
+   auto-deploys the vendored ALTCHA widget. Real submissions now carry a valid
+   `altcha` payload; the handler verifies it as advisory (logged, never
+   blocking) while the flag is still `false`. Soak.
+3. **Enforce last.** Set `ALTCHA_REQUIRED` to `"true"` in
+   `deployment-form-handler.yaml` and `just form-stack-apply`. A missing or bad
+   proof is now a hard `400`. The fail-closed startup check guarantees this step
+   cannot silently accept everything if the key is ever missing.
+
+### Offline test
+
+The stdlib verify is exercised without a cluster or network by an offline
+round-trip test (issue, brute-force solve, verify, plus replay / tamper /
+time-trap / expiry rejections). It runs inside `just form-stack-validate` and
+standalone via `just form-altcha-test`.
+
 ## Why no SMTP credential
 
 The keyholders list is configured `default_nonmember_action=accept` (ratified:
@@ -99,6 +179,8 @@ the registered `latoolb.us` `MailDomain` already provides.
 ```bash
 just form-stack-validate    # invariants: digests, Anubis TARGET, LMTP :8024,
                             # CORS greatfallstoolbus.org, honeypot, netpol shape,
+                            # ALTCHA challenge/verify wiring + offline round-trip,
+                            # ALTCHA_REQUIRED=false + HMAC key by name only,
                             # server.py byte-compiles, no committed secret
 ```
 

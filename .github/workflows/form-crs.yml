@@ -16,6 +16,7 @@ on:
       - "Justfile"
       - "k8s/form/**"
       - "scripts/validate-form-stack.sh"
+      - "scripts/test-form-altcha.py"
       - "docs/runbooks/form-intake.md"
       - "docs/ci-credentials.md"
   push:
@@ -26,6 +27,7 @@ on:
       - "Justfile"
       - "k8s/form/**"
       - "scripts/validate-form-stack.sh"
+      - "scripts/test-form-altcha.py"
       - "docs/runbooks/form-intake.md"
       - "docs/ci-credentials.md"
   workflow_dispatch:

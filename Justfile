@@ -340,6 +340,11 @@ form_stack_dir := "k8s/form/latoolb-us-production"
 form-stack-validate:
     bash scripts/validate-form-stack.sh {{ form_stack_dir }}
 
+# Offline ALTCHA challenge/solve/verify round-trip against the shipping server.py
+# (no network, no cluster). Also runs inside form-stack-validate.
+form-altcha-test:
+    python3 scripts/test-form-altcha.py
+
 form-stack-server-dry-run: form-stack-validate _mail-kubeconfig-inputs
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply --dry-run=server -k {{ form_stack_dir }}
 

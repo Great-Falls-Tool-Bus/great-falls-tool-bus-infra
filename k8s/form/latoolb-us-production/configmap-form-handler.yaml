@@ -16,8 +16,13 @@
 #
 # Anti-abuse is layered: browsers still hit an Anubis challenge, while the
 # fetch() JSON route is allowlisted and relies on the handler's token bucket,
-# honeypot, validation, and CORS. The token bucket keys on Cloudflare's
-# trusted visitor-IP header, never a client-supplied forwarding value.
+# honeypot, validation, CORS, an ALTCHA proof-of-work per submission, a global
+# aggregate ceiling, and a signed time-trap. The token bucket keys on
+# Cloudflare's trusted visitor-IP header, never a client-supplied forwarding
+# value. ALTCHA verify is SHA-256 + HMAC-SHA256 in stdlib only, so the image
+# keeps its zero-pip / zero-supply-chain surface; the HMAC key arrives from a
+# k8s Secret by NAME ONLY and is gated by ALTCHA_REQUIRED (default false) so the
+# handler can deploy before the site widget. See docs/runbooks/form-intake.md.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -32,14 +37,19 @@ data:
     """GFTB contact form intake (TIN-2420 Path B). Stdlib only.
 
     Accepts a small JSON contact payload behind the Anubis PoW gate, validates
-    it, rate-limits per client, builds a DMARC-safe message, and injects it over
-    LMTP to the keyholders@ Mailman list, which fans out to every keyholder.
+    it, verifies an ALTCHA proof-of-work, rate-limits per client and in
+    aggregate, builds a DMARC-safe message, and injects it over LMTP to the
+    keyholders@ Mailman list, which fans out to every keyholder.
     """
     from __future__ import annotations
 
+    import base64
+    import hashlib
+    import hmac
     import json
     import os
     import re
+    import secrets
     import smtplib
     import sys
     import threading
@@ -47,6 +57,7 @@ data:
     from email.message import EmailMessage
     from email.utils import formatdate, make_msgid
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import parse_qs
 
     # --- Configuration (env, with contract defaults) -----------------------------
     BIND_HOST = os.environ.get("FORM_BIND_HOST", "0.0.0.0")
@@ -72,6 +83,48 @@ data:
     # Token bucket: 5 requests/minute/client, refilled continuously.
     BUCKET_CAPACITY = int(os.environ.get("FORM_RATE_BURST", "5"))
     BUCKET_REFILL_PER_SEC = float(os.environ.get("FORM_RATE_REFILL_PER_SEC", str(5.0 / 60.0)))
+
+    # Global aggregate ceiling: a SECOND bucket keyed on a constant so an
+    # IP-rotating flood still slams a single cap even though each source IP stays
+    # under its own per-client budget. Single replica => this count is exact; a
+    # multi-replica move would need an external counter (documented in the runbook).
+    GLOBAL_BUCKET_CAPACITY = int(os.environ.get("FORM_GLOBAL_RATE_BURST", "30"))
+    GLOBAL_BUCKET_REFILL_PER_SEC = float(
+        os.environ.get("FORM_GLOBAL_RATE_REFILL_PER_SEC", str(30.0 / 60.0))
+    )
+    GLOBAL_BUCKET_KEY = "__global__"
+
+
+    def _env_bool(name: str, default: bool) -> bool:
+        raw = os.environ.get(name)
+        if raw is None:
+            return default
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+    # --- ALTCHA proof-of-work (self-hosted, stdlib verify) -----------------------
+    # A per-submission proof that the POSTing client spent real work. The client
+    # solves SHA-256(salt + n) == challenge for a secret n; the handler recomputes
+    # the hash, checks the HMAC-SHA256 signature (so only WE can mint a challenge),
+    # checks the signed expiry, and rejects replays. Every primitive is stdlib
+    # (hashlib, hmac, base64, json), so no pip dependency is added.
+    ALTCHA_REQUIRED = _env_bool("ALTCHA_REQUIRED", False)
+    # HMAC key: from a k8s Secret by NAME ONLY (no value in git). Absent-key
+    # behavior is explicit and asymmetric: fail CLOSED at startup when enforcement
+    # is on (a required proof that cannot be verified must never degrade to
+    # accept-all), else run in a challenge-disabled GRACE so the handler can
+    # deploy BEFORE the Secret and the site widget exist (rollout step 1).
+    ALTCHA_HMAC_KEY = os.environ.get("ALTCHA_HMAC_KEY", "")
+    ALTCHA_HMAC_KEY_BYTES = ALTCHA_HMAC_KEY.encode("utf-8")
+    ALTCHA_ENABLED = bool(ALTCHA_HMAC_KEY)
+    # PoW difficulty: the solver brute-forces 0..maxnumber. Modest for a contact
+    # form: near-instant for one visitor, a real per-message tax for a flood.
+    ALTCHA_MAX_NUMBER = int(os.environ.get("ALTCHA_MAX_NUMBER", "100000"))
+    # Time-trap bounds (seconds), both carried in the SIGNED salt so they cannot
+    # be forged: reject a solution returned implausibly fast (no human fills a
+    # form in under a few seconds) or one older than the challenge's expiry.
+    ALTCHA_MIN_SOLVE_SECONDS = float(os.environ.get("ALTCHA_MIN_SOLVE_SECONDS", "3.0"))
+    ALTCHA_EXPIRES_SECONDS = int(os.environ.get("ALTCHA_EXPIRES_SECONDS", "1800"))
 
     # RFC 5322-ish addr-spec: pragmatic, not exhaustive. We only need to reject
     # obviously bad input and header-injection attempts; the real deliverability
@@ -107,6 +160,138 @@ data:
 
 
     BUCKET = TokenBucket(BUCKET_CAPACITY, BUCKET_REFILL_PER_SEC)
+    GLOBAL_BUCKET = TokenBucket(GLOBAL_BUCKET_CAPACITY, GLOBAL_BUCKET_REFILL_PER_SEC)
+
+
+    class SeenSet:
+        """Bounded one-time-use set for spent ALTCHA challenges (replay guard).
+
+        Keyed on the challenge hash, valued by its signed expiry so entries
+        self-retire. In-memory and single-replica, like the token bucket; a
+        multi-replica move would need a shared store. The signed 'expires' bounds
+        how long any entry must live, so the set stays small.
+        """
+
+        def __init__(self) -> None:
+            self._state: dict[str, float] = {}
+            self._lock = threading.Lock()
+
+        def add_unique(self, key: str, expiry: float) -> bool:
+            now = time.time()
+            with self._lock:
+                # Opportunistic sweep so the dict cannot grow without bound.
+                if len(self._state) > 8192:
+                    self._state = {k: v for k, v in self._state.items() if v > now}
+                seen = self._state.get(key)
+                if seen is not None and seen > now:
+                    return False
+                self._state[key] = expiry
+                return True
+
+
+    SEEN = SeenSet()
+
+
+    def _altcha_salt_params(salt: str) -> dict:
+        # The salt is "<hex>?expires=<unix>&t=<unix>". Both ints are integrity-
+        # protected: the challenge hashes the whole salt and the challenge is
+        # HMAC-signed, so a tampered t/expires breaks verification.
+        if "?" not in salt:
+            return {}
+        query = salt.split("?", 1)[1]
+        parsed = parse_qs(query)
+        out: dict = {}
+        for key in ("expires", "t"):
+            values = parsed.get(key)
+            if values:
+                try:
+                    out[key] = int(values[0])
+                except ValueError:
+                    pass
+        return out
+
+
+    def altcha_new_challenge() -> dict:
+        # Issue a signed ALTCHA challenge (SHA-256 mode). The published format the
+        # stock widget solves: {algorithm, challenge, salt, signature, maxnumber}.
+        salt_hex = secrets.token_hex(12)
+        issued = int(time.time())
+        expires = issued + ALTCHA_EXPIRES_SECONDS
+        salt = "%s?expires=%d&t=%d" % (salt_hex, expires, issued)
+        number = secrets.randbelow(ALTCHA_MAX_NUMBER + 1)
+        challenge = hashlib.sha256((salt + str(number)).encode("utf-8")).hexdigest()
+        signature = hmac.new(
+            ALTCHA_HMAC_KEY_BYTES, challenge.encode("utf-8"), hashlib.sha256
+        ).hexdigest()
+        return {
+            "algorithm": "SHA-256",
+            "challenge": challenge,
+            "salt": salt,
+            "signature": signature,
+            "maxnumber": ALTCHA_MAX_NUMBER,
+        }
+
+
+    def altcha_verify(payload_b64: str) -> tuple[bool, str]:
+        """Verify a base64 ALTCHA solution payload. Returns (ok, reason)."""
+        if not ALTCHA_ENABLED:
+            # No key => cannot verify. Callers only reach here in grace mode.
+            return False, "altcha disabled"
+        if not isinstance(payload_b64, str) or not payload_b64:
+            return False, "altcha missing"
+        try:
+            raw = base64.b64decode(payload_b64, validate=True)
+            payload = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return False, "altcha decode"
+        if not isinstance(payload, dict):
+            return False, "altcha shape"
+        if payload.get("algorithm") != "SHA-256":
+            return False, "altcha algorithm"
+        salt = payload.get("salt")
+        number = payload.get("number")
+        challenge = payload.get("challenge")
+        signature = payload.get("signature")
+        if not (
+            isinstance(salt, str)
+            and isinstance(challenge, str)
+            and isinstance(signature, str)
+        ):
+            return False, "altcha fields"
+        # number may arrive as an int or a numeric string; both hash identically
+        # via str(number). Reject bool (an int subclass) and anything non-numeric.
+        if isinstance(number, bool):
+            return False, "altcha number"
+        if isinstance(number, str):
+            if not number.isdigit():
+                return False, "altcha number"
+        elif not isinstance(number, int):
+            return False, "altcha number"
+        recomputed = hashlib.sha256((salt + str(number)).encode("utf-8")).hexdigest()
+        if not hmac.compare_digest(recomputed, challenge):
+            return False, "altcha challenge"
+        expected_sig = hmac.new(
+            ALTCHA_HMAC_KEY_BYTES, challenge.encode("utf-8"), hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(expected_sig, signature):
+            return False, "altcha signature"
+        params = _altcha_salt_params(salt)
+        now = time.time()
+        expires = params.get("expires")
+        issued = params.get("t")
+        if expires is not None and now > expires:
+            return False, "altcha expired"
+        if issued is not None:
+            age = now - issued
+            if age < ALTCHA_MIN_SOLVE_SECONDS:
+                return False, "altcha too fast"
+            if age > ALTCHA_EXPIRES_SECONDS + 5:
+                return False, "altcha stale"
+        # One-time-use: record within the signed expiry window to reject replays.
+        window_end = float(expires) if expires is not None else now + ALTCHA_EXPIRES_SECONDS
+        if not SEEN.add_unique(challenge, window_end):
+            return False, "altcha replay"
+        return True, ""
 
 
     def _client_key(handler: "Handler") -> str:
@@ -199,7 +384,13 @@ data:
             origin = self.headers.get("Origin")
             return ALLOWED_ORIGIN if origin == ALLOWED_ORIGIN else None
 
-        def _send_json(self, status: int, obj: dict, extra_cors: bool = True):
+        def _send_json(
+            self,
+            status: int,
+            obj: dict,
+            extra_cors: bool = True,
+            extra_headers: "dict | None" = None,
+        ):
             payload = json.dumps(obj).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
@@ -209,6 +400,9 @@ data:
                 if allow:
                     self.send_header("Access-Control-Allow-Origin", allow)
                     self.send_header("Vary", "Origin")
+            if extra_headers:
+                for name, value in extra_headers.items():
+                    self.send_header(name, value)
             self.end_headers()
             self.wfile.write(payload)
 
@@ -216,15 +410,30 @@ data:
             if self.path == "/healthz":
                 self._send_json(200, {"ok": True}, extra_cors=False)
                 return
+            if self.path == "/api/challenge":
+                # Issue an ALTCHA challenge for the site widget to solve. Served
+                # cross-origin (CORS emitted when the Origin matches the static
+                # site) and never cached, so each visitor gets a fresh proof.
+                if not ALTCHA_ENABLED:
+                    # Grace mode (no key yet): nothing to sign. The widget degrades
+                    # to submitting without a proof while ALTCHA_REQUIRED is false.
+                    self._send_json(503, {"ok": False, "error": "challenge unavailable"})
+                    return
+                self._send_json(
+                    200,
+                    altcha_new_challenge(),
+                    extra_headers={"Cache-Control": "no-store"},
+                )
+                return
             self._send_json(404, {"ok": False, "error": "not found"})
 
         def do_OPTIONS(self):
-            # CORS preflight for the POST.
+            # CORS preflight for the POST / challenge GET.
             allow = self._cors_origin()
-            if self.path == "/api/contact" and allow:
+            if self.path in ("/api/contact", "/api/challenge") and allow:
                 self.send_response(204)
                 self.send_header("Access-Control-Allow-Origin", allow)
-                self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
                 self.send_header("Access-Control-Allow-Headers", "Content-Type")
                 self.send_header("Access-Control-Max-Age", "600")
                 self.send_header("Vary", "Origin")
@@ -243,6 +452,11 @@ data:
             if not BUCKET.allow(client_key):
                 self._send_json(429, {"ok": False, "error": "rate limited"})
                 return
+            # Global aggregate ceiling: even an IP-rotating flood, where every
+            # source stays under its own per-client budget, hits this single cap.
+            if not GLOBAL_BUCKET.allow(GLOBAL_BUCKET_KEY):
+                self._send_json(429, {"ok": False, "error": "rate limited"})
+                return
             try:
                 length = int(self.headers.get("Content-Length", "0"))
             except ValueError:
@@ -257,6 +471,26 @@ data:
             except (ValueError, UnicodeDecodeError):
                 self._send_json(400, {"ok": False, "error": "invalid JSON"})
                 return
+            # ALTCHA proof-of-work gate, BEFORE honeypot/validation/deliver so a
+            # POST without a valid, unexpired, unreplayed proof never reaches LMTP
+            # when enforcement is on. Sequencing: the handler accepts BOTH legacy
+            # posts (no 'altcha' field) and proofed posts, gated by ALTCHA_REQUIRED
+            # (default false), so it can deploy BEFORE the site widget. When the
+            # flag is false a proof is advisory (verified if present, never
+            # blocking); when true a missing or bad proof is a hard 400.
+            altcha_field = payload.get("altcha") if isinstance(payload, dict) else None
+            if ALTCHA_REQUIRED:
+                ok, reason = altcha_verify(altcha_field if isinstance(altcha_field, str) else "")
+                if not ok:
+                    sys.stderr.write("altcha reject (enforced): %s\n" % reason)
+                    self._send_json(400, {"ok": False, "error": "verification required"})
+                    return
+            elif isinstance(altcha_field, str) and altcha_field:
+                ok, reason = altcha_verify(altcha_field)
+                if not ok:
+                    # Advisory during the coexistence window: log and proceed so no
+                    # legitimate visitor is blocked before enforcement lands.
+                    sys.stderr.write("altcha advisory reject: %s\n" % reason)
             fields, err = validate(payload)
             if err == "honeypot":
                 # Do not tip off the bot: pretend success, send nothing.
@@ -275,10 +509,24 @@ data:
 
 
     def main() -> int:
+        # Fail closed: an enforce mode that cannot verify a proof must never start
+        # and silently accept everything. This surfaces the misconfiguration
+        # immediately in the rollout instead of degrading to accept-all.
+        if ALTCHA_REQUIRED and not ALTCHA_ENABLED:
+            sys.stderr.write(
+                "FATAL: ALTCHA_REQUIRED is set but ALTCHA_HMAC_KEY is empty; "
+                "refusing to start. Mint the form-altcha-hmac Secret or unset "
+                "ALTCHA_REQUIRED (see docs/runbooks/form-intake.md).\n"
+            )
+            return 1
         server = ThreadingHTTPServer((BIND_HOST, BIND_PORT), Handler)
         sys.stdout.write(
             "form-handler listening on %s:%d -> LMTP %s:%d\n"
             % (BIND_HOST, BIND_PORT, LMTP_HOST, LMTP_PORT)
+        )
+        sys.stdout.write(
+            "altcha: required=%s enabled=%s maxnumber=%d\n"
+            % (ALTCHA_REQUIRED, ALTCHA_ENABLED, ALTCHA_MAX_NUMBER)
         )
         sys.stdout.flush()
         try:

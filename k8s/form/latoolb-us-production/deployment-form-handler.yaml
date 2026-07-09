@@ -55,6 +55,21 @@ spec:
               value: keyholders@latoolb.us
             - name: FORM_ALLOWED_ORIGIN
               value: https://greatfallstoolbus.org
+            # ALTCHA proof-of-work gate. ALTCHA_REQUIRED stays "false" until BOTH
+            # this handler and the site widget are live; flip it to "true" only in
+            # rollout step 3 (docs/runbooks/form-intake.md). The HMAC key comes
+            # from a Secret by NAME ONLY (no value in git). optional: true lets the
+            # pod start before the Secret is minted (rollout step 1): with the flag
+            # false the handler serves in challenge-disabled grace; with the flag
+            # true and the key absent the handler fails closed at startup.
+            - name: ALTCHA_REQUIRED
+              value: "false"
+            - name: ALTCHA_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: form-altcha-hmac
+                  key: hmac-key
+                  optional: true
           volumeMounts:
             - name: src
               mountPath: /app
