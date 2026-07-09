@@ -48,7 +48,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GF_CORE_REF: 2281b576bce0e8dd776a047b84e7464f5b508a62
+  GF_CORE_REF: df510574d17b85e7f15470caf3574fcabc4768f1
   HAS_GF_CORE_DEPLOY_KEY: ${{ secrets.GF_CORE_DEPLOY_KEY != '' }}
   HAS_GF_CORE_READ_TOKEN: ${{ secrets.GF_CORE_READ_TOKEN != '' }}
   HAS_ARC_RUNNERS_KUBECONFIG: ${{ secrets.ARC_RUNNERS_KUBECONFIG_B64 != '' }}
