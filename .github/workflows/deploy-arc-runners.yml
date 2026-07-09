@@ -286,7 +286,7 @@ jobs:
           payload = json.loads(result.stdout)
           actual = {
               item["metadata"]["name"]: item.get("spec", {}).get("maxRunners")
-              for item in payload.get("items", [])
+              for item in payload.get("items", [payload])
           }
           mismatches = [
               f"{name}: expected {want}, got {actual.get(name)!r}"
