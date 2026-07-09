@@ -1,0 +1,12 @@
+module(
+    name = "great_falls_tool_bus_flywheel_cache_proof",
+    version = "0.0.1",
+    compatibility_level = 1,
+)
+
+# Self-contained proof workspace for the GloriousFlywheel org-tenancy
+# cache-backed Bazel soak (TIN-2364). Kept deliberately dependency-free and
+# decoupled from the repo-root MODULE.bazel (which pins attic-iac via a private
+# git_override): a cold cache round-trip must not require fetching the private
+# GloriousFlywheel core. The tinyland registry is listed first in the adjacent
+# .bazelrc, then BCR, matching the house registry chain.

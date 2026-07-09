@@ -1,0 +1,72 @@
+name: Flywheel org-tenancy cache proof
+
+# Declare-only pre-soak lane for the GloriousFlywheel L5 org-mint activation
+# (TIN-2364). It exchanges this repo's GitHub Actions OIDC identity for a
+# gf-reapi-cell profile and runs a cache-backed, READ-ONLY Bazel round-trip
+# routed to remote_instance_name=org-great-falls-tool-bus, giving the operator a
+# real lane to observe during the cache-read pilot soak.
+#
+# INERT until activation + cell rollout: while runtime_grants_enabled is off for
+# this repo the exchange mints the prior read-only default, and the shared cache
+# / exchange front door are not yet on the runner, so the driver logs a loud
+# notice and exits 0. The job is additionally continue-on-error so it can NEVER
+# block this repo's CI. Once the org tenant is activated and soaked, drop
+# continue-on-error to make this lane enforcing.
+#
+# Endpoint authority is fleet-runtime env, never in this YAML: nix-setup exports
+# BAZEL_REMOTE_CACHE from cluster DNS, and GF_REAPI_TOKEN_EXCHANGE_ENDPOINT comes
+# from the fleet profile.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: flywheel-cache-proof-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cache-proof:
+    name: flywheel-cache-proof (org-great-falls-tool-bus)
+    runs-on: tinyland-nix
+    # INERT until L5 activation + cell rollout; must never block CI.
+    continue-on-error: true
+    timeout-minutes: 15
+    env:
+      GFW_EXPECTED_INSTANCE_NAME: org-great-falls-tool-bus
+    steps:
+      - name: Checkout overlay
+        uses: actions/checkout@v6
+
+      # Endpoint-free cache attach. nix-setup derives BAZEL_REMOTE_CACHE from
+      # cluster DNS reachability (it invents no endpoint) and adds Nix to PATH.
+      # Non-fatal: off-cluster / pre-rollout it warns and the driver stays inert.
+      - name: Attach shared Bazel cache (fleet runtime env)
+        id: cache-setup
+        continue-on-error: true
+        uses: tinyland-inc/ci-templates/.github/actions/nix-setup@v2
+
+      - name: Fallback Nix on PATH
+        if: steps.cache-setup.outcome != 'success'
+        shell: bash
+        run: |
+          for nixbin in /nix/var/nix/profiles/default/bin "${HOME}/.nix-profile/bin"; do
+            [ -d "${nixbin}" ] && echo "${nixbin}" >> "${GITHUB_PATH}"
+          done
+
+      - name: Cache-backed org-tenancy Bazel proof (read-only)
+        shell: bash
+        run: |
+          set -uo pipefail
+          if command -v nix >/dev/null 2>&1; then
+            nix develop . --command just flywheel-cache-proof
+          else
+            echo "::warning::nix unavailable on runner; org-tenancy cache proof skipped (inert pre-activation)."
+          fi
