@@ -67,6 +67,20 @@ attic_cache          = "main"
 attic_public_key     = "main:eaUydxuDu7xBoy5cCo3MdknYAkVyTIASQ7DGuwxa+XA="
 bazel_cache_endpoint = "grpc://bazel-cache.nix-cache.svc.cluster.local:9092"
 
+# GloriousFlywheel hosted token-exchange front door for the GFTB org nix lane
+# (TIN-2364 L5 org-mint soak). The oidc-profile helper reads
+# GF_REAPI_TOKEN_EXCHANGE_ENDPOINT to exchange the job's GitHub Actions OIDC
+# identity for a short-lived gf-reapi-cell token. This is a cluster-internal
+# Service endpoint value, committed here under the same discipline as
+# bazel_cache_endpoint and attic_server above; it mirrors the honey.tfvars
+# export that covers the shared tinyland-nix lanes (GloriousFlywheel PR #1066).
+nix_env_vars = [
+  {
+    name  = "GF_REAPI_TOKEN_EXCHANGE_ENDPOINT"
+    value = "http://gf-reapi-token-exchange.gf-rbe.svc.cluster.local:8081/v1/token/exchange"
+  }
+]
+
 shared_runner_node_selector = {
   "kubernetes.io/hostname" = "sting"
 }
