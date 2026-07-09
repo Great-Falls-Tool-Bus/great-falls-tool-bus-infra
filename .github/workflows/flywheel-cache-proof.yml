@@ -9,9 +9,9 @@ name: Flywheel org-tenancy cache proof
 # INERT until activation + cell rollout: while runtime_grants_enabled is off for
 # this repo the exchange mints the prior read-only default, and the shared cache
 # / exchange front door are not yet on the runner, so the driver logs a loud
-# notice and exits 0. The job is additionally continue-on-error so it can NEVER
-# block this repo's CI. Once the org tenant is activated and soaked, drop
-# continue-on-error to make this lane enforcing.
+# notice and exits 0. The org tenant is activated and the round-trip proven
+# (TIN-2364 soak, 2026-07-09), so this lane is now ENFORCING: a failed exchange
+# or cache round-trip fails CI.
 #
 # Endpoint authority is fleet-runtime env, never in this YAML: nix-setup exports
 # BAZEL_REMOTE_CACHE from cluster DNS, and GF_REAPI_TOKEN_EXCHANGE_ENDPOINT comes
@@ -36,8 +36,6 @@ jobs:
   cache-proof:
     name: flywheel-cache-proof (org-great-falls-tool-bus)
     runs-on: tinyland-nix
-    # INERT until L5 activation + cell rollout; must never block CI.
-    continue-on-error: true
     timeout-minutes: 15
     env:
       GFW_EXPECTED_INSTANCE_NAME: org-great-falls-tool-bus
@@ -65,8 +63,8 @@ jobs:
       # activation keystone commit and content-verified before it is trusted on
       # PATH. The cache-proof driver locates flywheel-github-oidc-profile via
       # command -v, so this step is what enables the OIDC exchange on the
-      # runner. A hash mismatch fails this step; the job stays continue-on-error
-      # for now, so this can never block CI during the soak.
+      # runner. A hash mismatch fails this step and, now that the lane is
+      # enforcing, fails CI.
       - name: Install fleet OIDC front door (pinned)
         shell: bash
         env:
