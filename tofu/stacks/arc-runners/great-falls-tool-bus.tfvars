@@ -78,6 +78,10 @@ nix_env_vars = [
   {
     name  = "GF_REAPI_TOKEN_EXCHANGE_ENDPOINT"
     value = "http://gf-reapi-token-exchange.gf-rbe.svc.cluster.local:8081/v1/token/exchange"
+  },
+  {
+    name  = "GF_REAPI_CACHE_FRONTDOOR_ENDPOINT"
+    value = "grpc://gf-reapi-cell.gf-rbe.svc.cluster.local:8980"
   }
 ]
 
