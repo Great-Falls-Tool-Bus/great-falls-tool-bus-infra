@@ -23,6 +23,15 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      request_mode:
+        description: "Proof request mode. auto keeps PRs/read-only safe and uses cache-write only when the enforce-cell endpoint is present."
+        type: choice
+        default: auto
+        options:
+          - auto
+          - cache-read
+          - cache-write
 
 permissions:
   contents: read
@@ -39,6 +48,7 @@ jobs:
     timeout-minutes: 15
     env:
       GFW_EXPECTED_INSTANCE_NAME: org-great-falls-tool-bus
+      GFW_PROOF_REQUEST_MODE: ${{ inputs.request_mode || 'auto' }}
     steps:
       - name: Checkout overlay
         uses: actions/checkout@v6
@@ -83,20 +93,16 @@ jobs:
             exit 1
           fi
           chmod +x "${dest}"
-          # The minted cache-read profile points Bazel at gf-reapi-credhelper
-          # (resolved by PATH lookup). Build it from the same pinned core ref;
-          # the flake output is commit-pinned and the runner Attic substituter
-          # serves the fleet-built artifact when warm.
-          if ! command -v gf-reapi-credhelper >/dev/null 2>&1; then
-            nix build "github:tinyland-inc/GloriousFlywheel/${GF_OIDC_PROFILE_REF}#gf-reapi-credhelper" \
-              --out-link "${RUNNER_TEMP}/gf-credhelper"
-            ln -sf "$(readlink -f "${RUNNER_TEMP}/gf-credhelper")/bin/gf-reapi-credhelper" \
-              "${tools_dir}/gf-reapi-credhelper"
-          fi
           echo "${tools_dir}" >> "${GITHUB_PATH}"
           echo "installed pinned flywheel-github-oidc-profile (sha256 ${actual})"
 
-      - name: Cache-backed org-tenancy Bazel proof (read-only)
+      - name: Install released GF credential helper
+        uses: tinyland-inc/ci-templates/.github/actions/gf-credhelper-install@v2.11.0
+        with:
+          version: v0.2.0
+          sha256: 178fbf71b4892505e28ef5a05611485701fed8ba7ba1ada91d4d737b994f0cd2
+
+      - name: Cache-backed org-tenancy Bazel proof
         shell: bash
         run: |
           set -uo pipefail
