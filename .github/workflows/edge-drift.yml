@@ -6,6 +6,8 @@ name: Edge Zone Drift (zero-diff)
 # There is deliberately NO apply lane here. Like edge-plan.yml this binds the
 # protected `edge` environment (zone-scoped Cloudflare token) and skips green
 # with a notice while the token secret is unset (the runbook mints it late).
+# When ENABLE_GOOGLE_SSO=true, however, both Google OAuth credentials are a
+# hard preflight requirement: skipping would hide an unsafe input contract.
 #
 # D8 (audit wf_0118a02c): the plan is produced text-only (no -out=); a
 # persisted plan binary embeds the zone token and is apply-able, so only the
@@ -49,6 +51,12 @@ jobs:
     steps:
       - name: Validate deploy secrets
         id: secrets
+        env:
+          # Environment-level vars/secrets are available only after the runner
+          # declares `environment: edge`, so keep this preflight step-scoped.
+          ENABLE_GOOGLE_SSO: ${{ vars.ENABLE_GOOGLE_SSO || 'false' }}
+          HAS_GOOGLE_SSO_CLIENT_ID: ${{ secrets.GOOGLE_SSO_CLIENT_ID != '' }}
+          HAS_GOOGLE_SSO_CLIENT_SECRET: ${{ secrets.GOOGLE_SSO_CLIENT_SECRET != '' }}
         run: |
           set -euo pipefail
           missing=0
@@ -64,6 +72,18 @@ jobs:
           if [ "${HAS_ACCESS_ALLOWED_EMAILS_JSON}" != "true" ]; then
             echo "::notice::ACCESS_ALLOWED_EMAILS_JSON is not configured in the edge environment; skipping edge drift plan (Access allowlist is operator-custody PII, not committed)."
             missing_edge=1
+          fi
+          if [ "${ENABLE_GOOGLE_SSO}" = "true" ]; then
+            if [ "${HAS_GOOGLE_SSO_CLIENT_ID}" != "true" ]; then
+              echo "::error::GOOGLE_SSO_CLIENT_ID is required when ENABLE_GOOGLE_SSO=true."
+              missing_edge=1
+              missing=1
+            fi
+            if [ "${HAS_GOOGLE_SSO_CLIENT_SECRET}" != "true" ]; then
+              echo "::error::GOOGLE_SSO_CLIENT_SECRET is required when ENABLE_GOOGLE_SSO=true."
+              missing_edge=1
+              missing=1
+            fi
           fi
           if [ "${HAS_ARC_RUNNERS_RUSTFS_ACCESS_KEY}" != "true" ]; then
             echo "::notice::ARC_RUNNERS_RUSTFS_ACCESS_KEY is not configured; skipping edge drift plan."
@@ -117,6 +137,18 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_SECRET_KEY }}
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN_GFTB_ZONES }}
           TF_VAR_access_allowed_emails: ${{ secrets.ACCESS_ALLOWED_EMAILS_JSON }}
+          # Match edge-plan.yml exactly: scheduled drift must evaluate every
+          # live SSO and dev/preview input or defaults can masquerade as drift.
+          # The preflight checked only presence; values stay masked here.
+          TF_VAR_enable_google_sso: ${{ vars.ENABLE_GOOGLE_SSO || 'false' }}
+          TF_VAR_google_sso_apps_domain: ${{ vars.TF_VAR_GOOGLE_SSO_APPS_DOMAIN || 'sulliwood.org' }}
+          TF_VAR_google_sso_client_id: ${{ secrets.GOOGLE_SSO_CLIENT_ID }}
+          TF_VAR_google_sso_client_secret: ${{ secrets.GOOGLE_SSO_CLIENT_SECRET }}
+          TF_VAR_dev_preview_allowed_emails: ${{ secrets.DEV_PREVIEW_ALLOWED_EMAILS_JSON || '[]' }}
+          TF_VAR_enable_github_sso: ${{ vars.ENABLE_GITHUB_SSO || 'false' }}
+          TF_VAR_onetimepin_idp_id: ${{ vars.ONETIMEPIN_IDP_ID || '' }}
+          TF_VAR_github_sso_client_id: ${{ secrets.GH_SSO_CLIENT_ID }}
+          TF_VAR_github_sso_client_secret: ${{ secrets.GH_SSO_CLIENT_SECRET }}
         with:
           push-cache: "false"
           command: |

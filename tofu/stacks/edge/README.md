@@ -38,11 +38,12 @@ they exist as **console-created zones on the house Cloudflare account**
   shared honey-ingress Cloudflare Tunnel (proxied), gated behind
   `var.archives_dns_enabled` (default `false`, fail-closed) — TIN-2528;
   see "`lists.latoolb.us` archives DNS enable sequence" below
-- stages a Google Workspace SSO identity provider on the CF Access account
+- manages the live Google Workspace SSO identity provider on the CF Access account
   (`cloudflare_zero_trust_access_identity_provider` type `google-apps`),
-  gated behind `var.enable_google_sso` (default `false`, inert). Additive:
-  the apps keep `allowed_idps` empty, so once enabled BOTH Google and the
-  existing One-Time-PIN work - see "Google Workspace SSO enable sequence"
+  gated behind `var.enable_google_sso` (code default `false`, live `edge`
+  environment value `true`). Additive: the apex/`www` apps keep
+  `allowed_idps` empty, so BOTH Google and the existing One-Time-PIN work -
+  see "Google Workspace SSO steady-state contract"
   below and [`docs/runbooks/cf-access-google-sso.md`](../../docs/runbooks/cf-access-google-sso.md)
 - RETARGETS the orphaned pages.dev Access app into a **DECOUPLED dev + preview
   gate** covering `dev.greatfallstoolbus.org` + `*.preview.greatfallstoolbus.org`
@@ -50,7 +51,7 @@ they exist as **console-created zones on the house Cloudflare account**
   policy, fed by `var.dev_preview_allowed_emails`), NOT the shared
   `web_apex_allow`, and stages a **GitHub SSO** identity provider
   (`cloudflare_zero_trust_access_identity_provider` type `github`) gated behind
-  `var.enable_github_sso` (default `false`, inert, mirroring Google) — TIN-2535;
+  `var.enable_github_sso` (default `false`, inert) — TIN-2535;
   see "dev + preview DECOUPLE and GitHub SSO enable sequence" below and
   [`docs/runbooks/cf-access-dev-preview-and-github-sso.md`](../../docs/runbooks/cf-access-dev-preview-and-github-sso.md)
 
@@ -174,47 +175,48 @@ Enable sequence:
 Rollback: flip `var.archives_dns_enabled` back to `false` (plan/apply) and
 remove the `lists.latoolb.us` tunnel public-hostname route dashboard-side.
 
-## Google Workspace SSO enable sequence (declare-only; inert by default)
+## Google Workspace SSO steady-state contract (live; OTP retained)
 
-The CF Access account today has exactly one IdP: One-Time-PIN
-(`onetimepin`), so operator sign-in relies on the fragile 10-minute email
-OTP. `main.tf` stages a Google Workspace IdP
+The CF Access account has a managed Google Workspace IdP
 (`cloudflare_zero_trust_access_identity_provider.google_sso`, type
 `google-apps`, `apps_domain` = `var.google_sso_apps_domain`, default
-`sulliwood.org`) so the operator's Workspace account can sign in with Google
-instead.
+`sulliwood.org`) plus One-Time-PIN (`onetimepin`). The apex and `www`
+applications leave `allowed_idps` empty (all account IdPs), so Google and OTP
+remain available together. The dev/preview app has its separate GitHub + OTP
+pinning contract when GitHub SSO is enabled.
 
-This is PURELY ADDITIVE and INERT BY DEFAULT: it is gated behind
-`var.enable_google_sso` (default `false`, `count = 0`), so merging this
-changes nothing (no-op plan). The three self_hosted apps leave
-`allowed_idps` empty (all IdPs allowed), so enabling the IdP adds Google
-WITHOUT removing the OTP path - the OTP fallback keeps working throughout.
+The Terraform variable defaults to `false` for inert bootstrap/local use, but
+the live protected `edge` environment sets `ENABLE_GOOGLE_SSO=true`. Both
+`edge-plan.yml` and `edge-drift.yml` pass that flag, the two credential
+secrets, and the optional `TF_VAR_GOOGLE_SSO_APPS_DOMAIN` configuration
+variable override into OpenTofu. If the live flag is false or omitted, the
+plan requests destruction of the IdP; that is never a steady-state no-op.
 
-Full operator procedure (Google Cloud OAuth client, redirect URI, secrets,
-verify): [`docs/runbooks/cf-access-google-sso.md`](../../docs/runbooks/cf-access-google-sso.md).
-Enable sequence:
+Both workflows fail closed before planning when `ENABLE_GOOGLE_SSO=true` and
+either `GOOGLE_SSO_CLIENT_ID` or `GOOGLE_SSO_CLIENT_SECRET` is absent. The
+preflight uses only secret-presence booleans and never dereferences or prints
+the values; later OpenTofu steps consume them as masked secret environment
+inputs. Full bootstrap/rotation/recovery procedure:
+[`docs/runbooks/cf-access-google-sso.md`](../../docs/runbooks/cf-access-google-sso.md).
+Steady-state contract:
 
-1. Operator creates a Google Cloud **OAuth 2.0 Client ID** of type **Web
-   application** with the authorized redirect URI
-   `https://sulliwood.cloudflareaccess.com/cdn-cgi/access/callback` (the CF
-   Access team-domain callback), and records the client id + secret.
-2. Operator stores those in the protected `edge` environment as the secrets
-   `GOOGLE_SSO_CLIENT_ID` / `GOOGLE_SSO_CLIENT_SECRET` (and, on the operator
-   machine, the sops-lane credentials `google-sso-client-id` /
-   `google-sso-client-secret`). Never committed.
-3. Operator sets the `edge` environment variable `ENABLE_GOOGLE_SSO` to
-   `true` (this feeds `TF_VAR_enable_google_sso`; unset stays `false`).
-4. PR-plan (`edge-plan.yml`) shows the single IdP create, then
-   `workflow_dispatch action=apply` (dispatch-apply doctrine, D6) - no
-   direct apply.
-5. Operator verifies Google sign-in at
-   `https://sulliwood.cloudflareaccess.com` (or any gated app); the OTP
-   option is still offered and still works.
+1. Keep `ENABLE_GOOGLE_SSO=true` and both Google credential secrets present in
+   the protected `edge` environment.
+2. Leave `TF_VAR_GOOGLE_SSO_APPS_DOMAIN` unset for `sulliwood.org`, or set it
+   to the OAuth client's Workspace primary domain. The workflows map the
+   case-insensitive GitHub variable to `TF_VAR_google_sso_apps_domain` in
+   plan, apply, and drift.
+3. Expect the normal plan and scheduled drift plan to report no change to
+   `google_sso[0]`; a delete is a stop condition and indicates missing/skewed
+   workflow inputs.
+4. Verify Google sign-in and the retained OTP fallback after any intentional
+   credential/domain update.
 
-Rollback: set `ENABLE_GOOGLE_SSO` back to `false` (or unset it) and
-apply - the IdP is destroyed and only OTP remains. Google-ONLY pinning
-(dropping the OTP fallback) is a separate, deliberate follow-up documented
-inline in `main.tf` (`allowed_idps`), not part of this change.
+Recovery uses OTP while the operator restores the last-known-good Google
+inputs; setting `ENABLE_GOOGLE_SSO=false` is not routine rollback. It is an
+explicit destructive decommission requiring a reviewed IdP-only delete and a
+manual `action=apply` dispatch with `allow_destroy=true`. Google-only pinning
+is outside this contract: keep OTP alongside Google.
 
 ## dev + preview DECOUPLE and GitHub SSO enable sequence (TIN-2535; inert by default)
 
@@ -239,11 +241,13 @@ dev and preview along with prod. This change **decouples** them:
   touching the dev/preview app, policy, or group.
 - A **GitHub SSO** IdP (`cloudflare_zero_trust_access_identity_provider.github_sso`,
   type `github`) is staged, gated `count = var.enable_github_sso ? 1 : 0`,
-  default `false` — EXACTLY mirroring `google_sso`. Merging is a **strict no-op**
-  on this IdP. The dev/preview app pins `allowed_idps` to **[GitHub SSO,
+  default `false`. It uses the same count-gated resource shape as Google, but
+  Google is already live. Merging is a **strict no-op** on the GitHub IdP. The
+  dev/preview app pins `allowed_idps` to **[GitHub SSO,
   One-Time-PIN]** when enabled (Google is deliberately absent — it authenticates
   `@sulliwood.org` operators only, not the dev team). While disabled,
-  `allowed_idps` resolves to `[]` (all IdPs allowed, OTP works) so no lockout.
+  `allowed_idps` resolves to `[]` (all account IdPs, currently Google + OTP) so
+  no lockout.
 
 **INERT TO LIVE TRAFFIC:** `dev.` and `*.preview.` have no origins/DNS in this
 stack yet, so gating them changes nothing currently served. Full operator
@@ -270,8 +274,9 @@ Enable sequence:
    doctrine, D6) — no direct apply.
 
 Rollback: set `ENABLE_GITHUB_SSO` back to `false` (or unset it) and apply — the
-IdP is destroyed and `allowed_idps` returns to `[]` (OTP only). The dev/preview
-app / policy / group remain (they are the decouple, not the SSO).
+IdP is destroyed and `allowed_idps` returns to `[]` (all account IdPs,
+currently Google + OTP). The dev/preview app / policy / group remain (they are
+the decouple, not the SSO).
 
 **DIFF-PROOF BEFORE THE TIN-2421 FLIP:** before dropping the apex gate, a plan
 must show **ZERO changes** to `pages_dev` (the dev/preview app),

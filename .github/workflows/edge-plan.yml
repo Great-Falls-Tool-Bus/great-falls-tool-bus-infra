@@ -8,7 +8,9 @@ name: Edge Zone Stack
 # operator-custody Access allowlist JSON (names only here; mint + rotation:
 # docs/runbooks/edge-token-and-zones.md). FAIL-SOFT: until those secrets
 # exist, PR/push runs skip green with a notice — the house skip-green idiom;
-# manual action=apply fails closed instead.
+# manual action=apply fails closed instead. Google SSO is the live-lane
+# exception: whenever ENABLE_GOOGLE_SSO=true, missing OAuth credentials fail
+# every event red before planning so defaults can never request IdP deletion.
 #
 # BOOTSTRAP NOTE: runs on `tinyland-nix`, which for the GFTB org resolves
 # only through this overlay's own scale set — see README.md Bootstrap.
@@ -75,6 +77,12 @@ jobs:
     steps:
       - name: Validate deploy secrets
         id: secrets
+        env:
+          # Environment-level vars/secrets are available only after the runner
+          # declares `environment: edge`, so keep this preflight step-scoped.
+          ENABLE_GOOGLE_SSO: ${{ vars.ENABLE_GOOGLE_SSO || 'false' }}
+          HAS_GOOGLE_SSO_CLIENT_ID: ${{ secrets.GOOGLE_SSO_CLIENT_ID != '' }}
+          HAS_GOOGLE_SSO_CLIENT_SECRET: ${{ secrets.GOOGLE_SSO_CLIENT_SECRET != '' }}
         run: |
           set -euo pipefail
           missing=0
@@ -90,6 +98,18 @@ jobs:
           if [ "${HAS_ACCESS_ALLOWED_EMAILS_JSON}" != "true" ]; then
             echo "::notice::ACCESS_ALLOWED_EMAILS_JSON is not configured in the edge environment; skipping edge zone plan (Access allowlist is operator-custody PII, not committed)."
             missing_edge=1
+          fi
+          if [ "${ENABLE_GOOGLE_SSO}" = "true" ]; then
+            if [ "${HAS_GOOGLE_SSO_CLIENT_ID}" != "true" ]; then
+              echo "::error::GOOGLE_SSO_CLIENT_ID is required when ENABLE_GOOGLE_SSO=true."
+              missing_edge=1
+              missing=1
+            fi
+            if [ "${HAS_GOOGLE_SSO_CLIENT_SECRET}" != "true" ]; then
+              echo "::error::GOOGLE_SSO_CLIENT_SECRET is required when ENABLE_GOOGLE_SSO=true."
+              missing_edge=1
+              missing=1
+            fi
           fi
           if [ "${HAS_ARC_RUNNERS_RUSTFS_ACCESS_KEY}" != "true" ]; then
             echo "::notice::ARC_RUNNERS_RUSTFS_ACCESS_KEY is not configured; skipping edge zone plan."
@@ -147,20 +167,20 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_SECRET_KEY }}
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN_GFTB_ZONES }}
           TF_VAR_access_allowed_emails: ${{ secrets.ACCESS_ALLOWED_EMAILS_JSON }}
-          # Google Workspace SSO IdP (inert by default). ENABLE_GOOGLE_SSO
-          # defaults to 'false' when the variable is unset, so plans stay a
-          # no-op until the operator sets the variable to 'true' AND stores the
-          # OAuth secrets below. Empty secrets expand to "" (the variable
-          # defaults), which with the flag false keeps the IdP uncreated.
-          # See docs/runbooks/cf-access-google-sso.md.
+          # Google Workspace SSO is live when ENABLE_GOOGLE_SSO=true. The
+          # presence-only preflight above fails closed unless both credential
+          # secrets exist; values remain opaque. Keep the apps-domain override
+          # in the same environment-variable contract as the enable flag.
           TF_VAR_enable_google_sso: ${{ vars.ENABLE_GOOGLE_SSO || 'false' }}
+          TF_VAR_google_sso_apps_domain: ${{ vars.TF_VAR_GOOGLE_SSO_APPS_DOMAIN || 'sulliwood.org' }}
           TF_VAR_google_sso_client_id: ${{ secrets.GOOGLE_SSO_CLIENT_ID }}
           TF_VAR_google_sso_client_secret: ${{ secrets.GOOGLE_SSO_CLIENT_SECRET }}
           # Dev/preview DECOUPLE allowlist + GitHub SSO IdP (TIN-2535, inert by
           # default). DEV_PREVIEW_ALLOWED_EMAILS_JSON defaults to '[]' when
           # unset, so the dev/preview group is empty (gate admits nobody) until
           # the operator populates it. ENABLE_GITHUB_SSO defaults to 'false', so
-          # the GitHub IdP stays uncreated (strict no-op) exactly like Google.
+          # the GitHub IdP stays uncreated (strict no-op). It uses the same
+          # count-gated shape as Google, whose live flag is supplied above.
           # Secret names use the GH_ prefix because GitHub reserves 'GITHUB_' for
           # secret/variable names. See
           # docs/runbooks/cf-access-dev-preview-and-github-sso.md.
@@ -257,8 +277,9 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_SECRET_KEY }}
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN_GFTB_ZONES }}
           TF_VAR_access_allowed_emails: ${{ secrets.ACCESS_ALLOWED_EMAILS_JSON }}
-          # Google Workspace SSO IdP (inert by default; see the plan step).
+          # Google Workspace SSO (same fail-closed contract as the plan step).
           TF_VAR_enable_google_sso: ${{ vars.ENABLE_GOOGLE_SSO || 'false' }}
+          TF_VAR_google_sso_apps_domain: ${{ vars.TF_VAR_GOOGLE_SSO_APPS_DOMAIN || 'sulliwood.org' }}
           TF_VAR_google_sso_client_id: ${{ secrets.GOOGLE_SSO_CLIENT_ID }}
           TF_VAR_google_sso_client_secret: ${{ secrets.GOOGLE_SSO_CLIENT_SECRET }}
           # Dev/preview DECOUPLE allowlist + GitHub SSO IdP (TIN-2535, inert by

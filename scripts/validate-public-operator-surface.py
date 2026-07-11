@@ -46,6 +46,21 @@ RAW_K8S_MUTATION = re.compile(
     r"\bkustomize\s+build\b[^\n#`]*\bkubectl\b[^\n#`]*\b(?:apply|delete)\b)"
 )
 RAW_TOFU_WORKFLOW = re.compile(r"(?<![A-Za-z0-9_-])tofu(?:\s|-chdir\b)")
+WORKFLOW_ENV_ENTRY = re.compile(r"^          (TF_VAR_[A-Za-z0-9_]+):[ \t]*(.+)$")
+
+EDGE_RUNTIME_TF_VARS = {
+    "TF_VAR_access_allowed_emails",
+    "TF_VAR_cloudflare_api_token",
+    "TF_VAR_dev_preview_allowed_emails",
+    "TF_VAR_enable_github_sso",
+    "TF_VAR_enable_google_sso",
+    "TF_VAR_github_sso_client_id",
+    "TF_VAR_github_sso_client_secret",
+    "TF_VAR_google_sso_apps_domain",
+    "TF_VAR_google_sso_client_id",
+    "TF_VAR_google_sso_client_secret",
+    "TF_VAR_onetimepin_idp_id",
+}
 
 NEGATIVE_OR_DESCRIPTIVE_CONTEXT = re.compile(
     r"\b(no|not|cannot|can't|never|without|avoid|accidental|deliberately|"
@@ -141,6 +156,106 @@ def scan_workflows() -> list[Finding]:
     return findings
 
 
+def workflow_step(path: Path, name: str) -> tuple[int, list[str]]:
+    lines = (REPO / path).read_text(encoding="utf-8").splitlines()
+    marker = f"      - name: {name}"
+    try:
+        start = lines.index(marker)
+    except ValueError:
+        return 1, []
+    end = next(
+        (
+            index
+            for index in range(start + 1, len(lines))
+            if lines[index].startswith("      - name: ")
+        ),
+        len(lines),
+    )
+    return start + 1, lines[start:end]
+
+
+def scan_edge_workflow_contract() -> list[Finding]:
+    """Keep drift, plan, and apply on one secret-safe edge input contract."""
+    findings: list[Finding] = []
+    steps = [
+        (Path(".github/workflows/edge-plan.yml"), "Plan edge zones"),
+        (Path(".github/workflows/edge-plan.yml"), "Apply edge zones"),
+        (
+            Path(".github/workflows/edge-drift.yml"),
+            "Plan edge zones (text-only, no persisted binary)",
+        ),
+    ]
+    step_vars: list[tuple[Path, str, int, dict[str, str]]] = []
+    for path, name in steps:
+        line, block = workflow_step(path, name)
+        if not block:
+            findings.append(
+                Finding(
+                    "edge-workflow-step-missing",
+                    path,
+                    line,
+                    f"Required edge workflow step {name!r} was not found.",
+                )
+            )
+            continue
+        variables = {
+            match.group(1): match.group(2)
+            for text in block
+            if (match := WORKFLOW_ENV_ENTRY.match(text))
+        }
+        step_vars.append((path, name, line, variables))
+        missing = EDGE_RUNTIME_TF_VARS - variables.keys()
+        if missing:
+            findings.append(
+                Finding(
+                    "edge-workflow-input-missing",
+                    path,
+                    line,
+                    f"{name} is missing runtime input(s): {', '.join(sorted(missing))}.",
+                )
+            )
+
+    if step_vars:
+        baseline = step_vars[0][3]
+        for path, name, line, variables in step_vars[1:]:
+            if variables != baseline:
+                findings.append(
+                    Finding(
+                        "edge-workflow-input-drift",
+                        path,
+                        line,
+                        f"{name} TF_VAR_* inputs differ from the plan step.",
+                    )
+                )
+
+    required_fragments = {
+        "ENABLE_GOOGLE_SSO: ${{ vars.ENABLE_GOOGLE_SSO || 'false' }}": "expose ENABLE_GOOGLE_SSO to the presence-only preflight",
+        "HAS_GOOGLE_SSO_CLIENT_ID: ${{ secrets.GOOGLE_SSO_CLIENT_ID != '' }}": "check GOOGLE_SSO_CLIENT_ID presence without reading its value",
+        "HAS_GOOGLE_SSO_CLIENT_SECRET: ${{ secrets.GOOGLE_SSO_CLIENT_SECRET != '' }}": "check GOOGLE_SSO_CLIENT_SECRET presence without reading its value",
+        'if [ "${ENABLE_GOOGLE_SSO}" = "true" ]; then': "fail closed when live Google SSO credentials are incomplete",
+        'echo "::error::GOOGLE_SSO_CLIENT_ID is required when ENABLE_GOOGLE_SSO=true."\n'
+        "              missing_edge=1\n"
+        "              missing=1": "hard-fail when the enabled Google client id is absent",
+        'echo "::error::GOOGLE_SSO_CLIENT_SECRET is required when ENABLE_GOOGLE_SSO=true."\n'
+        "              missing_edge=1\n"
+        "              missing=1": "hard-fail when the enabled Google client secret is absent",
+        "TF_VAR_google_sso_apps_domain: ${{ vars.TF_VAR_GOOGLE_SSO_APPS_DOMAIN || 'sulliwood.org' }}": "map the documented Google Workspace domain override",
+    }
+    for path in {path for path, _ in steps}:
+        text = (REPO / path).read_text(encoding="utf-8")
+        for fragment, purpose in required_fragments.items():
+            if fragment not in text:
+                findings.append(
+                    Finding(
+                        "edge-google-sso-preflight-missing",
+                        path,
+                        1,
+                        f"Workflow must {purpose}.",
+                    )
+                )
+    return findings
+
+
 def scan_scripts() -> list[Finding]:
     findings: list[Finding] = []
     for rel, lineno, line in iter_lines(git_files(SCRIPT_GLOBS)):
@@ -179,7 +294,9 @@ def main() -> int:
         self_test()
         return 0
 
-    findings = scan_docs() + scan_workflows() + scan_scripts()
+    findings = (
+        scan_docs() + scan_workflows() + scan_edge_workflow_contract() + scan_scripts()
+    )
     if findings:
         print("public operator surface validation FAILED:", file=sys.stderr)
         for finding in findings:
@@ -194,7 +311,9 @@ def main() -> int:
         + len(git_files(WORKFLOW_GLOBS))
         + len(git_files(SCRIPT_GLOBS))
     )
-    print(f"public operator surface validation passed ({scanned} tracked surface files)")
+    print(
+        f"public operator surface validation passed ({scanned} tracked surface files)"
+    )
     return 0
 
 
