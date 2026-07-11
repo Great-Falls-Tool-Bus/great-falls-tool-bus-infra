@@ -24,7 +24,7 @@ output "access_application_aud" {
 }
 
 output "google_sso_idp_id" {
-  description = "Cloudflare Access IdP id for the Google Workspace provider, or null when var.enable_google_sso is false. Use it to pin allowed_idps for a Google-only follow-up (see main.tf)."
+  description = "Cloudflare Access IdP id for the Google Workspace provider, or null when var.enable_google_sso is false. Operational reference only; apex/www intentionally retain OTP alongside Google."
   value       = one(cloudflare_zero_trust_access_identity_provider.google_sso[*].id)
 }
 

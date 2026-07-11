@@ -36,8 +36,8 @@ are untouched. **The apex retirement can no longer ungate dev/preview.**
 ## What is already true (verified live)
 
 - The CF Access account (`fdcb4fb750ab79be0800e885f09ddbdc`, team domain
-  `sulliwood.cloudflareaccess.com`) has One-Time-PIN (`onetimepin`) and,
-  optionally, the inert Google Workspace IdP from
+  `sulliwood.cloudflareaccess.com`) has the live Google Workspace IdP plus
+  One-Time-PIN (`onetimepin`) from
   [`cf-access-google-sso.md`](cf-access-google-sso.md).
 - The pages.dev Access application is orphaned: its CF Pages origin
   (`greatfallstoolbus-org.pages.dev` + `*.preview`) was deleted with the Pages
@@ -65,7 +65,8 @@ are untouched. **The apex retirement can no longer ungate dev/preview.**
   `enable_github_sso` (bool, default `false`), `onetimepin_idp_id` (string,
   default `""`), and the sensitive `github_sso_client_id` /
   `github_sso_client_secret` (default `""`, never committed).
-- Workflow passthrough in `.github/workflows/edge-plan.yml`:
+- Matching workflow passthrough in `.github/workflows/edge-plan.yml` and
+  `.github/workflows/edge-drift.yml`:
   `TF_VAR_dev_preview_allowed_emails` from the `edge` environment secret
   `DEV_PREVIEW_ALLOWED_EMAILS_JSON` (defaults `[]` when unset),
   `TF_VAR_enable_github_sso` from the `edge` environment variable
@@ -75,9 +76,10 @@ are untouched. **The apex retirement can no longer ungate dev/preview.**
   `GH_SSO_CLIENT_ID` / `GH_SSO_CLIENT_SECRET`.
 
 With `enable_github_sso` false (the default) the plan is a strict no-op on the
-IdP, exactly like Google SSO. (The retarget of the app + the new group/policy
-DO show in the plan — they are the decouple; they just do not apply on merge and
-do not affect live traffic.)
+GitHub IdP. It uses the same count-gated resource shape as Google, but Google is
+already live. (The retarget of the app + the new group/policy DO show in the
+plan — they are the decouple; they just do not apply on merge and do not affect
+live traffic.)
 
 > **Secret naming:** the GitHub credentials use the `GH_` prefix
 > (`GH_SSO_CLIENT_ID` / `GH_SSO_CLIENT_SECRET`), NOT `GITHUB_`. GitHub Actions
@@ -169,9 +171,10 @@ Unset or any non-`true` value keeps the IdP off. (For a local run,
 ## Rollback
 
 Set `ENABLE_GITHUB_SSO` back to `false` (or unset it) and apply. The IdP is
-destroyed and `allowed_idps` returns to `[]` (OTP-only). The dev/preview app,
-`dev_preview_allow`, and `gftb_dev_team` remain — they are the decouple, not the
-SSO — so rolling back GitHub SSO does NOT re-couple dev/preview to the apex.
+destroyed and `allowed_idps` returns to `[]` (all account IdPs, currently
+Google + OTP). The dev/preview app, `dev_preview_allow`, and `gftb_dev_team`
+remain — they are the decouple, not the SSO — so rolling back GitHub SSO does
+NOT re-couple dev/preview to the apex.
 
 ## Diff-proof before the TIN-2421 apex flip (REQUIRED)
 
@@ -205,5 +208,7 @@ keystone exists to guarantee.
   HOW they prove it (GitHub + OTP). It never touches the prod apex allowlist
   (`access_allowed_emails`) or the apex identity providers — that separation is
   the decouple.
-- Google is deliberately NOT offered on the dev/preview gate: it authenticates
-  `@sulliwood.org` operators only, which is the apex audience, not the dev team.
+- While GitHub SSO is enabled, the dev/preview gate pins GitHub + OTP and does
+  not offer Google. With GitHub SSO disabled, `allowed_idps=[]` permits all
+  account IdPs (currently Google + OTP); the email allowlist remains the
+  authorization boundary either way.

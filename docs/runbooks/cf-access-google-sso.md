@@ -1,49 +1,52 @@
 # GFTB edge: Google Workspace SSO for Cloudflare Access (operator runbook)
 
-**Declare-only companion to [`tofu/stacks/edge/`](../../tofu/stacks/edge/README.md)
-("Google Workspace SSO enable sequence").** Adds a Google Workspace sign-in
-option to the Cloudflare Access edge stack so the operator's `sulliwood.org`
-Workspace account can authenticate with Google
-instead of the fragile 10-minute email One-Time-PIN (OTP). The tofu is merged
-INERT: it does nothing until the operator supplies the Google OAuth client
-id/secret and flips the enable flag. This is ADDITIVE: the OTP path stays
-available and working the entire time. Creating the Google Cloud OAuth client
-and storing secrets are **operator actions**. Secret **names only** in git, no
-values, ever.
+**Steady-state companion to [`tofu/stacks/edge/`](../../tofu/stacks/edge/README.md)
+("Google Workspace SSO steady-state contract").** Google Workspace SSO is
+already live and managed by this stack. It is ADDITIVE: the apex and `www`
+applications continue to allow the account One-Time-PIN (OTP) provider
+alongside Google. Creating or rotating the Google Cloud OAuth client and
+storing its credentials are **operator actions**. Secret **names only** in git,
+no values, ever.
 
-## What is already true (verified live)
+## Current managed posture
 
 - The CF Access account (`fdcb4fb750ab79be0800e885f09ddbdc`, team domain
-  `sulliwood.cloudflareaccess.com`) has exactly ONE identity provider today:
-  One-Time-PIN (`onetimepin`).
-- The three `self_hosted` Access apps in the edge stack (`web_apex`, `web_www`,
-  `pages_dev`) leave `allowed_idps` unset (`= []`), which means ALL account
-  IdPs are allowed. So the moment a Google IdP exists, Google sign-in works AND
-  the OTP option is still offered.
+  `sulliwood.cloudflareaccess.com`) has Google Workspace SSO and One-Time-PIN
+  (`onetimepin`).
+- The apex and `www` Access apps leave `allowed_idps` unset (`= []`), which
+  allows both account IdPs. The separate dev/preview app can pin its own
+  GitHub + OTP provider set; that does not change the apex Google + OTP
+  posture.
 - The shared allow policy `cloudflare_zero_trust_access_policy.web_apex_allow`
   allows the operator's Workspace mailbox plus the other approved addresses.
-  Adding an IdP does NOT change the allowlist: Google sign-in still only admits
-  allowlisted emails.
+  Google sign-in still only admits allowlisted emails.
+- The protected `edge` environment keeps `ENABLE_GOOGLE_SSO=true`; setting it
+  false or leaving it unset makes OpenTofu plan destruction of the managed
+  Google IdP.
 
-## What this change added (already merged, inert)
+## Workflow contract
 
 - `cloudflare_zero_trust_access_identity_provider.google_sso` in
   `tofu/stacks/edge/main.tf` (type `google-apps`, `apps_domain` =
   `var.google_sso_apps_domain`, default `sulliwood.org`), gated
   `count = var.enable_google_sso ? 1 : 0`.
-- Variables `enable_google_sso` (bool, default `false`),
-  `google_sso_apps_domain` (default `sulliwood.org`), and the sensitive
-  `google_sso_client_id` / `google_sso_client_secret` (default `""`, never
-  committed).
-- Workflow passthrough in `.github/workflows/edge-plan.yml`:
+- Both `.github/workflows/edge-plan.yml` and the scheduled
+  `.github/workflows/edge-drift.yml` pass the same live inputs:
   `TF_VAR_enable_google_sso` from the `edge` environment variable
-  `ENABLE_GOOGLE_SSO` (defaults `false` when unset), and
+  `ENABLE_GOOGLE_SSO`, `TF_VAR_google_sso_apps_domain` from the optional
+  `TF_VAR_GOOGLE_SSO_APPS_DOMAIN` variable (default `sulliwood.org`), and
   `TF_VAR_google_sso_client_id` / `TF_VAR_google_sso_client_secret` from the
   `edge` environment secrets `GOOGLE_SSO_CLIENT_ID` / `GOOGLE_SSO_CLIENT_SECRET`.
+- When `ENABLE_GOOGLE_SSO=true`, both workflows check only whether both
+  credential secrets exist and fail before checkout/planning if either is
+  absent. The preflight never dereferences or prints either value; later
+  OpenTofu steps consume them as masked secret environment inputs.
 
-With `enable_google_sso` false (the default) the plan is a no-op.
+The Terraform variable still defaults to `false` for inert bootstrap/local
+use. That default is NOT the live workflow posture and is NOT safe for a
+steady-state plan unless the live IdP is being deliberately decommissioned.
 
-## Enable procedure
+## Bootstrap or credential-rotation procedure
 
 ### Step 1 - create the Google Cloud OAuth 2.0 Web client (operator, Google console)
 
@@ -80,23 +83,30 @@ On the operator machine (sops lane), the same values are the credentials
 [`secrets/README.md`](../../secrets/README.md)). For a local plan/apply, feed
 them as `TF_VAR_google_sso_client_id` / `TF_VAR_google_sso_client_secret`.
 
-### Step 3 - flip the enable flag
+### Step 3 - preserve the live workflow variables
 
-Set the `edge` environment VARIABLE (not secret) `ENABLE_GOOGLE_SSO` to
-`true`. Unset or any non-`true` value keeps the IdP off. (For a local run,
-`export TF_VAR_enable_google_sso=true`.)
+Keep the `edge` environment VARIABLE (not secret) `ENABLE_GOOGLE_SSO` set to
+`true`. For a local operator plan, export `TF_VAR_enable_google_sso=true` and
+both credential variables from operator custody.
 
 The `apps_domain` defaults to `sulliwood.org`; override with the
-`edge`-scoped `TF_VAR_google_sso_apps_domain` only if the OAuth client belongs
-to a different Workspace primary domain.
+`edge` environment variable `TF_VAR_GOOGLE_SSO_APPS_DOMAIN` only if the OAuth
+client belongs to a different Workspace primary domain. GitHub configuration
+variable names are case-insensitive; the workflows map it to the
+case-sensitive runner variable `TF_VAR_google_sso_apps_domain` for plan,
+apply, and scheduled drift. Local operator runs set the latter directly.
 
 ### Step 4 - plan and apply through CI (dispatch-apply doctrine, D6)
 
-1. The `edge-plan.yml` PR/push plan will now show ONE resource to create:
-   `cloudflare_zero_trust_access_identity_provider.google_sso[0]`. Confirm it
-   is a single `create` and nothing is destroyed.
-2. Apply via `workflow_dispatch` with `action=apply` (never a direct apply,
-   never a merge side effect). See
+1. A steady-state `edge-plan.yml` or `edge-drift.yml` run must report no
+   changes for
+   `cloudflare_zero_trust_access_identity_provider.google_sso[0]`. Any proposed
+   delete is a stop condition: restore the enable flag and required inputs
+   before proceeding.
+2. During a credential or apps-domain rotation, confirm the plan updates only
+   the intended IdP fields and destroys nothing.
+3. Apply an intentional update via `workflow_dispatch` with `action=apply`
+   (never a direct apply, never a merge side effect). See
    [`tofu/stacks/edge/README.md`](../../tofu/stacks/edge/README.md)
    "Operating it".
 
@@ -111,34 +121,37 @@ to a different Workspace primary domain.
    (sign in via OTP in a private window). Google is additive, not a
    replacement.
 
-## Rollback
+## Recovery and decommissioning
 
-Set `ENABLE_GOOGLE_SSO` back to `false` (or unset it) and apply. The IdP is
-destroyed and the account returns to OTP-only. No app or policy change is
-needed because the apps never pinned `allowed_idps` to Google.
+For an OAuth or Google sign-in problem, use the retained OTP path, restore the
+last-known-good credentials/domain from operator custody, and re-plan. Do NOT
+set `ENABLE_GOOGLE_SSO=false` merely to make drift green: that requests
+destruction of the managed IdP.
 
-## Optional: Google-only (drop the OTP fallback)
-
-Only after Google sign-in is verified working, and only as a deliberate
-follow-up, the operator can pin the apps to the Google IdP so OTP is no longer
-offered. The inline example is in `tofu/stacks/edge/main.tf` next to the IdP
-resource (set `allowed_idps` on `web_apex` / `web_www` / `pages_dev` to
-`[cloudflare_zero_trust_access_identity_provider.google_sso[0].id]`). Do NOT do
-this before the IdP exists and is proven, or the operator can be locked out.
+Removing Google SSO is a destructive decommission, not routine rollback. It
+requires an explicit operator decision, a reviewed plan whose intended delete
+is limited to `google_sso[0]`, and a manual dispatch with `allow_destroy=true`.
+OTP must be verified first and remains the fallback throughout. Pinning the
+apex/`www` apps to Google-only is outside this contract; keep OTP alongside
+Google.
 
 ## Guardrails
 
 - Never commit the client id or secret. They live only in the `edge`
   environment secrets and operator sops custody.
+- Keep `ENABLE_GOOGLE_SSO=true` and both credential secrets present for every
+  live plan, apply, and scheduled drift run. The presence preflight is
+  deliberately fail-closed.
 - Token permission: the zone-scoped Cloudflare API token
-  (`cloudflare-api-token-gftb-zones`) carries `Access: Apps and Policies
-  Edit`, which manages the Access apps and policies today. Identity providers
-  are a SEPARATE Cloudflare permission group. If the apply returns a 403 /
-  authentication error on the `google_sso` resource, add `Access:
-  Organizations, Identity Providers, and Groups: Edit` to the token (mint /
-  rotate per [`docs/runbooks/edge-token-and-zones.md`](edge-token-and-zones.md))
-  and re-run. This is the only token change the IdP might need; DNS,
-  redirects, and Access apps stay on the existing scopes.
+  (`cloudflare-api-token-gftb-zones`) carries both `Access: Apps and Policies
+  Edit` and the separate account-scoped `Access: Organizations, Identity
+  Providers, and Groups: Edit` grant. If the apply returns a 403 /
+  authentication error on `google_sso`, verify that exact documented shape
+  and rotate the token per
+  [`docs/runbooks/edge-token-and-zones.md`](edge-token-and-zones.md); do not
+  broaden it beyond the named account/zones and permissions.
 - This runbook changes authentication only. The allowlist
   (`access_allowed_emails`) still governs WHO may enter; Google just adds
   HOW they prove who they are.
+- Keep the apex and `www` applications unpinned so OTP remains available
+  alongside Google.
