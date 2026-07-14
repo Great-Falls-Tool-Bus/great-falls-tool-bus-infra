@@ -20,8 +20,12 @@ while the `keyholders@` and `discuss@` list families are delivered by
 recipient-scoped LMTP to `mailman-core:8024`. Mailman moderates and fans out,
 then submits outbound over 587 STARTTLS with SASL as `lists-bounces@latoolb.us`;
 the substrate rspamd milter adds the `d=latoolb.us` DKIM signature (selector
-`mail`) before the message leaves for the world. The DNS edge authorizes both
-egress IPs in SPF and publishes MX, DKIM, and a start-observing DMARC record.
+`mail`) before the message leaves for the world. The DNS edge SPF authorizes the
+one real egress IP `71.168.64.84` (the host-networked postfix on honey egresses
+direct-to-MX, SNAT'd at the CRS309 to the Fidium static WAN; wire-proven
+2026-07-04) plus the inbound MX/relay `45.61.188.177` (`relay.tinyland.dev`,
+inbound-only, not an egress path), and publishes MX, DKIM, and a start-observing
+DMARC record.
 
 **Sources of truth.** Edge DNS records: `tofu/stacks/edge/main.tf` (MX ->
 `relay.tinyland.dev`, `priority 10`; SPF `v=spf1 ip4:45.61.188.177
@@ -73,14 +77,22 @@ host-networked and its source is SNAT'd to the node CIDR on the ingress leg; it
 admits REST `8001` from `mailman-web`. On egress, `mailman-core` reaches the
 substrate postfix at the raw host IP `192.168.70.10/32` on `587` (destination
 is not SNAT'd, the asymmetric quirk), Postgres on `5432`, `mailman-web` on
-`8000`/`8080` for the HyperKitty archive POST, plus DNS. `mailman-web` admits
-HTTP `8000` from any namespace and egresses to core REST `8001` and Postgres
-`5432`. `mailman-postgres` admits `5432` only from core and web.
+`8000`/`8080` for the HyperKitty archive POST, plus DNS. The web tier admits
+HTTP `8000` from a scoped set of namespaces, no longer "any": the LIVE public
+`discuss@` archive leg reaches it through the shared honey-ingress tunnel as
+`cloudflared` ns -> `anubis-archive:8081` (the k8s/archive PoW gate, TIN-2528)
+-> web `:8000`, admitted by the additive `mailman-core-archive-ingress`
+NetworkPolicy. `mailman-postgres` admits `5432` only from core and web.
 
 **Source of truth.** `k8s/list/latoolb-us-production/networkpolicy.yaml`
 verbatim (ingress CIDR `10.244.0.0/24` at lines 37-42; egress host IP
 `192.168.70.10/32` at lines 65-70; core -> web `8000`/`8080` at lines 85-93;
-web ingress `namespaceSelector {}` on `8000` at lines 115-119). The two
+the web-tier `:8000` ingress admits a scoped namespace set — `cloudflared`,
+`arc-runners`, `greatfallstoolbus-org-production` — folded into the `mailman-core`
+policy after the standalone `mailman-web` policy was retired (TIN-2493, web tier
+now co-located in the `mailman-core` pod). The LIVE archive leg's admission is
+the additive `mailman-core-archive-ingress` rule in
+`k8s/archive/latoolb-us-production/networkpolicy.yaml`. The two
 asymmetric host-networked quirks are annotated in that file's comments (ingress
 sees the SNAT node CIDR; egress targets the raw host IP). Live pod IPs on
 2026-07-04 (`mailman-core 10.244.0.17`) confirm the `10.244.0.0/24` node CIDR.
@@ -91,12 +103,14 @@ flowchart LR
     web["mailman-web<br/>Postorius + HyperKitty"]
     core["mailman-core<br/>list engine"]
     pg["mailman-postgres"]
-    anyns["Any namespace<br/>(future tunnel ingress)"]
+    cfns["cloudflared ns<br/>tunnel connector"]
+    anubisarc["anubis-archive<br/>PoW gate :8081<br/>k8s/archive (TIN-2528)"]
     dns(["DNS 53"])
 
     postfix -->|"ingress 8024 LMTP<br/>from ipBlock 10.244.0.0/24<br/>SNAT node CIDR (quirk 1)"| core
     web -->|"ingress 8001 REST"| core
-    anyns -->|"ingress 8000 HTTP"| web
+    cfns -->|"ingress 8081<br/>from ns cloudflared"| anubisarc
+    anubisarc -->|"ingress 8000 HTTP<br/>additive netpol<br/>mailman-core-archive-ingress"| web
     core -->|"egress 587 STARTTLS+SASL<br/>to ipBlock 192.168.70.10/32<br/>raw host IP (quirk 2)"| postfix
     core -->|"egress 5432"| pg
     core -->|"egress 8000/8080<br/>archive POST"| web
@@ -214,15 +228,23 @@ flowchart TD
 ## 5. Public -> cluster HTTP edge path
 
 **Claim.** Every inbound HTTP request for the GFTB properties enters at the
-Cloudflare edge and takes one of three paths, none of which serves web content
-from the cluster. (a) `greatfallstoolbus.org` apex and `www` are proxied CNAMEs
-to `var.pages_host` (default `greatfallstoolbus-org.pages.dev`); the CF edge
-terminates TLS, then Cloudflare Access gates the surface via three self-hosted
-Access applications — apex, www, and an **account-level** app covering
-`greatfallstoolbus-org.pages.dev` + `*.greatfallstoolbus-org.pages.dev` — all
-sharing one allowlist policy (`var.access_allowed_emails`, supplied from
-protected operator custody); an allowed request is served from the CF Pages
-origin, which is itself Access-gated by that account-level app. (b)
+Cloudflare edge and takes one of three paths. (a) `greatfallstoolbus.org` apex
+and `www` are, as of the 2026-07-06 on-cluster cutover, served **LIVE from the
+cluster**: they resolve to a proxied CNAME to the shared honey-ingress
+cloudflared tunnel (`da3ffda2-68ee-46d1-aa55-ec8dae2bd471.cfargotunnel.com`), the
+CF edge terminates TLS, and Cloudflare Access still gates the surface via the
+apex and www self-hosted apps (plus the **account-level**
+`*.greatfallstoolbus-org.pages.dev` app that now guards the retained Pages
+standby), all sharing one allowlist policy (`var.access_allowed_emails`, supplied
+from protected operator custody); an allowed request is carried through the
+tunnel to the in-cluster `adapter-node` web Deployment behind `Service
+greatfallstoolbus-org.greatfallstoolbus-org-production:80` (ClusterIP `:80` ->
+containerPort `3000`; `k8s/web`, `replicas:2`, digest-pinned). CF Pages is
+retained only as a **warm rollback standby, no longer the live origin.** NOTE
+(in-repo drift): the `tofu/stacks/edge` `web_apex`/`web_www` records still
+declare a proxied CNAME to `var.pages_host`; the tunnel repoint is the live
+dashboard-side state pending a tofu reconcile (TIN-2591, the TIN-991 successor).
+(b)
 `forms.latoolb.us` is a proxied
 CNAME to the shared honey-ingress cloudflared tunnel
 (`da3ffda2-68ee-46d1-aa55-ec8dae2bd471.cfargotunnel.com`, gated
@@ -234,17 +256,27 @@ in-cluster form chain admitted by the `latoolb-us-production` NetworkPolicy:
 `anubis` PoW gate `:8081` -> `form-handler` `:8080` -> `mailman-core` `:8024`
 LMTP (which then joins the mail flow, Diagram 1). (c) `latoolb.us` apex and
 `www` are a proxied `192.0.2.1` (RFC 5737 documentation IP the proxy answers
-in front of) plus a 301 redirect ruleset to `var.alias_redirect_target`. No
-on-cluster web serving exists.
+in front of) plus a 301 redirect ruleset to `var.alias_redirect_target`. The
+`greatfallstoolbus.org` web surface (a) is now served on-cluster; the
+`latoolb.us` alias path serves no content of its own.
 
 **Sources of truth.** Web edge + Access: `tofu/stacks/edge/main.tf`
-(`web_apex`/`web_www` proxied CNAME -> `var.pages_host` at lines 42-58; the
-three `cloudflare_zero_trust_access_application` — apex 65-76, www 83-94,
-account-level `pages_dev` with `self_hosted_domains` = `greatfallstoolbus-org.pages.dev`
-+ `*.greatfallstoolbus-org.pages.dev` at 103-114 — all binding the single
+(`web_apex`/`web_www` still declare a proxied CNAME -> `var.pages_host` at lines
+42-58 — this is the pre-cutover DECLARED target and is now DRIFT vs the live
+tunnel repoint, TIN-2591; the three `cloudflare_zero_trust_access_application` —
+apex 65-76, www 83-94, account-level `pages_dev` with `self_hosted_domains` =
+`greatfallstoolbus-org.pages.dev` + `*.greatfallstoolbus-org.pages.dev` at
+103-114 — all binding the single
 `cloudflare_zero_trust_access_policy.web_apex_allow` at 122-134) and
 `tofu/stacks/edge/variables.tf` (`pages_host` default `greatfallstoolbus-org.pages.dev`
-26-41; `access_allowed_emails` required operator input 15-26). Forms
+26-41; `access_allowed_emails` required operator input 15-26). LIVE on-cluster
+serving tier: `k8s/web/greatfallstoolbus-org-production/` (`deployment.yaml`
+`replicas: 2` + digest-pinned image; `service.yaml` ClusterIP `:80` ->
+targetPort `3000`; `networkpolicy.yaml` cloudflared-ns admission), reconciled
+LIVE per `k8s/web/README.md`. The tunnel public-hostname route
+(`greatfallstoolbus.org`+`www` -> `greatfallstoolbus-org` svc `:80`) is
+Cloudflare-dashboard/token-managed, NOT in this repo (same boundary as forms +
+archive). Forms
 CNAME: `tofu/stacks/edge/main.tf` `alias_forms` proxied CNAME ->
 `da3ffda2-68ee-46d1-aa55-ec8dae2bd471.cfargotunnel.com`, `count = var.forms_dns_enabled`
 (245-254); var at `variables.tf` 95-113. Alias redirect: `tofu/stacks/edge/main.tf`
@@ -266,18 +298,23 @@ flowchart TD
     client["Public HTTP client"]
 
     subgraph cf["Cloudflare edge — CONFIG-BACKED (tofu/stacks/edge)"]
-        webdns["greatfallstoolbus.org apex + www<br/>PROXIED CNAME to var.pages_host<br/>default greatfallstoolbus-org.pages.dev"]
+        webdns["greatfallstoolbus.org apex + www<br/>PROXIED CNAME to shared honey-ingress tunnel<br/>da3ffda2-68ee-46d1-aa55-ec8dae2bd471.cfargotunnel.com<br/>LIVE 2026-07-06 on-cluster cutover<br/>(tofu web_apex/web_www still declare var.pages_host = DRIFT, TIN-2591)"]
         proxy["CF proxy: terminate TLS + orange-cloud<br/>proxied=true"]
-        access["CF Access gate REV-2<br/>3 self_hosted apps: apex / www / account-level *.pages.dev<br/>shared policy var.access_allowed_emails<br/>operator allowlist from protected env"]
+        access["CF Access gate REV-2<br/>self_hosted apps: apex / www (live tunnel path)<br/>+ account-level *.pages.dev (guards the retained standby)<br/>shared policy var.access_allowed_emails<br/>operator allowlist from protected env"]
         formsdns["forms.latoolb.us<br/>PROXIED CNAME to cfargotunnel<br/>da3ffda2-68ee-46d1-aa55-ec8dae2bd471.cfargotunnel.com<br/>gated var.forms_dns_enabled"]
         aliasdns["latoolb.us apex + www<br/>PROXIED A 192.0.2.1 (RFC 5737)<br/>301 ruleset to var.alias_redirect_target"]
     end
 
-    pages["CF Pages origin<br/>greatfallstoolbus-org.pages.dev<br/>also Access-gated (account-level app)<br/>build/deploy in site repo, not this overlay"]
+    pages["CF Pages origin<br/>greatfallstoolbus-org.pages.dev<br/>RETAINED WARM STANDBY (rollback) — NOT the live origin<br/>build/deploy in site repo, not this overlay"]
 
-    tunnel["Shared honey-ingress cloudflared tunnel<br/>public-hostname route forms.latoolb.us to anubis:8081<br/>SUBSTRATE-REFERENCED: CF dashboard/token-managed, NOT in repo"]
+    tunnel["Shared honey-ingress cloudflared tunnel<br/>public-hostname routes: greatfallstoolbus.org + www to greatfallstoolbus-org svc:80,<br/>forms.latoolb.us to anubis:8081, lists.latoolb.us to anubis-archive:8081<br/>SUBSTRATE-REFERENCED: CF dashboard/token-managed, NOT in repo"]
 
     cfd["cloudflared pods (ns cloudflared)<br/>non-host-networked<br/>SUBSTRATE-REFERENCED deploy<br/>pod IPs 10.244.0.90 / 10.244.2.133 LIVE-OBSERVED-ONLY"]
+
+    subgraph webcluster["honey cluster: greatfallstoolbus-org-production — CONFIG-BACKED (k8s/web)"]
+        websvc["Service greatfallstoolbus-org<br/>ClusterIP :80 -> targetPort 3000"]
+        webdeploy["Deployment greatfallstoolbus-org<br/>adapter-node :3000<br/>replicas:2, digest-pinned, LIVE"]
+    end
 
     subgraph cluster["honey cluster: latoolb-us-production — CONFIG-BACKED (k8s/form/networkpolicy.yaml)"]
         anubis["anubis PoW gate :8081"]
@@ -288,12 +325,16 @@ flowchart TD
     client -->|"GET greatfallstoolbus.org / www"| webdns
     webdns -->|"resolve, proxied"| proxy
     proxy --> access
-    access -->|"allow -> serve"| pages
+    access -->|"allow -> tunnel origin"| tunnel
+    access -.->|"warm rollback standby (not live)"| pages
 
     client -->|"POST forms.latoolb.us"| formsdns
     formsdns -->|"resolve, proxied"| tunnel
+
     tunnel -.->|"tunnel route (boundary)"| cfd
-    cfd -->|"ingress :8081 from ns cloudflared"| anubis
+    cfd -->|"web route -> svc :80"| websvc
+    websvc -->|":80 -> :3000"| webdeploy
+    cfd -->|"forms route :8081 from ns cloudflared"| anubis
     anubis -->|"egress :8080"| fh
     fh -->|"egress :8024 LMTP"| mmc
 
@@ -303,14 +344,19 @@ flowchart TD
 
 **Open / not-in-config.**
 
-- The tunnel public-hostname ingress map (`forms.latoolb.us -> anubis:8081`)
-  is Cloudflare zero-trust dashboard/API state, token-managed; not in this repo
-  or any ConfigMap (`service-anubis.yaml` comment). Drawn as the dashed boundary.
+- The tunnel public-hostname ingress map (now `greatfallstoolbus.org`+`www` ->
+  `greatfallstoolbus-org` svc `:80`, `forms.latoolb.us -> anubis:8081`, and
+  `lists.latoolb.us -> anubis-archive:8081`) is Cloudflare zero-trust
+  dashboard/API state, token-managed; not in this repo or any ConfigMap
+  (`service-anubis.yaml` comment). Drawn as the dashed boundary. Bringing this
+  full map into git is TIN-2591 (TIN-991 successor).
 - `cloudflared` pod IPs (`10.244.0.90` honey / `10.244.2.133` sting) are
   LIVE-OBSERVED-ONLY (2026-07-04 read-only kubectl); not pinned in config — the
   netpol admits by `namespaceSelector`, not ipBlock, on this leg.
-- The CF Pages origin's build/deploy config lives in the site repo
-  (`greatfallstoolbus.org`), not this overlay; this stack owns only the CNAME
-  target and the Access gating.
+- The apex/www DNS repoint to the tunnel (2026-07-06 cutover) is live
+  dashboard-side; the in-repo `tofu/stacks/edge` `web_apex`/`web_www` still
+  declare `var.pages_host` and are DRIFT pending reconcile. CF Pages is retained
+  as a warm rollback standby; its build/deploy config lives in the site repo
+  (`greatfallstoolbus.org`), not this overlay.
 - `var.forms_dns_enabled` default is `true` in `variables.tf` (the forms CNAME
   is live after the 2026-07-05 route + smoke proof).

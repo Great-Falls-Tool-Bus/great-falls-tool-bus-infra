@@ -25,8 +25,12 @@ These manifests intentionally do **not** contain:
 - password material, `passwordSecretRef`, or any Secret with values
 - DNS records
 - the postfix transport-map / `extraDomains` entries (substrate-owned)
-- a public ingress / Cloudflare tunnel route (follow-up; nothing exposed
-  before the round-trip smoke passes)
+- a public ingress / Cloudflare tunnel route. (The web tier IS now publicly
+  exposed at `lists.latoolb.us` — the public `discuss@` archive — but that
+  exposure is owned by the **separate `k8s/archive` stack**: the `anubis-archive`
+  PoW gate plus its additive `mailman-core-archive-ingress` NetworkPolicy
+  (TIN-2528, live), not by these list manifests. The tunnel public-hostname
+  route itself stays dashboard/token-managed, not in git.)
 
 Secrets are referenced by name only and are operator-owned (see
 `docs/runbooks/list-bringup.md`): `mailman-db`, `mailman-app`,

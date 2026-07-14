@@ -52,3 +52,19 @@ environment) and applies GFTB DNS/Access/redirect through
 one ciphertext staying blahaj-side. Memo 0002's process rule applies here:
 this is a dated correction note, never a silent rewrite — row (c)'s original
 text stands above as the historical record.
+
+## Correction — row (g), dated 2026-07-03 (decision D1=A)
+
+Row (g)'s "`latoolb.us` (mail MX + redirect) stays Dreamhost either way"
+premise is **superseded as written.** Decision **D1=A (2026-07-03)** moved the
+`latoolb.us` **nameservers to Cloudflare**; DreamHost is now **registrar-only**,
+no longer the DNS authority for the zone. All `latoolb.us` DNS records —
+MX/SPF/DKIM/DMARC (mail) plus the apex/www 301-redirect and the `forms.` /
+`lists.` tunnel CNAMEs — are authored in this overlay's `tofu/stacks/edge/`
+against the Cloudflare `latoolb.us` zone (`data.cloudflare_zone.alias`), not at
+DreamHost. Row (g)'s REV-2 amendment (which kept only the `greatfallstoolbus.org`
+zone on Cloudflare and left `latoolb.us` on DreamHost) is superseded for the NS
+authority accordingly. The mail data plane is unchanged — inbound still flows
+through the MX `relay.tinyland.dev` (ADR 010) — only the DNS control plane
+moved. Per the memo 0002 process rule this is a dated correction note, never a
+silent rewrite; row (g)'s original text stands above as the historical record.
