@@ -341,21 +341,18 @@ resource "cloudflare_dns_record" "alias_mx" {
   ttl      = 1
 }
 
-# SPF ambiguity RESOLVED by live evidence (2026-07-04 port25 round-trip,
-# session 1f91b703): outbound egresses directly from honey (Source IP
-# 71.168.64.84, HELO mail.tinyland.dev), NOT via the BuyVM relay — so
-# "v=spf1 mx ~all" softfailed (mx only covers relay.tinyland.dev =
-# 45.61.188.177). The working reference is tinyland.dev's own SPF, which
-# authorizes BOTH the relay and honey's egress:
-#   "v=spf1 ip4:45.61.188.177 ip4:71.168.64.84 mx ~all"
-# Mirrored verbatim here. DKIM already passes (selector mail).
+# The residential fallback was retired after the FL relay cutover and its
+# quiet DMARC observation window. Live DNS on 2026-07-13 confirms both
+# latoolb.us and tinyland.dev authorize only the BuyVM relay egress
+# (45.61.188.177); mx retains the relay.tinyland.dev authorization path.
+# DKIM continues to pass with selector mail.
 resource "cloudflare_dns_record" "alias_spf" {
   count = var.mail_dns_enabled ? 1 : 0
 
   zone_id = data.cloudflare_zone.alias.zone_id
   name    = local.alias_domain
   type    = "TXT"
-  content = "\"v=spf1 ip4:45.61.188.177 ip4:71.168.64.84 mx ~all\"" # tighten ~all only after quiet DMARC
+  content = "\"v=spf1 ip4:45.61.188.177 mx ~all\""
   ttl     = 1
 }
 

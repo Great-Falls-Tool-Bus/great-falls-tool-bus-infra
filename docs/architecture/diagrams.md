@@ -20,12 +20,13 @@ while the `keyholders@` and `discuss@` list families are delivered by
 recipient-scoped LMTP to `mailman-core:8024`. Mailman moderates and fans out,
 then submits outbound over 587 STARTTLS with SASL as `lists-bounces@latoolb.us`;
 the substrate rspamd milter adds the `d=latoolb.us` DKIM signature (selector
-`mail`) before the message leaves for the world. The DNS edge authorizes both
-egress IPs in SPF and publishes MX, DKIM, and a start-observing DMARC record.
+`mail`) before the message leaves for the world. The DNS edge authorizes the
+FL relay egress IP in SPF and publishes MX, DKIM, and a start-observing DMARC
+record.
 
 **Sources of truth.** Edge DNS records: `tofu/stacks/edge/main.tf` (MX ->
-`relay.tinyland.dev`, `priority 10`; SPF `v=spf1 ip4:45.61.188.177
-ip4:71.168.64.84 mx ~all`; DMARC `p=none`; DKIM selector `mail`, all gated on
+`relay.tinyland.dev`, `priority 10`; SPF `v=spf1 ip4:45.61.188.177 mx ~all`;
+DMARC `p=none`; DKIM selector `mail`, all gated on
 `var.mail_dns_enabled`). LMTP target: `k8s/list/latoolb-us-production/service-mailman-core.yaml`
 (port `8024`) and `docs/runbooks/list-bringup.md` pre-apply gate 1 (transport
 `<list-domain> lmtp:[mailman-core.latoolb-us-production.svc.cluster.local]:8024`).
@@ -35,13 +36,13 @@ postfix.tinyland-dev-production.svc.cluster.local`, `SMTP_PORT 587`,
 `smtp_secure_mode starttls`, SASL from the `lists-bounces-smtp` Secret). DKIM
 selector: `k8s/mail/latoolb-us-production/maildomain-latoolb-us.yaml`
 (`dkimSelector: mail`). Substrate postfix/dovecot/rspamd and the DKIM private
-key are blahaj-owned (ADR 010). The `45.61.188.177` relay and `71.168.64.84`
-honey egress facts are the SPF comment in `tofu/stacks/edge/main.tf`.
+key are blahaj-owned (ADR 010). The `45.61.188.177` relay egress fact and the
+residential-fallback retirement are recorded in `tofu/stacks/edge/main.tf`.
 
 ```mermaid
 flowchart TD
     sender["External sender"]
-    dns["DNS edge for latoolb.us<br/>MX 10 relay.tinyland.dev<br/>SPF v=spf1 ip4:45.61.188.177 ip4:71.168.64.84 mx ~all<br/>DKIM selector mail<br/>DMARC p=none rua postmaster@<br/>src: tofu/stacks/edge/main.tf"]
+    dns["DNS edge for latoolb.us<br/>MX 10 relay.tinyland.dev<br/>SPF v=spf1 ip4:45.61.188.177 mx ~all<br/>DKIM selector mail<br/>DMARC p=none rua postmaster@<br/>src: tofu/stacks/edge/main.tf"]
     mx["MX relay.tinyland.dev<br/>BuyVM 45.61.188.177"]
     postfix["Substrate postfix on honey<br/>host-networked 192.168.70.10<br/>ports 25 / 587 / 465<br/>SUBSTRATE (blahaj)"]
     transport{"virtual_domains<br/>+ transport map<br/>by recipient"}
