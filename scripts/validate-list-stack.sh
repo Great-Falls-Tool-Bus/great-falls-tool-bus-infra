@@ -49,6 +49,8 @@ assert_eq "$(field '.metadata.namespace' "${account_file}")" "latoolb-us-product
 assert_eq "$(field '.spec.email' "${account_file}")" "lists-bounces@latoolb.us" "MailAccount spec.email"
 assert_eq "$(field '.spec.domainRef' "${account_file}")" "latoolb-us" "MailAccount spec.domainRef"
 assert_eq "$(field '.spec.enabled' "${account_file}")" "true" "MailAccount spec.enabled"
+assert_eq "$(field '.spec.submission.envelopeSenderAliases | length' "${account_file}")" "1" "MailAccount envelope sender alias count"
+assert_eq "$(field '.spec.submission.envelopeSenderAliases[0]' "${account_file}")" "root@lists.latoolb.us" "Mailman observed envelope sender alias"
 if [ "$(field '.spec.passwordSecretRef // ""' "${account_file}")" != "" ]; then
   fail "MailAccount must not declare passwordSecretRef; the controller generates the credential (overlay doctrine)"
 fi

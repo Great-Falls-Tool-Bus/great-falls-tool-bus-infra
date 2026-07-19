@@ -22,6 +22,12 @@ spec:
   domainRef: latoolb-us
   quota: 1024
   enabled: true
+  submission:
+    # OBSERVED live Mailman fan-out authenticates with the lists-bounces
+    # account while using this envelope sender. Ownership remains explicit in
+    # the GFTB overlay; the generic substrate must not invent this alias.
+    envelopeSenderAliases:
+      - root@lists.latoolb.us
   # No passwordSecretRef by overlay doctrine: the account controller generates
   # the initial credential on first reconcile (same rule the validate-mail-crs
   # gate enforces on keyholders). The generated password is projected into the
