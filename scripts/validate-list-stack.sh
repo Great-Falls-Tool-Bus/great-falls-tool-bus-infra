@@ -12,6 +12,7 @@ core_svc_file="${dir}/service-mailman-core.yaml"
 cfg_file="${dir}/configmap-mailman.yaml"
 pvcs_file="${dir}/pvcs.yaml"
 kustomization_file="${dir}/kustomization.yaml"
+core_deploy="${dir}/deployment-mailman-core.yaml"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -40,6 +41,7 @@ require_file "${core_svc_file}"
 require_file "${cfg_file}"
 require_file "${pvcs_file}"
 require_file "${kustomization_file}"
+require_file "${core_deploy}"
 
 # --- Submission identity (contract capability #2) --------------------------
 assert_eq "$(field '.apiVersion' "${account_file}")" "mail.tinyland.dev/v1alpha1" "MailAccount apiVersion"
@@ -67,6 +69,23 @@ smtp_host="$(yq -r 'select(.metadata.name == "mailman-env") | .data.SMTP_HOST' "
 smtp_port="$(yq -r 'select(.metadata.name == "mailman-env") | .data.SMTP_PORT' "${cfg_file}")"
 assert_eq "${smtp_host}" "postfix.tinyland-dev-production.svc.cluster.local" "outgoing SMTP host (substrate submission endpoint)"
 assert_eq "${smtp_port}" "587" "outgoing SMTP port (submission, not port-25 CIDR trust)"
+
+# The generic admission boundary requires a fresh runtime receipt binding on
+# every submission-capable Deployment and final Pod. Static source cannot carry
+# those rotating values. Until the GFTB protected renderer exists, keep both
+# capability labels absent and rely on the exact named compatibility peer.
+for capability_label in \
+  "mail.tinyland.dev/submission-client" \
+  "mail.tinyland.dev/application-mail-projection"; do
+  assert_eq \
+    "$(field ".metadata.labels[\"${capability_label}\"] // \"\"" "${core_deploy}")" \
+    "" \
+    "mailman-core Deployment must not statically self-grant ${capability_label}"
+  assert_eq \
+    "$(field ".spec.template.metadata.labels[\"${capability_label}\"] // \"\"" "${core_deploy}")" \
+    "" \
+    "mailman-core Pod template must not carry unbound ${capability_label}"
+done
 
 # docker-mailman uses MAILMAN_HOSTNAME as the internal core host during web
 # settings import. The public list identity belongs in SERVE_FROM_DOMAIN.
@@ -131,8 +150,6 @@ assert_eq "${core_memory_limit}" "2Gi" "mailman-core memory limit"
 # HyperKitty answered 403. The fix co-locates mailman-web as a second container
 # in the mailman-core pod so the POST travels over loopback (127.0.0.1:8000) and
 # the trusted source matches. Assert that co-located shape holds.
-core_deploy="${dir}/deployment-mailman-core.yaml"
-
 # The standalone web Deployment must be gone (folded into the core pod).
 if [ -f "${dir}/deployment-mailman-web.yaml" ]; then
   fail "deployment-mailman-web.yaml must be removed; mailman-web is co-located inside deployment-mailman-core.yaml (TIN-2493)"

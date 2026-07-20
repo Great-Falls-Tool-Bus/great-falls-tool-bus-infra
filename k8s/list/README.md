@@ -28,6 +28,28 @@ These manifests intentionally do **not** contain:
 - a public ingress / Cloudflare tunnel route (follow-up; nothing exposed
   before the round-trip smoke passes)
 
+### Submission-capability transition
+
+The currently working Mailman sender uses an exact, named Postfix NetworkPolicy
+compatibility peer. The `latoolb-us-production` Namespace/domain authorization
+remains a cluster-side security grant; the GFTB tenant apply identity cannot
+self-grant or widen it.
+
+Do not add `mail.tinyland.dev/submission-client=true` directly to the static
+Mailman Deployment. Once generic submission admission is active, a capable
+Deployment and its Pod template must also carry
+`mail.tinyland.dev/application-mail-projection=true` and the fresh binding for
+the current runtime configuration, observation generation, controller
+revision, full/Postfix projection hashes and immutable snapshot, and the
+Postfix/Dovecot ready revisions. Static YAML cannot safely pin that rotating
+state.
+
+TIN-3061 owns the future GFTB protected renderer that must inject and apply that
+complete binding. A separate Blahaj change may remove the named compatibility
+peer only after the bound workload is admitted and Ready, the substrate
+acknowledgement is converged, and cross-node STARTTLS/SASL policy is proven
+before `DATA`.
+
 Secrets are referenced by name only and are operator-owned (see
 `docs/runbooks/list-bringup.md`): `mailman-db`, `mailman-app`,
 `lists-bounces-smtp`.
