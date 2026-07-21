@@ -14,9 +14,9 @@ name: Web Stack Apply
 #   * No push/PR triggers. workflow_dispatch only.
 #   * A required `confirm` input must equal the sentinel `apply`; any other value
 #     aborts before the cluster is touched.
-#   * Requires the GF core read credential gate AND the operator-minted
-#     web-apply-kubeconfig, stored as WEB_APPLY_KUBECONFIG_B64 in the protected
-#     `web-apply` environment. Absent either => ::error:: + exit; nothing applies.
+#   * Requires the operator-minted web-apply-kubeconfig, stored as
+#     WEB_APPLY_KUBECONFIG_B64 in the protected `web-apply` environment.
+#     Its absence fails closed before anything applies.
 #     The kubeconfig is a namespace-scoped ServiceAccount able to apply the
 #     greatfallstoolbus-org-production workload objects ONLY; apply fails closed
 #     on RBAC until the operator mints that SA (k8s/web/secrets.contract.yaml).
@@ -90,8 +90,6 @@ concurrency:
 
 env:
   GF_CORE_REF: 2281b576bce0e8dd776a047b84e7464f5b508a62
-  HAS_GF_CORE_DEPLOY_KEY: ${{ secrets.GF_CORE_DEPLOY_KEY != '' }}
-  HAS_GF_CORE_READ_TOKEN: ${{ secrets.GF_CORE_READ_TOKEN != '' }}
   HAS_WEB_APPLY_KUBECONFIG: ${{ secrets.WEB_APPLY_KUBECONFIG_B64 != '' }}
 
 jobs:
@@ -151,13 +149,6 @@ jobs:
             exit 1
           fi
 
-      - name: Require GloriousFlywheel core read credential
-        run: |
-          if [[ "${HAS_GF_CORE_DEPLOY_KEY}" != "true" && "${HAS_GF_CORE_READ_TOKEN}" != "true" ]]; then
-            echo "::error::GF_CORE_DEPLOY_KEY or GF_CORE_READ_TOKEN is required."
-            exit 1
-          fi
-
       - name: Require web-apply kubeconfig secret
         run: |
           if [[ "${HAS_WEB_APPLY_KUBECONFIG}" != "true" ]]; then
@@ -186,40 +177,41 @@ jobs:
           esac
 
       - name: Checkout overlay
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           path: overlay
+          persist-credentials: false
 
-      - name: Checkout GloriousFlywheel core with deploy key
-        if: env.HAS_GF_CORE_DEPLOY_KEY == 'true'
-        uses: actions/checkout@v6
+      - name: Checkout public GloriousFlywheel core
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: tinyland-inc/GloriousFlywheel
           ref: ${{ env.GF_CORE_REF }}
           path: GloriousFlywheel
-          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
+          persist-credentials: false
 
-      - name: Checkout GloriousFlywheel core with read token
-        if: env.HAS_GF_CORE_DEPLOY_KEY != 'true' && env.HAS_GF_CORE_READ_TOKEN == 'true'
-        uses: actions/checkout@v6
-        with:
-          repository: tinyland-inc/GloriousFlywheel
-          ref: ${{ env.GF_CORE_REF }}
-          path: GloriousFlywheel
-          token: ${{ secrets.GF_CORE_READ_TOKEN }}
+      - name: Verify GloriousFlywheel core checkout
+        run: |
+          set -euo pipefail
+          actual="$(git -C GloriousFlywheel rev-parse --verify HEAD)"
+          if [ "${actual}" != "${GF_CORE_REF}" ]; then
+            echo "::error::GloriousFlywheel checkout mismatch: expected ${GF_CORE_REF}, got ${actual}"
+            exit 1
+          fi
 
       # CD-only "merge on green" gate. Runs BEFORE any cluster touch (dry-run /
       # apply below): the deploy proceeds only if the SITE repo's ci.yml for the
       # dispatched commit concluded success. Read-only cross-repo check via the
       # infra devshell (gh + jq); the site repo is PUBLIC so its CI run metadata
-      # is world-readable — GF_CORE_READ_TOKEN is used when present, else the
-      # ambient GITHUB_TOKEN suffices. The manual workflow_dispatch path skips
-      # this gate (its authorization is confirm=apply).
+      # is world-readable. SITE_CI_READ_TOKEN is a purpose-bound optional
+      # override; the ambient per-run token is the default. The manual
+      # workflow_dispatch path skips this gate (its authorization is
+      # confirm=apply).
       - name: CI-green gate (SITE ci.yml success for this commit) [CD only]
         if: github.event_name == 'repository_dispatch'
         uses: ./GloriousFlywheel/.github/actions/nix-job
         env:
-          GH_TOKEN: ${{ secrets.GF_CORE_READ_TOKEN != '' && secrets.GF_CORE_READ_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.SITE_CI_READ_TOKEN != '' && secrets.SITE_CI_READ_TOKEN || github.token }}
           CI_GREEN_SHA: ${{ github.event.client_payload.sha }}
           CI_GREEN_REPO: ${{ github.repository_owner }}/greatfallstoolbus.org
         with:

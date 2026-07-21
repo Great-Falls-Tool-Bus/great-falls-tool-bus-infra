@@ -51,7 +51,9 @@ jobs:
       GFW_PROOF_REQUEST_MODE: ${{ inputs.request_mode || 'auto' }}
     steps:
       - name: Checkout overlay
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
 
       # Endpoint-free cache attach. nix-setup derives BAZEL_REMOTE_CACHE from
       # cluster DNS reachability (it invents no endpoint) and adds Nix to PATH.

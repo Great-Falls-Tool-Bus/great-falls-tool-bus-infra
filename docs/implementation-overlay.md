@@ -75,12 +75,13 @@ Raising any of these is an explicit operator decision followed by
 
 Overlay CI (`deploy-arc-runners.yml`, `validate.yml`) runs on `tinyland-nix`,
 which for GFTB resolves ONLY through the scale set this stack provisions, and
-needs `ARC_RUNNERS_KUBECONFIG_B64` / RustFS keys / `GF_CORE_DEPLOY_KEY`
-secrets. That is fine for steady-state PLAN once secrets exist, but the FIRST
-plan and FIRST apply must run from the operator machine, where the `honey`
-kubectl context works. Order: create App -> install App -> write App secret ->
-preflight -> `arc-init`/`arc-plan` (with RustFS creds exported) -> operator
-review -> `arc-apply` -> verify listener -> only then does overlay CI pick up.
+needs `ARC_RUNNERS_KUBECONFIG_B64` and RustFS state keys for ARC planning.
+GloriousFlywheel source is public and exact-SHA-pinned, so it needs no
+dedicated cross-repository secret. The FIRST plan and FIRST apply must still
+run from the operator machine, where the `honey` kubectl context works. Order:
+create App -> install App -> write App secret -> preflight ->
+`arc-init`/`arc-plan` (with RustFS creds exported) -> operator review ->
+`arc-apply` -> verify listener -> only then does overlay CI pick up.
 
 ## Enrollment Preflight
 
@@ -91,13 +92,12 @@ export GF_CORE_PATH=../GloriousFlywheel
 just enrollment-preflight
 ```
 
-The preflight is read-only. The preferred core-read credential is
-`GF_CORE_DEPLOY_KEY`, backed by a read-only deploy key on
-`tinyland-inc/GloriousFlywheel`. Missing
-`github-app-secret-great-falls-tool-bus`, an absent live
-`great-falls-tool-bus-nix` scale set, queued validation runs, or core-pin
-drift are enrollment blockers, not reasons to create org- or repo-specific
-labels.
+The preflight is read-only. Missing `github-app-secret-great-falls-tool-bus`,
+an absent live `great-falls-tool-bus-nix` scale set, queued validation runs, or
+core-pin drift are enrollment blockers, not reasons to create org- or
+repo-specific labels. At the pinned pre-#1208 core revision, the shared preflight
+still prints a legacy core-read-credential row. Do not provision a key solely
+for that row; `just core-checkout` is the source-authority gate.
 
 ## ARC Runner Plan And Apply
 
@@ -149,12 +149,15 @@ kubeconfig, or derived secret material.
 
 ## Current Core Pin
 
-This overlay pins GloriousFlywheel core at
+This overlay's implementation authority pins GloriousFlywheel core at
 `2281b576bce0e8dd776a047b84e7464f5b508a62`, `origin/main`, refreshed
-2026-07-02 (PR #3) from the overlay-authoring pin `7072ce2e`. Tracking main
-was chosen over the template's pin because GFTB needs the newer contracts
+2026-07-02 (PR #3) from the overlay-authoring pin `7072ce2e`. Tracking a merged
+commit was chosen over the template's pin because GFTB needs the newer contracts
 (extra-runner-set executor wiring, the consumer registry, the public
 token-exchange front door), a fresh overlay has no live state to protect, and
 the template's four internally divergent pins were a wart to fix, not
 replicate. The same commit appears in `config/organization.yaml`,
-`MODULE.bazel`, and every workflow `GF_CORE_REF`; refresh them all together.
+`MODULE.bazel`, `Justfile`, and each non-ARC core workflow. The ARC runner and
+OIDC profile surfaces retain the existing
+`df510574d17b85e7f15470caf3574fcabc4768f1` role pin. Review any future pin
+convergence as a separate executable-core adoption change.

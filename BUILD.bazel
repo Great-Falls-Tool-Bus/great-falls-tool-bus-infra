@@ -1,6 +1,46 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
 exports_files([
     "README.md",
     "config/organization.yaml",
     "tofu/backend/honey.s3.hcl",
     "tofu/stacks/arc-runners/great-falls-tool-bus.tfvars",
 ])
+
+WORKFLOW_SOURCES = glob([
+    ".github/workflows/*.yaml",
+    ".github/workflows/*.yml",
+], allow_empty = True)
+
+CORE_CHECKOUT_CONTRACT_SOURCES = [
+    "Justfile",
+    "MODULE.bazel",
+    "README.md",
+    "//bazel/flywheel-proof:MODULE.bazel",
+    "config/organization.yaml",
+    "docs/ci-credentials.md",
+    "docs/implementation-overlay.md",
+    "docs/onboarding-runbook.md",
+    "docs/runbooks/oncluster-web-cutover.md",
+] + WORKFLOW_SOURCES
+
+sh_test(
+    name = "core_checkout_contract_test",
+    srcs = ["scripts/validate-core-checkout.py"],
+    data = CORE_CHECKOUT_CONTRACT_SOURCES,
+)
+
+sh_test(
+    name = "core_checkout_contract_selftest",
+    srcs = ["scripts/validate-core-checkout.py"],
+    args = ["--self-test"],
+    data = CORE_CHECKOUT_CONTRACT_SOURCES,
+)
+
+test_suite(
+    name = "core_checkout_contract_tests",
+    tests = [
+        ":core_checkout_contract_selftest",
+        ":core_checkout_contract_test",
+    ],
+)
