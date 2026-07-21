@@ -82,12 +82,14 @@ just enrollment-preflight   # now fully green
 
 ## 10. Arm overlay CI (steady-state plan-only lane)
 ```bash
-gh secret set GF_CORE_DEPLOY_KEY        -R Great-Falls-Tool-Bus/great-falls-tool-bus-infra < ~/secrets/gf-core-deploy-key   # read-only deploy key on tinyland-inc/GloriousFlywheel (mint via GF core admin if absent)
 kubectl config view --minify --flatten --context honey | base64 | gh secret set ARC_RUNNERS_KUBECONFIG_B64 -R Great-Falls-Tool-Bus/great-falls-tool-bus-infra
 gh secret set ARC_RUNNERS_RUSTFS_ACCESS_KEY -R Great-Falls-Tool-Bus/great-falls-tool-bus-infra --body "<rustfs-access-key>"
 gh secret set ARC_RUNNERS_RUSTFS_SECRET_KEY -R Great-Falls-Tool-Bus/great-falls-tool-bus-infra --body "<rustfs-secret-key>"
 gh workflow run validate.yml -R Great-Falls-Tool-Bus/great-falls-tool-bus-infra && gh run watch -R Great-Falls-Tool-Bus/great-falls-tool-bus-infra
 ```
+GloriousFlywheel source checkout needs no dedicated cross-repository secret:
+the public repository is bound to an exact commit, the action supplies no
+explicit token or SSH key, and credential persistence is disabled.
 Green validate run on `tinyland-nix` = end-to-end proof: App installation + org registration + scale set + label pickup.
 
 ## 11. First repo proof
@@ -109,8 +111,7 @@ Execute first_repo_plan (**corrected 2026-07-02 per prompts-enqueue prompt 50 (g
 - [operator-browser] Review plan (creates-only, zero deletes) and consent _(automatable via: L7, apply consent is deliberately human; the destroy-guard already automates the safety check)_
 - [operator-terminal] just arc-apply (FIRST apply, operator machine) _(automatable via: L7, operator-gated by design; steady-state re-applies can use workflow_dispatch action=apply (already-automated lane))_
 - [agent] Verify listener: kubectl -n arc-runners get autoscalingrunnersets | grep great-falls + managed-by=Helm _(automatable via: already-automated, enrollment-preflight + flywheel-enroll-verify CHECK 3 cover this)_
-- [operator-terminal] Mint/read GF core read-only deploy key for GF_CORE_DEPLOY_KEY _(automatable via: L5, needs GF-core admin key-mint tooling; gh repo deploy-key add is L3 once the keypair exists)_
-- [operator-terminal] Set overlay CI secrets (GF_CORE_DEPLOY_KEY, ARC_RUNNERS_KUBECONFIG_B64, ARC_RUNNERS_RUSTFS_*) _(automatable via: L3, gh secret set one-liners; secret-material custody keeps the operator in the loop (L5 with a broker))_
+- [operator-terminal] Set overlay ARC plan/apply secrets (ARC_RUNNERS_KUBECONFIG_B64, ARC_RUNNERS_RUSTFS_*) _(automatable via: L3, gh secret set one-liners; secret-material custody keeps the operator in the loop (L5 with a broker))_
 - [agent] Dispatch validate.yml and watch for green on tinyland-nix (label-pickup proof) _(automatable via: already-automated, gh workflow run + gh run watch)_
 - [operator-terminal] Spawn repo #1 via the user-only `tinyland-spawn-sister-site` skill (gated on the prompt-50 step-1 decision packet; greatfallstoolbus.org MVP per prompts-enqueue prompt 50) _(automatable via: L7 provisioning seed, spawn stays user-only by doctrine)_
 - [agent] Wire the spawned repo: goo two-tier ci.yml + mint script + registry PR + proof runs _(automatable via: already-automated, this package's first_repo_plan)_

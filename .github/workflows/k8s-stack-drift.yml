@@ -49,8 +49,6 @@ concurrency:
 
 env:
   GF_CORE_REF: 2281b576bce0e8dd776a047b84e7464f5b508a62
-  HAS_GF_CORE_DEPLOY_KEY: ${{ secrets.GF_CORE_DEPLOY_KEY != '' }}
-  HAS_GF_CORE_READ_TOKEN: ${{ secrets.GF_CORE_READ_TOKEN != '' }}
 
 jobs:
   mail-stacks-drift:
@@ -73,42 +71,31 @@ jobs:
             echo "kubeconfig-present=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Require GloriousFlywheel core read credential
-        if: steps.secrets.outputs.kubeconfig-present == 'true'
-        run: |
-          if [[ "${HAS_GF_CORE_DEPLOY_KEY}" != "true" && "${HAS_GF_CORE_READ_TOKEN}" != "true" ]]; then
-            echo "::error::GF_CORE_DEPLOY_KEY or GF_CORE_READ_TOKEN is required."
-            exit 1
-          fi
-
       - name: Checkout overlay
         if: steps.secrets.outputs.kubeconfig-present == 'true'
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           path: overlay
+          persist-credentials: false
 
-      - name: Checkout GloriousFlywheel core with deploy key
-        if: >-
-          steps.secrets.outputs.kubeconfig-present == 'true'
-          && env.HAS_GF_CORE_DEPLOY_KEY == 'true'
-        uses: actions/checkout@v6
+      - name: Checkout public GloriousFlywheel core
+        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: tinyland-inc/GloriousFlywheel
           ref: ${{ env.GF_CORE_REF }}
           path: GloriousFlywheel
-          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
+          persist-credentials: false
 
-      - name: Checkout GloriousFlywheel core with read token
-        if: >-
-          steps.secrets.outputs.kubeconfig-present == 'true'
-          && env.HAS_GF_CORE_DEPLOY_KEY != 'true'
-          && env.HAS_GF_CORE_READ_TOKEN == 'true'
-        uses: actions/checkout@v6
-        with:
-          repository: tinyland-inc/GloriousFlywheel
-          ref: ${{ env.GF_CORE_REF }}
-          path: GloriousFlywheel
-          token: ${{ secrets.GF_CORE_READ_TOKEN }}
+      - name: Verify GloriousFlywheel core checkout
+        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        run: |
+          set -euo pipefail
+          actual="$(git -C GloriousFlywheel rev-parse --verify HEAD)"
+          if [ "${actual}" != "${GF_CORE_REF}" ]; then
+            echo "::error::GloriousFlywheel checkout mismatch: expected ${GF_CORE_REF}, got ${actual}"
+            exit 1
+          fi
 
       - name: Materialize namespace kubeconfig
         if: steps.secrets.outputs.kubeconfig-present == 'true'
@@ -208,42 +195,31 @@ jobs:
             echo "kubeconfig-present=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Require GloriousFlywheel core read credential
-        if: steps.secrets.outputs.kubeconfig-present == 'true'
-        run: |
-          if [[ "${HAS_GF_CORE_DEPLOY_KEY}" != "true" && "${HAS_GF_CORE_READ_TOKEN}" != "true" ]]; then
-            echo "::error::GF_CORE_DEPLOY_KEY or GF_CORE_READ_TOKEN is required."
-            exit 1
-          fi
-
       - name: Checkout overlay
         if: steps.secrets.outputs.kubeconfig-present == 'true'
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           path: overlay
+          persist-credentials: false
 
-      - name: Checkout GloriousFlywheel core with deploy key
-        if: >-
-          steps.secrets.outputs.kubeconfig-present == 'true'
-          && env.HAS_GF_CORE_DEPLOY_KEY == 'true'
-        uses: actions/checkout@v6
+      - name: Checkout public GloriousFlywheel core
+        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: tinyland-inc/GloriousFlywheel
           ref: ${{ env.GF_CORE_REF }}
           path: GloriousFlywheel
-          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
+          persist-credentials: false
 
-      - name: Checkout GloriousFlywheel core with read token
-        if: >-
-          steps.secrets.outputs.kubeconfig-present == 'true'
-          && env.HAS_GF_CORE_DEPLOY_KEY != 'true'
-          && env.HAS_GF_CORE_READ_TOKEN == 'true'
-        uses: actions/checkout@v6
-        with:
-          repository: tinyland-inc/GloriousFlywheel
-          ref: ${{ env.GF_CORE_REF }}
-          path: GloriousFlywheel
-          token: ${{ secrets.GF_CORE_READ_TOKEN }}
+      - name: Verify GloriousFlywheel core checkout
+        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        run: |
+          set -euo pipefail
+          actual="$(git -C GloriousFlywheel rev-parse --verify HEAD)"
+          if [ "${actual}" != "${GF_CORE_REF}" ]; then
+            echo "::error::GloriousFlywheel checkout mismatch: expected ${GF_CORE_REF}, got ${actual}"
+            exit 1
+          fi
 
       - name: Materialize web-apply kubeconfig
         if: steps.secrets.outputs.kubeconfig-present == 'true'
