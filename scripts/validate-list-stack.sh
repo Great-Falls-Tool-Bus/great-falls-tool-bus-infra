@@ -12,6 +12,7 @@ core_svc_file="${dir}/service-mailman-core.yaml"
 cfg_file="${dir}/configmap-mailman.yaml"
 pvcs_file="${dir}/pvcs.yaml"
 kustomization_file="${dir}/kustomization.yaml"
+core_deploy="${dir}/deployment-mailman-core.yaml"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -32,6 +33,121 @@ assert_eq() {
   fi
 }
 
+select_rendered_doc() {
+  local rendered="$1"
+  local api_version="$2"
+  local kind="$3"
+  local name="$4"
+  local namespace="$5"
+  local output="$6"
+  local context="$7"
+  local split_dir
+  local doc
+  local matches=0
+
+  split_dir="$(mktemp -d "${contract_tmpdir}/documents.XXXXXX")"
+  awk -v outdir="${split_dir}" '
+    BEGIN {
+      document = 1
+      output = sprintf("%s/%04d.yaml", outdir, document)
+    }
+    /^---[[:space:]]*$/ {
+      close(output)
+      document++
+      output = sprintf("%s/%04d.yaml", outdir, document)
+      next
+    }
+    { print > output }
+  ' "${rendered}"
+
+  for doc in "${split_dir}"/*.yaml; do
+    [ -f "${doc}" ] || continue
+    if [ "$(field '.apiVersion // ""' "${doc}")" = "${api_version}" ] && \
+      [ "$(field '.kind // ""' "${doc}")" = "${kind}" ] && \
+      [ "$(field '.metadata.name // ""' "${doc}")" = "${name}" ] && \
+      [ "$(field '.metadata.namespace // ""' "${doc}")" = "${namespace}" ]; then
+      matches=$((matches + 1))
+      cp "${doc}" "${output}"
+    fi
+  done
+
+  assert_eq "${matches}" "1" "${context}: exact rendered document count"
+}
+
+assert_rendered_submission_contract() {
+  local rendered="$1"
+  local context="$2"
+  local selected_dir
+  local account_doc
+  local deployment_doc
+
+  selected_dir="$(mktemp -d "${contract_tmpdir}/selection.XXXXXX")"
+  account_doc="${selected_dir}/mailaccount.yaml"
+  deployment_doc="${selected_dir}/deployment.yaml"
+  select_rendered_doc \
+    "${rendered}" \
+    "mail.tinyland.dev/v1alpha1" \
+    "MailAccount" \
+    "lists-bounces" \
+    "latoolb-us-production" \
+    "${account_doc}" \
+    "${context}: MailAccount selector"
+  select_rendered_doc \
+    "${rendered}" \
+    "apps/v1" \
+    "Deployment" \
+    "mailman-core" \
+    "latoolb-us-production" \
+    "${deployment_doc}" \
+    "${context}: Deployment selector"
+
+  # Assert against the decoded apply payload, not only the source files. A
+  # Kustomization transformer, patch, or replacement can otherwise alter these
+  # security properties after their base manifests pass validation.
+  assert_eq \
+    "$(field '.metadata.name' "${account_doc}")" \
+    "lists-bounces" \
+    "${context}: rendered MailAccount identity"
+  assert_eq \
+    "$(field '(.spec.submission.envelopeSenderAliases // []) | length' "${account_doc}")" \
+    "1" \
+    "${context}: rendered envelope sender alias count"
+  assert_eq \
+    "$(field '.spec.submission.envelopeSenderAliases[0]' "${account_doc}")" \
+    "root@lists.latoolb.us" \
+    "${context}: rendered Mailman envelope sender alias"
+
+  assert_eq \
+    "$(field '.metadata.name' "${deployment_doc}")" \
+    "mailman-core" \
+    "${context}: rendered mailman-core Deployment identity"
+  for capability_label in \
+    "mail.tinyland.dev/submission-client" \
+    "mail.tinyland.dev/application-mail-projection"; do
+    assert_eq \
+      "$(field "(.metadata.labels // {}) | has(\"${capability_label}\")" "${deployment_doc}")" \
+      "false" \
+      "${context}: rendered mailman-core Deployment must not carry ${capability_label}"
+    assert_eq \
+      "$(field "(.spec.template.metadata.labels // {}) | has(\"${capability_label}\")" "${deployment_doc}")" \
+      "false" \
+      "${context}: rendered mailman-core Pod template must not carry ${capability_label}"
+  done
+}
+
+expect_rendered_submission_contract_rejection() {
+  local rendered="$1"
+  local case_name="$2"
+  local expected="$3"
+  local log="$4"
+
+  if (assert_rendered_submission_contract "${rendered}" "self-test ${case_name}") >"${log}" 2>&1; then
+    fail "rendered submission contract self-test accepted ${case_name}"
+  fi
+  grep -F "${expected}" "${log}" >/dev/null || \
+    fail "rendered submission contract self-test rejected ${case_name} for the wrong reason"
+}
+
 command -v yq >/dev/null 2>&1 || fail "yq is required"
 command -v kubectl >/dev/null 2>&1 || fail "kubectl is required for kubectl kustomize"
 
@@ -40,6 +156,83 @@ require_file "${core_svc_file}"
 require_file "${cfg_file}"
 require_file "${pvcs_file}"
 require_file "${kustomization_file}"
+require_file "${core_deploy}"
+
+# Render once up front. Every invariant that grants or binds authenticated
+# submission is checked against this exact decoded apply payload.
+contract_tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/gftb-list-contract.XXXXXX")"
+trap 'rm -rf "${contract_tmpdir}"' EXIT
+rendered_stack="${contract_tmpdir}/rendered.yaml"
+kubectl kustomize "${dir}" >"${rendered_stack}"
+assert_rendered_submission_contract "${rendered_stack}" "list stack"
+
+# Bounded poison coverage for the three render-time bypass classes this guard
+# closes. These mutate only temporary decoded fixtures, never source manifests.
+poison_deployment="${contract_tmpdir}/poison-deployment-label.yaml"
+awk '
+  /^---$/ { in_deployment = 0 }
+  /^kind: Deployment$/ { in_deployment = 1 }
+  { print }
+  in_deployment && !injected && $0 == "    app.kubernetes.io/component: list-engine" {
+    print "    mail.tinyland.dev/submission-client: true"
+    injected = 1
+  }
+  END { if (!injected) exit 42 }
+' "${rendered_stack}" >"${poison_deployment}" || \
+  fail "could not construct Deployment capability-label self-test fixture"
+expect_rendered_submission_contract_rejection \
+  "${poison_deployment}" \
+  "Deployment capability label" \
+  "rendered mailman-core Deployment must not carry mail.tinyland.dev/submission-client" \
+  "${contract_tmpdir}/poison-deployment-label.log"
+
+poison_pod="${contract_tmpdir}/poison-pod-label.yaml"
+awk '
+  /^---$/ { in_deployment = 0 }
+  /^kind: Deployment$/ { in_deployment = 1 }
+  { print }
+  in_deployment && !injected && $0 == "        app.kubernetes.io/component: list-engine" {
+    print "        mail.tinyland.dev/application-mail-projection: true"
+    injected = 1
+  }
+  END { if (!injected) exit 42 }
+' "${rendered_stack}" >"${poison_pod}" || \
+  fail "could not construct Pod capability-label self-test fixture"
+expect_rendered_submission_contract_rejection \
+  "${poison_pod}" \
+  "Pod capability label" \
+  "rendered mailman-core Pod template must not carry mail.tinyland.dev/application-mail-projection" \
+  "${contract_tmpdir}/poison-pod-label.log"
+
+poison_alias="${contract_tmpdir}/poison-envelope-alias.yaml"
+awk '
+  /^---$/ { in_account = 0 }
+  /^kind: MailAccount$/ { in_account = 1 }
+  in_account && !replaced && $0 == "    - root@lists.latoolb.us" {
+    print "    - other@lists.latoolb.us"
+    replaced = 1
+    next
+  }
+  { print }
+  END { if (!replaced) exit 42 }
+' "${rendered_stack}" >"${poison_alias}" || \
+  fail "could not construct envelope-alias self-test fixture"
+expect_rendered_submission_contract_rejection \
+  "${poison_alias}" \
+  "envelope sender alias replacement" \
+  "rendered Mailman envelope sender alias" \
+  "${contract_tmpdir}/poison-envelope-alias.log"
+
+poison_duplicate_account="${contract_tmpdir}/poison-duplicate-account.yaml"
+awk '
+  FNR == 1 && NR != 1 { print "---" }
+  { print }
+' "${rendered_stack}" "${account_file}" >"${poison_duplicate_account}"
+expect_rendered_submission_contract_rejection \
+  "${poison_duplicate_account}" \
+  "duplicate MailAccount identity" \
+  "exact rendered document count" \
+  "${contract_tmpdir}/poison-duplicate-account.log"
 
 # --- Submission identity (contract capability #2) --------------------------
 assert_eq "$(field '.apiVersion' "${account_file}")" "mail.tinyland.dev/v1alpha1" "MailAccount apiVersion"
@@ -49,6 +242,8 @@ assert_eq "$(field '.metadata.namespace' "${account_file}")" "latoolb-us-product
 assert_eq "$(field '.spec.email' "${account_file}")" "lists-bounces@latoolb.us" "MailAccount spec.email"
 assert_eq "$(field '.spec.domainRef' "${account_file}")" "latoolb-us" "MailAccount spec.domainRef"
 assert_eq "$(field '.spec.enabled' "${account_file}")" "true" "MailAccount spec.enabled"
+assert_eq "$(field '.spec.submission.envelopeSenderAliases | length' "${account_file}")" "1" "MailAccount envelope sender alias count"
+assert_eq "$(field '.spec.submission.envelopeSenderAliases[0]' "${account_file}")" "root@lists.latoolb.us" "Mailman observed envelope sender alias"
 if [ "$(field '.spec.passwordSecretRef // ""' "${account_file}")" != "" ]; then
   fail "MailAccount must not declare passwordSecretRef; the controller generates the credential (overlay doctrine)"
 fi
@@ -129,8 +324,6 @@ assert_eq "${core_memory_limit}" "2Gi" "mailman-core memory limit"
 # HyperKitty answered 403. The fix co-locates mailman-web as a second container
 # in the mailman-core pod so the POST travels over loopback (127.0.0.1:8000) and
 # the trusted source matches. Assert that co-located shape holds.
-core_deploy="${dir}/deployment-mailman-core.yaml"
-
 # The standalone web Deployment must be gone (folded into the core pod).
 if [ -f "${dir}/deployment-mailman-web.yaml" ]; then
   fail "deployment-mailman-web.yaml must be removed; mailman-web is co-located inside deployment-mailman-core.yaml (TIN-2493)"
@@ -219,8 +412,5 @@ require_file "${branding_file}"
 if grep -Eq "class[[:space:]]+InsecureTLSEmailBackend|verify_mode[[:space:]]*=[[:space:]]*ssl\.CERT_NONE|check_hostname[[:space:]]*=[[:space:]]*False|EMAIL_BACKEND[[:space:]]*=[[:space:]]*[\"'][^\"']*Insecure" "${branding_file}"; then
   fail "mailman-web branding must not reintroduce the unverified TLS email backend (#74): no InsecureTLSEmailBackend class / verify_mode=ssl.CERT_NONE / check_hostname=False / EMAIL_BACKEND override to an insecure backend"
 fi
-
-# --- Full render must succeed ----------------------------------------------
-kubectl kustomize "${dir}" >/dev/null
 
 echo "list stack validation passed: mailman-core LMTP :8024, submission 587+STARTTLS VERIFIED (substrate mail CA), lists-bounces@latoolb.us, image digests pinned, no committed secrets"

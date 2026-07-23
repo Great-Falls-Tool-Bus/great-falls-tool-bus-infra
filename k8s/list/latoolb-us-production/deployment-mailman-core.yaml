@@ -23,6 +23,12 @@ kind: Deployment
 metadata:
   name: mailman-core
   namespace: latoolb-us-production
+  # Do not add the substrate submission/projection capability labels directly
+  # to this static manifest. Once generic submission admission is active, a
+  # capable workload must also carry the fresh runtime binding on both this
+  # Deployment and its Pod template. A future GFTB-owned protected renderer
+  # (TIN-3061) will inject that complete binding; the exact named Mailman
+  # NetworkPolicy peer remains the bounded compatibility path until then.
   labels:
     app.kubernetes.io/name: mailman-core
     app.kubernetes.io/component: list-engine
