@@ -33,41 +33,103 @@ assert_eq() {
   fi
 }
 
+select_rendered_doc() {
+  local rendered="$1"
+  local api_version="$2"
+  local kind="$3"
+  local name="$4"
+  local namespace="$5"
+  local output="$6"
+  local context="$7"
+  local split_dir
+  local doc
+  local matches=0
+
+  split_dir="$(mktemp -d "${contract_tmpdir}/documents.XXXXXX")"
+  awk -v outdir="${split_dir}" '
+    BEGIN {
+      document = 1
+      output = sprintf("%s/%04d.yaml", outdir, document)
+    }
+    /^---[[:space:]]*$/ {
+      close(output)
+      document++
+      output = sprintf("%s/%04d.yaml", outdir, document)
+      next
+    }
+    { print > output }
+  ' "${rendered}"
+
+  for doc in "${split_dir}"/*.yaml; do
+    [ -f "${doc}" ] || continue
+    if [ "$(field '.apiVersion // ""' "${doc}")" = "${api_version}" ] && \
+      [ "$(field '.kind // ""' "${doc}")" = "${kind}" ] && \
+      [ "$(field '.metadata.name // ""' "${doc}")" = "${name}" ] && \
+      [ "$(field '.metadata.namespace // ""' "${doc}")" = "${namespace}" ]; then
+      matches=$((matches + 1))
+      cp "${doc}" "${output}"
+    fi
+  done
+
+  assert_eq "${matches}" "1" "${context}: exact rendered document count"
+}
+
 assert_rendered_submission_contract() {
   local rendered="$1"
   local context="$2"
-  local account_query='select(.apiVersion == "mail.tinyland.dev/v1alpha1" and .kind == "MailAccount" and .metadata.name == "lists-bounces" and .metadata.namespace == "latoolb-us-production")'
-  local deployment_query='select(.apiVersion == "apps/v1" and .kind == "Deployment" and .metadata.name == "mailman-core" and .metadata.namespace == "latoolb-us-production")'
+  local selected_dir
+  local account_doc
+  local deployment_doc
+
+  selected_dir="$(mktemp -d "${contract_tmpdir}/selection.XXXXXX")"
+  account_doc="${selected_dir}/mailaccount.yaml"
+  deployment_doc="${selected_dir}/deployment.yaml"
+  select_rendered_doc \
+    "${rendered}" \
+    "mail.tinyland.dev/v1alpha1" \
+    "MailAccount" \
+    "lists-bounces" \
+    "latoolb-us-production" \
+    "${account_doc}" \
+    "${context}: MailAccount selector"
+  select_rendered_doc \
+    "${rendered}" \
+    "apps/v1" \
+    "Deployment" \
+    "mailman-core" \
+    "latoolb-us-production" \
+    "${deployment_doc}" \
+    "${context}: Deployment selector"
 
   # Assert against the decoded apply payload, not only the source files. A
   # Kustomization transformer, patch, or replacement can otherwise alter these
   # security properties after their base manifests pass validation.
   assert_eq \
-    "$(field "${account_query} | .metadata.name" "${rendered}")" \
+    "$(field '.metadata.name' "${account_doc}")" \
     "lists-bounces" \
     "${context}: rendered MailAccount identity"
   assert_eq \
-    "$(field "${account_query} | (.spec.submission.envelopeSenderAliases // []) | length" "${rendered}")" \
+    "$(field '(.spec.submission.envelopeSenderAliases // []) | length' "${account_doc}")" \
     "1" \
     "${context}: rendered envelope sender alias count"
   assert_eq \
-    "$(field "${account_query} | .spec.submission.envelopeSenderAliases[0]" "${rendered}")" \
+    "$(field '.spec.submission.envelopeSenderAliases[0]' "${account_doc}")" \
     "root@lists.latoolb.us" \
     "${context}: rendered Mailman envelope sender alias"
 
   assert_eq \
-    "$(field "${deployment_query} | .metadata.name" "${rendered}")" \
+    "$(field '.metadata.name' "${deployment_doc}")" \
     "mailman-core" \
     "${context}: rendered mailman-core Deployment identity"
   for capability_label in \
     "mail.tinyland.dev/submission-client" \
     "mail.tinyland.dev/application-mail-projection"; do
     assert_eq \
-      "$(field "${deployment_query} | (.metadata.labels // {}) | has(\"${capability_label}\")" "${rendered}")" \
+      "$(field "(.metadata.labels // {}) | has(\"${capability_label}\")" "${deployment_doc}")" \
       "false" \
       "${context}: rendered mailman-core Deployment must not carry ${capability_label}"
     assert_eq \
-      "$(field "${deployment_query} | (.spec.template.metadata.labels // {}) | has(\"${capability_label}\")" "${rendered}")" \
+      "$(field "(.spec.template.metadata.labels // {}) | has(\"${capability_label}\")" "${deployment_doc}")" \
       "false" \
       "${context}: rendered mailman-core Pod template must not carry ${capability_label}"
   done
@@ -160,6 +222,17 @@ expect_rendered_submission_contract_rejection \
   "envelope sender alias replacement" \
   "rendered Mailman envelope sender alias" \
   "${contract_tmpdir}/poison-envelope-alias.log"
+
+poison_duplicate_account="${contract_tmpdir}/poison-duplicate-account.yaml"
+awk '
+  FNR == 1 && NR != 1 { print "---" }
+  { print }
+' "${rendered_stack}" "${account_file}" >"${poison_duplicate_account}"
+expect_rendered_submission_contract_rejection \
+  "${poison_duplicate_account}" \
+  "duplicate MailAccount identity" \
+  "exact rendered document count" \
+  "${contract_tmpdir}/poison-duplicate-account.log"
 
 # --- Submission identity (contract capability #2) --------------------------
 assert_eq "$(field '.apiVersion' "${account_file}")" "mail.tinyland.dev/v1alpha1" "MailAccount apiVersion"
