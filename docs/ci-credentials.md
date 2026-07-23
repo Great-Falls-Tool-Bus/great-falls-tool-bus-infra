@@ -1,25 +1,32 @@
 # CI Credentials
 
-This overlay validates by checking out the private GloriousFlywheel core repo
-next to the overlay repo.
+This overlay validates by checking out the public GloriousFlywheel core repo at
+an exact role-bound commit next to the overlay repo.
 
-## Required Secret
+## Core Source Checkout
 
-`GF_CORE_DEPLOY_KEY` must be available as a repository Actions secret for
-`Great-Falls-Tool-Bus/great-falls-tool-bus-infra`. It is the private half of a
-read-only deploy key attached to `tinyland-inc/GloriousFlywheel`.
+The core checkout needs no dedicated cross-repository deploy key, PAT, or
+GitHub App secret. Each workflow supplies the canonical public repository,
+exact `GF_CORE_REF`, explicit `GloriousFlywheel` path, and
+`persist-credentials: false`, then compares the checked-out `HEAD` with the
+declared ref before consuming any core action or devshell.
 
-Use a least-privilege credential:
+Pinned `actions/checkout` still defaults its `token` input to the workflow
+repository's ephemeral per-run `github.token`. That token can fetch public
+source but carries no private-GloriousFlywheel grant; the workflow neither
+passes it explicitly nor persists it in Git configuration.
 
-- read-only access to `tinyland-inc/GloriousFlywheel`
-- no package, organization-admin, workflow-write, or state/backend privileges
-- rotation path recorded in the operator password manager or GitHub App secret
-  store
+If GloriousFlywheel becomes private later, that is a new reviewed authority
+change. Use a dedicated, per-overlay GitHub App installation token scoped only
+to `contents:read` on that repository; do not silently restore a deploy-key/PAT
+ladder and do not reuse the org-scoped ARC registration App.
 
-`GF_CORE_READ_TOKEN` remains a compatibility fallback for a least-privilege
-read token. Do not use a broad personal token by default. If a broad operator
-token is used temporarily, record the exception and replace it before treating
-the overlay CI as production authority.
+## Optional Site-CI Metadata Token
+
+`SITE_CI_READ_TOKEN` is an optional, purpose-bound override for the
+`web-stack.yml` repository-dispatch gate that reads the public site repository's
+Actions result. Its default is the workflow's ephemeral `github.token`. It is
+not a GloriousFlywheel source credential and must not be named or reused as one.
 
 ## Optional Cache-Warming Secret
 
@@ -80,17 +87,25 @@ product logic into this repo.
 
 ## Current Status
 
-The validation workflow is wired to use `GF_CORE_DEPLOY_KEY` for the core
-checkout.
+All eleven core-consuming workflows use the public exact-SHA checkout contract.
+The repository contains a twelfth workflow without a core checkout; the finite
+`.yml`/`.yaml` census deliberately covers it so a new source consumer cannot
+hide under the alternate extension.
 
-`just enrollment-preflight` checks whether the secret metadata exists without
-reading the secret value. Missing owner GitHub App Kubernetes secrets, absent
-GFTB-bound ARC runner scale sets, queued validation runs, or core-pin drift
-are blockers.
+`just core-checkout` validates checkout action immutability, public repository,
+finite overlay/core paths, role pin, non-persistence, read-only workflow
+permission, closed HEAD assertion, all 30 exact `GF_CORE_CI_PATH` devshell
+sources, the pinned-and-hashed OIDC helper URL, and absence of dedicated
+cross-repository credential inputs. `just core-checkout-selftest` proves the
+guard rejects adversarial mutations. The pinned pre-#1208 GloriousFlywheel
+`implementation-overlay-preflight.py` still reports its legacy source-key row;
+that row is not authority for this public checkout and is not a reason to mint
+a new credential.
 
-The overlay validates against GloriousFlywheel main at
-`2281b576bce0e8dd776a047b84e7464f5b508a62` (origin/main, refreshed 2026-07-02
-in PR #3 from the overlay-authoring pin `7072ce2e`), the single pin shared by
-`config/organization.yaml`, `MODULE.bazel`, and every workflow. Refresh this
-pin to a newer merged commit or release before moving live ARC state when the
-core contract changes.
+The overlay's implementation authority remains
+`2281b576bce0e8dd776a047b84e7464f5b508a62`, shared by
+`config/organization.yaml`, `MODULE.bazel`, `Justfile`, and the non-ARC core
+workflow consumers. The ARC runner and OIDC profile surfaces retain their
+existing `df510574d17b85e7f15470caf3574fcabc4768f1` role pin. The
+finite contract checks this mapping exactly. A future convergence must review
+the executable core delta as its own adoption change.

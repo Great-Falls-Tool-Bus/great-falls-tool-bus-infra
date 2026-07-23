@@ -31,8 +31,6 @@ concurrency:
 
 env:
   GF_CORE_REF: 2281b576bce0e8dd776a047b84e7464f5b508a62
-  HAS_GF_CORE_DEPLOY_KEY: ${{ secrets.GF_CORE_DEPLOY_KEY != '' }}
-  HAS_GF_CORE_READ_TOKEN: ${{ secrets.GF_CORE_READ_TOKEN != '' }}
   HAS_CLOUDFLARE_API_TOKEN_GFTB_ZONES: ${{ secrets.CLOUDFLARE_API_TOKEN_GFTB_ZONES != '' }}
   HAS_ACCESS_ALLOWED_EMAILS_JSON: ${{ secrets.ACCESS_ALLOWED_EMAILS_JSON != '' }}
   HAS_ARC_RUNNERS_RUSTFS_ACCESS_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_ACCESS_KEY != '' }}
@@ -61,10 +59,6 @@ jobs:
           set -euo pipefail
           missing=0
           missing_edge=0
-          if [ "${HAS_GF_CORE_DEPLOY_KEY}" != "true" ] && [ "${HAS_GF_CORE_READ_TOKEN}" != "true" ]; then
-            echo "::error::GF_CORE_DEPLOY_KEY or GF_CORE_READ_TOKEN is required."
-            missing=1
-          fi
           if [ "${HAS_CLOUDFLARE_API_TOKEN_GFTB_ZONES}" != "true" ]; then
             echo "::notice::CLOUDFLARE_API_TOKEN_GFTB_ZONES is not configured in the edge environment; skipping edge drift plan (token mint is a runbook step — docs/runbooks/edge-token-and-zones.md)."
             missing_edge=1
@@ -102,32 +96,29 @@ jobs:
 
       - name: Checkout overlay
         if: steps.secrets.outputs.edge-deploy-secrets-present == 'true'
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           path: overlay
+          persist-credentials: false
 
-      - name: Checkout GloriousFlywheel core with deploy key
-        if: >-
-          steps.secrets.outputs.edge-deploy-secrets-present == 'true'
-          && env.HAS_GF_CORE_DEPLOY_KEY == 'true'
-        uses: actions/checkout@v6
+      - name: Checkout public GloriousFlywheel core
+        if: steps.secrets.outputs.edge-deploy-secrets-present == 'true'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: tinyland-inc/GloriousFlywheel
           ref: ${{ env.GF_CORE_REF }}
           path: GloriousFlywheel
-          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
+          persist-credentials: false
 
-      - name: Checkout GloriousFlywheel core with read token
-        if: >-
-          steps.secrets.outputs.edge-deploy-secrets-present == 'true'
-          && env.HAS_GF_CORE_DEPLOY_KEY != 'true'
-          && env.HAS_GF_CORE_READ_TOKEN == 'true'
-        uses: actions/checkout@v6
-        with:
-          repository: tinyland-inc/GloriousFlywheel
-          ref: ${{ env.GF_CORE_REF }}
-          path: GloriousFlywheel
-          token: ${{ secrets.GF_CORE_READ_TOKEN }}
+      - name: Verify GloriousFlywheel core checkout
+        if: steps.secrets.outputs.edge-deploy-secrets-present == 'true'
+        run: |
+          set -euo pipefail
+          actual="$(git -C GloriousFlywheel rev-parse --verify HEAD)"
+          if [ "${actual}" != "${GF_CORE_REF}" ]; then
+            echo "::error::GloriousFlywheel checkout mismatch: expected ${GF_CORE_REF}, got ${actual}"
+            exit 1
+          fi
 
       - name: Plan edge zones (text-only, no persisted binary)
         if: steps.secrets.outputs.edge-deploy-secrets-present == 'true'

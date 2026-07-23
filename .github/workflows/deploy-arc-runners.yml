@@ -3,8 +3,8 @@ name: Deploy ARC Runners
 # BOOTSTRAP CIRCULARITY — READ BEFORE FIRST USE.
 # This workflow runs on `tinyland-nix`, which for the Great-Falls-Tool-Bus org
 # resolves ONLY through the great-falls-tool-bus-nix scale set that THIS
-# stack provisions, and it needs ARC_RUNNERS_KUBECONFIG_B64 / RustFS keys /
-# GF_CORE_DEPLOY_KEY secrets. Before the first successful operator-machine
+# stack provisions, and it needs ARC_RUNNERS_KUBECONFIG_B64 / RustFS keys.
+# Before the first successful operator-machine
 # `just arc-apply` (kubectl context `honey`), no runner can pick these jobs
 # up: the FIRST plan and FIRST apply MUST run from the operator machine per
 # docs/implementation-overlay.md. This lane is the steady-state PLAN-ONLY
@@ -49,8 +49,6 @@ concurrency:
 
 env:
   GF_CORE_REF: df510574d17b85e7f15470caf3574fcabc4768f1
-  HAS_GF_CORE_DEPLOY_KEY: ${{ secrets.GF_CORE_DEPLOY_KEY != '' }}
-  HAS_GF_CORE_READ_TOKEN: ${{ secrets.GF_CORE_READ_TOKEN != '' }}
   HAS_ARC_RUNNERS_KUBECONFIG: ${{ secrets.ARC_RUNNERS_KUBECONFIG_B64 != '' }}
   HAS_ARC_RUNNERS_RUSTFS_ACCESS_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_ACCESS_KEY != '' }}
   HAS_ARC_RUNNERS_RUSTFS_SECRET_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_SECRET_KEY != '' }}
@@ -67,10 +65,6 @@ jobs:
           set -euo pipefail
           missing=0
           missing_arc=0
-          if [ "${HAS_GF_CORE_DEPLOY_KEY}" != "true" ] && [ "${HAS_GF_CORE_READ_TOKEN}" != "true" ]; then
-            echo "::error::GF_CORE_DEPLOY_KEY or GF_CORE_READ_TOKEN is required."
-            missing=1
-          fi
           if [ "${HAS_ARC_RUNNERS_KUBECONFIG}" != "true" ]; then
             echo "::notice::ARC_RUNNERS_KUBECONFIG_B64 is not configured; skipping ARC runner plan."
             missing_arc=1
@@ -96,32 +90,29 @@ jobs:
 
       - name: Checkout overlay
         if: steps.secrets.outputs.arc-deploy-secrets-present == 'true'
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           path: overlay
+          persist-credentials: false
 
-      - name: Checkout GloriousFlywheel core with deploy key
-        if: >-
-          steps.secrets.outputs.arc-deploy-secrets-present == 'true'
-          && env.HAS_GF_CORE_DEPLOY_KEY == 'true'
-        uses: actions/checkout@v6
+      - name: Checkout public GloriousFlywheel core
+        if: steps.secrets.outputs.arc-deploy-secrets-present == 'true'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: tinyland-inc/GloriousFlywheel
           ref: ${{ env.GF_CORE_REF }}
           path: GloriousFlywheel
-          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
+          persist-credentials: false
 
-      - name: Checkout GloriousFlywheel core with read token
-        if: >-
-          steps.secrets.outputs.arc-deploy-secrets-present == 'true'
-          && env.HAS_GF_CORE_DEPLOY_KEY != 'true'
-          && env.HAS_GF_CORE_READ_TOKEN == 'true'
-        uses: actions/checkout@v6
-        with:
-          repository: tinyland-inc/GloriousFlywheel
-          ref: ${{ env.GF_CORE_REF }}
-          path: GloriousFlywheel
-          token: ${{ secrets.GF_CORE_READ_TOKEN }}
+      - name: Verify GloriousFlywheel core checkout
+        if: steps.secrets.outputs.arc-deploy-secrets-present == 'true'
+        run: |
+          set -euo pipefail
+          actual="$(git -C GloriousFlywheel rev-parse --verify HEAD)"
+          if [ "${actual}" != "${GF_CORE_REF}" ]; then
+            echo "::error::GloriousFlywheel checkout mismatch: expected ${GF_CORE_REF}, got ${actual}"
+            exit 1
+          fi
 
       - name: Materialize kubeconfig
         if: steps.secrets.outputs.arc-deploy-secrets-present == 'true'

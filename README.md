@@ -39,12 +39,15 @@ Grounded mermaid diagrams (mail flow, network/ports, planes, Bazel/GF) live in
   superseded fail-closed reference key)
 - Core pin: `2281b576bce0e8dd776a047b84e7464f5b508a62` (GloriousFlywheel
   `origin/main`, refreshed 2026-07-02 from the overlay-authoring pin
-  `7072ce2e`, PR #3, preflight next-action #1). Tracking main was chosen over
+  `7072ce2e`, PR #3, preflight next-action #1). A merged commit was chosen over
   the template's pin because (a) GFTB depends on contracts that postdate it
   (extra-runner-set executor wiring, consumer registry, token-exchange front
   door) and (b) the template carried four divergent pins across its own files,
-  a drift wart. This overlay uses ONE pin everywhere:
-  `config/organization.yaml`, `MODULE.bazel`, and every workflow `GF_CORE_REF`.
+  a drift wart. `config/organization.yaml`, `MODULE.bazel`, `Justfile`, and the
+  non-ARC workflow consumers share this implementation pin. The ARC runner and
+  OIDC profile surfaces retain their existing
+  `df510574d17b85e7f15470caf3574fcabc4768f1` role pin; pin convergence is a
+  separate adoption change, not part of the source-checkout repair.
 - Capacity posture (TIN-2165/TIN-2234 pod-cap crunch): nix only, `min 0 / max
   4`, no warm pool, docker/dind off, sting placement + the dedicated
   `compute-expansion` toleration.
@@ -126,20 +129,23 @@ just arc-apply    # operator gate; destroy-checked, ALLOW_ARC_DESTROY-gated
 
 `just arc-plan` runs the GloriousFlywheel ARC stack with this repo's
 `tofu/stacks/arc-runners/great-falls-tool-bus.tfvars` and backend config.
-`just enrollment-preflight` is read-only and reports missing core-read
-credentials, ARC GitHub App secrets, live runner-set registration, and recent
-workflow blockers before any plan or apply.
+`just enrollment-preflight` is read-only and reports ARC GitHub App secrets,
+live runner-set registration, and recent workflow blockers before any plan or
+apply. The pinned pre-#1208 GloriousFlywheel implementation still emits a legacy
+core-read-credential row; do not provision a key solely to satisfy that row.
+`just core-checkout` is this overlay's fail-closed source-authority check.
 `just arc-app-secret-*` writes the configured
 `github-app-secret-great-falls-tool-bus` secret into both `arc-systems` and
 `arc-runners` by calling the GloriousFlywheel core wrapper; it requires
 `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, and
 `GITHUB_APP_PRIVATE_KEY_PATH`.
 
-CI also needs a repository Actions secret named `GF_CORE_DEPLOY_KEY` with read
-access to `tinyland-inc/GloriousFlywheel` so the private core repo can be
-checked out next to this overlay. Use a read-only deploy key by default and
-keep `GF_CORE_READ_TOKEN` only as a least-privilege compatibility fallback.
-See [CI Credentials](docs/ci-credentials.md).
+CI checks out the public `tinyland-inc/GloriousFlywheel` source at the exact
+declared commit. No dedicated cross-repository deploy key, PAT, or GitHub App
+secret is required. `actions/checkout` may use this repository's ephemeral
+per-run `github.token` for the public fetch, but the workflow supplies no
+private-GF grant, passes no explicit token or SSH key, and disables credential
+persistence. See [CI Credentials](docs/ci-credentials.md).
 
 ARC runner plan/apply uses `.github/workflows/deploy-arc-runners.yml`
 (plan-only on PR/push; apply only via manual `workflow_dispatch` with

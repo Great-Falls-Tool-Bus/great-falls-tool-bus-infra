@@ -19,40 +19,32 @@ permissions:
 
 env:
   GF_CORE_REF: 2281b576bce0e8dd776a047b84e7464f5b508a62
-  HAS_GF_CORE_DEPLOY_KEY: ${{ secrets.GF_CORE_DEPLOY_KEY != '' }}
-  HAS_GF_CORE_READ_TOKEN: ${{ secrets.GF_CORE_READ_TOKEN != '' }}
   ATTIC_TOKEN: ${{ github.event_name == 'push' && secrets.ATTIC_TOKEN || '' }}
 
 jobs:
   validate:
     runs-on: tinyland-nix
     steps:
-      - name: Require GloriousFlywheel core read credential
-        run: |
-          if [[ "${HAS_GF_CORE_DEPLOY_KEY}" != "true" && "${HAS_GF_CORE_READ_TOKEN}" != "true" ]]; then
-            echo "::error::GF_CORE_DEPLOY_KEY or GF_CORE_READ_TOKEN is required to validate this private implementation overlay against the private GloriousFlywheel core repo. Prefer the read-only deploy key path; do not use a broad personal token by default."
-            exit 1
-          fi
       - name: Checkout overlay
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           path: overlay
-      - name: Checkout GloriousFlywheel core with deploy key
-        if: env.HAS_GF_CORE_DEPLOY_KEY == 'true'
-        uses: actions/checkout@v6
+          persist-credentials: false
+      - name: Checkout public GloriousFlywheel core
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: tinyland-inc/GloriousFlywheel
           ref: ${{ env.GF_CORE_REF }}
           path: GloriousFlywheel
-          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
-      - name: Checkout GloriousFlywheel core with read token
-        if: env.HAS_GF_CORE_DEPLOY_KEY != 'true' && env.HAS_GF_CORE_READ_TOKEN == 'true'
-        uses: actions/checkout@v6
-        with:
-          repository: tinyland-inc/GloriousFlywheel
-          ref: ${{ env.GF_CORE_REF }}
-          path: GloriousFlywheel
-          token: ${{ secrets.GF_CORE_READ_TOKEN }}
+          persist-credentials: false
+      - name: Verify GloriousFlywheel core checkout
+        run: |
+          set -euo pipefail
+          actual="$(git -C GloriousFlywheel rev-parse --verify HEAD)"
+          if [ "${actual}" != "${GF_CORE_REF}" ]; then
+            echo "::error::GloriousFlywheel checkout mismatch: expected ${GF_CORE_REF}, got ${actual}"
+            exit 1
+          fi
       - name: Validate overlay contract
         env:
           ATTIC_PUBLIC_KEY: ${{ github.event_name == 'push' && vars.ATTIC_PUBLIC_KEY || '' }}

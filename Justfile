@@ -19,6 +19,8 @@ check:
     just secrets-scan-dir
     just public-surface
     just public-pii
+    just core-checkout-selftest
+    just core-checkout
     just taxonomy
     just mail-cr-validate
     just list-stack-validate
@@ -49,6 +51,23 @@ public-surface:
 # addresses and example domains.
 public-pii:
     python3 scripts/validate-public-pii-surface.py
+
+# Finite public-source checkout contract. GloriousFlywheel is read at the exact
+# reviewed commit for each role without a dedicated cross-repo deploy key, PAT,
+# or App secret.
+# actions/checkout may still use this repository's ephemeral GITHUB_TOKEN for
+# the public fetch; the workflow never supplies or persists it explicitly.
+core-checkout:
+    python3 -B scripts/validate-core-checkout.py
+
+core-checkout-selftest:
+    python3 -B scripts/validate-core-checkout.py --self-test
+
+core-checkout-bazel:
+    bazelisk test --lockfile_mode=off //:core_checkout_contract_tests
+
+workflow-lint:
+    actionlint -ignore 'label "tinyland-nix" is unknown' -ignore 'SC2155'
 
 # Generate changelog (git-cliff)
 changelog:
@@ -481,7 +500,7 @@ web-cd-ci-green-gate:
     # Fail fast with a clear message if the token cannot even read the site repo,
     # rather than looping until timeout on an auth error.
     if ! gh api "repos/${site_repo}" --jq '.full_name' >/dev/null 2>&1; then
-      echo "::error::CI-green gate: GH_TOKEN cannot read ${site_repo}. Provision a read-only token with actions:read on the (public) site repo — GF_CORE_READ_TOKEN or a minimal PAT — or rely on the ambient GITHUB_TOKEN. Fail-closed."
+      echo "::error::CI-green gate: GH_TOKEN cannot read ${site_repo}. Provision the purpose-bound SITE_CI_READ_TOKEN with actions:read on the public site repo, or rely on the ambient GITHUB_TOKEN. Fail-closed."
       exit 1
     fi
     echo "CI-green gate: waiting for ${site_repo} ci.yml @ ${CI_GREEN_SHA} to conclude..."

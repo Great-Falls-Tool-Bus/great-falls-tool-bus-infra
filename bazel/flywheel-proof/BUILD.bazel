@@ -4,6 +4,8 @@
 # remote_instance_name (org-great-falls-tool-bus once runtime grants are live),
 # which is exactly what the operator observes during the pilot soak. Read-only on
 # PRs (the wrapper forwards --remote_upload_local_results=false).
+exports_files(["MODULE.bazel"])
+
 genrule(
     name = "cache_proof",
     outs = ["cache_proof.txt"],
