@@ -1,11 +1,8 @@
 name: Validate Overlay
 
-# BOOTSTRAP NOTE: this job runs on `tinyland-nix`, which for the GFTB org
-# resolves ONLY through the great-falls-tool-bus-nix scale set that this
-# overlay's ARC stack provisions. Until the first operator-machine
-# `just arc-apply` succeeds, these jobs queue unpicked. tinyland-nix (not
-# tinyland-nix-heavy, used by older overlays): GFTB provisions
-# only the nix lane, and labels resolve through this org's own scale sets.
+# BOOTSTRAP NOTE: this job selects the GFTB owner group plus `tinyland-nix`.
+# Until exact repository admission and the matching ARC binding are live, it
+# queues unpicked. No Default or hosted fallback is valid.
 
 on:
   pull_request:
@@ -18,24 +15,27 @@ permissions:
   contents: read
 
 env:
-  GF_CORE_REF: 2281b576bce0e8dd776a047b84e7464f5b508a62
+  GF_CORE_REF: f26b541d1d7600d56b2e78c87038415fa06b3622
   ATTIC_TOKEN: ${{ github.event_name == 'push' && secrets.ATTIC_TOKEN || '' }}
 
 jobs:
   validate:
-    runs-on: tinyland-nix
+    runs-on:
+      group: great-falls-tool-bus-infra
+      labels: tinyland-nix
     steps:
       - name: Checkout overlay
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           path: overlay
           persist-credentials: false
-      - name: Checkout public GloriousFlywheel core
+      - name: Checkout private GloriousFlywheel release
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: tinyland-inc/GloriousFlywheel
           ref: ${{ env.GF_CORE_REF }}
           path: GloriousFlywheel
+          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
           persist-credentials: false
       - name: Verify GloriousFlywheel core checkout
         run: |
@@ -118,7 +118,7 @@ jobs:
 
           cd overlay
           export GF_CORE_PATH=../GloriousFlywheel
-          export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+          export GF_CORE_CI_PATH="path:../GloriousFlywheel#ci"
 
           echo "::group::secrets scan"
           nix develop . -c gitleaks dir --config .gitleaks.toml --redact --verbose .

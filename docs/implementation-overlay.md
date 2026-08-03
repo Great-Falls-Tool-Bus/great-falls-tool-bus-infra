@@ -1,163 +1,114 @@
-# Great-Falls-Tool-Bus Implementation Overlay
+# Great-Falls-Tool-Bus implementation overlay
 
-This repository is the Great-Falls-Tool-Bus (GFTB) owner overlay for the shared
-Honey substrate. It is the organization counterpart to the older
-personal-account overlay and the third owner overlay overall.
+This repository is the Great-Falls-Tool-Bus (GFTB) installation overlay for
+the shared GloriousFlywheel product. It owns GFTB-specific admission and
+installation coordinates; it does not fork runner, cache, or REAPI product
+logic from `tinyland-inc/GloriousFlywheel`.
 
-## What This Repo Owns
+## Authority boundary
 
-- GFTB GitHub App installation binding
-- Honey ARC tfvars for org-scoped repo enrollment
-- S3 backend state coordinates for this overlay
-- private operator metadata and cache namespace choices
+This overlay owns:
 
-## What GloriousFlywheel Owns
+- the GFTB GitHub App registration coordinates;
+- desired non-Default runner-group admission;
+- exact private repository identity;
+- per-plane backend, namespace, credential, and release coordinates; and
+- GFTB edge and DNS apply authority.
 
-- reusable OpenTofu modules and ARC stack code
-- runner images and shared capability labels
-- cache-backed local and CI contract
-- public and operator documentation
+GloriousFlywheel owns reusable ARC roots, runner images, shared capability
+labels, authenticated cache attachment, REAPI execution, and the generated
+front-door contract.
 
-## Organization Boundary
+## Three independent facts
 
-GFTB is a GitHub organization, so ARC registers at the ORG scope:
-`github_config_url = https://github.com/Great-Falls-Tool-Bus`. The GFTB GitHub
-App is installed org-wide (all repositories), which makes the single
-`great-falls-tool-bus-nix` scale set reachable from every GFTB repo. There is
-no repo-scoped registration anchor and no per-repo `extra_runner_sets` entry.
-The personal-account anchor pattern exists only because personal accounts lack
-org-level registration.
+GFTB Actions capacity is usable only when all three facts are proved:
 
-Workflows use shared labels such as `tinyland-nix`. Reachability is solved by
-this overlay's GitHub App installation and ARC registration, not by minting
-`gftb-*` or repo-shaped labels. Only `tinyland-nix` is provisioned today.
+1. **Admission:** runner group `great-falls-tool-bus-infra` admits exact private
+   repository id `1286829099`.
+2. **Registration and capacity:** an org-scoped ARC release for
+   `https://github.com/Great-Falls-Tool-Bus` exposes shared label
+   `tinyland-nix` with bounded nonzero capacity.
+3. **Attachment:** the runner receives the authenticated GF cache/front-door
+   profile and produces deposit/withdraw evidence.
 
-## Shared Controller Boundary
+A group, a label, a green job, or a live release proves only its own layer.
+None is activation evidence by itself.
 
-The Tinyland overlay owns the shared ARC controller and namespaces for Honey.
-This overlay attaches the GFTB runner scale set to that controller with
-`deploy_arc_controller = false`, `create_controller_namespace = false`, and
-`create_runner_namespace = false`.
+## Current observed state
 
-Internal Helm release names and ARC `runnerScaleSetName` values use the
-`great-falls-tool-bus-*` prefix to avoid cluster collisions. Those names are
-not workflow labels; workflows continue to use shared `tinyland-*` capability
-labels (the arc-runner module publishes `runner_label` explicitly alongside the
-owner-distinct registration name).
+The adopted compatibility release `great-falls-tool-bus-nix` is live in shared
+namespace `arc-runners`, bound to GitHub's `Default` group, and configured at
+`min=0/max=4`. It carries the current token-exchange and GF front-door
+environment. Preserve it until an attended migration gives it an explicit
+disposition. Its runner payload selects Sting; its request-less listener still
+has a legacy Bumble hostname pin. That listener is not job compute, but it is
+placement drift the dedicated owner root must not reproduce.
 
-## Conservative Capacity Posture
+The overlay repository is currently public, and the target group could not be
+read with the available token. Therefore this branch stages desired admission
+and workflow selectors but is not merge or activation authority. There is no
+Default, hosted-runner, or repo-shaped-label fallback.
 
-Honey/sting pod budget is the scarce resource (TIN-2165/TIN-2234):
+## Target owner plane
 
-- nix lane only (`deploy_docker_runner = false`, `deploy_dind_runner = false`)
-- `nix_min_runners = 0`, `nix_max_runners = 4`
-- `nix_warm_pool_enabled = false`
-- runner pods pinned to `sting` with the
-  `dedicated.tinyland.dev/compute-expansion` toleration (the tinyland-goo-nix
-  anchor shape)
+The target uses:
 
-Raising any of these is an explicit operator decision followed by
-`just arc-plan` / `just arc-apply`.
+- org-scoped ARC registration with no per-repo registration anchors;
+- a selected, private-repository-only owner group;
+- shared capability label `tinyland-nix`;
+- a dedicated owner namespace, state key, plan identity, release credential,
+  saved plan, and `TF_DATA_DIR`; and
+- initial owner-release capacity `min=0/max=0`, raised only by a later reviewed
+  readiness change.
 
-## Shared Substrate
+The frozen primary `arc-runners` root is not owner authority. Do not rebind the
+adopted release in place or use its legacy workflow to simulate owner
+isolation.
 
-- cluster: `honey`
-- Attic: `http://attic.nix-cache.svc.cluster.local` (cache `main`)
-- Attic public key: `main:eaUydxuDu7xBoy5cCo3MdknYAkVyTIASQ7DGuwxa+XA=`
-- Bazel cache: `grpc://bazel-cache.nix-cache.svc.cluster.local:9092`
-- Bazel executor: `grpc://gf-reapi-cell.gf-rbe.svc.cluster.local:8980`
-  (substrate fact; the primary lane is cache-only until the deliberate
-  executor flip, see the tfvars comment)
-- state bucket: `tofu-state`, key prefix `great-falls-tool-bus-infra`
-- public token mint: `https://gf-token-exchange.tinyland.dev/v1/token/exchange`
+Runner payload placement is compute-only. Bumble provides storage services; it
+is not runner compute placement. Target Nix owner planes carry no physical
+hostname or storage-node selector, and both payload and listener exclude the
+installation's storage-only node label.
 
-## Bootstrap Circularity And First Apply
+## Core release boundary
 
-Overlay CI (`deploy-arc-runners.yml`, `validate.yml`) runs on `tinyland-nix`,
-which for GFTB resolves ONLY through the scale set this stack provisions, and
-needs `ARC_RUNNERS_KUBECONFIG_B64` and RustFS state keys for ARC planning.
-GloriousFlywheel source is public and exact-SHA-pinned, so it needs no
-dedicated cross-repository secret. The FIRST plan and FIRST apply must still
-run from the operator machine, where the `honey` kubectl context works. Order:
-create App -> install App -> write App secret -> preflight ->
-`arc-init`/`arc-plan` (with RustFS creds exported) -> operator review ->
-`arc-apply` -> verify listener -> only then does overlay CI pick up.
+Source validation pins signed GF tag `v0.3.0`, exact commit
+`f26b541d1d7600d56b2e78c87038415fa06b3622`. Every core-consuming workflow
+checks out that private source with `GF_CORE_DEPLOY_KEY`, verifies `HEAD`, and
+uses the local `#ci` devshell.
 
-## Enrollment Preflight
+That release is validation authority only. It predates the storage-only
+placement correction and its owner root cannot project the typed
+token-exchange plus `:8980` authenticated-front-door tuple that the live GFTB
+release already carries. The unauthenticated `:9092` compatibility cache is
+not an acceptable new owner-plane default.
 
-Run this before `arc-plan` or `arc-apply`:
+Activation is blocked until GF lands that typed attachment contract and cuts a
+new signed release. The overlay must then repin and add dedicated bootstrap and
+release roots from that release before any attended plan exists.
 
-```bash
-export GF_CORE_PATH=../GloriousFlywheel
-just enrollment-preflight
-```
+## Source checks
 
-The preflight is read-only. Missing `github-app-secret-great-falls-tool-bus`,
-an absent live `great-falls-tool-bus-nix` scale set, queued validation runs, or
-core-pin drift are enrollment blockers, not reasons to create org- or
-repo-specific labels. At the pinned pre-#1208 core revision, the shared preflight
-still prints a legacy core-read-credential row. Do not provision a key solely
-for that row; `just core-checkout` is the source-authority gate.
-
-## ARC Runner Plan And Apply
-
-The steady-state deploy surface is `.github/workflows/deploy-arc-runners.yml`.
-Pull requests and pushes run a plan against the GFTB overlay state key only.
-Live apply requires manual `workflow_dispatch` with `action=apply`. If the
-scoped `ARC_RUNNERS_*` deploy secrets are absent, plan runs skip with notices
-and manual apply fails closed.
-
-The workflow uses the same GloriousFlywheel stack as the local Just targets:
-
-```bash
-just arc-init
-just arc-plan
-just arc-plan-show
-just arc-plan-destroy-check
-just arc-apply
-```
-
-Apply remains guarded by OpenTofu JSON plan actions. In-place Helm release
-updates, such as raising `maxRunners`, are allowed. Any delete action is
-blocked unless the operator explicitly sets `allow_destroy=true` on the manual
-workflow dispatch or `ALLOW_ARC_DESTROY=1` for local apply.
-
-## ARC GitHub App Secret
-
-After the GFTB GitHub App is created at
-`https://github.com/organizations/Great-Falls-Tool-Bus/settings/apps/new`
-(name `gf-arc-great-falls-tool-bus`; Organization self-hosted runners:
-Read & write; Repository Actions: Read; Repository Metadata: Read), installed
-org-wide, and the `.pem` private key downloaded by the human operator, rotate
-the ARC secret through the overlay Just targets:
+From this worktree, with the signed GF release checked out beside it:
 
 ```bash
 export GF_CORE_PATH=../GloriousFlywheel
-export GITHUB_APP_ID=<APP_ID>
-export GITHUB_APP_INSTALLATION_ID=<INSTALLATION_ID>
-export GITHUB_APP_PRIVATE_KEY_PATH=<PATH_TO_PRIVATE_KEY>
-
-just arc-app-secret-dry-run
-just arc-app-secret-apply
+export GF_CORE_CI_PATH=path:../GloriousFlywheel#ci
+just check
 just enrollment-preflight
 ```
 
-The wrapper reads `github-app-secret-great-falls-tool-bus` and the `honey`
-context from `config/organization.yaml`, then writes the same GitHub App secret
-into `arc-systems` and `arc-runners`. Do not commit the private key,
-kubeconfig, or derived secret material.
+`just runner-group-test` is a backend-disabled mock-provider source test. It
+does not contact GitHub. `just enrollment-preflight` is read-only. Missing
+visibility, group, credential, registration, or attachment evidence is a
+blocker, never permission to improvise a fallback.
 
-## Current Core Pin
+## Legacy workflow
 
-This overlay's implementation authority pins GloriousFlywheel core at
-`2281b576bce0e8dd776a047b84e7464f5b508a62`, `origin/main`, refreshed
-2026-07-02 (PR #3) from the overlay-authoring pin `7072ce2e`. Tracking a merged
-commit was chosen over the template's pin because GFTB needs the newer contracts
-(extra-runner-set executor wiring, the consumer registry, the public
-token-exchange front door), a fresh overlay has no live state to protect, and
-the template's four internally divergent pins were a wart to fix, not
-replicate. The same commit appears in `config/organization.yaml`,
-`MODULE.bazel`, `Justfile`, and each non-ARC core workflow. The ARC runner and
-OIDC profile surfaces retain the existing
-`df510574d17b85e7f15470caf3574fcabc4768f1` role pin. Review any future pin
-convergence as a separate executable-core adoption change.
+`.github/workflows/deploy-arc-runners.yml` retains maintenance behavior for the
+adopted primary-root release. It is not the owner-plane activation path and
+must not bind the target group or create the future owner release. Any later
+retirement or migration of that workflow needs its own reviewed carrier.
+
+The attended activation order, once all missing source exists, is maintained in
+[onboarding-runbook.md](onboarding-runbook.md).

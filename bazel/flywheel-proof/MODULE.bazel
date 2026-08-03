@@ -6,7 +6,8 @@ module(
 
 # Self-contained proof workspace for the GloriousFlywheel org-tenancy
 # cache-backed Bazel soak (TIN-2364). Kept deliberately dependency-free and
-# decoupled from the repo-root MODULE.bazel (which pins attic-iac via a public,
-# exact-commit git_override): a cold cache round-trip must not require fetching
-# GloriousFlywheel core. The tinyland registry is listed first in the adjacent
-# .bazelrc, then BCR, matching the house registry chain.
+# decoupled from the repo-root MODULE.bazel (which records the private signed
+# release identity while its contract test overrides to the verified local
+# checkout): a cold cache round-trip must not require fetching GloriousFlywheel
+# core. The tinyland registry is listed first in the adjacent .bazelrc, then
+# BCR, matching the house registry chain.

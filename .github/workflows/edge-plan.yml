@@ -54,7 +54,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GF_CORE_REF: 2281b576bce0e8dd776a047b84e7464f5b508a62
+  GF_CORE_REF: f26b541d1d7600d56b2e78c87038415fa06b3622
   HAS_CLOUDFLARE_API_TOKEN_GFTB_ZONES: ${{ secrets.CLOUDFLARE_API_TOKEN_GFTB_ZONES != '' }}
   HAS_ACCESS_ALLOWED_EMAILS_JSON: ${{ secrets.ACCESS_ALLOWED_EMAILS_JSON != '' }}
   HAS_ARC_RUNNERS_RUSTFS_ACCESS_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_ACCESS_KEY != '' }}
@@ -63,7 +63,9 @@ env:
 jobs:
   plan-apply:
     name: Plan or apply GFTB edge zones
-    runs-on: tinyland-nix
+    runs-on:
+      group: great-falls-tool-bus-infra
+      labels: tinyland-nix
     timeout-minutes: 30
     # The zone-scoped token secret lives ONLY in this `edge` environment,
     # not at repository scope. NOTE: this is a plain environment — required-
@@ -131,13 +133,14 @@ jobs:
           path: overlay
           persist-credentials: false
 
-      - name: Checkout public GloriousFlywheel core
+      - name: Checkout private GloriousFlywheel release
         if: steps.secrets.outputs.edge-deploy-secrets-present == 'true'
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: tinyland-inc/GloriousFlywheel
           ref: ${{ env.GF_CORE_REF }}
           path: GloriousFlywheel
+          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
           persist-credentials: false
 
       - name: Verify GloriousFlywheel core checkout
@@ -186,7 +189,7 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            export GF_CORE_CI_PATH="path:../GloriousFlywheel#ci"
             nix develop "${GF_CORE_CI_PATH}" -c just edge-zones-fmt-check
             nix develop "${GF_CORE_CI_PATH}" -c just edge-zones-validate
             nix develop "${GF_CORE_CI_PATH}" -c just edge-zones-init
@@ -208,7 +211,7 @@ jobs:
         run: |
           set -euo pipefail
           cd overlay
-          export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+          export GF_CORE_CI_PATH="path:../GloriousFlywheel#ci"
           nix develop "${GF_CORE_CI_PATH}" -c python3 - <<'PY'
           import json
           import os
@@ -291,6 +294,6 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            export GF_CORE_CI_PATH="path:../GloriousFlywheel#ci"
             nix develop "${GF_CORE_CI_PATH}" -c just edge-zones-plan-destroy-check
             nix develop "${GF_CORE_CI_PATH}" -c just edge-zones-apply

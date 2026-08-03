@@ -1,15 +1,12 @@
 name: Deploy ARC Runners
 
-# BOOTSTRAP CIRCULARITY — READ BEFORE FIRST USE.
-# This workflow runs on `tinyland-nix`, which for the Great-Falls-Tool-Bus org
-# resolves ONLY through the great-falls-tool-bus-nix scale set that THIS
-# stack provisions, and it needs ARC_RUNNERS_KUBECONFIG_B64 / RustFS keys.
-# Before the first successful operator-machine
-# `just arc-apply` (kubectl context `honey`), no runner can pick these jobs
-# up: the FIRST plan and FIRST apply MUST run from the operator machine per
-# docs/implementation-overlay.md. This lane is the steady-state PLAN-ONLY
-# surface after bootstrap; apply stays operator-gated via workflow_dispatch
-# action=apply, and destructive plans additionally require allow_destroy=true.
+# LEGACY STATE MAINTENANCE -- NOT OWNER-PLANE ACTIVATION.
+# The existing primary-root release is compatibility evidence in shared
+# namespace `arc-runners`. This workflow retains its historical plan/apply
+# behavior, but must not bind the new group, create a dedicated owner release,
+# or stand in for the separate owner bootstrap/release roots. The staged
+# group-plus-label selector intentionally leaves this draft unable to run until
+# owner admission and capacity have been proved through their own authorities.
 
 on:
   pull_request:
@@ -48,7 +45,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GF_CORE_REF: df510574d17b85e7f15470caf3574fcabc4768f1
+  GF_CORE_REF: f26b541d1d7600d56b2e78c87038415fa06b3622
   HAS_ARC_RUNNERS_KUBECONFIG: ${{ secrets.ARC_RUNNERS_KUBECONFIG_B64 != '' }}
   HAS_ARC_RUNNERS_RUSTFS_ACCESS_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_ACCESS_KEY != '' }}
   HAS_ARC_RUNNERS_RUSTFS_SECRET_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_SECRET_KEY != '' }}
@@ -56,7 +53,9 @@ env:
 jobs:
   plan-apply:
     name: Plan or apply GFTB ARC runners
-    runs-on: tinyland-nix
+    runs-on:
+      group: great-falls-tool-bus-infra
+      labels: tinyland-nix
     timeout-minutes: 30
     steps:
       - name: Validate deploy secrets
@@ -95,13 +94,14 @@ jobs:
           path: overlay
           persist-credentials: false
 
-      - name: Checkout public GloriousFlywheel core
+      - name: Checkout private GloriousFlywheel release
         if: steps.secrets.outputs.arc-deploy-secrets-present == 'true'
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: tinyland-inc/GloriousFlywheel
           ref: ${{ env.GF_CORE_REF }}
           path: GloriousFlywheel
+          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
           persist-credentials: false
 
       - name: Verify GloriousFlywheel core checkout
@@ -137,7 +137,7 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            export GF_CORE_CI_PATH="path:../GloriousFlywheel#ci"
             if [ -n "${KUBERNETES_SERVICE_HOST:-}" ]; then
               export GF_IN_CLUSTER_API_SERVER="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT_HTTPS:-443}"
               nix develop "${GF_CORE_CI_PATH}" -c bash -lc '
@@ -172,7 +172,7 @@ jobs:
         run: |
           set -euo pipefail
           cd overlay
-          export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+          export GF_CORE_CI_PATH="path:../GloriousFlywheel#ci"
           nix develop "${GF_CORE_CI_PATH}" -c python3 - <<'PY'
           import json
           import os
@@ -233,7 +233,7 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            export GF_CORE_CI_PATH="path:../GloriousFlywheel#ci"
             export TF_VAR_k8s_config_path="${ARC_RUNNERS_KUBECONFIG}"
             nix develop "${GF_CORE_CI_PATH}" -c just arc-plan-destroy-check
             nix develop "${GF_CORE_CI_PATH}" -c just arc-apply
@@ -248,7 +248,7 @@ jobs:
           set -euo pipefail
           cd overlay
           export KUBECONFIG="${ARC_RUNNERS_KUBECONFIG}"
-          export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+          export GF_CORE_CI_PATH="path:../GloriousFlywheel#ci"
           nix develop "${GF_CORE_CI_PATH}" -c python3 - <<'PY'
           import json
           import subprocess

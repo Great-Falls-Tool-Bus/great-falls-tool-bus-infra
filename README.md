@@ -8,10 +8,10 @@ enrollment while reusing the same GloriousFlywheel backend services, runner
 types, and caches as the other overlays.
 
 Because GFTB is an organization (not a personal account), ARC registers at the
-ORG scope: `github_config_url = https://github.com/Great-Falls-Tool-Bus`. One
-scale set serves every repo in the org, so this overlay needs **no** per-repo
-`extra_runner_sets` registration anchors (the biggest structural difference
-from the older personal-account overlay template).
+ORG scope: `github_config_url = https://github.com/Great-Falls-Tool-Bus`.
+Registration stays org-wide, while the non-Default owner group admits exact
+private repositories. This overlay needs no repo-scoped `extra_runner_sets`
+registration anchors.
 
 ## Architecture
 
@@ -23,34 +23,38 @@ Grounded mermaid diagrams (mail flow, network/ports, planes, Bazel/GF) live in
 - Core product repo: `tinyland-inc/GloriousFlywheel`
 - ARC registration: `https://github.com/Great-Falls-Tool-Bus` (org-scoped, no
   repo anchors)
+- Desired runner group: `great-falls-tool-bus-infra`, selected/private-only,
+  admitting only repository id `1286829099`. An attended admin census must
+  still determine whether that group already exists.
 - Cluster context: `honey`; shared ARC controller owner: Tinyland overlay
 - Workflow labels: shared `tinyland-*` capability labels. ONLY `tinyland-nix`
   is provisioned for this org today (conservative posture); a GFTB workflow
   requesting any other label will queue unpicked.
-- Scale set: `great-falls-tool-bus-nix` (ARC registration identity only;
-  workflows use `runs-on: tinyland-nix`)
+- Live compatibility scale set: `great-falls-tool-bus-nix` in shared namespace
+  `arc-runners`, currently bound to `Default` at `min 0 / max 4`. This branch
+  stages the future group-plus-`tinyland-nix` selector but does not rebind or
+  replace that release. Its job payload selects Sting; the legacy listener's
+  Bumble hostname pin is retained state drift, not target compute placement.
 - Shared Nix cache: `http://attic.nix-cache.svc.cluster.local`
-- Shared Bazel cache: `grpc://bazel-cache.nix-cache.svc.cluster.local:9092`
-- Shared Bazel executor: `grpc://gf-reapi-cell.gf-rbe.svc.cluster.local:8980`
-  (documented substrate fact, NOT wired into the primary lane yet; see the
-  executor-flip note in the tfvars)
+- Legacy Bazel cache: `grpc://bazel-cache.nix-cache.svc.cluster.local:9092`
+  (unauthenticated compatibility only, not the owner-plane product default)
+- GF cache/executor front door:
+  `grpc://gf-reapi-cell.gf-rbe.svc.cluster.local:8980`. The live compatibility
+  release carries the token-exchange/front-door environment. The released
+  owner root cannot yet preserve that typed attachment, so migration is held.
 - State: bucket `tofu-state`, key prefix `great-falls-tool-bus-infra`
   (`arc-runners/` and live `edge/` state keys; `edge-dns/` is a
   superseded fail-closed reference key)
-- Core pin: `2281b576bce0e8dd776a047b84e7464f5b508a62` (GloriousFlywheel
-  `origin/main`, refreshed 2026-07-02 from the overlay-authoring pin
-  `7072ce2e`, PR #3, preflight next-action #1). A merged commit was chosen over
-  the template's pin because (a) GFTB depends on contracts that postdate it
-  (extra-runner-set executor wiring, consumer registry, token-exchange front
-  door) and (b) the template carried four divergent pins across its own files,
-  a drift wart. `config/organization.yaml`, `MODULE.bazel`, `Justfile`, and the
-  non-ARC workflow consumers share this implementation pin. The ARC runner and
-  OIDC profile surfaces retain their existing
-  `df510574d17b85e7f15470caf3574fcabc4768f1` role pin; pin convergence is a
-  separate adoption change, not part of the source-checkout repair.
-- Capacity posture (TIN-2165/TIN-2234 pod-cap crunch): nix only, `min 0 / max
-  4`, no warm pool, docker/dind off, sting placement + the dedicated
-  `compute-expansion` toleration.
+- Validation release: signed tag `v0.3.0`, exact commit
+  `f26b541d1d7600d56b2e78c87038415fa06b3622`. CI checks out that private
+  release with the overlay's read-only deploy key, verifies `HEAD`, and uses
+  the checked-out local `#ci` devshell. The root Bazel contract test overrides
+  `attic-iac` to that verified checkout instead of fetching it again. The
+  release is not owner-plane activation authority: it predates the current
+  storage-only and authenticated-front-door contract.
+- Capacity posture: preserve the live compatibility lane at `min 0 / max 4`.
+  A dedicated owner Nix plane starts at `min 0 / max 0` after a suitable signed
+  GF release exists; nonzero readiness is separate.
 
 Private credentials stay outside Git:
 
@@ -100,12 +104,11 @@ operation (members, moderation, settings, stack) in
 
 ## Bootstrap (read first)
 
-This overlay's own CI runs on `tinyland-nix`, which for GFTB resolves ONLY
-through the scale set this overlay provisions. Until the first
-operator-machine `just arc-apply` succeeds, overlay CI jobs queue unpicked.
-The FIRST plan and FIRST apply run from the operator machine (kubectl context
-`honey`). Runs queued from the initial push are picked up once the listener
-registers; re-dispatch if they have expired. See
+This branch stages CI selectors for the exact GFTB owner group plus
+`tinyland-nix`. It must remain unmerged while the repository is public, group
+existence is unproved, and no authenticated owner-plane release exists.
+Merging early would park the repository; Default and hosted fallbacks remain
+invalid. See
 [docs/implementation-overlay.md](docs/implementation-overlay.md) for the
 ordered runbook.
 
@@ -119,46 +122,28 @@ export GF_CORE_PATH=../GloriousFlywheel   # already the default here (the
                                           # dead name is fixed in this overlay)
 just check
 just enrollment-preflight
-just arc-app-secret-dry-run
-just arc-app-secret-apply
-just arc-init
-just arc-plan
-just arc-plan-show
-just arc-apply    # operator gate; destroy-checked, ALLOW_ARC_DESTROY-gated
+just runner-group-test      # backend-disabled/mock source proof only
+just flywheel-cache-proof   # live evidence only on admitted Actions capacity
 ```
 
-`just arc-plan` runs the GloriousFlywheel ARC stack with this repo's
-`tofu/stacks/arc-runners/great-falls-tool-bus.tfvars` and backend config.
 `just enrollment-preflight` is read-only and reports ARC GitHub App secrets,
-live runner-set registration, and recent workflow blockers before any plan or
-apply. The pinned pre-#1208 GloriousFlywheel implementation still emits a legacy
-core-read-credential row; do not provision a key solely to satisfy that row.
+live runner-set registration, and recent workflow blockers.
 `just core-checkout` is this overlay's fail-closed source-authority check.
-`just arc-app-secret-*` writes the configured
-`github-app-secret-great-falls-tool-bus` secret into both `arc-systems` and
-`arc-runners` by calling the GloriousFlywheel core wrapper; it requires
-`GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, and
-`GITHUB_APP_PRIVATE_KEY_PATH`.
 
-CI checks out the public `tinyland-inc/GloriousFlywheel` source at the exact
-declared commit. No dedicated cross-repository deploy key, PAT, or GitHub App
-secret is required. `actions/checkout` may use this repository's ephemeral
-per-run `github.token` for the public fetch, but the workflow supplies no
-private-GF grant, passes no explicit token or SSH key, and disables credential
-persistence. See [CI Credentials](docs/ci-credentials.md).
+CI checks out the private `tinyland-inc/GloriousFlywheel` signed release at the
+exact declared commit using `GF_CORE_DEPLOY_KEY`, a read-only key dedicated to
+this overlay. The key is not the ARC registration credential and is never
+persisted. See [CI Credentials](docs/ci-credentials.md).
 
-ARC runner plan/apply uses `.github/workflows/deploy-arc-runners.yml`
-(plan-only on PR/push; apply only via manual `workflow_dispatch` with
-`action=apply`). It requires `ARC_RUNNERS_KUBECONFIG_B64`,
-`ARC_RUNNERS_RUSTFS_ACCESS_KEY`, and `ARC_RUNNERS_RUSTFS_SECRET_KEY`.
+`.github/workflows/deploy-arc-runners.yml` remains a legacy-state maintenance
+surface for the adopted shared-namespace release. It is not the owner-plane
+activation path and must not be used to bind the new group. The future owner
+plane requires separate bootstrap/release state, identity, credential, and
+saved-plan evidence from a newer signed GF release.
 
 Trusted push validation may also read from and publish warmed Nix outputs into
 the shared Attic cache when an `ATTIC_TOKEN` repository secret is present.
 Pull-request validation stays read-only.
-
-`just arc-apply` runs a destructive-plan guard backed by OpenTofu's JSON plan
-actions. If a recorded state rehome or teardown window intentionally allows
-destruction, set `ALLOW_ARC_DESTROY=1` for that one apply.
 
 ## Boundary
 
@@ -167,8 +152,8 @@ overlays. That is an owner/auth boundary. It is not a new runner product and
 it does not justify labels such as `gftb-nix` or `great-falls-*` workflow
 labels.
 
-Because all overlays attach to the same physical `arc-runners` namespace, this
-overlay uses owner-distinct internal Helm release and ARC `runnerScaleSetName`
-values (`great-falls-tool-bus-*`) while preserving the shared `tinyland-*`
-runner labels. The GFTB overlay does not deploy the shared ARC controller or
-shared namespaces (`deploy_arc_controller = false`).
+The current release still occupies shared namespace `arc-runners`; that is
+legacy adoption evidence, not the target architecture. The target owner Nix
+plane uses a dedicated namespace and per-plane credential while preserving
+shared `tinyland-*` capability labels and the shared ARC controller. This
+overlay never turns Bumble's storage role into runner compute placement.

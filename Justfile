@@ -5,12 +5,13 @@ set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 # "../GloriousFlywheel-infra-overlays" — a dead-name rename residue that forced
 # every operator to export GF_CORE_PATH. This overlay defaults to the real
 # checkout directory name. Override GF_CORE_PATH when the core source checkout
-# lives elsewhere. GF_CORE_CI_PATH is a pinned GitHub flake ref by default so
-# tooling no longer assumes a sibling checkout for the #ci devshell.
+# lives elsewhere. CI verifies the private signed-release checkout first, then
+# consumes its local #ci devshell without a second network fetch.
 gf_core := env_var_or_default("GF_CORE_PATH", "../GloriousFlywheel")
-gf_core_ci := env_var_or_default("GF_CORE_CI_PATH", "github:tinyland-inc/GloriousFlywheel/2281b576bce0e8dd776a047b84e7464f5b508a62#ci")
+gf_core_ci := env_var_or_default("GF_CORE_CI_PATH", "path:../GloriousFlywheel#ci")
 arc_tfvars := "tofu/stacks/arc-runners/great-falls-tool-bus.tfvars"
 arc_backend := env_var_or_default("ARC_BACKEND", "tofu/backend/honey.s3.hcl")
+runner_group_stack := "tofu/stacks/gf-runner-group"
 
 default:
     @just --list
@@ -19,8 +20,10 @@ check:
     just secrets-scan-dir
     just public-surface
     just public-pii
-    just core-checkout-selftest
     just core-checkout
+    just workflow-lint
+    just runner-group-fmt-check
+    just runner-group-test
     just taxonomy
     just mail-cr-validate
     just list-stack-validate
@@ -52,22 +55,28 @@ public-surface:
 public-pii:
     python3 scripts/validate-public-pii-surface.py
 
-# Finite public-source checkout contract. GloriousFlywheel is read at the exact
-# reviewed commit for each role without a dedicated cross-repo deploy key, PAT,
-# or App secret.
-# actions/checkout may still use this repository's ephemeral GITHUB_TOKEN for
-# the public fetch; the workflow never supplies or persists it explicitly.
+# Finite private-release checkout contract. This stays small until the
+# generated GF front-door/overlay projection replaces it.
 core-checkout:
     python3 -B scripts/validate-core-checkout.py
 
-core-checkout-selftest:
-    python3 -B scripts/validate-core-checkout.py --self-test
-
 core-checkout-bazel:
-    bazelisk test --lockfile_mode=off //:core_checkout_contract_tests
+    bazelisk test --lockfile_mode=off "--override_module=attic-iac={{ gf_core }}" //:core_checkout_contract_test
 
 workflow-lint:
     actionlint -ignore 'label "tinyland-nix" is unknown' -ignore 'SC2155'
+
+runner-group-fmt-check:
+    tofu fmt -check -recursive {{ runner_group_stack }}
+
+runner-group-test:
+    #!/usr/bin/env bash
+    # Mock-provider source proof only: no GitHub or backend request is made.
+    set -euo pipefail
+    tf_data_dir="$(mktemp -d -t gftb-runner-group-test.XXXXXX)"
+    trap 'rm -rf "${tf_data_dir}"' EXIT
+    TF_DATA_DIR="${tf_data_dir}" tofu -chdir={{ runner_group_stack }} init -backend=false -lockfile=readonly
+    TF_DATA_DIR="${tf_data_dir}" tofu -chdir={{ runner_group_stack }} test
 
 # Generate changelog (git-cliff)
 changelog:
@@ -137,24 +146,19 @@ flywheel-enroll repo="Great-Falls-Tool-Bus/great-falls-tool-bus.github.io":
     @echo "  just arc-apply             # destroy-checked, ALLOW_ARC_DESTROY-gated"
     @echo "This umbrella does NOT mutate the cluster."
 
-# GloriousFlywheel org-tenancy cache-backed Bazel proof (TIN-2364 pre-soak
-# surface). Declare-only + INERT until the operator flips
-# runtime_grants_enabled:true for org-great-falls-tool-bus and rolls the
-# gf-reapi cell + exchange onto the org-grammar image. Exchanges this repo's
-# GitHub OIDC identity for a gf-reapi-cell profile and runs a cache-backed,
-# READ-ONLY Bazel round-trip routed to remote_instance_name=org-great-falls-tool-bus
-# against the hermetic bazel/flywheel-proof/ genrule. Endpoint authority is
-# fleet-runtime env (BAZEL_REMOTE_CACHE, GF_REAPI_TOKEN_EXCHANGE_ENDPOINT); this
-# recipe bakes none and never hard-fails when they are absent. NOT part of
-# `check` (it needs the on-cluster cache substrate).
+# Authenticated GFTB cache deposit/withdraw proof (TIN-2299/TIN-2364).
+# GitHub Actions requires the exact org mint and a fresh-output-base cache hit;
+# trusted main may deposit while pull requests remain read-only. Endpoint and
+# credential authority remain fleet-runtime only. This is not part of `check`
+# because it requires the live on-cluster cache substrate.
 flywheel-cache-proof:
     GFW_EXPECTED_INSTANCE_NAME=org-great-falls-tool-bus bash scripts/flywheel-cache-proof.sh
 
 arc-fmt-check:
     #!/usr/bin/env bash
     # Fresh-clone friendly: use tofu from PATH when present; the GF-core nix
-    # devshell is the fallback for machines without tofu installed. GF_CORE_CI_PATH
-    # defaults to a pinned GitHub flake ref, not a sibling checkout.
+    # devshell is the fallback for machines without tofu installed. CI verifies
+    # the signed private GF checkout before using its local #ci devshell.
     set -euo pipefail
     if command -v tofu >/dev/null 2>&1; then
         tofu fmt -check {{ arc_tfvars }}

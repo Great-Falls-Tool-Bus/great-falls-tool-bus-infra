@@ -376,8 +376,9 @@ on-cluster inherits this path verbatim: the app repo builds the image (ambient
 overlay; the backstop reaper governs lanes.
 
 In **this overlay** the concrete chassis mirrors the existing
-`.github/workflows/mail-crs.yml` / `edge-plan.yml` exactly: `runs-on:
-tinyland-nix`, a protected **environment** gate, PR/push = validate-only, and a
+`.github/workflows/mail-crs.yml` / `edge-plan.yml` exactly: the
+`great-falls-tool-bus-infra` group plus `tinyland-nix`, a protected
+**environment** gate, PR/push = validate-only, and a
 manual **`workflow_dispatch` with `action` choice** (`plan`/`server-dry-run`
 then `apply`), fail-soft skip-green when the environment secret is absent,
 destructive-plan guard, and a namespace kubeconfig materialized only inside the
@@ -386,8 +387,8 @@ protected environment. That cutover workflow now exists as
 (TIN-2543): the same chassis, but **apply-only**. It triggers ONLY on
 `workflow_dispatch` with a required `confirm=apply` sentinel (no push/PR), gates
 fail-closed on the protected `web-apply` environment holding
-`web-apply-kubeconfig`, checks public GloriousFlywheel source at the repository's
-exact pin with no dedicated cross-repository grant, takes the operator-resolved
+`web-apply-kubeconfig`, checks the private signed GloriousFlywheel release with
+the overlay's read-only deploy key, takes the operator-resolved
 image as a dispatch `image` input (never a committed pin), and runs `just web-stack-apply`
 (workload apply, image pin, `replicas` flip 0 to N) followed by an in-cluster
 `/health` readiness gate. It does **not** un-park the overlay: the `k8s/web/`

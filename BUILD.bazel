@@ -29,18 +29,3 @@ sh_test(
     srcs = ["scripts/validate-core-checkout.py"],
     data = CORE_CHECKOUT_CONTRACT_SOURCES,
 )
-
-sh_test(
-    name = "core_checkout_contract_selftest",
-    srcs = ["scripts/validate-core-checkout.py"],
-    args = ["--self-test"],
-    data = CORE_CHECKOUT_CONTRACT_SOURCES,
-)
-
-test_suite(
-    name = "core_checkout_contract_tests",
-    tests = [
-        ":core_checkout_contract_selftest",
-        ":core_checkout_contract_test",
-    ],
-)

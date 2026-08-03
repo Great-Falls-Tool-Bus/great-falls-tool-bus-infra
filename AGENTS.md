@@ -12,12 +12,13 @@ Hard rules:
   workflows request shared `tinyland-*` labels only
 - ARC registration for this org is org-scoped
   (`https://github.com/Great-Falls-Tool-Bus`); do not add repo-scoped
-  registration anchors (org-level registration already reaches every GFTB
-  repo, so the personal-account anchor pattern does not apply here)
-- keep the capacity posture conservative (nix lane only,
-  `nix_max_runners = 4`, no warm pool, docker/dind off) unless an explicit
-  operator decision raises it; the honey/sting pod budget is the scarce
-  resource (TIN-2165/TIN-2234)
+  registration anchors. Org registration supplies identity; the non-Default
+  `great-falls-tool-bus-infra` group separately admits exact private repos.
+  Both must be present before a workflow can select capacity.
+- preserve the adopted-live compatibility release at `min=0/max=4` until an
+  attended migration owns its disposition. A new owner-plane release starts at
+  `min=0/max=0`; readiness is a later reviewed change. Do not alter the frozen
+  primary `arc-runners` state to simulate owner isolation
 - keep reusable OpenTofu modules, runner images, and product docs in
   `tinyland-inc/GloriousFlywheel`
 - this overlay owns the GFTB edge/DNS **apply plane**

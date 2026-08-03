@@ -10,5 +10,5 @@ bazel_dep(name = "rules_shell", version = "0.6.1")
 git_override(
     module_name = "attic-iac",
     remote = "https://github.com/tinyland-inc/GloriousFlywheel.git",
-    commit = "2281b576bce0e8dd776a047b84e7464f5b508a62",
+    commit = "f26b541d1d7600d56b2e78c87038415fa06b3622",
 )

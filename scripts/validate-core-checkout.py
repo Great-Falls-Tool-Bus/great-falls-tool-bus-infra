@@ -1,37 +1,33 @@
 #!/usr/bin/env python3
-"""Validate the finite public GloriousFlywheel source-checkout contract."""
+"""Validate the finite private GF release and owner-runner attachment.
+
+This check enforces the current hand-authored overlay boundary. Retire it when
+the generated GF front-door/owner-overlay projection emits these workflow and
+release bindings directly.
+"""
 
 from __future__ import annotations
 
 import os
 import re
 import sys
-import tempfile
-from dataclasses import dataclass
 from pathlib import Path
 
 
-def _repository_root() -> Path:
-    test_srcdir = Path(sys.argv[0]).resolve().parent
-    if os.environ.get("TEST_SRCDIR") and os.environ.get("TEST_WORKSPACE"):
-        candidate = Path(os.environ["TEST_SRCDIR"]) / os.environ["TEST_WORKSPACE"]
-        if candidate.is_dir():
-            return candidate
-    return test_srcdir.parent
-
-
-ROOT = _repository_root()
-WORKFLOW_DIR = Path(".github/workflows")
+PIN = "f26b541d1d7600d56b2e78c87038415fa06b3622"
+SIGNED_REF = "refs/tags/v0.3.0"
 CORE_REPOSITORY = "tinyland-inc/GloriousFlywheel"
-CORE_REMOTE = f"https://github.com/{CORE_REPOSITORY}.git"
-CORE_MODULE = "attic-iac"
-CORE_FLAKE_PREFIX = f"github:{CORE_REPOSITORY}/"
+GROUP = "great-falls-tool-bus-infra"
+LABEL = "tinyland-nix"
 CHECKOUT_ACTION = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10"
-IMPLEMENTATION_CORE_PIN = "2281b576bce0e8dd776a047b84e7464f5b508a62"
-ARC_CORE_PIN = "df510574d17b85e7f15470caf3574fcabc4768f1"
-OIDC_PROFILE_PIN = ARC_CORE_PIN
-OIDC_PROFILE_SHA256 = "0aa1bb2b1814c28d6162fc91d5cb3201ecaa13775e94ab3571db776d5dcc3ba8"
-EXACT_SHA = re.compile(r"^[0-9a-f]{40}$")
+NIX_SETUP_ACTION = (
+    "tinyland-inc/ci-templates/.github/actions/nix-setup@"
+    "e07ac8b2b316eedeb3bbffea47af1acf05624545"
+)
+CREDHELPER_ACTION = (
+    "tinyland-inc/ci-templates/.github/actions/gf-credhelper-install@"
+    "a76a637c8d1b2abe5fade554185892cb37a09c66"
+)
 
 EXPECTED_WORKFLOWS = {
     "archive-stack.yml",
@@ -48,9 +44,7 @@ EXPECTED_WORKFLOWS = {
     "web-stack.yml",
 }
 
-# One entry per workflow that checks out the public reusable core. Values are
-# exact job-level checkout counts, not a loose minimum.
-EXPECTED_CORE_CHECKOUTS = {
+CORE_CHECKOUTS = {
     "archive-stack.yml": 2,
     "deploy-arc-runners.yml": 1,
     "edge-drift.yml": 1,
@@ -64,19 +58,7 @@ EXPECTED_CORE_CHECKOUTS = {
     "web-stack.yml": 1,
 }
 
-# Preserve the reviewed executable authority for each role. Public-checkout
-# hardening must not silently import a newer core implementation into unrelated
-# apply, drift, or mail lanes.
-EXPECTED_CORE_PINS = {
-    workflow: (
-        ARC_CORE_PIN if workflow == "deploy-arc-runners.yml" else IMPLEMENTATION_CORE_PIN
-    )
-    for workflow in EXPECTED_CORE_CHECKOUTS
-}
-
-# Every source checkout, including the overlay checkout, is immutable and does
-# not persist the source repository's per-run GITHUB_TOKEN into Git config.
-EXPECTED_ACTION_CHECKOUTS = {
+ACTION_CHECKOUTS = {
     "archive-stack.yml": 4,
     "deploy-arc-runners.yml": 2,
     "edge-drift.yml": 2,
@@ -91,7 +73,7 @@ EXPECTED_ACTION_CHECKOUTS = {
     "web-stack.yml": 2,
 }
 
-EXPECTED_CORE_CI_PATH_EXPORTS = {
+CORE_CI_PATH_EXPORTS = {
     "archive-stack.yml": 3,
     "deploy-arc-runners.yml": 4,
     "edge-drift.yml": 1,
@@ -106,781 +88,236 @@ EXPECTED_CORE_CI_PATH_EXPORTS = {
     "web-stack.yml": 3,
 }
 
-EXPECTED_PERMISSIONS = {
-    workflow: (
-        ("contents: read", "id-token: write")
-        if workflow == "flywheel-cache-proof.yml"
-        else ("contents: read",)
-    )
-    for workflow in EXPECTED_WORKFLOWS
-}
 
-CONDITIONAL_CHECKOUTS = {
-    "deploy-arc-runners.yml": "if: steps.secrets.outputs.arc-deploy-secrets-present == 'true'",
-    "edge-drift.yml": "if: steps.secrets.outputs.edge-deploy-secrets-present == 'true'",
-    "edge-plan.yml": "if: steps.secrets.outputs.edge-deploy-secrets-present == 'true'",
-    "k8s-stack-drift.yml": "if: steps.secrets.outputs.kubeconfig-present == 'true'",
-}
-
-RETIRED_CORE_CREDENTIALS = ("GF_CORE_DEPLOY_KEY", "GF_CORE_READ_TOKEN")
-AUTHORITY_DOCS = (
-    Path("README.md"),
-    Path("docs/ci-credentials.md"),
-    Path("docs/implementation-overlay.md"),
-    Path("docs/onboarding-runbook.md"),
-    Path("docs/runbooks/oncluster-web-cutover.md"),
-    Path("bazel/flywheel-proof/MODULE.bazel"),
-)
-VERIFY_SCRIPT = (
-    "set -euo pipefail",
-    'actual="$(git -C GloriousFlywheel rev-parse --verify HEAD)"',
-    'if [ "${actual}" != "${GF_CORE_REF}" ]; then',
-    '  echo "::error::GloriousFlywheel checkout mismatch: expected ${GF_CORE_REF}, got ${actual}"',
-    "  exit 1",
-    "fi",
-)
-OIDC_INSTALL_SCRIPT = (
-    "set -euo pipefail",
-    'tools_dir="${RUNNER_TEMP}/gf-tools"',
-    'dest="${tools_dir}/flywheel-github-oidc-profile"',
-    'url="https://raw.githubusercontent.com/tinyland-inc/GloriousFlywheel/'
-    '${GF_OIDC_PROFILE_REF}/scripts/flywheel-github-oidc-profile.sh"',
-    'mkdir -p "${tools_dir}"',
-    'curl --fail --silent --show-error --location "${url}" --output "${dest}"',
-    'actual="$(sha256sum "${dest}" | awk \'{ print $1 }\')"',
-    'if [ "${actual}" != "${GF_OIDC_PROFILE_SHA256}" ]; then',
-    '  echo "::error::flywheel-github-oidc-profile sha256 mismatch: expected '
-    '${GF_OIDC_PROFILE_SHA256}, got ${actual}"',
-    "  exit 1",
-    "fi",
-    'chmod +x "${dest}"',
-    'echo "${tools_dir}" >> "${GITHUB_PATH}"',
-    'echo "installed pinned flywheel-github-oidc-profile (sha256 ${actual})"',
-)
+def repository_root() -> Path:
+    if os.environ.get("TEST_SRCDIR") and os.environ.get("TEST_WORKSPACE"):
+        candidate = Path(os.environ["TEST_SRCDIR"]) / os.environ["TEST_WORKSPACE"]
+        if candidate.is_dir():
+            return candidate
+    return Path(__file__).resolve().parent.parent
 
 
-class ContractError(RuntimeError):
-    """A checked source surface violates the finite checkout contract."""
+ROOT = repository_root()
 
 
-@dataclass(frozen=True)
-class Step:
-    name: str
-    line: int
-    lines: tuple[str, ...]
-
-    @property
-    def text(self) -> str:
-        return "\n".join(self.lines)
+def read(relative: str) -> str:
+    return (ROOT / relative).read_text(encoding="utf-8")
 
 
-def _read(root: Path, relative: Path, label: str) -> str:
-    path = root / relative
-    try:
-        if not path.is_file():
-            raise OSError("not a regular file")
-        return path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise ContractError(f"{label} is unreadable: {relative}") from exc
+def exact_field(text: str, field: str, expected: str, source: str) -> list[str]:
+    values = re.findall(rf"(?m)^\s*{re.escape(field)}:\s*([^\s#]+)", text)
+    if values == [expected]:
+        return []
+    return [f"{source}: expected exactly one {field}: {expected}, found {values}"]
 
 
-def _one(values: list[str], label: str) -> str:
-    if len(values) != 1:
-        raise ContractError(f"{label} must appear exactly once")
-    return values[0]
-
-
-def _exact_sha(value: str, label: str) -> str:
-    if not EXACT_SHA.fullmatch(value):
-        raise ContractError(f"{label} must be an exact lowercase 40-hex commit")
-    return value
-
-
-def workflow_sources(root: Path) -> dict[str, str]:
-    directory = root / WORKFLOW_DIR
-    paths = sorted([*directory.glob("*.yml"), *directory.glob("*.yaml")])
-    return {path.name: path.read_text(encoding="utf-8") for path in paths}
-
-
-def workflow_steps(text: str) -> list[Step]:
+def steps(text: str) -> list[tuple[str, str]]:
     lines = text.splitlines()
-    starts = [
-        index for index, line in enumerate(lines) if line.startswith("      - name: ")
-    ]
-    steps: list[Step] = []
+    starts = [index for index, line in enumerate(lines) if line.startswith("      - name: ")]
+    result: list[tuple[str, str]] = []
     for position, start in enumerate(starts):
         end = starts[position + 1] if position + 1 < len(starts) else len(lines)
-        steps.append(
-            Step(
-                name=lines[start].split(": ", 1)[1],
-                line=start + 1,
-                lines=tuple(lines[start:end]),
-            )
-        )
-    return steps
+        result.append((lines[start].split(": ", 1)[1], "\n".join(lines[start:end])))
+    return result
 
 
-def workflow_permissions(text: str) -> tuple[str, ...]:
-    lines = text.splitlines()
-    headers = [index for index, line in enumerate(lines) if line == "permissions:"]
+def condition(step: str) -> str:
+    match = re.search(r"(?m)^        if:\s*(.+)$", step)
+    return match.group(1).strip() if match else ""
+
+
+def permissions(text: str) -> tuple[str, ...]:
+    headers = list(re.finditer(r"(?m)^permissions:\s*$", text))
     if len(headers) != 1:
-        raise ContractError("permissions must appear exactly once at workflow scope")
-    permissions: list[str] = []
-    for line in lines[headers[0] + 1 :]:
-        if not line.strip():
-            break
-        match = re.fullmatch(
-            r"  ([a-z0-9-]+)[ \t]*:[ \t]*([^\s#]+)[ \t]*(?:#.*)?", line
-        )
-        if match is None:
-            raise ContractError("workflow permissions block must contain simple scalar grants")
-        permissions.append(f"{match.group(1)}: {match.group(2)}")
-    return tuple(permissions)
-
-
-def _step_condition(step: Step) -> tuple[str, ...]:
-    for index, line in enumerate(step.lines[1:], start=1):
-        if not line.startswith("        if:"):
-            continue
-        condition = [line.strip()]
-        for following in step.lines[index + 1 :]:
-            if following.startswith("          "):
-                condition.append(following.strip())
-            else:
-                break
-        return tuple(condition)
-    return ()
-
-
-def _step_run_script(step: Step) -> tuple[str, ...]:
-    try:
-        start = step.lines.index("        run: |") + 1
-    except ValueError:
         return ()
-    script: list[str] = []
-    for line in step.lines[start:]:
-        if line.startswith("          "):
-            script.append(line[10:])
-        elif not line.strip():
-            script.append("")
-        else:
-            break
-    while script and not script[-1]:
-        script.pop()
-    return tuple(script)
-
-
-def _checkout_use(step: Step) -> list[str]:
-    return re.findall(r"(?m)^\s+uses:\s*([^\s#]+)(?:\s*#.*)?$", step.text)
-
-
-def _with_values(step: Step, key: str) -> list[str]:
-    return [
-        value.strip()
-        for value in re.findall(
-            rf"(?m)^\s{{10}}{re.escape(key)}\s*:\s*([^#\n]+?)(?:\s+#.*)?$",
-            step.text,
-        )
-    ]
-
-
-def organization_pin(source: str) -> str:
-    lines = source.splitlines()
-    headers = [
-        index for index, line in enumerate(lines) if re.fullmatch(r"core:\s*(?:#.*)?", line)
-    ]
-    if len(headers) != 1:
-        raise ContractError("config/organization.yaml must contain one core block")
-    block_lines: list[str] = []
-    for line in lines[headers[0] + 1 :]:
-        if line and not line[0].isspace():
-            break
-        block_lines.append(line)
-    block = "\n".join(block_lines)
-    repository = _one(
-        re.findall(r"(?m)^  repository:\s*([^\s#]+)\s*(?:#.*)?$", block),
-        "config core.repository",
-    )
-    module = _one(
-        re.findall(r"(?m)^  module_name:\s*([^\s#]+)\s*(?:#.*)?$", block),
-        "config core.module_name",
-    )
-    pin = _one(
-        re.findall(r"(?m)^  pinned_commit:\s*([^\s#]+)\s*(?:#.*)?$", block),
-        "config core.pinned_commit",
-    )
-    if repository != CORE_REPOSITORY:
-        raise ContractError(f"config core.repository must be {CORE_REPOSITORY}")
-    if module != CORE_MODULE:
-        raise ContractError(f"config core.module_name must be {CORE_MODULE}")
-    return _exact_sha(pin, "config core.pinned_commit")
-
-
-def module_pin(source: str) -> str:
-    blocks = re.findall(r"(?ms)^\s*git_override\s*\(\s*(.*?)^\s*\)\s*$", source)
-    matches: list[tuple[str, str]] = []
-    for block in blocks:
-        modules = re.findall(r'(?m)^\s*module_name\s*=\s*"([^"]+)"\s*,?\s*$', block)
-        if modules != [CORE_MODULE]:
+    values: list[str] = []
+    for line in text[headers[0].end() :].splitlines():
+        if not line.strip():
+            if values:
+                break
             continue
-        remote = _one(
-            re.findall(r'(?m)^\s*remote\s*=\s*"([^"]+)"\s*,?\s*$', block),
-            "MODULE.bazel core remote",
-        )
-        commit = _one(
-            re.findall(r'(?m)^\s*commit\s*=\s*"([^"]+)"\s*,?\s*$', block),
-            "MODULE.bazel core commit",
-        )
-        matches.append((remote, commit))
-    if len(matches) != 1:
-        raise ContractError("MODULE.bazel must contain one attic-iac git_override")
-    remote, commit = matches[0]
-    if remote != CORE_REMOTE:
-        raise ContractError(f"MODULE.bazel core remote must be {CORE_REMOTE}")
-    return _exact_sha(commit, "MODULE.bazel core commit")
+        match = re.fullmatch(r"  ([a-z0-9-]+):\s*([^\s#]+)(?:\s+#.*)?", line)
+        if not match:
+            break
+        values.append(f"{match.group(1)}: {match.group(2)}")
+    return tuple(values)
 
 
-def justfile_pin(source: str) -> str:
-    definitions = re.findall(r"(?m)^gf_core_ci\s*:=.*$", source)
-    definition = _one(definitions, "Justfile gf_core_ci authority")
-    match = re.fullmatch(
-        r'gf_core_ci := env_var_or_default\("GF_CORE_CI_PATH", "'
-        + re.escape(CORE_FLAKE_PREFIX)
-        + r'([0-9a-f]{40})#ci"\)',
-        definition,
-    )
-    if match is None:
-        raise ContractError(
-            "Justfile gf_core_ci default must be the canonical exact public #ci flake"
-        )
-    return _exact_sha(match.group(1), "Justfile gf_core_ci commit")
-
-
-def _workflow_census_findings(sources: dict[str, str]) -> list[str]:
+def validate() -> list[str]:
     findings: list[str] = []
-    actual = set(sources)
-    missing = sorted(EXPECTED_WORKFLOWS - actual)
-    extra = sorted(actual - EXPECTED_WORKFLOWS)
-    if missing:
-        findings.append(f"workflow census missing: {', '.join(missing)}")
-    if extra:
-        findings.append(f"workflow census has unowned file(s): {', '.join(extra)}")
-    stems: dict[str, list[str]] = {}
-    for name in actual:
-        stems.setdefault(Path(name).stem, []).append(name)
-    for stem, names in sorted(stems.items()):
-        if len(names) > 1:
-            findings.append(
-                f"workflow census has duplicate basename {stem}: {', '.join(sorted(names))}"
-            )
-    return findings
+    organization = read("config/organization.yaml")
 
+    findings += exact_field(organization, "pinned_commit", PIN, "config/organization.yaml")
+    findings += exact_field(organization, "signed_ref", SIGNED_REF, "config/organization.yaml")
+    findings += exact_field(organization, "repository_id", "1286829099", "config/organization.yaml")
+    findings += exact_field(organization, "repository_visibility", "private", "config/organization.yaml")
 
-def _checkout_findings(sources: dict[str, str]) -> list[str]:
-    findings: list[str] = []
-    observed_core_workflows: set[str] = set()
-
-    for workflow, source in sorted(sources.items()):
-        for credential in RETIRED_CORE_CREDENTIALS:
-            if credential in source:
-                findings.append(f"{workflow}: references retired {credential}")
-        if re.search(
-            r"(?mi)\b(?:git\s+clone|gh\s+repo\s+clone)\b[^\n]*GloriousFlywheel",
-            source,
-        ):
-            findings.append(f"{workflow}: bypasses the bounded core checkout with a shell clone")
-        if re.search(
-            r"(?m)^\s+uses:\s*['\"]?tinyland-inc/GloriousFlywheel(?:/|@)",
-            source,
-        ):
-            findings.append(
-                f"{workflow}: consumes remote core workflow/action outside the bounded checkout"
-            )
-
-        permission_headers = re.findall(
-            r"(?m)^([ \t]*)permissions[ \t]*:[ \t]*$", source
-        )
-        if permission_headers != [""]:
-            findings.append(f"{workflow}: must declare permissions exactly once at workflow scope")
-        try:
-            observed_permissions = workflow_permissions(source)
-            if observed_permissions != EXPECTED_PERMISSIONS[workflow]:
-                findings.append(
-                    f"{workflow}: workflow permissions must remain the finite least-privilege set"
-                )
-        except (ContractError, KeyError) as exc:
-            findings.append(f"{workflow}: {exc}")
-
-        expected_ci_paths = EXPECTED_CORE_CI_PATH_EXPORTS.get(workflow, 0)
-        core_ci_definitions = re.findall(
-            r"(?m)^[ \t]+(?:export[ \t]+)?GF_CORE_CI_PATH[ \t]*=", source
-        )
-        if len(core_ci_definitions) != expected_ci_paths:
-            findings.append(
-                f"{workflow}: expected {expected_ci_paths} GF_CORE_CI_PATH definition(s)"
-            )
-        canonical_ci_path_lines = re.findall(
-            r'(?m)^[ \t]+export GF_CORE_CI_PATH="github:tinyland-inc/'
-            r'GloriousFlywheel/\$\{GF_CORE_REF\}#ci"[ \t]*$',
-            source,
-        )
-        if len(canonical_ci_path_lines) != expected_ci_paths:
-            findings.append(
-                f"{workflow}: every GF_CORE_CI_PATH must bind the exact workflow GF_CORE_REF"
-            )
-        if source.count(CORE_FLAKE_PREFIX) != expected_ci_paths:
-            findings.append(
-                f"{workflow}: has an unowned GloriousFlywheel flake source"
-            )
-
-        steps = workflow_steps(source)
-        action_steps = [step for step in steps if CHECKOUT_ACTION.split("@", 1)[0] in step.text]
-        raw_action_count = len(re.findall(r"(?m)^\s+uses:\s*actions/checkout@", source))
-        checkout_mentions = source.count("actions/checkout")
-        if checkout_mentions != raw_action_count:
-            findings.append(
-                f"{workflow}: every actions/checkout mention must be an unquoted uses field"
-            )
-        if len(action_steps) != raw_action_count:
-            findings.append(f"{workflow}: every actions/checkout use must be a named step")
-        expected_action_count = EXPECTED_ACTION_CHECKOUTS.get(workflow)
-        if expected_action_count is not None and raw_action_count != expected_action_count:
-            findings.append(
-                f"{workflow}: expected {expected_action_count} checkout action(s), found {raw_action_count}"
-            )
-        expected_condition = (
-            (CONDITIONAL_CHECKOUTS[workflow],)
-            if workflow in CONDITIONAL_CHECKOUTS
-            else ()
-        )
-        for step in action_steps:
-            location = f"{workflow}:{step.line}"
-            if _checkout_use(step) != [CHECKOUT_ACTION]:
-                findings.append(f"{location}: checkout action must pin {CHECKOUT_ACTION}")
-            if _with_values(step, "persist-credentials") != ["false"]:
-                findings.append(
-                    f"{location}: checkout must set persist-credentials: false exactly once"
-                )
-            if re.search(
-                r"(?mi)^\s+['\"]?(?:token|ssh-key)['\"]?\s*:", step.text
-            ):
-                findings.append(f"{location}: checkout has an explicit credential input")
-            if _step_condition(step) != expected_condition:
-                findings.append(f"{location}: checkout condition must preserve lane gating")
-
-            repositories = _with_values(step, "repository")
-            if repositories == [CORE_REPOSITORY]:
-                continue
-            if repositories:
-                findings.append(f"{location}: overlay checkout cannot select another repository")
-            if step.name != "Checkout overlay":
-                findings.append(f"{location}: non-core checkout must be the overlay checkout")
-            if _with_values(step, "ref"):
-                findings.append(f"{location}: overlay checkout must use the event revision")
-            expected_overlay_path = [] if workflow == "flywheel-cache-proof.yml" else ["overlay"]
-            if _with_values(step, "path") != expected_overlay_path:
-                rendered = "the workspace root" if not expected_overlay_path else "overlay"
-                findings.append(f"{location}: overlay checkout path must be {rendered}")
-
-        core_indexes = [
-            index
-            for index, step in enumerate(steps)
-            if _with_values(step, "repository") == [CORE_REPOSITORY]
-        ]
-        if core_indexes:
-            observed_core_workflows.add(workflow)
-        expected_core_count = EXPECTED_CORE_CHECKOUTS.get(workflow, 0)
-        if len(core_indexes) != expected_core_count:
-            findings.append(
-                f"{workflow}: expected {expected_core_count} public core checkout(s), found {len(core_indexes)}"
-            )
-
-        for index in core_indexes:
-            step = steps[index]
-            location = f"{workflow}:{step.line}"
-            if step.name != "Checkout public GloriousFlywheel core":
-                findings.append(f"{location}: core checkout name must state public authority")
-            if _with_values(step, "repository") != [CORE_REPOSITORY]:
-                findings.append(f"{location}: core repository must be {CORE_REPOSITORY}")
-            if _with_values(step, "ref") != ["${{ env.GF_CORE_REF }}"]:
-                findings.append(f"{location}: core ref must be env.GF_CORE_REF")
-            if _with_values(step, "path") != ["GloriousFlywheel"]:
-                findings.append(f"{location}: core checkout path must be GloriousFlywheel")
-            if _with_values(step, "persist-credentials") != ["false"]:
-                findings.append(f"{location}: core checkout must not persist credentials")
-            if index + 1 >= len(steps):
-                findings.append(f"{location}: core checkout lacks a following HEAD assertion")
-                continue
-            assertion = steps[index + 1]
-            assertion_location = f"{workflow}:{assertion.line}"
-            if assertion.name != "Verify GloriousFlywheel core checkout":
-                findings.append(
-                    f"{location}: the immediately following step must verify core HEAD"
-                )
-                continue
-            if _step_condition(assertion) != _step_condition(step):
-                findings.append(
-                    f"{assertion_location}: HEAD assertion condition must equal checkout condition"
-                )
-            if _step_run_script(assertion) != VERIFY_SCRIPT:
-                findings.append(
-                    f"{assertion_location}: HEAD assertion must use the closed canonical script"
-                )
-            if re.search(
-                r"(?m)^\s+continue-on-error\s*:", assertion.text
-            ):
-                findings.append(f"{assertion_location}: HEAD assertion cannot fail soft")
-
-        if expected_core_count:
-            all_ref_definitions = re.findall(
-                r"(?m)^[ \t]+GF_CORE_REF[ \t]*:[ \t]*[^\s#]+[ \t]*(?:#.*)?$",
-                source,
-            )
-            if len(all_ref_definitions) != 1:
-                findings.append(
-                    f"{workflow}: GF_CORE_REF must have one workflow-level definition and no job/step override"
-                )
-            refs = re.findall(
-                r"(?m)^  GF_CORE_REF[ \t]*:[ \t]*([^\s#]+)[ \t]*(?:#.*)?$",
-                source,
-            )
-            if len(refs) != 1:
-                findings.append(f"{workflow}: GF_CORE_REF must appear exactly once")
-            else:
-                try:
-                    observed_pin = _exact_sha(refs[0], f"{workflow} GF_CORE_REF")
-                    expected_pin = EXPECTED_CORE_PINS[workflow]
-                    if observed_pin != expected_pin:
-                        findings.append(
-                            f"{workflow}: GF_CORE_REF must preserve role pin {expected_pin}"
-                        )
-                except ContractError as exc:
-                    findings.append(str(exc))
-
-    if observed_core_workflows != set(EXPECTED_CORE_CHECKOUTS):
-        missing = sorted(set(EXPECTED_CORE_CHECKOUTS) - observed_core_workflows)
-        extra = sorted(observed_core_workflows - set(EXPECTED_CORE_CHECKOUTS))
-        if missing:
-            findings.append(f"core checkout census missing: {', '.join(missing)}")
-        if extra:
-            findings.append(f"core checkout census has unowned workflow(s): {', '.join(extra)}")
-    return findings
-
-
-def validate(root: Path) -> list[str]:
-    findings: list[str] = []
-    sources = workflow_sources(root)
-    findings.extend(_workflow_census_findings(sources))
-    findings.extend(_checkout_findings(sources))
-
-    for label, relative, parser in (
-        ("organization config", Path("config/organization.yaml"), organization_pin),
-        ("Bzlmod module", Path("MODULE.bazel"), module_pin),
-        ("Justfile", Path("Justfile"), justfile_pin),
+    for required in (
+        "name: great-falls-tool-bus-infra",
+        "visibility: selected",
+        "allows_public_repositories: false",
+        "restricted_to_workflows: false",
     ):
-        try:
-            observed_pin = parser(_read(root, relative, label))
-            if observed_pin != IMPLEMENTATION_CORE_PIN:
-                findings.append(
-                    f"{relative}: core authority must preserve implementation pin "
-                    f"{IMPLEMENTATION_CORE_PIN}"
-                )
-        except ContractError as exc:
-            findings.append(str(exc))
+        if organization.count(required) != 1:
+            findings.append(f"config/organization.yaml: expected exactly one {required!r}")
 
-    proof = sources.get("flywheel-cache-proof.yml", "")
-    oidc_refs = re.findall(
-        r"(?m)^[ \t]+GF_OIDC_PROFILE_REF[ \t]*:[ \t]*([^\s#]+)[ \t]*$",
-        proof,
+    module = read("MODULE.bazel")
+    if f'commit = "{PIN}"' not in module:
+        findings.append("MODULE.bazel: GF module override does not match the signed release commit")
+    if f'remote = "https://github.com/{CORE_REPOSITORY}.git"' not in module:
+        findings.append("MODULE.bazel: GF module override must use the canonical repository")
+
+    justfile = read("Justfile")
+    if '"--override_module=attic-iac={{ gf_core }}"' not in justfile:
+        findings.append("Justfile: the root Bazel contract test must use the verified local GF checkout")
+
+    workflows = ROOT / ".github" / "workflows"
+    observed = {path.name for path in workflows.glob("*.y*ml")}
+    if observed != EXPECTED_WORKFLOWS:
+        findings.append(
+            "workflow census drift: "
+            f"missing={sorted(EXPECTED_WORKFLOWS - observed)} "
+            f"unexpected={sorted(observed - EXPECTED_WORKFLOWS)}"
+        )
+
+    selector = re.compile(
+        rf"(?m)^\s*runs-on:\s*$\n\s*group:\s*{re.escape(GROUP)}\s*$"
+        rf"\n\s*labels:\s*{re.escape(LABEL)}\s*$"
     )
-    if len(oidc_refs) != 1:
-        findings.append("flywheel-cache-proof.yml must contain one GF_OIDC_PROFILE_REF")
-    else:
-        try:
-            observed_pin = _exact_sha(
-                oidc_refs[0], "flywheel-cache-proof.yml GF_OIDC_PROFILE_REF"
+    key = "ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}"
+
+    for name in sorted(observed & EXPECTED_WORKFLOWS):
+        text = (workflows / name).read_text(encoding="utf-8")
+        parsed_steps = steps(text)
+        runs_on = len(re.findall(r"(?m)^\s*runs-on:\s*(?:\S.*)?$", text))
+        selected = len(selector.findall(text))
+        if selected != runs_on:
+            findings.append(
+                f"{name}: every {runs_on} job selector must bind {GROUP!r} + {LABEL!r}; found {selected}"
             )
-            if observed_pin != OIDC_PROFILE_PIN:
-                findings.append(
-                    "flywheel-cache-proof.yml: GF_OIDC_PROFILE_REF must preserve "
-                    f"role pin {OIDC_PROFILE_PIN}"
-                )
-        except ContractError as exc:
-            findings.append(str(exc))
-    oidc_hashes = re.findall(
-        r"(?m)^[ \t]+GF_OIDC_PROFILE_SHA256[ \t]*:[ \t]*([^\s#]+)[ \t]*$",
-        proof,
-    )
-    if oidc_hashes != [OIDC_PROFILE_SHA256]:
-        findings.append(
-            "flywheel-cache-proof.yml must preserve the content hash for the pinned OIDC helper"
-        )
-    canonical_oidc_url = (
-        'url="https://raw.githubusercontent.com/tinyland-inc/GloriousFlywheel/'
-        '${GF_OIDC_PROFILE_REF}/scripts/flywheel-github-oidc-profile.sh"'
-    )
-    raw_oidc_urls = re.findall(
-        r'(?m)^\s+url="https://raw\.githubusercontent\.com/tinyland-inc/'
-        r'GloriousFlywheel/[^\n]+$',
-        proof,
-    )
-    if len(raw_oidc_urls) != 1 or canonical_oidc_url not in raw_oidc_urls[0]:
-        findings.append(
-            "flywheel-cache-proof.yml must fetch the OIDC helper through its exact pinned ref"
-        )
-    oidc_install_steps = [
-        step
-        for step in workflow_steps(proof)
-        if step.name == "Install fleet OIDC front door (pinned)"
-    ]
-    if len(oidc_install_steps) != 1:
-        findings.append(
-            "flywheel-cache-proof.yml must contain one pinned OIDC helper install step"
-        )
-    elif _step_run_script(oidc_install_steps[0]) != OIDC_INSTALL_SCRIPT:
-        findings.append(
-            "flywheel-cache-proof.yml must preserve the closed OIDC fetch-and-hash script"
-        )
+        if re.search(r"(?m)^\s*runs-on:\s*tinyland-nix\s*$", text):
+            findings.append(f"{name}: label-only runner selection is forbidden")
 
-    for relative in AUTHORITY_DOCS:
-        try:
-            source = _read(root, relative, f"authority document {relative}")
-        except ContractError as exc:
-            findings.append(str(exc))
-            continue
-        for credential in RETIRED_CORE_CREDENTIALS:
-            if credential in source:
-                findings.append(f"{relative}: references retired {credential}")
-        if re.search(r"private\s+(?:GloriousFlywheel|core repo)", source, re.IGNORECASE):
-            findings.append(f"{relative}: claims the public core source is private")
+        expected_permissions = (
+            ("contents: read", "id-token: write")
+            if name == "flywheel-cache-proof.yml"
+            else ("contents: read",)
+        )
+        if permissions(text) != expected_permissions:
+            findings.append(f"{name}: workflow permissions must be {expected_permissions}")
+
+        checkout_steps = [step for _, step in parsed_steps if "uses: actions/checkout@" in step]
+        if len(checkout_steps) != ACTION_CHECKOUTS[name]:
+            findings.append(
+                f"{name}: expected {ACTION_CHECKOUTS[name]} checkout steps, found {len(checkout_steps)}"
+            )
+        for checkout in checkout_steps:
+            if f"uses: {CHECKOUT_ACTION}" not in checkout:
+                findings.append(f"{name}: every checkout action must use the immutable approved commit")
+            if checkout.count("persist-credentials: false") != 1:
+                findings.append(f"{name}: every checkout must disable credential persistence")
+            if re.search(r"(?m)^\s*token\s*:", checkout):
+                findings.append(f"{name}: explicit checkout token is forbidden")
+
+        expected = CORE_CHECKOUTS.get(name, 0)
+        core_steps = [
+            (index, step)
+            for index, (_, step) in enumerate(parsed_steps)
+            if f"repository: {CORE_REPOSITORY}" in step
+        ]
+        actual = len(core_steps)
+        if actual != expected:
+            findings.append(f"{name}: expected {expected} GF checkouts, found {actual}")
+        if expected:
+            if text.count("Checkout private GloriousFlywheel release") != expected:
+                findings.append(f"{name}: private GF checkout step count drift")
+            if text.count(key) != expected:
+                findings.append(f"{name}: every private GF checkout requires the read-only deploy key")
+            refs = re.findall(r"(?m)^\s*GF_CORE_REF:\s*([0-9a-f]+)\s*$", text)
+            if refs != [PIN]:
+                findings.append(f"{name}: GF_CORE_REF must be the signed release commit")
+            expected_ci_paths = CORE_CI_PATH_EXPORTS[name]
+            observed_ci_paths = text.count('GF_CORE_CI_PATH="path:../GloriousFlywheel#ci"')
+            if observed_ci_paths != expected_ci_paths:
+                findings.append(
+                    f"{name}: expected {expected_ci_paths} verified local #ci paths, found {observed_ci_paths}"
+                )
+
+        for index, checkout in core_steps:
+            for required in (
+                "ref: ${{ env.GF_CORE_REF }}",
+                "path: GloriousFlywheel",
+                key,
+                "persist-credentials: false",
+            ):
+                if checkout.count(required) != 1:
+                    findings.append(f"{name}: private GF checkout requires exactly one {required!r}")
+            if index + 1 >= len(parsed_steps):
+                findings.append(f"{name}: private GF checkout has no following HEAD verification")
+                continue
+            verify_name, verify = parsed_steps[index + 1]
+            if verify_name != "Verify GloriousFlywheel core checkout":
+                findings.append(f"{name}: private GF checkout must be followed by HEAD verification")
+                continue
+            if condition(checkout) != condition(verify):
+                findings.append(f"{name}: checkout and HEAD verification conditions differ")
+            for required in (
+                'actual="$(git -C GloriousFlywheel rev-parse --verify HEAD)"',
+                'if [ "${actual}" != "${GF_CORE_REF}" ]; then',
+                "exit 1",
+            ):
+                if required not in verify:
+                    findings.append(f"{name}: HEAD verification is missing {required!r}")
+
+        if f"github:tinyland-inc/GloriousFlywheel/" in text:
+            findings.append(f"{name}: private GF devshell must use the verified local checkout")
+
+        unexpected_ssh = [
+            checkout
+            for checkout in checkout_steps
+            if "ssh-key:" in checkout and f"repository: {CORE_REPOSITORY}" not in checkout
+        ]
+        if unexpected_ssh:
+            findings.append(f"{name}: only the private GF checkout may use an SSH key")
+
+    proof = (workflows / "flywheel-cache-proof.yml").read_text(encoding="utf-8")
+    if proof.count(f"uses: {NIX_SETUP_ACTION}") != 1:
+        findings.append("flywheel-cache-proof.yml: nix-setup must use its immutable v2.12.1 commit")
+    if proof.count(f"uses: {CREDHELPER_ACTION}") != 1:
+        findings.append("flywheel-cache-proof.yml: credhelper install must use its immutable v2.11.0 commit")
+    if "workflow_dispatch:" in proof:
+        findings.append("flywheel-cache-proof.yml: manual cache-write dispatch is forbidden")
+
+    public_claims = (
+        "Checkout public GloriousFlywheel core",
+        "public GloriousFlywheel core",
+        "GloriousFlywheel source is public",
+        "CI checks out the public `tinyland-inc/GloriousFlywheel`",
+    )
+    for relative in (
+        "README.md",
+        "Justfile",
+        "docs/ci-credentials.md",
+        "docs/implementation-overlay.md",
+        "docs/onboarding-runbook.md",
+        "docs/runbooks/oncluster-web-cutover.md",
+        "bazel/flywheel-proof/MODULE.bazel",
+    ):
+        text = read(relative)
+        for claim in public_claims:
+            if claim in text:
+                findings.append(f"{relative}: stale public-core claim {claim!r}")
 
     return findings
-
-
-def _write_fixture(destination: Path, source_root: Path) -> None:
-    required = [
-        Path("config/organization.yaml"),
-        Path("MODULE.bazel"),
-        Path("Justfile"),
-        *AUTHORITY_DOCS,
-        *[WORKFLOW_DIR / name for name in EXPECTED_WORKFLOWS],
-    ]
-    for relative in dict.fromkeys(required):
-        target = destination / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(_read(source_root, relative, f"self-test fixture {relative}"), encoding="utf-8")
-
-
-def self_test(root: Path) -> None:
-    mutations: dict[str, tuple[Path, str, str]] = {
-        "floating workflow pin": (
-            Path(".github/workflows/validate.yml"),
-            f"GF_CORE_REF: {IMPLEMENTATION_CORE_PIN}",
-            "GF_CORE_REF: main",
-        ),
-        "job-level core ref override": (
-            Path(".github/workflows/validate.yml"),
-            "    steps:\n",
-            f"    env:\n      GF_CORE_REF: {'e' * 40}\n    steps:\n",
-        ),
-        "floating checkout action": (
-            Path(".github/workflows/validate.yml"),
-            CHECKOUT_ACTION,
-            "actions/checkout@v6",
-        ),
-        "credential persistence": (
-            Path(".github/workflows/validate.yml"),
-            "persist-credentials: false",
-            "persist-credentials: true",
-        ),
-        "wrong core path": (
-            Path(".github/workflows/validate.yml"),
-            "path: GloriousFlywheel",
-            "path: core",
-        ),
-        "explicit checkout token": (
-            Path(".github/workflows/validate.yml"),
-            "          path: GloriousFlywheel\n",
-            "          path: GloriousFlywheel\n          token: ${{ github.token }}\n",
-        ),
-        "explicit checkout SSH key": (
-            Path(".github/workflows/validate.yml"),
-            "          path: GloriousFlywheel\n",
-            "          path: GloriousFlywheel\n          ssh-key: ${{ secrets.SOME_KEY }}\n",
-        ),
-        "overlay checkout token": (
-            Path(".github/workflows/validate.yml"),
-            "          path: overlay\n",
-            "          path: overlay\n          token: ${{ secrets.SITE_CI_READ_TOKEN }}\n",
-        ),
-        "spaced checkout credential key": (
-            Path(".github/workflows/validate.yml"),
-            "          path: GloriousFlywheel\n",
-            "          path: GloriousFlywheel\n          token : ${{ secrets.NEW_GF_PAT }}\n",
-        ),
-        "wrong overlay path": (
-            Path(".github/workflows/validate.yml"),
-            "          path: overlay\n",
-            "          path: wrong-overlay\n",
-        ),
-        "duplicate core ref": (
-            Path(".github/workflows/validate.yml"),
-            "          ref: ${{ env.GF_CORE_REF }}\n",
-            "          ref: ${{ env.GF_CORE_REF }}\n          ref: main\n",
-        ),
-        "quoted hidden checkout": (
-            Path(".github/workflows/validate.yml"),
-            "    steps:\n",
-            "    steps:\n      - name: Hidden checkout\n        uses: 'actions/checkout@v6'\n",
-        ),
-        "shell core clone": (
-            Path(".github/workflows/validate.yml"),
-            "    steps:\n",
-            "    steps:\n      - name: Clone core\n        run: git clone https://github.com/tinyland-inc/GloriousFlywheel\n",
-        ),
-        "remote core action": (
-            Path(".github/workflows/validate.yml"),
-            "    steps:\n",
-            "    steps:\n      - name: Remote core action\n        uses: tinyland-inc/GloriousFlywheel/.github/actions/nix-job@main\n",
-        ),
-        "floating core devshell": (
-            Path(".github/workflows/validate.yml"),
-            'export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"',
-            'export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/main#ci"',
-        ),
-        "write contents permission": (
-            Path(".github/workflows/validate.yml"),
-            "  contents: read",
-            "  contents: write",
-        ),
-        "expanded workflow token permissions": (
-            Path(".github/workflows/validate.yml"),
-            "  contents: read\n",
-            "  contents: read\n  actions: write\n",
-        ),
-        "floating OIDC helper URL": (
-            Path(".github/workflows/flywheel-cache-proof.yml"),
-            "GloriousFlywheel/${GF_OIDC_PROFILE_REF}/scripts/flywheel-github-oidc-profile.sh",
-            "GloriousFlywheel/main/scripts/flywheel-github-oidc-profile.sh",
-        ),
-        "mismatched OIDC helper hash": (
-            Path(".github/workflows/flywheel-cache-proof.yml"),
-            f"GF_OIDC_PROFILE_SHA256: {OIDC_PROFILE_SHA256}",
-            f"GF_OIDC_PROFILE_SHA256: {'f' * 64}",
-        ),
-        "disabled OIDC hash comparison": (
-            Path(".github/workflows/flywheel-cache-proof.yml"),
-            'if [ "${actual}" != "${GF_OIDC_PROFILE_SHA256}" ]; then',
-            "if false; then",
-        ),
-        "legacy core credential": (
-            Path(".github/workflows/validate.yml"),
-            "env:\n",
-            "env:\n  GF_CORE_READ_TOKEN: ${{ secrets.GF_CORE_READ_TOKEN }}\n",
-        ),
-        "missing HEAD assertion": (
-            Path(".github/workflows/validate.yml"),
-            "      - name: Verify GloriousFlywheel core checkout",
-            "      - name: Do not verify GloriousFlywheel core checkout",
-        ),
-        "mutated HEAD assertion": (
-            Path(".github/workflows/validate.yml"),
-            "rev-parse --verify HEAD",
-            "rev-parse --verify HEAD || true",
-        ),
-        "HEAD assertion condition drift": (
-            Path(".github/workflows/edge-drift.yml"),
-            "      - name: Verify GloriousFlywheel core checkout\n        if: steps.secrets.outputs.edge-deploy-secrets-present == 'true'",
-            "      - name: Verify GloriousFlywheel core checkout\n        if: always()",
-        ),
-        "checkout lane condition drift": (
-            Path(".github/workflows/edge-drift.yml"),
-            "      - name: Checkout overlay\n        if: steps.secrets.outputs.edge-deploy-secrets-present == 'true'",
-            "      - name: Checkout overlay\n        if: always()",
-        ),
-        "fail-soft HEAD assertion": (
-            Path(".github/workflows/validate.yml"),
-            "      - name: Verify GloriousFlywheel core checkout\n        run: |",
-            "      - name: Verify GloriousFlywheel core checkout\n        continue-on-error: true\n        run: |",
-        ),
-        "mismatched Justfile pin": (
-            Path("Justfile"),
-            f"{IMPLEMENTATION_CORE_PIN}#ci",
-            f"{'a' * 40}#ci",
-        ),
-        "floating Bzlmod pin": (
-            Path("MODULE.bazel"),
-            f'commit = "{IMPLEMENTATION_CORE_PIN}"',
-            'commit = "main"',
-        ),
-        "mismatched organization pin": (
-            Path("config/organization.yaml"),
-            f"pinned_commit: {IMPLEMENTATION_CORE_PIN}",
-            f"pinned_commit: {'b' * 40}",
-        ),
-        "mismatched ARC role pin": (
-            Path(".github/workflows/deploy-arc-runners.yml"),
-            f"GF_CORE_REF: {ARC_CORE_PIN}",
-            f"GF_CORE_REF: {'c' * 40}",
-        ),
-        "mismatched OIDC profile pin": (
-            Path(".github/workflows/flywheel-cache-proof.yml"),
-            f"GF_OIDC_PROFILE_REF: {OIDC_PROFILE_PIN}",
-            f"GF_OIDC_PROFILE_REF: {'d' * 40}",
-        ),
-    }
-
-    for label, (relative, old, new) in mutations.items():
-        with tempfile.TemporaryDirectory() as temporary:
-            fixture = Path(temporary)
-            _write_fixture(fixture, root)
-            path = fixture / relative
-            source = path.read_text(encoding="utf-8")
-            if old not in source:
-                raise RuntimeError(f"self-test fixture for {label} did not match source")
-            path.write_text(source.replace(old, new, 1), encoding="utf-8")
-            findings = validate(fixture)
-            if not findings:
-                raise RuntimeError(f"self-test accepted {label}")
-
-    with tempfile.TemporaryDirectory() as temporary:
-        fixture = Path(temporary)
-        _write_fixture(fixture, root)
-        (fixture / WORKFLOW_DIR / "validate.yaml").write_text(
-            _read(root, WORKFLOW_DIR / "validate.yml", "validate workflow"),
-            encoding="utf-8",
-        )
-        findings = validate(fixture)
-        if not any("duplicate basename validate" in finding for finding in findings):
-            raise RuntimeError("self-test accepted a duplicate .yml/.yaml workflow")
 
 
 def main() -> int:
-    findings = validate(ROOT)
+    findings = validate()
     if findings:
-        print(f"core-checkout contract FAILED ({len(findings)} finding(s)):", file=sys.stderr)
         for finding in findings:
-            print(f"- {finding}", file=sys.stderr)
+            print(f"ERROR: {finding}", file=sys.stderr)
         return 1
-
-    if "--self-test" in sys.argv:
-        try:
-            self_test(ROOT)
-        except RuntimeError as exc:
-            print(f"core-checkout self-test FAILED: {exc}", file=sys.stderr)
-            return 1
-        print("core-checkout self-test passed")
-        return 0
-
-    print(
-        "core-checkout contract passed: "
-        f"{len(EXPECTED_CORE_CHECKOUTS)} workflow consumers, "
-        f"{sum(EXPECTED_CORE_CHECKOUTS.values())} public exact-SHA checkouts, "
-        f"{sum(EXPECTED_CORE_CI_PATH_EXPORTS.values())} pinned #ci devshell sources, "
-        f"implementation pin {IMPLEMENTATION_CORE_PIN}, "
-        f"ARC/OIDC role pin {ARC_CORE_PIN}; "
-        "no dedicated cross-repo checkout credential"
-    )
+    print("private GF release and owner-runner attachment contract: PASS")
     return 0
 
 

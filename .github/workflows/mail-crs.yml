@@ -38,24 +38,27 @@ permissions:
   contents: read
 
 env:
-  GF_CORE_REF: 2281b576bce0e8dd776a047b84e7464f5b508a62
+  GF_CORE_REF: f26b541d1d7600d56b2e78c87038415fa06b3622
 
 jobs:
   validate:
     name: Validate mail CRs
-    runs-on: tinyland-nix
+    runs-on:
+      group: great-falls-tool-bus-infra
+      labels: tinyland-nix
     steps:
       - name: Checkout overlay
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           path: overlay
           persist-credentials: false
-      - name: Checkout public GloriousFlywheel core
+      - name: Checkout private GloriousFlywheel release
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: tinyland-inc/GloriousFlywheel
           ref: ${{ env.GF_CORE_REF }}
           path: GloriousFlywheel
+          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
           persist-credentials: false
       - name: Verify GloriousFlywheel core checkout
         run: |
@@ -73,14 +76,16 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            export GF_CORE_CI_PATH="path:../GloriousFlywheel#ci"
             nix develop "${GF_CORE_CI_PATH}" -c just mail-cr-validate
 
   server:
     name: Server dry-run or apply
     if: github.event_name == 'workflow_dispatch'
     needs: validate
-    runs-on: tinyland-nix
+    runs-on:
+      group: great-falls-tool-bus-infra
+      labels: tinyland-nix
     environment: mail
     steps:
       - name: Validate mail kubeconfig secret
@@ -97,12 +102,13 @@ jobs:
         with:
           path: overlay
           persist-credentials: false
-      - name: Checkout public GloriousFlywheel core
+      - name: Checkout private GloriousFlywheel release
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: tinyland-inc/GloriousFlywheel
           ref: ${{ env.GF_CORE_REF }}
           path: GloriousFlywheel
+          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
           persist-credentials: false
       - name: Verify GloriousFlywheel core checkout
         run: |
@@ -135,7 +141,7 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            export GF_CORE_CI_PATH="path:../GloriousFlywheel#ci"
             if [ -n "${KUBERNETES_SERVICE_HOST:-}" ]; then
               cluster_name="$(nix develop "${GF_CORE_CI_PATH}" -c kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" config view --minify -o jsonpath='{.contexts[0].context.cluster}')"
               nix develop "${GF_CORE_CI_PATH}" -c kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" config set-cluster "${cluster_name}" --server=https://kubernetes.default.svc >/dev/null
@@ -150,5 +156,5 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            export GF_CORE_CI_PATH="path:../GloriousFlywheel#ci"
             nix develop "${GF_CORE_CI_PATH}" -c just mail-cr-apply

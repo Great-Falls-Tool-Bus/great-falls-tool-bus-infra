@@ -1,25 +1,22 @@
 # CI Credentials
 
-This overlay validates by checking out the public GloriousFlywheel core repo at
-an exact role-bound commit next to the overlay repo.
+This overlay validates against the private signed GloriousFlywheel release at
+one exact commit next to the overlay repo.
 
 ## Core Source Checkout
 
-The core checkout needs no dedicated cross-repository deploy key, PAT, or
-GitHub App secret. Each workflow supplies the canonical public repository,
-exact `GF_CORE_REF`, explicit `GloriousFlywheel` path, and
-`persist-credentials: false`, then compares the checked-out `HEAD` with the
-declared ref before consuming any core action or devshell.
+`GF_CORE_DEPLOY_KEY` is a read-only deploy key attached to
+`tinyland-inc/GloriousFlywheel` and stored as a secret in this private overlay.
+It grants source read only. It is not the ARC registration App, an apply
+credential, or a general PAT.
 
-Pinned `actions/checkout` still defaults its `token` input to the workflow
-repository's ephemeral per-run `github.token`. That token can fetch public
-source but carries no private-GloriousFlywheel grant; the workflow neither
-passes it explicitly nor persists it in Git configuration.
-
-If GloriousFlywheel becomes private later, that is a new reviewed authority
-change. Use a dedicated, per-overlay GitHub App installation token scoped only
-to `contents:read` on that repository; do not silently restore a deploy-key/PAT
-ladder and do not reuse the org-scoped ARC registration App.
+Each core-consuming job supplies the exact `GF_CORE_REF`, explicit checkout
+path, `ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}`, and
+`persist-credentials: false`, then compares `HEAD` with the declared commit.
+The checked-out local `#ci` devshell is used afterward, avoiding a second
+private network fetch. The root Bazel contract test similarly passes
+`--override_module=attic-iac=<verified-checkout>`; the tracked `git_override`
+records release identity and is not the CI fetch path.
 
 ## Optional Site-CI Metadata Token
 
@@ -36,10 +33,12 @@ Attic cache. The workflow only exposes this token on `push` events.
 Pull-request validation stays read-only and skips private Attic attachment
 unless a separate authenticated read path is added.
 
-## ARC Runner Deploy Secrets
+## Legacy ARC State Secrets
 
-The ARC runner deploy workflow plans on pull requests and pushes, but applies
-only through manual `workflow_dispatch` with `action=apply`.
+The existing ARC workflow can maintain the adopted shared-namespace release.
+It is not the dedicated owner-plane activation path. Its manual apply remains
+historical behavior and must not be used to bind the new group or create the
+future owner release.
 
 Required secrets:
 
@@ -72,10 +71,10 @@ GFTB_MAIL_KUBECONFIG=/path/to/latoolb-us-production.kubeconfig just mail-cr-serv
 GFTB_MAIL_KUBECONFIG=/path/to/latoolb-us-production.kubeconfig just mail-cr-apply
 ```
 
-BOOTSTRAP NOTE: these secrets only matter AFTER the GFTB scale set exists.
-Overlay CI itself runs on `tinyland-nix`, which resolves through the scale set
-this stack provisions. The first plan/apply always happens on the operator
-machine (see docs/implementation-overlay.md).
+These secrets do not satisfy the dedicated owner-plane authority contract.
+That future path needs distinct bootstrap/release state, identities,
+credentials, and protected attended mutation after a suitable signed GF
+release exists.
 
 ## Why It Exists
 
@@ -87,25 +86,17 @@ product logic into this repo.
 
 ## Current Status
 
-All eleven core-consuming workflows use the public exact-SHA checkout contract.
+All eleven core-consuming workflows use the private exact-release checkout contract.
 The repository contains a twelfth workflow without a core checkout; the finite
 `.yml`/`.yaml` census deliberately covers it so a new source consumer cannot
 hide under the alternate extension.
 
-`just core-checkout` validates checkout action immutability, public repository,
-finite overlay/core paths, role pin, non-persistence, read-only workflow
-permission, closed HEAD assertion, all 30 exact `GF_CORE_CI_PATH` devshell
-sources, the pinned-and-hashed OIDC helper URL, and absence of dedicated
-cross-repository credential inputs. `just core-checkout-selftest` proves the
-guard rejects adversarial mutations. The pinned pre-#1208 GloriousFlywheel
-`implementation-overlay-preflight.py` still reports its legacy source-key row;
-that row is not authority for this public checkout and is not a reason to mint
-a new credential.
+`just core-checkout` checks the finite workflow census, exact private checkout,
+local devshell use, shared release pin, and group-plus-capability selectors. It
+is intentionally small and is retired when the GF-generated front-door/overlay
+projection emits these bindings.
 
-The overlay's implementation authority remains
-`2281b576bce0e8dd776a047b84e7464f5b508a62`, shared by
-`config/organization.yaml`, `MODULE.bazel`, `Justfile`, and the non-ARC core
-workflow consumers. The ARC runner and OIDC profile surfaces retain their
-existing `df510574d17b85e7f15470caf3574fcabc4768f1` role pin. The
-finite contract checks this mapping exactly. A future convergence must review
-the executable core delta as its own adoption change.
+The validation authority is signed GF release `v0.3.0`, exact commit
+`f26b541d1d7600d56b2e78c87038415fa06b3622`. It is not owner-plane activation
+authority because its owner root cannot project the required authenticated
+front-door tuple.

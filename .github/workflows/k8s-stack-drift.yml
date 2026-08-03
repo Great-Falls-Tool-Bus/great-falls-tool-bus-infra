@@ -48,12 +48,14 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GF_CORE_REF: 2281b576bce0e8dd776a047b84e7464f5b508a62
+  GF_CORE_REF: f26b541d1d7600d56b2e78c87038415fa06b3622
 
 jobs:
   mail-stacks-drift:
     name: Assert zero-diff (mail, list, form, archive)
-    runs-on: tinyland-nix
+    runs-on:
+      group: great-falls-tool-bus-infra
+      labels: tinyland-nix
     timeout-minutes: 20
     # Same protected `mail` environment mail-crs.yml / list-crs.yml /
     # form-crs.yml / archive-stack.yml already bind for their server/apply jobs.
@@ -78,13 +80,14 @@ jobs:
           path: overlay
           persist-credentials: false
 
-      - name: Checkout public GloriousFlywheel core
+      - name: Checkout private GloriousFlywheel release
         if: steps.secrets.outputs.kubeconfig-present == 'true'
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: tinyland-inc/GloriousFlywheel
           ref: ${{ env.GF_CORE_REF }}
           path: GloriousFlywheel
+          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
           persist-credentials: false
 
       - name: Verify GloriousFlywheel core checkout
@@ -123,7 +126,7 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            export GF_CORE_CI_PATH="path:../GloriousFlywheel#ci"
             nix develop "${GF_CORE_CI_PATH}" -c just mail-cr-drift-check
 
       - name: Drift check -- list stack
@@ -135,7 +138,7 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            export GF_CORE_CI_PATH="path:../GloriousFlywheel#ci"
             nix develop "${GF_CORE_CI_PATH}" -c just list-stack-drift-check
 
       - name: Drift check -- form stack
@@ -147,7 +150,7 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            export GF_CORE_CI_PATH="path:../GloriousFlywheel#ci"
             nix develop "${GF_CORE_CI_PATH}" -c just form-stack-drift-check
 
       - name: Drift check -- archive stack
@@ -159,7 +162,7 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            export GF_CORE_CI_PATH="path:../GloriousFlywheel#ci"
             nix develop "${GF_CORE_CI_PATH}" -c just archive-stack-drift-check
 
       - name: Upload drift artifacts
@@ -178,7 +181,9 @@ jobs:
 
   web-stack-drift:
     name: Report web-stack diff (informational; parked skeleton diverges by design)
-    runs-on: tinyland-nix
+    runs-on:
+      group: great-falls-tool-bus-infra
+      labels: tinyland-nix
     timeout-minutes: 20
     # Same protected `web-apply` environment web-stack.yml already binds.
     environment: web-apply
@@ -202,13 +207,14 @@ jobs:
           path: overlay
           persist-credentials: false
 
-      - name: Checkout public GloriousFlywheel core
+      - name: Checkout private GloriousFlywheel release
         if: steps.secrets.outputs.kubeconfig-present == 'true'
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: tinyland-inc/GloriousFlywheel
           ref: ${{ env.GF_CORE_REF }}
           path: GloriousFlywheel
+          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
           persist-credentials: false
 
       - name: Verify GloriousFlywheel core checkout
@@ -241,7 +247,7 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            export GF_CORE_CI_PATH="path:../GloriousFlywheel#ci"
             nix develop "${GF_CORE_CI_PATH}" -c just web-stack-drift-check
 
       - name: Upload drift artifact

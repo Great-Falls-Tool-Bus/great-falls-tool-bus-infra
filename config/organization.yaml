@@ -7,13 +7,16 @@ owner:
   forge: github
   account_kind: organization
   repository: Great-Falls-Tool-Bus/great-falls-tool-bus-infra
+  repository_id: 1286829099
+  repository_visibility: private
   github_config_url: https://github.com/Great-Falls-Tool-Bus
   github_app_secret_name: github-app-secret-great-falls-tool-bus
 
 core:
   repository: tinyland-inc/GloriousFlywheel
   module_name: attic-iac
-  pinned_commit: 2281b576bce0e8dd776a047b84e7464f5b508a62
+  pinned_commit: f26b541d1d7600d56b2e78c87038415fa06b3622
+  signed_ref: refs/tags/v0.3.0
 
 substrate:
   cluster:
@@ -33,6 +36,13 @@ substrate:
     bazel_executor_endpoint: grpc://gf-reapi-cell.gf-rbe.svc.cluster.local:8980
 
 runner_contract:
+  runner_group:
+    name: great-falls-tool-bus-infra
+    visibility: selected
+    allows_public_repositories: false
+    selected_repository_ids:
+      - 1286829099
+    restricted_to_workflows: false
   shared_labels:
     - tinyland-nix
     - tinyland-docker
