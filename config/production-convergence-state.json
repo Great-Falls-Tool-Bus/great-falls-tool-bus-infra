@@ -1,0 +1,5 @@
+{
+  "$comment": "Kill-switch as code for the greatfallstoolbus.org production-convergence carrier (site.scaffold docs/patterns/production-convergence.md section 5; tofu-agent-carrier.md section 2 step 2). Each tick the carrier reads this document FIRST from its clone of this repo's main and exits 0 quietly while enabled is false -- a halted tick is a successful tick. SHIPS false: no carrier exists yet; the flip to true is the operator enable ceremony, gated on the Push-2 stateful-gitops module publication and the pin swap in tofu/stacks/web-convergence/ (docs/decisions/0002-production-convergence-conversion.md). Flipping this flag, in either direction, is always a reviewed PR -- never a dashboard click, a suspended workflow, or a deleted credential.",
+  "schema_version": 1,
+  "enabled": false
+}
