@@ -12,10 +12,11 @@
 - **Binding architecture rulings:** TIN-2609 comment
   `a498b0ec-57f2-4a7a-b01b-3dc2acbdc366` and TIN-3578 comment
   `70364081-24a6-4d86-8306-c8fa4ccbc688`
-- **Credential-projection carrier:** TIN-3768, especially comments
-  `dc5ac98f-ecf2-4ddf-9c0a-d288c2cfd722`,
-  `4b1f75ab-01c0-48cf-9efc-3b8bb019cc55`, and
-  `040b9054-79e5-443d-acd9-fcb0421f8428`
+- **Enrolment/controller MVP ruling:** TIN-3768 comment
+  `27a1616e-b8d8-4560-81d6-d1dbf6fe7145`, grounded by correction
+  `48be6e96-86a8-470a-9db6-f175f58202b8`. The typed lane owns the keystone
+  projection shape; its exact stable and instance-scoped target source remains
+  pending rather than inferred from a nonexistent registry field.
 
 This is a design contract, not a second mutable status surface. Dated evidence
 below is retained only where it explains a required invariant. Current
@@ -36,9 +37,11 @@ reviewed site source
   -> immutable terminal receipts
 ```
 
-The execution is edge-triggered by immutable accepted intent. Scheduled
-automation is authenticated, report-only, and fail-closed drift/readback; it
-does not mutate and is not a pull reconciler.
+The execution is edge-triggered by immutable accepted intent. Each accepted
+decision digest is consumed once by the protected executor and terminates in
+receipts or rollback. There is no standing convergence or drift loop. Periodic
+diagnostics, if retained, are observational only and carry no decision, plan,
+apply, or lifecycle authority.
 
 The design contains:
 
@@ -49,7 +52,7 @@ The design contains:
   state, and rollback.
 
 It contains no Flux, Argo CD, source-controller CRDs, shell/CronJob lifecycle
-controller, shared multi-tenant apply workflow, second backend, runtime Git
+controller, state-owning shared apply workflow, second backend, runtime Git
 clone, routine manual dispatch, or application lifecycle in GF core or Blahaj.
 Immutable OCI is artifact transport only; transport never becomes lifecycle
 authority.
@@ -106,6 +109,24 @@ do not own GFTB state, and must not be called as a cross-tenant state backend.
 GFTB implements the same interface and evidence invariants in its own owner
 overlay.
 
+### 1.6 Reusable GF product stack
+
+GFTB and MMS are exemplary consumers of the reusable GF stack, not exceptions
+to design around. Their production mail, metal, RBAC, complex-topology, and
+application-stack deployment requirements are product inputs that GF's typed
+contracts, controller, executor primitives, and evidence model must support.
+The reusable stack must therefore be richer than an ARC-only or simple
+web-Deployment path, and it must accept tenant-specific topology and
+least-privilege operations without forcing those tenants into ad hoc control
+planes.
+
+Reuse does not centralize tenant state or credentials. GF supplies generic
+typed protocol and reviewed executor machinery; the GFTB owner overlay
+instantiates it with GFTB mappings, state, protected identities, recipes, and
+rollback. TIN-2597 and TIN-2611's app-stack findings remain requirements for
+that reusable machinery even though the former shared-workflow authority is
+retired.
+
 ## 2. Existing GFTB path and its disposition
 
 At the branch's 2026-08-06 baseline, the site repository's
@@ -129,7 +150,9 @@ durable control plane:
 
 Future source work joins and refits the existing `web-stack.yml` and `Justfile`
 surfaces in place. It must not add a parallel workflow, scratch controller,
-shared apply module, or dual production mutation path.
+state-owning shared apply module, or dual production mutation path. It may and
+should consume the reusable GF typed/executor interfaces once their exact
+carriers land.
 
 The existing public operator-surface rule remains: workflows call reviewed
 `Justfile` recipes; privileged mutation is not copied inline into workflow or
@@ -225,32 +248,52 @@ downstream jobs.
 
 ## 4. Pull-credential projection
 
-TIN-3768 makes private-image pull projection the controller's first governed
-operand, but the typed TenantOverlay/owner-installation field is not yet
-landed. This spec records the required boundary and does not invent that field.
+TIN-3768 comment `27a1616e-b8d8-4560-81d6-d1dbf6fe7145` makes Secret
+projection the controller's first `Accept`-consuming apply and owns its exact
+typed design. This GFTB spec consumes that design; it does not add another
+TenantOverlay field, registry, writer, or projection protocol.
 
-- Projection is required only for a release whose declared image audience is
-  private. The public `converge-agent` carrier does not require a pull Secret.
-- Exact cluster authority, namespace, object name, opaque credential reference,
-  and private-image audience come from signed TenantOverlay/owner-installation
-  data. They are never inferred from GF consumer/spoke registries, runner
-  classes, labels, namespace globs, or repository names.
-- GF-I09 carries no credential bytes and performs no projection.
-- An accepted #5 decision emits immutable projection intent. The existing
-  protected subordinate-executor pattern performs create-if-absent projection
-  under a scoped identity and reports exact object/version/hash evidence.
+The ratified keystone shape is:
+
+- `Core.dhall` stays opaque: TenantOverlay carries the Option-E-only
+  `credentialIdentityKey : Natural`;
+- declared `CredentialProjection` is separate from verifier-owned
+  `CredentialProjectionVerification`;
+- controller Go owns a closed `RegistryPullAuthority` mirroring
+  `WorkerRouteAuthority`;
+- `tenantProjectionActivates` binds projection to an `Accept` for the same
+  tenant and refuses cross-tenant or `Refuse` cases; and
+- GF-Q17 is the merge-blocking typed act for the new surface.
+
+The proposed namespace derivation is not an implementable source contract yet.
+Protected GF source has no registry `runtime_namespaces` field, and
+`tofu_plan_secret_read_namespaces` owns plan-identity `secrets:get` RBAC rather
+than projection-write targets; it also excludes ephemeral previews. The
+GF/controller typed-surface lane must ratify the source for exact stable and
+instance-scoped projection coordinates, how preview instances enter it, and
+how it remains distinct from plan-read RBAC. GFTB contributes those
+requirements and consumes the resulting immutable decision; it does not invent
+a schema or independently implement a competing shape.
+
+The operational boundary remains:
+
+- `converge-agent` is public and needs no carrier pull Secret; controller and
+  `gf-reapi-cell` remain private on the existing infra projection path;
+- a GFTB application image follows its declared visibility; a private image
+  requires accepted projection evidence, while a public image does not
+  fabricate that dependency;
+- the first proof is GF self-dogfood, before MMS or GFTB activation;
+- the protected subordinate executor consumes the exact accepted projection
+  once under scoped authority and reports object/version/hash evidence;
+- no interim cluster-admin workflow or second apply authority is admitted;
 - Git, OCI operands, logs, plans, and receipts contain no dockerconfigjson
-  payload bytes.
-- Rotation retains current and previous generations until a cold Pod proves
-  every accepted private digest can be pulled in every exact target. Only then
-  may the old generation be revoked.
-- Dynamic namespaces enter the target inventory only through their own
-  accepted instance decision.
+  payload bytes; and
+- rotation retains current and previous generations until a cold Pod proves
+  every accepted private digest can be pulled in every exact target, then
+  revokes the old generation.
 
-Until the typed surface, scoped executor, custody, rotation, rollback, and
-cold-pull proof exist, a private-image GFTB activation must refuse. If the GFTB
-application image is declared public, the release records that fact and no
-credential dependency is fabricated.
+Until GF-Q17, the typed operand, scoped executor, custody, rotation, rollback,
+and cold-pull proof exist, a private-image GFTB activation must refuse.
 
 ## 5. Acceptance oracle
 
@@ -321,9 +364,11 @@ The transition never runs two production mutation authorities.
    remove producer `repository_dispatch`, bespoke signal credentials and
    payload, routine manual apply, inline digest-resolution authority, and any
    duplicate policy gates.
-7. **Complete continuous readback.** Refit the existing scheduled drift surface
-   as authenticated report-only, fail-closed readback bound to the same
-   accepted desired state. It may alert/refuse future work; it never mutates.
+7. **Bound observational audit.** The existing scheduled drift surface may
+   remain only as authenticated, report-only diagnostics. It never accepts
+   intent, schedules convergence, mutates, or substitutes for the edge-triggered
+   attempt/outcome/served receipts. Remove wording that makes it a standing
+   controller or product liveness authority.
 
 ## 7. Existing surfaces and retirement triggers
 
@@ -335,7 +380,7 @@ The transition never runs two production mutation authorities.
 | manual `workflow_dispatch` steady-state apply | retire as product mechanism | governed rollback is exercised and externally observed |
 | `Justfile` workload validation/apply entrypoints | retain as GFTB-owned verbs, split by plan/apply authority as needed | replaced only by a separately ratified GFTB owner-overlay interface |
 | `/health` probe | retain for liveness only | never promoted to served-content oracle |
-| `k8s-stack-drift.yml` | refit in place to authenticated report-only readback | delete only if the same scheduled claim is enforced by a higher-ranked existing contract |
+| `k8s-stack-drift.yml` | retain/refit only as observational diagnostics; never a convergence loop or mutation trigger | delete if it duplicates the immutable terminal receipt/readback claim |
 | this spec | retire into an operator runbook and durable interface docs | #104's design is implemented, production/rollback receipts are accepted, and no mutable status remains here |
 
 Removing a superseded surface and its false documentation happens in the same
@@ -352,7 +397,9 @@ The following are gates, not workarounds:
   GFTB execution authority;
 - GFTB does not yet have the authenticated GF-I09 producer and closed
   owner-overlay adapter described here;
-- TIN-3768's typed projection operand and exact cold-pull proof are absent;
+- TIN-3768's ratified GF-Q17/typed projection operand, exact stable/instance
+  coordinate source, and cold-pull proof must land on the GF/controller
+  carriers rather than being invented here;
 - protected plan/apply identities and terminal GFTB receipt publication require
   reviewed source and runtime proof;
 - a credentialed served-content probe is required; constant `/health` cannot
@@ -360,10 +407,11 @@ The following are gates, not workarounds:
 - refusal, replay/expiry, failure isolation, rollback, and self-dogfood/MMS/GFTB
   canary order remain acceptance gates.
 
-Do not resolve a blocker by adding Flux/Argo, a shared apply workflow, a
-shell/CronJob controller, runtime Git, hosted fallback, a second backend,
-cluster-admin projection, a manual production path, or a tenant lifecycle
-owner outside this repository.
+Do not resolve a blocker by adding Flux/Argo, a state-owning shared apply
+workflow, a shell/CronJob controller, runtime Git, hosted fallback, a second
+backend, cluster-admin projection, a manual production path, or a tenant
+lifecycle owner outside this repository. Do not use that fence to discard
+GFTB's full-stack requirements from the reusable GF product.
 
 ## 9. References
 
