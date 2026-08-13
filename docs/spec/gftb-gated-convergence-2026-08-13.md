@@ -12,6 +12,8 @@
 - **Binding architecture rulings:** TIN-2609 comment
   `a498b0ec-57f2-4a7a-b01b-3dc2acbdc366` and TIN-3578 comment
   `70364081-24a6-4d86-8306-c8fa4ccbc688`
+- **Executable edge audit:** TIN-2609 comment
+  `e0e74eb9-44bf-4f2f-aed0-52fa78395e65`
 - **Enrolment/controller MVP ruling:** TIN-3768 comment
   `27a1616e-b8d8-4560-81d6-d1dbf6fe7145`, grounded by correction
   `48be6e96-86a8-470a-9db6-f175f58202b8`. The typed lane owns the keystone
@@ -42,6 +44,14 @@ decision digest is consumed once by the protected executor and terminates in
 receipts or rollback. There is no standing convergence or drift loop. Periodic
 diagnostics, if retained, are observational only and carry no decision, plan,
 apply, or lifecycle authority.
+
+This diagram is the required chain, not a claim that its initiating edge
+exists. The current #55 relay GETs an already-existing request on protected
+main push; #56 consumes a supplied request; and #5 does not install its sample
+request. The GF/controller chain must still land the protected operand
+publication/event contract that authors the exact request generation and
+triggers the corresponding protected plan run. GFTB neither owns that central
+publisher nor substitutes a manual dispatch or hand-created request.
 
 The design contains:
 
@@ -159,6 +169,19 @@ The existing public operator-surface rule remains: workflows call reviewed
 documentation.
 
 ## 3. Required protocol
+
+### 3.0 Governed source edge
+
+Before any GFTB activation, the existing #5/#55/#56 chain must gain one
+explicit protected initiation contract. It binds the exact writer identity,
+source/ref/tree/release digests, request generation and UID, nonce/lease
+semantics, and the corresponding protected plan run. Publishing a request must
+reliably initiate that run without a routine manual click, runtime Git clone,
+or second controller/workflow/backend.
+
+This is central GF/controller-chain work. The GFTB producer supplies its
+authenticated release and owner-overlay coordinates; it does not hand-create
+the Kubernetes request or introduce a tenant-specific dispatch authority.
 
 ### 3.1 Immutable release
 
@@ -344,9 +367,10 @@ whose red path has not been observed is not acceptance evidence.
 
 The transition never runs two production mutation authorities.
 
-1. **Close typed prerequisites.** Land the no-Flux refit on #5, the governed
-   executor interfaces, the GFTB GF-I09 producer, and any required TIN-3768
-   TenantOverlay projection shape. Source green is not runtime acceptance.
+1. **Close typed prerequisites.** Land the no-Flux refit on #5, the protected
+   request-publication/event contract, the governed executor interfaces, the
+   GFTB GF-I09 producer, and the TIN-3768 typed projection shape. Source green
+   is not runtime acceptance.
 2. **Refit tests and contracts in place.** Extend existing validation families
    with fixtures for release, plan, decision, terminal result, replay, refusal,
    served-content, and rollback. Every new validator names its claim and
@@ -393,6 +417,9 @@ The following are gates, not workarounds:
 
 - owner-overlay-controller #5 must have a landed and adjudicated no-Flux
   source refit, governed installation, and live refusal/acceptance receipts;
+- the central chain must have the protected exact-request publisher/event
+  contract identified by `e0e74eb9-44bf-4f2f-aed0-52fa78395e65`; #55/#56 do
+  not currently create or advance the request;
 - tinyland-infra #55/#56 are held self-dogfood reference carriers, not deployed
   GFTB execution authority;
 - GFTB does not yet have the authenticated GF-I09 producer and closed
