@@ -339,7 +339,11 @@ member. Common fields bind the request digest and reader-observed UID/generation
 the union tag and full operand digest, tenant, environment, policy, controller
 identity, nonce and lease epoch/expiry, pre-state fingerprint, backend identity,
 verifier identity, and protected workflow run. Every mutation-capable receipt
-also binds the exact monotonic cutover-latch digest and epoch plus the verifier's
+also binds the exact monotonic cutover-latch digest and epoch, the exact
+`LegacyAdmissionFence/v1` UID/epoch and stage-current server-issued compare
+resource version, the immutable digests of the closed legacy authority set and
+governed identity allow set, the enforcement mode and per-target token-map
+digest, and the verifier's
 observation that every legacy mutation authority applicable to that operand is
 disabled. Fields belonging to another operand schema are forbidden, not
 optional decoration.
@@ -362,6 +366,81 @@ run, editing only the latest workflow revision, observing an empty per-ref
 concurrency group, or asking an old client to read the latch is not quiescence.
 If any issued legacy authority or already-admitted write cannot be enumerated
 and fenced, the receipt cannot finalize and governed mutation refuses.
+
+The quiescence receipt is not merely a historical observation. Before it may
+finalize, the protected cutover operation installs and reads back one persistent
+server-side `LegacyAdmissionFence/v1` for the exact environment, operand target
+scope, and closed legacy identity set. That set binds the repository, workflow,
+and ref claims, Environment and service-account subjects, credential issuers and
+generations, allowed API authorities/verbs, and every target coordinate formerly
+reachable by either legacy path. The API server rejects every request carrying
+one of those legacy identities regardless of client workflow revision, token
+refresh, or latch awareness. Mutation in the fenced target scope is
+deny-by-default except for the exact governed identities bound into the fence.
+
+The `Enforced` authority/target set, governed-identity allow set, enforcement
+mode, and target-token mapping are immutable. No caller, including the protected
+cutover identity, may add or remove an issuer, subject, grant, target, verb,
+credential generation, governed writer, or target token while that fence is
+`Enforced`; such a request is refused server-side without changing its epoch or
+digests. The current fence remains `Enforced` for the complete lifetime of the
+governed mutation lane, including after step 10 removes the legacy mutation
+authorities, queued work, credentials, and paths. There is no standalone
+`Enforced` -> `Retired` transition and no `Disabled`, `Rearmed`, or
+mutable-enforced state. The protected cutover identity may supersede the current
+fence only through one authoritative transaction or target-local CAS that
+atomically installs and reads back an equivalent or stricter successor in
+`Enforced` state over the same complete target scope. The successor must retain
+or strengthen the old fence's legacy-identity, issuer, grant, verb, and target
+deny coverage and may not broaden its governed-identity allow set. It must expose
+the same `LegacyAdmissionFence/v1` admission contract so every future plan,
+decision, attempt, and target commit binds the one current enforced instance.
+The old record becomes historical `Superseded` evidence only as the successor
+becomes current. Every committed state has exactly one current `Enforced` fence
+over the complete governed target scope; no observation may see an unfenced
+target. Every plan, decision, or attempt bound to the old UID, epoch, mode,
+digests, token, or resource-version lineage is stale if that handoff wins.
+
+Fence enforcement must choose and record one of two closed authoritative modes.
+In `Transactional`, the fence row stores the immutable server-written
+target-token map. The mutation request carries the exact opaque server-issued
+token as a transaction precondition; the server compares it with the current
+row's token, UID, epoch, `Enforced` state, immutable digests, and resource
+version. One serializable store transaction takes the required read/write
+conflict against that row while committing the target mutation; an atomic
+successor-fence handoff writes that same current-fence authority and therefore
+contends.
+`TargetLocal` is available only when the complete fenced target scope is one
+target or server-controlled aggregate target object under one UID and resource
+version. The protected cutover installs the fence UID/epoch, both immutable set
+digests, enforcement mode, `Enforced` state, and one server-written token in that
+same object. The token, fence UID, and enforced epoch are write-once while
+`Enforced`. Each governed or recovery request must carry that exact opaque
+server-issued token plus the current server-issued object resource version, and
+the API server must compare both against the co-located authoritative fields in
+the **same** target CAS. A successful governed mutation or recovery fence
+preserves the token, fence UID/epoch, immutable digests, mode, and `Enforced`
+state while advancing the target fields, target fencing epoch, and object
+resource version. That returned resource version is the next authoritative
+lineage value recorded by the attempt/readback journal; the original resource
+version is a one-transition compare precondition, not an immutable token alias.
+An atomic successor-fence handoff CASes the latest value in that same lineage,
+installs the successor's complete immutable `Enforced` tuple and new
+server-issued token, and retains the old tuple and token as historical evidence.
+The receipt maps every covered target coordinate to that sole current token and
+initial resource version. A scope requiring independent per-target CASes,
+including an N-step successor handoff, must use `Transactional` mode or refuse;
+partial target-local activation, replacement, or retirement is forbidden.
+
+Token carriage is required but never self-authenticating authority. A caller-
+invented token, boolean such as `fenceVerified=true`, stale or unissued resource
+version, webhook observation, cached admission read, or client assertion that is
+not compared with the authoritative token/state/epoch/resource version in the
+recorded transaction or co-located CAS is forbidden. A separate pre-write check
+does not qualify.
+If neither mode is available
+for every target—including create coordinates and multi-object steps—governed
+mutation refuses; quiescence alone is not a substitute for this commit fence.
 
 For Ring-2 `ApplicationRelease/v1` and `ImagePinReplicaFlip/v1`, the GFTB plan
 identity acquires declared OCI content by digest, independently checks
@@ -395,7 +474,8 @@ A Ring-2 saved plan is immutable and single-use. Ring 1 has no application
 saved-plan: its only executable authorization is the accepted full projection
 operand plus the exact verifier-owned evidence. An apply must refuse if its
 operand-specific evidence, pre-state, decision, nonce, lease, policy, identity,
-or cutover latch no longer matches.
+cutover latch, or exact enforced legacy-admission fence mode, immutable digests,
+and target token no longer match.
 
 Prerequisite receipts form a closed, verifier-owned list before they enter the
 canonical binding. Their digests are sorted and unique; every receipt belongs to
@@ -426,7 +506,8 @@ Decision lifecycle is closed, linearizable, and race-independent:
    requeue. No final decision object, immutable intent, refusal receipt, or
    nonce consumption is created.
 2. The finalization record contains two initially empty, write-once slots under
-   that one resource version: `admittedEvidence` and `finalDecision`. The
+   that one resource version—`admittedEvidence` and `finalDecision`—plus a
+   controller-owned `applyWake` state initially set to `Dormant`. The
    protected verifier submits the canonical operand-scoped evidence envelope
    through the controller's authoritative API. The API admits it only by CAS
    from `Pending(current resourceVersion, admittedEvidence = empty,
@@ -459,23 +540,38 @@ Decision lifecycle is closed, linearizable, and race-independent:
    and late even if its client request began before the deadline. No timestamp
    from a separately versioned object can reverse either ordering.
 5. The winning final CAS installs the one canonical immutable decision payload
-   in the record's write-once `finalDecision` slot. The finalization record is
-   the decision object, so no second resource write can split classification
-   from finalization. Its name is derived from request UID/generation. Every
-   stale or later contender reads the existing final state and is non-authoring;
-   pending is never unbounded.
+   in the record's write-once `finalDecision` slot. When that payload is
+   `Accept`, the same resource-version transition must also change `applyWake`
+   from `Dormant` to `Due(generation = 1)`, binding the accepted-decision digest,
+   exact existing-owner-lane route, exact protected apply identity as delivery
+   audience, and first due deadline. A `Refuse` changes it to `Closed(NoApply)`
+   instead. No visible
+   final `Accept` may exist without its durable due apply generation. The
+   finalization record is the decision and initial wake object, so no second
+   resource write can split classification from apply notification. Its name is
+   derived from request UID/generation. Every stale or later contender reads the
+   existing final state and is non-authoring; pending is never unbounded.
 6. Runtime activation requires proof that evidence-slot admission, empty-slot
-   expiry, evidence validation, and the final slot all use this one
-   authoritative key/resource version. An eventually consistent evidence read,
-   a separately versioned evidence-key predicate without a transactional store,
-   or an independent create-only decision write does not satisfy the contract.
+   expiry, evidence validation, the final slot, and initial apply-wake
+   registration all use this one authoritative key/resource version. An
+   eventually consistent evidence read, a separately versioned evidence-key
+   predicate without a transactional store, an independent create-only decision
+   write, or best-effort post-`Accept` dispatch does not satisfy the contract.
 
 A newer independent source event does not silently supersede an in-flight
 accepted transaction; lease and nonce rules serialize authority. It is not a
 recovery workaround for normal same-generation materialization. Every `Accept`
-also binds the exact monotonic cutover-latch digest and epoch observed by its
-verifier. A changed or rearmed latch makes that decision ineligible for
-execution.
+binds the exact operand-specific protected apply identity and the exact monotonic
+cutover-latch digest and epoch observed by its
+verifier, the exact enforced `LegacyAdmissionFence/v1` UID/epoch, its
+stage-current server-issued compare resource version, the digests of the closed
+legacy authority set and governed identity allow set, the enforcement mode, and
+the per-target token-map digest. A changed latch, fence identity/epoch, immutable
+digest, mode, or token makes that decision ineligible for execution. A changed
+`TargetLocal` resource version is accepted only as the next value produced and
+recorded by this decision's own successful target-CAS lineage; an unrelated or
+unrecorded change makes the decision stale. The persistent legacy deny remains
+active even when no governed write is in progress.
 
 For GFTB, the application release and image transition remain typed operands,
 not authority embedded in the tenant workflow. The accepted
@@ -514,14 +610,19 @@ prerequisite.
 ### 3.4 Protected apply
 
 Only the separate operand-specific GFTB apply identity, behind the existing
-protected environment, may consume an unexpired `Accept` decision. Ring 2
+protected environment, may consume an unexpired `Accept` decision for mutation.
+An `Accept` whose execution lease expires before claim handoff may only be
+consumed into the canonical non-mutating terminal failure described below. Ring 2
 executes the exact saved plan. Ring 1 executes only the closed projection
 operand under its exact verifier evidence and resolves opaque custody only at
 the subordinate write boundary. The result records:
 
 - environment/protection approval and apply identity;
 - decision, request, operand-specific evidence or plan, pre-state, artifact,
-  cutover-latch digest/epoch, and exact `LegacyAuthorityQuiesced/v1` digest;
+  cutover-latch digest/epoch, exact `LegacyAuthorityQuiesced/v1` digest, and
+  exact enforced `LegacyAdmissionFence/v1` UID/epoch, stage-current server-issued
+  compare resource version, immutable digests, enforcement mode, and relevant
+  server-issued target token;
 - apply start/end, exit classification, and post-state fingerprint;
 - for Ring 2, the exact workload image, operation marker, Deployment generation,
   observedGeneration, desired replicas, and ready replicas;
@@ -532,16 +633,80 @@ the subordinate write boundary. The result records:
 No source merge, controller source green, scheduled run, or manual click may
 stand in for this terminal apply result.
 
-Before mutation, the apply run atomically creates one durable attempt record
-whose canonical name is deterministically derived from the request
-UID/generation and accepted-decision digest. The create-only record contains the
-attempt claim and its one authoritative arbitration state. It binds the full
+An accepted decision never relies on a best-effort workflow event. The
+finalization record's due `applyWake` generation is delivered at least once by a
+storage-backed authenticated outbox/timer into the existing GFTB owner lane.
+Delivery contains only finalization-record identity/digest, wake generation and
+due deadline. It grants no decision, saved-plan, projection, attempt, or
+target-write authority. The protected run must read the final record and
+independently revalidate every normal apply precondition. A lost delivery, an early delivery,
+or a run that dies before claim handoff leaves that same generation due and
+redeliverable with bounded backoff.
+
+Attempt creation and apply-wake handoff are one authoritative transaction. The
+`OwnerActive` branch predicates on `Final(Accept, applyWake = Due(current
+generation, current resourceVersion))`, canonical attempt-name absence, and
+authoritative server time at or before the inclusive decision execution
+deadline. It creates the exact run-bound attempt in `OwnerActive`, changes the
+wake to `HandedOff(current generation, attempt UID/generation/digest)`, and
+registers the attempt's first recovery-wake generation in the same commit. A
+separate client clock cannot classify expiry.
+
+After authoritative server time is later than the execution deadline, an expiry
+branch authenticated as the exact protected apply identity bound into the
+accepted decision may instead predicate on that exact same due generation and
+resource version and atomically create the canonical attempt directly in `Final`
+with the one terminal
+`AttemptOutcome(Failed:DecisionExpiredBeforeMutation)` while closing the apply
+wake. It grants no owner/write phase or recovery wake. The outcome binds
+`rollbackEligible = false`: because no governed target mutation was admitted or
+attempted, it is categorically excluded from both members of
+`RollbackFailureOperand/v1`. Recovery and rollback cannot consume it; a later
+source event requires a fresh request, evidence, decision, and attempt. The `OwnerActive`
+and expiry transactions contend on the same record: a handoff linearized by the
+deadline makes expiry stale even if its response is held; a handoff call begun
+before but still unlinearized after a winning server-time expiry CAS is stale.
+Neither branch can silently drop an accepted digest.
+
+If the authoritative store cannot provide the multi-key transaction, the
+attempt-ownership/handoff state must be co-located in a write-once `attemptSlot`
+under the finalization record's resource version; a separate create followed by
+acknowledgement is forbidden. In that mode the deterministic attempt name remains
+the logical slot key, empty-slot CAS replaces object-name absence, the slot owns
+the logical attempt UID/generation/digest, and the finalization record resource
+version is the attempt arbitration resource version used by every later
+`OwnerActive`, `RecoveryFencing`, and `Final` CAS. In that mode, the canonical
+`AttemptOutcome` and, on a successful Ring-2 `Final`, the convergence record and
+its first due `observationWake` are write-once fields of that same finalization
+record installed by the one `Final` CAS; slot occupancy replaces create-only object existence, and
+no separate object create may stand in for any of them. In transactional mode,
+separate records are permitted only through the explicit serializable transaction
+against the attempt arbitration resource version. Downstream references to the
+attempt record, outcome, convergence record, or wake mean those canonical logical
+subrecords in co-located mode. A response lost after either handoff commit is
+recovered by exact readback; duplicate deliveries read the same handoff and
+attempt and remain observation-only.
+
+Delivery acknowledgement may close an apply-wake generation only after that
+exact handoff is durably read back, or after the same transaction records the
+non-mutating expiry outcome. A crash before the transaction leaves the current
+generation due; a crash after it leaves either the attempt recovery wake or the
+terminal outcome. Under eventual authenticated delivery and authoritative-store
+availability, lost, early, crashed, and duplicate deliveries therefore converge
+to one attempt claim and never a second apply.
+
+The atomically handed-off durable attempt record has a canonical name derived
+from the request UID/generation and accepted-decision digest. Its create-only
+claim and one authoritative arbitration state bind the full
 operand-specific execution evidence (Ring-2 saved-plan digest or Ring-1
 projection-verification digest), decision-derived operation marker, exact
-cutover-latch digest/epoch, exact `LegacyAuthorityQuiesced/v1` digest, and the
-exact protected apply identity and workflow run ID that won creation. It also
-binds a bounded owner lease epoch/deadline and a closed monotonic owner phase
-machine: `Claimed` -> `PreWrite` -> `WriteIssued`.
+cutover-latch digest/epoch, exact `LegacyAuthorityQuiesced/v1` digest, exact
+`LegacyAdmissionFence/v1` UID/epoch, stage-current server-issued compare resource
+version and recorded resource-version lineage, immutable digests, enforcement
+mode and relevant server-issued target token, and the exact protected apply
+identity and workflow run ID that won handoff. It
+also binds a bounded owner lease epoch/deadline and a closed monotonic owner
+phase machine: `Claimed` -> `PreWrite` -> `WriteIssued`.
 The decision lease bounds the owner lease; only the exact winner may renew it or
 advance phase, using compare-and-swap while the independently observed workflow
 run remains active. Phase never moves backward, and an expired or independently
@@ -549,20 +714,34 @@ terminal owner can never renew or resume its lease.
 
 The attempt also binds the exact target commit coordinates. For every existing
 target mutation they include API authority, kind, namespace/name, UID, current
-resource version, and controller-owned target fencing epoch. The operation
-marker, next fencing epoch, and intended state change are one API-server commit
-with preconditions on that UID, resource version, and prior fencing epoch; a
-separate pre-write check followed by an unfenced mutation is forbidden. For a
-create or multi-object step that cannot supply an equivalent target-atomic CAS,
-recovery must instead prove an authoritative quiescence barrier covering every
-submitted mutation before it can classify unchanged or terminal failure. Lease
-expiry or workflow termination alone is not quiescence. Ring-1 initial
-bootstrap additionally retains Section 4's quarantine, partial-attempt, and
-idempotent-resume rules.
+resource version, controller-owned target fencing epoch, and the recorded fence
+mode plus relevant server-issued target token and compare resource version. In
+`Transactional` mode, the operation marker, next target fencing epoch, intended
+state change, and exact server-issued token commit in one serializable store
+transaction that validates the token/state/epoch/resource version and takes the
+required read/write conflict on the current `Enforced` fence row. In
+`TargetLocal` mode, that tuple and the exact opaque server-issued token are CAS
+preconditions on the co-located target UID and current object resource version.
+The server compares them with the stored `Enforced` token/state/epoch in that
+same CAS; success preserves those fence fields, advances target state/fencing
+epoch, and returns the next object resource version for the attempt lineage. The
+carried token is required input, but an unverified client-authored token,
+resource version, boolean assertion, webhook result, or separate read does not
+qualify. If an atomic successor-fence handoff wins the same transactional
+conflict or target-local CAS first, the governed commit is stale;
+if the governed commit wins first, the server-side deny remains enforced and the
+successor handoff must re-evaluate against the resulting current state. A create
+or multi-object step must use `Transactional` mode unless every mutation and
+fence token really is co-located in one authoritative CAS; otherwise governed
+mutation refuses. A
+quiescence barrier, lease expiry, or workflow termination is not an atomicity
+substitute. Ring-1 initial bootstrap additionally retains Section 4's
+quarantine, partial-attempt, and idempotent-resume rules.
 
-Authoritative-store create success is the ownership grant; the server-issued
+Authoritative-store handoff success is the ownership grant; the server-issued
 attempt UID/generation, digest, owner lease, phase, arbitration resource version,
-and target commit coordinates are independently read back. An `AlreadyExists`
+apply-wake handoff, and target/fence commit coordinates are independently read
+back. An `AlreadyExists`
 contender is initially observation-only. It may not classify unchanged
 pre-state, publish an outcome, or acquire recovery while the exact owner run is
 active with an unexpired lease. Recovery eligibility requires all of: no
@@ -591,33 +770,50 @@ to `WriteIssued` and freshly prove all of the following: its owner lease remains
 unexpired; its exact identity/run and arbitration/fencing epochs still own the
 attempt; the arbitration state is `OwnerActive`; the cutover-latch digest/epoch
 is unchanged; the exact `LegacyAuthorityQuiesced/v1` receipt remains current;
+the exact `LegacyAdmissionFence/v1` UID/epoch remains `Enforced`, with the
+stage-current server-issued compare resource version matching the attempt's
+recorded lineage and unchanged digests for the closed legacy authority set and
+governed identity allow set, enforcement mode, and relevant server-issued target
+token;
 fresh server-side reads still show frozen trigger admission, zero nonterminal
 legacy runs across every ref/revision, revoked-or-expired issued legacy
 authority, and the receipt's target admission fence/quiescence coordinates; and
 no legacy authority has been recreated. It then submits only the target-atomic
-UID/resource-version/fencing-epoch commit defined above. A pause, expiry,
-owner-run termination, recovery takeover, phase mismatch, missing readback,
-rearmed trigger, newly issued legacy authority, latch change, target replacement,
-or target resource-version/fence change denies that commit. An old workflow
-revision cannot bypass this boundary because the governed write is admitted
-only after the independent server-side cutover receipt, never on the old
-client's cooperation.
+UID/resource-version/fencing-epoch plus legacy-admission-fence commit defined
+above. A pause, expiry, owner-run termination, recovery takeover, phase mismatch,
+missing readback, rearmed trigger, newly issued legacy authority, latch change,
+legacy-fence/digest/mode/token change, target replacement, or target resource
+version/fence change denies that commit. A rearm or allow-set expansion after
+this fresh read is refused because `Enforced` is immutable. The only permitted
+current-fence transition is an atomic handoff that installs an equivalent or
+stricter successor as the current `Enforced` fence, and it contends with the
+governed write through the recorded `Transactional` conflict or `TargetLocal`
+CAS. A standalone retirement or disable request is refused. An old workflow
+revision cannot bypass this boundary because its identity is rejected at API
+admission through and after the governed commit, never on the old client's
+cooperation.
 
 After recovery wins arbitration, it never executes the saved plan or projection
-write. For every unresolved `WriteIssued` target, it must first advance the
-target fencing epoch by an API-server CAS against the exact target UID, resource
-version, and owner epoch, or establish the proved quiescence barrier required
-above. The owner's already-submitted mutation and the recovery fence therefore
-serialize at the target commit: if the owner commit wins, recovery observes and
+write. For every unresolved `WriteIssued` target, it must advance the target
+fencing epoch using the attempt's exact recorded fence mode: a serializable
+target/fence-row transaction in `Transactional`, or one target UID and
+current resource-version CAS carrying and server-validating the co-located opaque
+token in `TargetLocal`. A successful target-local recovery fence preserves the
+stored fence token/UID/enforced epoch, advances the target fencing epoch and
+object resource version, and records that returned value as the next lineage
+entry. The owner's
+already-submitted mutation and the recovery fence therefore serialize at that
+same authoritative commit: if the owner commit wins, recovery observes and
 classifies that committed state; if the recovery fence wins, the delayed owner
 commit fails its stale resource-version/fence precondition. Recovery may not
-publish unchanged or failed state until all targets are fenced or proven
-quiescent and then freshly read. An admitted but delayed owner request can never
-commit after a recovery failure.
+publish unchanged or failed state until every target is fenced through that mode
+and freshly read. An admitted but delayed owner request can never commit after a
+recovery failure; a quiescence observation is not a replacement for the required
+transaction or co-located CAS.
 
 Recovery liveness has a durable wake edge in the existing GFTB owner lane; it
 does not depend on a surviving workflow process or a routine manual click. The
-attempt create, each bounded owner/recovery lease renewal, and every
+attempt handoff, each bounded owner/recovery lease renewal, and every
 `RecoveryFencing` acquisition/successor CAS atomically register or advance a
 storage-backed recovery-wake generation for that exact attempt and lease
 deadline. The authenticated outbox/timer delivery is at-least-once and is
@@ -694,26 +890,107 @@ An apply result is not a served result. The terminal chain separately records:
 - the source revision/build marker observed in served content.
 
 For Ring-2 application/image transactions, the mutation outcome and the
-convergence outcome are distinct. After a successful `AttemptOutcome`, the
-same attempt-finalization CAS registers a durable, non-authorizing observation
-wake in the existing owner lane. Its at-least-once delivery starts the protected
-observer, which creates or reads one canonical convergence record keyed by
-request UID/generation, decision, attempt-record, and `AttemptOutcome` digests.
-Its bounded `Observing` state contains write-once registry, cluster-readback,
-served-content, and final-outcome slots under one resource version. Evidence
-admission and the server-deadline finalizer contend on that same record; one CAS
-produces exactly one immutable
-`ConvergenceOutcome = Converged | Failed(typed reason)`. Exact
-registry, target, operation marker, generation/replica, and served source-marker
-agreement yields `Converged`. A definitive served source-marker mismatch, or a
-bounded terminal registry/readback/served failure after the observation
-deadline, yields typed failure. Missing, ambiguous, unauthenticated, or
-conflicting evidence cannot synthesize success; before the deadline it remains
-non-authorizing observation, and after the deadline it may only produce the
-corresponding typed terminal failure. This observer can publish evidence and
-the convergence result only; it carries no decision, plan, apply, recovery, or
-rollback authority. The successful `AttemptOutcome` remains successful and
-append-only even when its `ConvergenceOutcome` is failure.
+convergence outcome are distinct. The same authoritative attempt-finalization
+transaction that installs a successful `AttemptOutcome` also creates, or
+co-locates under that attempt resource version, one canonical convergence record
+and its first due `observationWake` generation. No successful mutation outcome
+may become visible without both. The record is keyed by request UID/generation,
+decision, attempt-record, and `AttemptOutcome` digests and binds the exact
+immutable protected observer subject admitted for this operand. Its immutable
+overall observation deadline and bounded `Observing` state contain an observer
+owner tuple initially empty, a closed monotonic phase (`Unclaimed` ->
+`Collecting` -> `Finalizing`), write-once registry, cluster-readback,
+served-content and final-outcome slots, and the durable wake generation under one
+authoritative resource version. An observer owner tuple is exactly `(immutable
+subject, protected run, observer epoch, lease deadline)`; sharing the immutable
+subject does not make a different run the owner. An independent best-effort
+record create or post-outcome dispatch is forbidden.
+
+The storage-backed authenticated outbox/timer delivers each due observation
+generation at least once into the existing owner lane. Delivery binds only the
+convergence-record identity/digest, generation and due deadline and grants no
+evidence-publication, finalization, decision, plan, apply, recovery, rollback,
+or mutation authority. A run authenticated as that exact immutable observer
+subject must independently read the record and CAS `Observing(current
+resourceVersion, current wake generation)` to bind its exact run, a bounded
+observer epoch and `Collecting` lease whose deadline is
+`min(authoritativeServerNow + boundedLease, immutableOverallObservationDeadline)`.
+That acquisition CAS installs the exact owner tuple and atomically registers the
+next wake at the earlier of lease expiry and the overall deadline. It cannot
+acquire or renew `Collecting` after the overall deadline.
+Acknowledgement is valid only after this successor wake is durably read back; a
+lost or early delivery, or a runner death before acquisition, leaves the current
+generation due and redeliverable with bounded backoff.
+
+Every observer lease renewal, phase change, evidence-slot write, and pre-deadline
+finalization CAS must authenticate as the record's exact immutable observer
+subject **and** match the current owner tuple's run, observer epoch, unexpired
+lease, phase, wake generation, and `Observing` resource version. The immutable
+subject alone is not ownership. Initial acquisition instead predicates on the
+empty owner tuple; a successor acquisition predicates on the complete current
+owner tuple plus the termination/expiry proof below. Neither grants the new run
+authority until its CAS wins. An evidence-slot CAS additionally requires
+authoritative server time at or before the inclusive overall deadline; every
+`Collecting` renewal keeps its lease deadline at or before that immutable
+deadline and schedules the next wake in the same CAS. If the exact current run is
+independently terminal or its lease expires before the overall deadline, a
+contender authenticated as the same immutable subject may CAS that current
+resource version to the next `Collecting` observer epoch. It binds predecessor
+owner/lease and terminal-or-expiry proof, current phase and all write-once slots,
+the exact successor run and capped lease, and the next wake generation. Any
+different subject, same-subject different run without the successor CAS, stale
+epoch, stale lease, or stale resource version is refused. The predecessor's
+renewal, evidence, phase, and finalization CASes become stale.
+
+After authoritative server time is later than the immutable overall observation
+deadline, `Collecting` is frozen:
+no acquisition, renewal, or evidence-slot write can extend or reopen it. A due
+deadline contender authenticated as the exact immutable subject must instead CAS
+the current resource version directly into `Finalizing`, freezing all admitted
+slots and installing one exact `(subject, run, finalizer epoch, bounded
+finalizer-only lease)` owner tuple plus the next finalizer wake. This is not an
+observer-lease renewal: it cannot admit evidence or move phase backward. If that
+run terminates or its bounded finalizer lease expires before the terminal CAS,
+exactly one same-subject successor may CAS the current resource version to the
+next finalizer epoch with the frozen slots and a new bounded finalizer-only lease;
+the prior run becomes stale. A finalizer lease is never renewed in place. The
+terminal CAS requires the exact current finalizer owner tuple, unexpired lease,
+`Finalizing` phase, wake generation, and resource version. Thus every evidence
+and final CAS has one unambiguous run/epoch owner while post-deadline liveness does
+not extend the evidence window. Every successor resumes only from authoritative
+slots, never local memory, and gains no mutation authority.
+
+Evidence admission and the server-deadline finalizer contend on that same
+record. Only authoritative server time classifies the inclusive overall
+observation deadline. At or before the inclusive deadline, the exact current `Collecting` owner
+may publish a definitive success or failure only with its complete owner tuple
+and current resource version. After the deadline, the exact current
+`Finalizing` owner publishes from the frozen slots. One CAS produces exactly one immutable
+`ConvergenceOutcome = Converged | Failed(typed reason)` and closes the current
+wake generation. Exact registry, target, operation marker, generation/replica,
+and served source-marker agreement yields `Converged`. A definitive served
+source-marker mismatch, or a bounded terminal registry/readback/served failure
+after the immutable observation deadline, yields typed failure. Missing,
+ambiguous, unauthenticated, or conflicting evidence cannot synthesize success;
+before the deadline it remains non-authorizing observation, and after the
+deadline the due generation is redelivered until one finalizer owner or
+successor publishes the corresponding typed terminal failure. An evidence CAS
+linearized by the inclusive deadline advances the resource version and makes a
+concurrent deadline-freeze CAS stale; an evidence request still unlinearized
+after the freeze CAS is stale and cannot alter the frozen slots. A delivery
+cannot acknowledge away the only deadline wake before a next wake or `Final`
+state exists.
+
+A crash before or after atomic convergence-record creation, observer
+acquisition, any evidence-slot CAS, the overall deadline, or the final CAS
+therefore leaves either no committed successful mutation outcome to observe, a
+due generation, a bounded successor path, or the sole terminal outcome. Under
+eventual authenticated delivery and authoritative-API availability every
+successful Ring-2 mutation reaches one terminal convergence result. This
+observer can publish evidence and that result only; it carries no decision,
+plan, apply, recovery, rollback, or mutation authority and is not a standing
+convergence loop or second controller. The successful `AttemptOutcome` remains
+successful and append-only even when its `ConvergenceOutcome` is failure.
 
 Ring-1 remains independent of this Ring-2 served-content finalizer. Its
 successful post-write terminal evidence is the exact
@@ -722,7 +999,8 @@ GF-I09 application release, image-plan, or served-source prerequisite.
 
 Rollback is a distinct accepted transaction and may follow only one canonical
 `RollbackFailureOperand/v1`: either (a) an exact accepted transaction whose
-immutable `AttemptOutcome` is classified failure, or (b) an exact successful
+immutable `AttemptOutcome` is classified as a rollback-eligible mutation
+failure, or (b) an exact successful
 `AttemptOutcome` paired with its canonical terminal
 `ConvergenceOutcome(Failed)`. Case (b) is the governed rollback operand when O5
 is true but O8 proves that the protected origin serves the wrong revision. The
@@ -731,9 +1009,15 @@ digests, the canonical create-only `AttemptOutcome` digest, and, for case (b),
 the canonical convergence-record and failed `ConvergenceOutcome` digests and
 exact independent observations. It also binds a retained prior accepted
 release, fresh post-failure pre-state, a new saved rollback plan, the current
-cutover-latch and `LegacyAuthorityQuiesced/v1` digests/epochs, fresh nonce/lease,
-and an externally observed served result. A successful `AttemptOutcome` by
-itself, a successful convergence outcome, or a noncanonical, conflicting, or
+cutover-latch, `LegacyAuthorityQuiesced/v1`, and enforced
+`LegacyAdmissionFence/v1` UID/epoch, stage-current server-issued compare resource
+version, immutable digests, enforcement mode and relevant server-issued target
+token, fresh nonce/lease, and an externally observed served result.
+`AttemptOutcome(Failed:DecisionExpiredBeforeMutation)` always carries
+`rollbackEligible = false` and cannot enter case (a): it proves that no governed
+mutation was admitted, so there is no failed target state to roll back. A
+successful `AttemptOutcome` by itself, a successful convergence outcome, any
+other outcome marked rollback-ineligible, or a noncanonical, conflicting, or
 merely missing terminal result cannot be its failed-result operand. Reusing a
 pre-failure plan or merely reselecting an old image is not a rollback receipt.
 
@@ -940,15 +1224,37 @@ show the chain refuses or fails on:
   expiry CAS, and (b) an evidence-slot CAS linearized by the deadline but whose
   response/validation is held makes the expiry CAS stale and must be evaluated;
   malformed admitted evidence yields typed refusal rather than absence;
+- final `Accept` publication with initial apply-wake registration held across a
+  crash: the one finalization-record CAS must expose both or neither. Lost and
+  early apply-wake delivery, a runner crash before handoff, a response lost after
+  handoff, and duplicate delivery must retain acknowledgement-safe redelivery and
+  converge through one transactional or co-located-CAS wake-to-attempt handoff to
+  exactly one canonical claim. Use authoritative server time and hold both
+  deadline orderings: (a) a handoff CAS linearized at or before the inclusive
+  execution deadline makes a later expiry CAS stale even when handoff response is
+  held, and (b) a handoff call begun before but still unlinearized after a winning
+  post-deadline expiry CAS is stale. Only the exact protected apply identity may
+  execute expiry, which creates the one canonical non-mutating terminal failure,
+  never a write or a dropped accepted digest, and must carry
+  `rollbackEligible = false`; any attempt to construct either rollback-failure
+  operand from `DecisionExpiredBeforeMutation` is refused;
 - changed pre-state or a mismatched saved plan;
 - absent or operand-mismatched post-write projection activation evidence when
   private-image projection is required;
-- failure to publish/read back the attempt claim before mutation, and a crash
+- failure to publish/read back the attempt record or logical attempt slot before
+  mutation, and a crash
   after mutation but before result publication; retry must not reapply and the
   independent observer must recover a terminal result;
 - duplicate atomic claim creation, where exactly one protected run wins and an
-  `AlreadyExists` contender cannot finalize recovery while that owner run is
-  merely slow but active with an unexpired lease;
+  `AlreadyExists` or occupied-slot contender cannot finalize recovery while that
+  owner run is merely slow but active with an unexpired lease;
+- in co-located attempt mode, handoff, owner publication versus recovery takeover,
+  recovery-successor acquisition, final outcome publication, and convergence
+  record creation all CAS the finalization record's evolving resource version. A
+  stale resource version or any separately invented attempt-object resource
+  version is refused at each boundary; the one `Final` CAS installs the write-once
+  logical `AttemptOutcome` and, after Ring-2 success, the convergence record and
+  first due observation wake together or exposes none of them;
 - owner termination/lease expiry with concurrent recovery contenders: exactly
   one initial attempt-arbitration recovery CAS wins and every other contender
   remains read-only while that recovery lease is active; after independently
@@ -956,8 +1262,13 @@ show the chain refuses or fails on:
   a late-resuming original owner must fail the arbitration and target
   UID/resource-version/fencing-epoch checks before mutation;
 - an owner mutation admitted at `WriteIssued` but delayed across recovery
-  takeover: the owner target commit and recovery target-fence CAS must
-  serialize, and no owner write may commit after recovery publishes terminal
+  takeover: the owner target commit and recovery target fence must serialize
+  through the exact recorded `Transactional` conflict or `TargetLocal` CAS. In
+  `TargetLocal`, both must carry the exact server-issued opaque token and current
+  resource version, the server must compare them with the co-located
+  token/state/epoch in that same CAS, success must preserve the token and record
+  the returned next resource version, and stale, unissued, or caller-invented
+  values must fail. No owner write may commit after recovery publishes terminal
   unchanged/failure state;
 - owner result publication concurrent with recovery acquisition: both contend
   on the same attempt-arbitration resource version, exactly one reaches
@@ -979,16 +1290,59 @@ show the chain refuses or fails on:
   committed or rejected before the barrier and bound target snapshot, and must
   never commit after the receipt or governed enablement;
 - either legacy mutation path rearmed after the cutover receipt, or its latch,
-  credential generation, run set, or target coordinates changing after plan or
+  credential generation, run set, target coordinates, fence mode/token, or
+  immutable legacy-authority or governed-identity set changing after plan or
   decision but before the fresh pre-write read;
+- an attempted legacy-authority reissue, governed-identity allow-set expansion,
+  target-token substitution, or any other `Enforced`-set/mode/token mutation
+  **after** the fresh pre-write read: the server must refuse it without changing
+  the fence epoch, immutable digests, mode, or token map. A standalone
+  retirement or disable request is refused. A proposed successor that weakens
+  legacy-identity, issuer, grant, verb, or target deny coverage; broadens the
+  governed allow set; is not installed as the current `Enforced` fence in the
+  same authoritative transition; or requires independent
+  per-target CASes is likewise refused. Hold a valid atomic successor-fence
+  handoff against a governed target commit in both orders under each recorded
+  mode: `TargetLocal` covers one target/aggregate CAS only, and an independent
+  multi-target scope must refuse or use `Transactional`. If the handoff wins the
+  serializable conflict or target-local CAS, the old target intent is stale and
+  refuses while the successor is `Enforced`; if the target commit wins, the old
+  fence stays `Enforced` and the handoff must re-evaluate after that commit. No
+  ordering permits both authority rearm and a governed write, an unfenced target,
+  or a post-commit legacy write; retiring legacy authorities never removes the
+  current enforced fence;
 - a recovered terminal failure followed by otherwise-positive live observations;
   O5 and the full oracle must remain false for that generation;
+- successful attempt finalization held immediately before and after atomic
+  convergence-record plus observation-wake creation: a committed successful
+  outcome must always have both. Then lose or duplicate the initial delivery and
+  crash the observer before acquisition, immediately after acquisition, before
+  and after every registry/readback/served evidence-slot CAS, across the overall
+  observation deadline, and before/after final CAS. Acknowledgement must never
+  discard the only due generation. Every `Collecting` lease must be capped at the
+  immutable overall deadline; renewal at or past that cap and evidence
+  publication after it must fail. Evidence, phase, renewal, and pre-deadline
+  final CASes from the same subject but a different run, epoch, lease, wake
+  generation, or resource version must fail. Independent run termination/lease
+  expiry must permit exactly one same-record successor authenticated as the
+  immutable protected observer subject and refuse every other subject, including
+  one in a formerly accepted role or identity class. After the overall deadline,
+  one exact finalizer-owner CAS must freeze the slots and bind the current
+  subject/run/epoch/bounded finalizer-only lease; crash or expiry admits one next
+  finalizer epoch, never a `Collecting` renewal or evidence write. Hold evidence
+  and authoritative-server-deadline finalization in both CAS orders: evidence
+  linearized by the inclusive deadline makes expiry stale, while an unlinearized
+  evidence call loses after the post-deadline finalizer wins. The winner resumes
+  authoritative slots and reaches one terminal `ConvergenceOutcome` without any
+  mutation;
 - apply failure and served-content mismatch, including a successful immutable
   `AttemptOutcome` followed by a definitive wrong served revision: exactly one
   terminal failed `ConvergenceOutcome` must exist and the apply outcome must not
   be rewritten;
-- rollback evidence that does not bind the canonical apply-failure or
-  convergence-failure operand and fresh pre-state;
+- rollback evidence that does not bind the canonical rollback-eligible
+  apply-failure or convergence-failure operand and fresh pre-state, including a
+  poison that tries to use rollback-ineligible
+  `Failed:DecisionExpiredBeforeMutation`;
 - accept one operand class and then a disjoint class/target: the latter must not
   replace or hide the former in `LatestAcceptedDesiredByOperand`; overlapping
   contradictory keys, a missing active key, and partial multi-target expansion
@@ -1019,17 +1373,52 @@ The transition never runs two production mutation authorities.
    fixtures must prove pending creates no final object, exact later evidence
    creates one final decision on the same generation, malformed/expired paths
    create one immutable refusal, and evidence/deadline contenders use the same
-   record/resource version in both held-call orders. Recovery interleavings must
+   record/resource version in both held-call orders. Apply-delivery fixtures must
+   prove final `Accept` and its first wake are atomic; lost/early/crashed delivery
+   and a lost handoff response retain acknowledgement-safe redelivery; the
+   wake-to-attempt handoff is one transaction or same-record CAS; authoritative server
+   time decides expiry; both held deadline orders produce exactly one logical
+   attempt and either `OwnerActive` or the non-mutating expiry outcome, and any
+   expiry caller other than the exact protected apply identity is refused. The
+   co-located fixture must then use the finalization record's evolving resource
+   version for handoff, owner-publication/recovery arbitration, recovery
+   successor, final outcome, and convergence-record creation, rejecting a stale
+   or separate attempt-object resource version at every boundary. Its one `Final`
+   CAS must install the write-once logical outcome plus, after Ring-2 success, the
+   convergence record and first observation wake atomically.
+   Recovery interleavings must
    prove a slow live owner excludes recovery; owner outcome publication and
    recovery takeover serialize on one arbitration resource version; a delayed
    already-admitted owner write cannot commit after recovery failure; crashes at
    every `RecoveryFencing` boundary admit a monotonic read/fence/finalize-only
    successor; lost/early/crashed recovery deliveries retain an at-least-once
-   wake generation; and exactly one canonical `AttemptOutcome` exists. Add the
-   successful-apply/wrong-served-revision fixture and require one failed
+   wake generation; and exactly one canonical `AttemptOutcome` exists.
+   Observation interleavings must cover atomic successful-outcome/record/wake
+   creation, lost/early/duplicate delivery, crash before and after acquisition
+   and every evidence slot, both authoritative-server-deadline CAS orders,
+   acknowledgement safety, capped `Collecting` leases that never extend evidence
+   admission beyond the immutable overall deadline, and exact active
+   subject/run/epoch/lease/wake/resource-version ownership at every evidence and
+   final CAS. They must refuse every successor subject other than the record's
+   exact immutable protected observer subject, refuse a same-subject run that has
+   not won the successor CAS, and prove the post-deadline finalizer-only owner and
+   one admitted same-record finalizer successor reach the only terminal outcome
+   without reopening evidence collection.
+   Add the successful-apply/wrong-served-revision fixture and require one failed
    `ConvergenceOutcome` plus the exact case-(b) rollback operand without outcome
    rewrite. Cutover fixtures hold an old-revision run queued, waiting, and
-   in-flight across the freeze and credential fence. The existing scheduled
+   in-flight across the freeze and credential fence; refuse any immutable-set,
+   mode, or target-token-map change while `Enforced`; refuse standalone
+   retirement, disable, a weaker or broader successor, and a successor that is
+   not installed `Enforced` atomically; refuse independent multi-target
+   `TargetLocal`; require the exact server-issued token to be carried and compared
+   in the authoritative transaction/CAS while refusing caller-invented, unissued,
+   or stale token/resource-version assertions; prove each successful
+   target-local write preserves that token and records the returned next resource
+   version; and hold a valid atomic successor-fence handoff against the governed
+   write in both orders under `Transactional` and single-target/aggregate
+   `TargetLocal`, proving one conflict/CAS winner, continuous enforcement, and no
+   post-commit rearm or legacy write. The existing scheduled
    readback family must also prove absent authentication, readback error, a
    disjoint later operand acceptance, and actual drift from any active entry in
    the complete `LatestAcceptedDesiredByOperand` map are red while every
@@ -1048,19 +1437,34 @@ The transition never runs two production mutation authorities.
    authoritative workflow and Environment APIs until every legacy run ID is
    terminal and none is queued, waiting, pending approval, or in progress.
    Server-side revoke or independently expire every apply credential or
-   authorization issued to those runs, then cross an authoritative API-server
-   quiescence barrier that reports zero in-flight legacy mutations and orders
-   every pre-fence admitted request as committed or rejected. Fresh target
-   UID/resource-version/fencing-epoch readback follows that barrier. Only then
-   may the protected cutover operation finalize
+   authorization issued to those runs. Install and read back the persistent
+   server-side `LegacyAdmissionFence/v1` over the complete legacy identity,
+   issuer, grant, verb, and target set. Freeze its legacy-authority and governed
+   identity sets while `Enforced`, and record either a serializable
+   `Transactional` fence-row conflict or a `TargetLocal` co-located target token
+   for every mutation coordinate. `TargetLocal` is permitted only when one target
+   or server-controlled aggregate object covers the complete scope under one CAS;
+   independent multi-target scopes require `Transactional`. Each mutation must
+   carry the exact opaque server-issued token and current server-issued resource
+   version, which the server compares with the authoritative fields in that same
+   transaction/CAS; neither value is authority by client assertion. A separate
+   resource-version pre-read is not an admission precondition.
+   Then cross an authoritative API-server quiescence barrier that reports zero
+   in-flight legacy mutations and orders every pre-fence admitted request as
+   committed or rejected. Fresh target UID/resource-version/fencing-epoch and
+   admission-fence readback follows that barrier. Only then may the protected
+   cutover operation finalize
    the append-only `LegacyAuthorityQuiesced/v1` receipt and monotonic latch.
    Asking refit clients to consume the latch, cancelling a run, or draining only
    the current ref is insufficient because an old workflow revision can bypass
    that source check. The governed executor refuses until the exact receipt is
-   bound through plan, decision, attempt, and fresh pre-write read. Every pre-
-   receipt plan or decision is stale and must be regenerated before the canary.
-   The disabled source may remain for comparison until parity, but it has no
-   credential or mutation authority.
+   bound through plan, decision, attempt, fresh pre-write read, and the target
+   commit's recorded transaction or co-located CAS. Every pre-receipt plan or
+   decision is stale and must be regenerated before the canary. The disabled
+   source may remain for
+   comparison until parity, but the API server continues to deny its closed
+   identity set through and after governed commits; it has no credential or
+   mutation authority.
 5. **Refit and prove live scheduled readback before canary.** Before the first
    governed GFTB write, refit the existing `k8s-stack-drift.yml` carrier in
    place to use protected short-lived authentication and the exact
@@ -1102,11 +1506,16 @@ The transition never runs two production mutation authorities.
    fresh scheduled readback of the complete operand-keyed accepted desired map;
    neither the failed mutation/convergence results nor rollback result is
    rewritten or reused.
-10. **Retire the bespoke authority.** Only after parity, exact failed-transaction
-   rollback, and reconvergence evidence,
+10. **Retire the bespoke mutation authorities.** Only after parity, exact
+   failed-transaction rollback, and reconvergence evidence,
    remove producer `repository_dispatch`, bespoke signal credentials and
    payload, routine manual apply, inline digest-resolution authority, and any
-   duplicate policy gates.
+   duplicate policy gates. This removal does not retire
+   `LegacyAdmissionFence/v1`: the current fence stays `Enforced` for the governed
+   mutation lane's lifetime. It may be superseded only by an equivalent or
+   stricter successor installed `Enforced` in the same server-authoritative
+   transaction/CAS that makes the old record historical, with no unfenced
+   interval; a standalone `Retired` or disabled state is forbidden.
 11. **Continue scheduled observational enforcement.** The carrier refit and
    negative proof already completed in step 5 remain mandatory and recurring.
    Every run reads every active entry in the current exact
@@ -1122,9 +1531,9 @@ The transition never runs two production mutation authorities.
 | Existing surface | Disposition | Retirement trigger |
 |---|---|---|
 | site `container-ghcr.yml` publish logic | retain build/publication, make GF-I09 the release authority | authenticated GFTB GF-I09 producer proof |
-| producer `signal-cd` / `repository_dispatch` | freeze across every ref/revision and fence before the first governed mutation; remove after parity | `LegacyAuthorityQuiesced/v1` proves trigger freeze, zero queued/waiting/pending/in-progress legacy runs, credential revocation/expiry, and admitted-write quiescence before canary; one governed successful transaction, one exact terminal served-failure transaction, its bound rollback, and reconvergence have immutable receipts |
+| producer `signal-cd` / `repository_dispatch` | freeze across every ref/revision and install a persistent server-side `LegacyAdmissionFence/v1` before the first governed mutation; remove the legacy producer after parity while the fence remains enforced | `LegacyAuthorityQuiesced/v1` proves trigger freeze, zero queued/waiting/pending/in-progress legacy runs, credential revocation/expiry, admitted-write quiescence, and enforced admission-fence readback before canary; one governed successful transaction, one exact terminal served-failure transaction, its bound rollback, and reconvergence have immutable receipts; the legacy producer, queued work, credentials, and recreation paths are removed while the current fence remains `Enforced`, and any fence successor is installed atomically with equivalent or stricter coverage through its recorded conflict/CAS |
 | infra `web-stack.yml` | refit in place as the GFTB protected executor; do not clone it | accepted controller/executor contract and protected runtime proof |
-| manual `workflow_dispatch` steady-state apply | freeze admission, drain every ref/revision, revoke/expire issued authority, and fence before the first governed mutation; retire as product mechanism | governed rollback is exercised and externally observed |
+| manual `workflow_dispatch` steady-state apply | freeze admission, drain every ref/revision, revoke/expire issued authority, and place its closed identity set behind the persistent server-side fence before the first governed mutation; retire the manual path as a product mechanism while the fence remains enforced | governed rollback is exercised and externally observed, the manual authority and recreation path are removed, and the current fence remains `Enforced` or is atomically superseded by an equivalent or stricter `Enforced` successor |
 | `Justfile` workload validation/apply entrypoints | retain as GFTB-owned verbs, split by plan/apply authority as needed | replaced only by a separately ratified GFTB owner-overlay interface |
 | `/health` probe | retain for liveness only | never promoted to served-content oracle |
 | `k8s-stack-drift.yml` | refit and prove before first governed canary; retain as mandatory authenticated, report-only, fail-closed scheduled readback of the complete `LatestAcceptedDesiredByOperand` map; never a convergence loop or mutation trigger | replace only in the same change by an explicitly named equivalent scheduled carrier with the same complete operand-keyed binding that fails on absent authority, readback error, omitted/ambiguous keys, and real drift and retains zero mutation/decision authority |
@@ -1169,27 +1578,56 @@ The following are gates, not workarounds:
   cold-pull proof must land on the GF/controller carriers rather than being
   reimplemented here;
 - protected plan/apply identities; one common-record resource-version fence for
-  same-generation evidence admission versus expiry/finalization; atomic
-  create-only run-bound attempt ownership; bounded owner lease/phase; one
-  owner-publication/recovery arbitration CAS; target-commit-atomic
-  UID/resource-version/fencing epochs or proved quiescence; bounded recovery
+  same-generation evidence admission versus expiry/finalization and atomic
+  final-`Accept` apply-wake registration; durable authenticated at-least-once
+  apply-wake delivery in the existing owner lane; acknowledgement-safe,
+  transactional wake-to-attempt handoff; atomic create-only run-bound attempt
+  ownership; bounded owner lease/phase; one
+  owner-publication/recovery arbitration CAS; target-commit-atomic UID,
+  resource-version, and fencing epochs under the exact `Transactional` or
+  `TargetLocal` legacy-fence mode and immutable server-written target token. The
+  exact token and stage-current server-issued resource version must be carried as
+  request preconditions and compared with authoritative state in the same
+  transaction/CAS; successful target-local mutations preserve the token and
+  record the returned next resource version. An unverified client assertion,
+  pre-read,
+  independent multi-target CAS, or quiescence substitute; bounded recovery
   lease/phase, durable authenticated at-least-once recovery wake in the existing
   owner lane, and read/fence/finalize-only successor CAS; one canonical
-  create-only `AttemptOutcome`; one canonical post-success
-  `ConvergenceOutcome`; the closed apply-failure/served-failure rollback-operand
+  create-only `AttemptOutcome`; atomic post-success convergence-record plus wake
+  creation; exact immutable protected observer subject plus exact active
+  run/epoch/lease ownership, `Collecting` renewal capped by the immutable overall
+  deadline, and a distinct post-deadline finalizer-only owner/successor phase;
+  acknowledgement-safe at-least-once observation delivery and same-record
+  observer-successor CAS through one
+  canonical `ConvergenceOutcome`; the closed apply-failure/served-failure rollback-operand
   union; single-use lost-result recovery; and terminal GFTB receipt publication
   require reviewed source and runtime proof;
 - a protected monotonic cutover-latch and exact
   `LegacyAuthorityQuiesced/v1` receipt must bind through plan, decision, attempt
-  record, and fresh pre-write observation. It proves trigger admission frozen
+  record, fresh pre-write observation, and the target commit. A persistent
+  server-side `LegacyAdmissionFence/v1` over the closed legacy identity, issuer,
+  grant, verb, and target set, governed-identity allow set, enforcement mode, and
+  target-token mapping must be immutable while `Enforced` and enforced through and after
+  that commit by the recorded serializable fence-row conflict or one co-located
+  target/aggregate-token CAS. The receipt proves trigger admission frozen
   and zero queued/waiting/pending/in-progress legacy runs across every ref and
   workflow revision, server-side revocation/expiry of all issued legacy
   authority, and quiescence or rejection of every already-admitted write before
-  governed canary or rollback can consume an accepted decision;
+  governed canary or rollback can consume an accepted decision. Removing legacy
+  authorities and recreation paths does not retire the current fence. Any fence
+  replacement contends through that same mode and atomically installs an
+  equivalent or stricter successor in `Enforced` state; a standalone retirement,
+  disable, weaker/broader successor, independent multi-target `TargetLocal`,
+  post-read rearm, unfenced interval, and post-commit legacy writes are
+  server-refused;
 - a credentialed served-content probe and the canonical convergence finalizer
-  are required; constant `/health` cannot substitute, and a successful
+  with durable deadline wake/redelivery and successor liveness are required;
+  constant `/health` cannot substitute, and a successful
   `AttemptOutcome` followed by served mismatch must remain oracle-red while
-  supplying an immutable rollback-failure operand;
+  supplying an immutable rollback-failure operand; the pre-mutation
+  `Failed:DecisionExpiredBeforeMutation` outcome is explicitly
+  rollback-ineligible and cannot enter that operand union;
 - the existing scheduled drift/readback must be authenticated, report-only,
   bind and read every active entry in the complete
   `LatestAcceptedDesiredByOperand` map, and fail closed on absent authority,
