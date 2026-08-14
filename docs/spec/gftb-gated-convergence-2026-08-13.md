@@ -9,16 +9,20 @@
 - **Source carrier:** Great-Falls-Tool-Bus/great-falls-tool-bus-infra #104
 - **Controller carrier:** tinyland-inc/owner-overlay-controller #5
 - **Reference executor carriers:** tinyland-inc/tinyland-infra #55 and #56
-- **Binding architecture rulings:** TIN-2609 comment
-  `a498b0ec-57f2-4a7a-b01b-3dc2acbdc366` and TIN-3578 comment
+- **Binding architecture rulings:** TIN-2609 comments
+  `a498b0ec-57f2-4a7a-b01b-3dc2acbdc366` and
+  `adaa70dd-a6e3-4293-b1a1-71e5a7686bdf`, grounded by RING-0 design
+  `2c50174d-ac3d-4630-b037-a6149ec0e58d`, plus TIN-3578 comment
   `70364081-24a6-4d86-8306-c8fa4ccbc688`
 - **Executable edge audit:** TIN-2609 comment
   `e0e74eb9-44bf-4f2f-aed0-52fa78395e65`
 - **Enrolment/controller MVP ruling:** TIN-3768 comment
   `27a1616e-b8d8-4560-81d6-d1dbf6fe7145`, grounded by correction
-  `48be6e96-86a8-470a-9db6-f175f58202b8`. The typed lane owns the keystone
-  projection shape; its exact stable and instance-scoped target source remains
-  pending rather than inferred from a nonexistent registry field.
+  `48be6e96-86a8-470a-9db6-f175f58202b8` and RING-0 cross-link
+  `d96b78cd-368a-46d8-b961-9b29b93e1f88`. The typed lane owns the keystone
+  projection shape. Stable coordinates come from a signed
+  `OwnerInstallation/v2`; preview coordinates come from a signed, expiring
+  `OwnerOverlayInstance/v1`, never from an RBE registry or plan-read RBAC list.
 
 This is a design contract, not a second mutable status surface. Dated evidence
 below is retained only where it explains a required invariant. Current
@@ -31,10 +35,12 @@ GFTB converges through the estate's existing receipt-driven, GF-gated model:
 ```text
 reviewed site source
   -> immutable image + authenticated GF-I09 application release
-  -> owner-overlay-controller #5 request gate (default refusal)
+  -> create-only publisher in the existing #55 protected-main push workflow
+  -> owner-overlay-controller #5 typed request gate (default refusal)
   -> GFTB owner-overlay protected materialize/check/plan
-  -> owner-overlay-controller #5: exact-plan Accept | Refuse
-  -> separate protected apply identity
+  -> owner-overlay-controller #5: typed, exact-plan Accept | Refuse
+  -> GFTB consumes the exact ImagePinReplicaFlip/v1 accepted intent
+  -> separate protected GFTB apply identity
   -> observe/serve/rollback
   -> immutable terminal receipts
 ```
@@ -48,14 +54,27 @@ apply, or lifecycle authority.
 This diagram is the required chain, not a claim that its initiating edge
 exists. The current #55 relay GETs an already-existing request on protected
 main push; #56 consumes a supplied request; and #5 does not install its sample
-request. The GF/controller chain must still land the protected operand
-publication/event contract that authors the exact request generation and
-triggers the corresponding protected plan run. GFTB neither owns that central
-publisher nor substitutes a manual dispatch or hand-created request.
+request. The existing #55 protected-main workflow must gain a separate
+create-only publisher job before materialization. It consumes already-published
+digest-addressed artifacts, creates the digest-named typed request, and passes
+its exact name, UID, and digest to materialization. #55 then writes typed
+verification, #5 emits one immutable intent, and the same run's separately
+protected apply job invokes #56. GFTB neither owns that central publisher nor
+substitutes a new workflow, manual dispatch, or hand-created request.
+
+The current exact #55 (`59c603467e033652097258652ad12d2bbd730986`) and
+#56 (`e57085a88cd17e9d6bf76653db301870574304c5`) heads remain incompatible
+with the RING-0 union: they retain caller-authored verification/source fields
+and mirrored request plan/pre-state fields that the verifier-owned design
+removes. Both remain held until they are refit in place; this document does not
+claim an executable edge.
 
 The design contains:
 
 - one decision authority: owner-overlay-controller #5;
+- one closed request union with exactly one typed operand per immutable
+  request: `RegistryPullProjection/v1`, `ApplicationRelease/v1`, or
+  `ImagePinReplicaFlip/v1`;
 - one tenant state owner: the GFTB owner overlay;
 - one protected executor chain owned by that overlay;
 - one immutable evidence graph binding release, decision, plan, result, served
@@ -84,6 +103,16 @@ authority. It validates closed, immutable request and evidence maps; binds
 policy, identity, nonce and lease; refuses unknown, incomplete, stale,
 replayed, or mismatched inputs; and retains immutable decision and terminal
 receipt coordinates.
+
+One authority does not mean one generic payload. The first CRD is a closed,
+extensible operand-class union. Projection, application release, and the exact
+image-pin/replica-flip verb are separate variants with verifier and result
+schemas; adding mail, Tofu-plan, or edge-DNS later requires a reviewed union
+member, not a free-form manifest, patch, command, or runtime plugin. GFTB
+consumes `ImagePinReplicaFlip/v1` for one exact `apps/v1` Deployment,
+container, immutable image transition, and replica transition. Its owner
+overlay remains the subordinate state, plan, apply, observe, and rollback
+executor.
 
 The no-Flux refit keeps #5 fail-closed while materialization or plan evidence
 is missing. A request may remain `Refuse: MaterializationPending` until the
@@ -117,7 +146,9 @@ shape: digest-addressed materialization, a closed adapter, path-scoped plan,
 protected apply, and immutable results. They are not a reusable GFTB workflow,
 do not own GFTB state, and must not be called as a cross-tenant state backend.
 GFTB implements the same interface and evidence invariants in its own owner
-overlay.
+overlay. Their current held heads are not compatible runtime dependencies:
+#55/#56 still mirror caller-authored fields removed by the union and must be
+coordinated with #5 before any activation.
 
 ### 1.6 Reusable GF product stack
 
@@ -179,9 +210,13 @@ semantics, and the corresponding protected plan run. Publishing a request must
 reliably initiate that run without a routine manual click, runtime Git clone,
 or second controller/workflow/backend.
 
-This is central GF/controller-chain work. The GFTB producer supplies its
-authenticated release and owner-overlay coordinates; it does not hand-create
-the Kubernetes request or introduce a tenant-specific dispatch authority.
+This is a create-only publisher identity inside the existing #55
+protected-main push workflow, before its existing materialization job. It
+authors exactly one immutable request containing a common envelope and exactly
+one typed union member. This is central GF/controller-chain work. The GFTB
+producer supplies authenticated release and owner-overlay coordinates; it does
+not hand-create the Kubernetes request or introduce a tenant-specific dispatch
+authority.
 
 ### 3.1 Immutable release
 
@@ -205,8 +240,8 @@ checks size/hash/media/source identity, and materializes it in a private,
 bounded directory. It performs no runtime Git checkout and accepts no
 free-form executable.
 
-The owner overlay supplies a closed adapter and exact path scope. The plan
-receipt binds:
+The owner overlay supplies a closed adapter and exact path scope. The
+verifier-owned plan receipt binds:
 
 - request and release digests;
 - tenant, environment, policy digest, controller identity, nonce, and lease
@@ -216,13 +251,17 @@ receipt binds:
 - saved-plan artifact digest and machine-readable change summary;
 - plan identity and protected workflow run.
 
+The request does not author `verified=true`, `planDigest`, or
+`preStateFingerprint`. Protected materialization derives and records those
+observations independently before a final decision can accept.
+
 The saved plan is immutable and single-use. An apply must refuse if the plan,
 pre-state, decision, nonce, lease, policy, or identity no longer matches.
 
 ### 3.3 Controller decision
 
-Controller #5 validates the exact request-bound materialization and plan receipt and emits
-one closed decision:
+Controller #5 validates the exact request-bound typed materialization and plan
+receipt and emits one closed decision:
 
 - `Accept` binds the only saved plan that the apply identity may execute; or
 - `Refuse` carries a typed reason and authorizes no mutation.
@@ -231,6 +270,13 @@ Missing evidence, expiry, replay, unknown fields, digest mismatch, unexpected
 path, changed pre-state, unsafe plan semantics, or unproved credential
 projection fail closed. A newer request does not silently supersede an
 in-flight accepted transaction; lease and nonce rules serialize authority.
+
+For GFTB, the application release and image transition remain typed operands,
+not authority embedded in the tenant workflow. The accepted
+`ImagePinReplicaFlip/v1` binds the exact Deployment/container, current and
+desired immutable image, current and desired replicas, prior acceptance,
+rollout deadline, and—when the image is private—the exact successful projection
+receipt. The GFTB executor may consume only that closed intent.
 
 ### 3.4 Protected apply
 
@@ -288,17 +334,26 @@ The ratified keystone shape is:
   tenant and refuses cross-tenant or `Refuse` cases; and
 - GF-Q17 is the merge-blocking typed act for the new surface.
 
-The proposed namespace derivation is not an implementable source contract yet.
-Protected GF source has no registry `runtime_namespaces` field, and
-`tofu_plan_secret_read_namespaces` owns plan-identity `secrets:get` RBAC rather
-than projection-write targets; it also excludes ephemeral previews. The
-GF/controller typed-surface lane must ratify the source for exact stable and
-instance-scoped projection coordinates, how preview instances enter it, and
-how it remains distinct from plan-read RBAC. GFTB contributes those
-requirements and consumes the resulting immutable decision; it does not invent
-a schema or independently implement a competing shape.
+Exact projection coordinates use two signed owner artifacts:
 
-The operational boundary remains:
+- stable targets come from protected-main tenant-owner
+  `OwnerInstallation/v2`, carried by the authenticated overlay release. It
+  binds the exact namespace and cluster authority, Secret object identity,
+  private-image audience, writer-scope/quota source digests, and opaque Core
+  credential identity key;
+- preview targets come from a signed, expiring `OwnerOverlayInstance/v1`
+  produced by the same owner's existing protected instance-admission lane. It
+  binds one namespace and instance, exact source repository/ref/SHA/event,
+  expiry and lease, writer-scope/quota digests, and its parent
+  `OwnerInstallation/v2` descriptor.
+
+Neither source is inferred from a PR number, namespace glob or label,
+`runner_class`, `tfvars_anchor`, the RBE consumer/spoke/org registries, or
+`tofu_plan_secret_read_namespaces`. GFTB consumes these shared signed schemas;
+it does not independently invent a third coordinate source.
+
+The operational boundary, including TIN-2609 Secret-byte grounding
+`330f52cd-bb6b-4eae-a39d-bf2f43a93125`, remains:
 
 - `converge-agent` is public and needs no carrier pull Secret; controller and
   `gf-reapi-cell` remain private on the existing infra projection path;
@@ -309,8 +364,10 @@ The operational boundary remains:
 - the protected subordinate executor consumes the exact accepted projection
   once under scoped authority and reports object/version/hash evidence;
 - no interim cluster-admin workflow or second apply authority is admitted;
-- Git, OCI operands, logs, plans, and receipts contain no dockerconfigjson
-  payload bytes; and
+- “Secret-bytes” means that only the protected subordinate executor resolves
+  opaque custody and sends dockerconfigjson bytes directly to the Kubernetes
+  API. Those bytes never enter Git, OCI, the CRD, controller memory/state,
+  ConfigMaps, status, logs, plans, intents, results, or receipts; and
 - rotation retains current and previous generations until a cold Pod proves
   every accepted private digest can be pulled in every exact target, then
   revokes the old generation.
@@ -368,9 +425,9 @@ whose red path has not been observed is not acceptance evidence.
 The transition never runs two production mutation authorities.
 
 1. **Close typed prerequisites.** Land the no-Flux refit on #5, the protected
-   request-publication/event contract, the governed executor interfaces, the
-   GFTB GF-I09 producer, and the TIN-3768 typed projection shape. Source green
-   is not runtime acceptance.
+   three-member operand union, the create-only publisher inside #55, compatible
+   #55/#56 verifier/executor interfaces, the GFTB GF-I09 producer, and the
+   TIN-3768 typed projection shape. Source green is not runtime acceptance.
 2. **Refit tests and contracts in place.** Extend existing validation families
    with fixtures for release, plan, decision, terminal result, replay, refusal,
    served-content, and rollback. Every new validator names its claim and
@@ -418,15 +475,18 @@ The following are gates, not workarounds:
 - owner-overlay-controller #5 must have a landed and adjudicated no-Flux
   source refit, governed installation, and live refusal/acceptance receipts;
 - the central chain must have the protected exact-request publisher/event
-  contract identified by `e0e74eb9-44bf-4f2f-aed0-52fa78395e65`; #55/#56 do
-  not currently create or advance the request;
-- tinyland-infra #55/#56 are held self-dogfood reference carriers, not deployed
-  GFTB execution authority;
+  contract identified by `e0e74eb9-44bf-4f2f-aed0-52fa78395e65`, implemented
+  as a separate create-only job inside #55; #55/#56 do not currently create or
+  advance the request;
+- tinyland-infra #55/#56 are held self-dogfood reference carriers whose current
+  heads are incompatible with the RING-0 union, not deployed GFTB execution
+  authority;
 - GFTB does not yet have the authenticated GF-I09 producer and closed
   owner-overlay adapter described here;
-- TIN-3768's ratified GF-Q17/typed projection operand, exact stable/instance
-  coordinate source, and cold-pull proof must land on the GF/controller
-  carriers rather than being invented here;
+- TIN-3768's ratified GF-Q17/typed projection operand, signed
+  `OwnerInstallation/v2` / expiring `OwnerOverlayInstance/v1` coordinate
+  sources, and cold-pull proof must land on the GF/controller carriers rather
+  than being reimplemented here;
 - protected plan/apply identities and terminal GFTB receipt publication require
   reviewed source and runtime proof;
 - a credentialed served-content probe is required; constant `/health` cannot
@@ -445,8 +505,14 @@ GFTB's full-stack requirements from the reusable GF product.
 - TIN-2611 — GFTB CD convergence through the sole GF-gated
   owner-controller chain
 - TIN-2609 — governed owner-overlay controller consuming GF-I09
+- TIN-2609 `adaa70dd-a6e3-4293-b1a1-71e5a7686bdf` — one decision authority,
+  three typed MVP operand classes
+- TIN-2609 `2c50174d-ac3d-4630-b037-a6149ec0e58d` — RING-0 operand union,
+  verifier, replay, receipt, and existing-workflow publisher design
 - TIN-3578 — executable GF-gated production-convergence contract
 - TIN-3768 — first-class pull-credential projection
+- TIN-3768 `d96b78cd-368a-46d8-b961-9b29b93e1f88` — opaque custody and signed
+  stable/preview coordinate-source cross-link
 - TIN-3270 — privileged dispatch/credential trust boundary
 - TIN-3457 — mutation-proven assertions
 - Great-Falls-Tool-Bus/great-falls-tool-bus-infra #104 — this held source unit
