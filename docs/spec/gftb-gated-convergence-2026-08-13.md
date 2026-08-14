@@ -19,6 +19,9 @@
   carrier but do not authorize Core, CRD, workflow, or runtime implementation.
 - **Executable edge audit:** TIN-2609 comment
   `e0e74eb9-44bf-4f2f-aed0-52fa78395e65`
+- **Full-source control-chain review:**
+  #104#pullrequestreview-4934324323. Its six findings are repaired here without
+  releasing this source or any runtime carrier.
 - **Enrolment/controller MVP ruling:** TIN-3768 comment
   `27a1616e-b8d8-4560-81d6-d1dbf6fe7145`, grounded by correction
   `48be6e96-86a8-470a-9db6-f175f58202b8`. Its original direct-identity/GF-Q17
@@ -48,7 +51,8 @@ GFTB converges through the estate's existing receipt-driven, GF-gated model:
 ```text
 reviewed site source
   -> immutable image + authenticated GF-I09 application release
-  -> create-only publisher in the existing #55 protected-main push workflow
+  -> authenticated release-complete edge into the existing GFTB owner lane
+  -> create-only request publisher using the shared controller interface
   -> owner-overlay-controller #5 typed request gate (default refusal)
   -> GFTB owner-overlay protected materialize/check/plan
   -> owner-overlay-controller #5: typed, exact-plan Accept | Refuse
@@ -66,19 +70,33 @@ the original attempt's outcome. There is no standing convergence or drift loop.
 Periodic diagnostics, if retained, are observational only and carry no
 decision, plan, apply, or lifecycle authority.
 
-This diagram is the required chain, not a claim that its initiating edge
-exists. The current #55 relay GETs an already-existing request on protected
-main push; #56 consumes a supplied request; and #5 does not install its sample
-request. The existing #55 protected-main workflow must gain a separate
-create-only publisher job before materialization. It consumes already-published
-digest-addressed artifacts, creates the digest-named typed request, and exports
-only its canonical name and expected digest. On either create success or
-`AlreadyExists`, the existing exact-name plan reader GETs the object, verifies
-its immutable bytes, digest, and publisher identity, and emits the observed UID
-and generation into verifier-owned evidence. #55 then writes typed verification,
-#5 emits one immutable intent, and the same run's separately protected apply job
-invokes #56. GFTB neither owns that central publisher nor substitutes a new
-workflow, manual dispatch, or hand-created request.
+This diagram is the required **GFTB** chain, not a claim that its initiating
+edge exists. Two existing-carrier edges must not be conflated:
+
+- GF self-dogfood uses #55's protected-main push edge and #56's bounded
+  self-dogfood adapter. #55 currently GETs an already-existing request, #56
+  consumes a supplied request, and #5 does not install its sample request. A
+  separate create-only publisher job inside #55 remains a prerequisite for that
+  Ring-0 proof only.
+- GFTB adoption starts when the existing protected site producer publishes the
+  immutable GF-I09 release and emits one authenticated release-complete event
+  into the existing GFTB owner-lane carrier, refit in place from
+  `web-stack.yml`. The event is wake-up evidence only: it binds the protected
+  producer identity/run and exact GF-I09 release coordinate, carries no image,
+  replica, plan, apply, or credential authority, and resolves idempotently to
+  one canonical request. The current bespoke `repository_dispatch` payload and
+  routine `workflow_dispatch` are not that durable event contract. The exact
+  authenticated transport must be selected on the existing TIN-2609/TIN-2611
+  carriers before implementation; until then the GFTB initiating edge is
+  absent and activation refuses.
+
+The GFTB plan identity invokes the same reviewed create-only publisher
+interface, then the exact-name reader verifies the object on create or
+`AlreadyExists` and emits UID plus generation. #5 emits one immutable decision;
+the separately protected apply job in the same GFTB owner lane invokes only the
+GFTB `Justfile`/owner executor. It never invokes #56 or transfers GFTB state to
+tinyland-infra. No new workflow, manual dispatch authority, or hand-created
+request is admitted.
 
 The current exact #55 (`59c603467e033652097258652ad12d2bbd730986`) and
 #56 (`e57085a88cd17e9d6bf76653db301870574304c5`) heads remain incompatible
@@ -169,7 +187,8 @@ shape: digest-addressed materialization, a closed adapter, path-scoped plan,
 protected apply, and immutable results. They are not a reusable GFTB workflow,
 do not own GFTB state, and must not be called as a cross-tenant state backend.
 GFTB implements the same interface and evidence invariants in its own owner
-overlay. Their current held heads are not compatible runtime dependencies:
+overlay. A GFTB accepted intent therefore never invokes #56. Their current held
+heads are not compatible runtime dependencies:
 #55/#56 still mirror caller-authored fields removed by the union and must be
 coordinated with #5 before any activation.
 
@@ -226,27 +245,44 @@ documentation.
 
 ### 3.0 Governed source edge
 
-Before any GFTB activation, the existing #5/#55/#56 chain must gain one
-explicit protected initiation contract. It binds the exact writer identity,
-source/ref/tree/release digests, the expected request digest, reader-observed
-generation and UID, nonce/lease semantics, and the corresponding protected plan
-run. Publishing a request must reliably initiate that run without a routine
-manual click, runtime Git clone, or second controller/workflow/backend.
+Before any activation, each owner adoption names one existing carrier whose
+event starts the protected plan run. The initiation contract binds the exact
+writer and event identities, source/ref/tree or signed-owner-input digests, the
+expected request digest, reader-observed generation and UID, nonce/lease
+semantics, and the corresponding protected plan run. A request publication must
+reliably initiate that run without a routine manual click, runtime Git clone, or
+second controller/workflow/backend.
 
-This is a create-only publisher identity inside the existing #55
-protected-main push workflow, before its existing materialization job. It
-authors exactly one immutable request containing a common envelope and exactly
-one typed union member. This is central GF/controller-chain work. The GFTB
-producer supplies authenticated release and owner-overlay coordinates; it does
-not hand-create the Kubernetes request or introduce a tenant-specific dispatch
-authority. Create-only publisher retries stop at canonical name plus expected
-digest: the exact-name plan reader, not the publisher, verifies an existing
-object and supplies its UID and generation.
+For GF self-dogfood, that carrier is #55's protected-main push workflow; its
+separate create-only publisher precedes materialization and #56 remains only its
+bounded executor. For GFTB Ring 2, the existing site producer emits the
+authenticated release-complete event described in Section 0 to the existing
+GFTB `web-stack.yml` owner lane. That GFTB plan identity, not the site producer
+and not #55, invokes the shared create-only publisher interface. The notification
+is independently verified and supplies only the exact protected producer/run
+and GF-I09 release coordinate. Missing, mutable, replayed, differently bound, or
+payload-authoritative notifications refuse before request creation.
+
+Ring-1 `RegistryPullProjection/v1` has a separate owner-input edge. It starts
+only from the independently materialized signed owner-installation or instance
+input, applicable custody identity, policy, and publication facts. It requires
+no GF-I09 application/overlay release and cannot be triggered by a Ring-2 image
+publication. The concrete coordinate and custody source remains held under
+TIN-3768; no implementation may infer it while that hold remains.
+
+Every publisher invocation authors exactly one immutable request containing a
+common envelope and exactly one typed union member. Create-only retries stop at
+canonical name plus expected digest: the exact-name plan reader, not the
+publisher, verifies an existing object and supplies its UID and generation.
 
 ### 3.1 Immutable release
 
-The producer must publish an authenticated GF-I09 application release that
-binds at least:
+This subsection applies only to Ring-2 `ApplicationRelease/v1` and
+`ImagePinReplicaFlip/v1` transactions. It is never a prerequisite for Ring-1
+`RegistryPullProjection/v1`.
+
+For Ring 2, the producer must publish an authenticated GF-I09 application
+release that binds at least:
 
 - source repository, exact commit, source-tree digest, and protected producer
   identity/run;
@@ -318,11 +354,14 @@ private projection, verifier-owned pre-decision evidence independently observes
 the tenant and opaque credential identity, registry authority, expected input
 digest, canonical target-coordinate set and count, canonical private-image
 audience and count, projection policy, custody, writer scope, and pre-state. The
-owner controller emits a separate `RegistryPullProjectionDecision` and refuses
-before write unless the overlay registers that exact projection and every
-verifier counterpart equals the declared operand. Exact `Accept` authorizes only
-the scoped subordinate write for that full operand. It requires neither
-post-write success nor a Ring-2 GF-I09
+owner controller first requires `registryPullProjectionIsVerified`: input,
+custody, writer-scope, and pre-state checks are all true and every observed key
+is positive. Any failed verifier-only check emits `VerificationFailed` and
+refuses before write. Only then may registration and field equality be tested;
+the controller refuses unless the overlay registers that exact projection and
+every verifier counterpart equals the declared operand. Exact `Accept`
+authorizes only the scoped subordinate write for that full operand. It requires
+neither post-write success nor a Ring-2 GF-I09
 `ApplicationRelease/v1`/overlay handoff or `ImagePinReplicaFlip/v1` operand.
 
 After the accepted write, an independent observer emits
@@ -349,6 +388,20 @@ saved plan and records:
 
 No source merge, controller source green, scheduled run, or manual click may
 stand in for this terminal apply result.
+
+The apply records a durable attempt claim keyed by request UID/generation,
+accepted decision digest, saved-plan digest, and a decision-derived operation
+marker before mutation. Claim publication and independent readback are a
+precondition to write; failure to prove the claim refuses without mutation. If
+the runner is cancelled or crashes after a possible write but before result
+publication, retry never executes the saved plan again. An independent,
+read-only recovery observer uses that exact claim plus live Deployment
+UID/generation, operation marker, image, replicas, and post-state to publish the
+missing terminal outcome. Exact desired state with the decision-derived marker
+yields recovered success; exact unchanged pre-state or ambiguous/partial state
+yields an immutable terminal failure and fences further mutation until a fresh
+accepted rollback or forward transaction. Recovery is result publication, not
+a second apply authority.
 
 ### 3.5 Observe, serve, and rollback
 
@@ -400,8 +453,10 @@ The upstream typed source contract is:
   policy digest;
 - verifier-owned `RegistryPullProjectionVerification` independently observes
   every declared field plus input, custody, writer-scope, and pre-state checks;
-- `RegistryPullProjectionDecision` refuses unless the overlay registers the
-  exact projection and every verifier counterpart equals the declared operand.
+- `RegistryPullProjectionDecision` first requires all verifier-only input,
+  custody, writer-scope, and pre-state checks to be true; otherwise it emits
+  `VerificationFailed`. It then refuses unless the overlay registers the exact
+  projection and every verifier counterpart equals the declared operand.
   Exact `Accept` carries that full operand and is the immutable authorization
   for the scoped subordinate write, independent from GF-I09 and post-write
   success;
@@ -492,7 +547,7 @@ evidence proves all of the following:
 | O2 | GF-I09 binds `S` to immutable image/release coordinates | protected producer receipt |
 | O3 | materialization and saved plan bind the exact release and pre-state | GFTB plan receipt |
 | O4 | #5 accepted that exact plan under current policy/identity/nonce/lease | controller decision receipt |
-| O5 | the protected apply identity executed that exact saved plan | apply result receipt |
+| O5 | the protected apply identity executed that exact saved plan once, including a recovered terminal result after lost publication | attempt claim plus apply or independent recovery result receipt |
 | O6 | the registry independently serves the bound image digest | authenticated registry read |
 | O7 | live state carries the operation marker and caught-up generation with replicas greater than zero | cluster readback |
 | O8 | the protected served origin returns content built from `S` | credentialed served-content probe |
@@ -521,6 +576,10 @@ show the chain refuses or fails on:
 - changed pre-state or a mismatched saved plan;
 - absent or operand-mismatched post-write projection activation evidence when
   private-image projection is required;
+- failure to publish/read back the attempt claim before mutation, and a crash
+  after mutation but before result publication; retry must not reapply and the
+  independent observer must recover a terminal result;
+- either legacy mutation path remaining armed when governed apply is enabled;
 - apply failure and served-content mismatch;
 - rollback evidence that does not bind the failed result and fresh pre-state.
 
@@ -533,29 +592,37 @@ The transition never runs two production mutation authorities.
 
 1. **Close typed prerequisites.** Land the no-Flux refit on #5, the protected
    three-member operand union, the create-only publisher inside #55, compatible
-   #55/#56 verifier/executor interfaces, the GFTB GF-I09 producer, and the
-   operator-ratified TIN-3768 coordinate/custody shape. Reconstruct #55/#56 from
-   current protected source while preserving the short-lived TokenRequest path;
-   do not revive the held static plan kubeconfig. Source green is not runtime
-   acceptance.
+   #55/#56 verifier/executor interfaces, the GFTB GF-I09 producer plus its
+   authenticated release-complete edge into the existing GFTB owner lane, the
+   GFTB-owned executor interface, and the operator-ratified TIN-3768
+   coordinate/custody shape. Reconstruct #55/#56 from current protected source
+   while preserving the short-lived TokenRequest path; do not revive the held
+   static plan kubeconfig. Source green is not runtime acceptance.
 2. **Refit tests and contracts in place.** Extend existing validation families
    with fixtures for release, plan, decision, terminal result, replay, refusal,
-   served-content, and rollback. Every new validator names its claim and
-   retirement trigger in the same change.
+   lost-result recovery, served-content, and rollback. Every new validator names
+   its claim and retirement trigger in the same change.
 3. **Plan-only rehearsal.** Run the exact GFTB path with mutation disabled;
    independently verify materialization, pre-state, saved plan, controller
    refusal/acceptance semantics, and receipts. This is not a shadow controller
    or second workflow.
-4. **Governed canary.** After the self-dogfood and MMS prerequisite proofs,
+4. **Fence legacy mutation authority.** Before the first governed write, a
+   protected, append-only cutover receipt disables the existing
+   `repository_dispatch` apply and routine manual mutation path. Both old paths
+   fail closed while the governed latch is set; the governed executor refuses
+   while either old path remains armed. The disabled source may remain for
+   comparison until parity, but it has no credential or mutation authority.
+5. **Governed canary.** After the self-dogfood and MMS prerequisite proofs,
    execute one accepted GFTB transaction through the protected identity and
    require O1-O8 plus negative controls.
-5. **Rollback proof.** Exercise and externally observe the retained prior
+6. **Rollback proof.** Exercise and externally observe the retained prior
    release through a fresh accepted rollback transaction, then reconverge.
-6. **Retire the bespoke authority.** Only after parity and rollback evidence,
+   The governed rollback is the only enabled rollback mutation path.
+7. **Retire the bespoke authority.** Only after parity and rollback evidence,
    remove producer `repository_dispatch`, bespoke signal credentials and
    payload, routine manual apply, inline digest-resolution authority, and any
    duplicate policy gates.
-7. **Bound observational audit.** The existing scheduled drift surface may
+8. **Bound observational audit.** The existing scheduled drift surface may
    remain only as authenticated, report-only diagnostics. It never accepts
    intent, schedules convergence, mutates, or substitutes for the edge-triggered
    attempt/outcome/served receipts. Remove wording that makes it a standing
@@ -566,9 +633,9 @@ The transition never runs two production mutation authorities.
 | Existing surface | Disposition | Retirement trigger |
 |---|---|---|
 | site `container-ghcr.yml` publish logic | retain build/publication, make GF-I09 the release authority | authenticated GFTB GF-I09 producer proof |
-| producer `signal-cd` / `repository_dispatch` | remove | one governed production transaction, negative controls, rollback, and reconvergence all have terminal receipts |
+| producer `signal-cd` / `repository_dispatch` | fence before the first governed mutation; remove after parity | cutover receipt proves old path disabled before canary; one governed production transaction, negative controls, rollback, and reconvergence then have terminal receipts |
 | infra `web-stack.yml` | refit in place as the GFTB protected executor; do not clone it | accepted controller/executor contract and protected runtime proof |
-| manual `workflow_dispatch` steady-state apply | retire as product mechanism | governed rollback is exercised and externally observed |
+| manual `workflow_dispatch` steady-state apply | fence before the first governed mutation; retire as product mechanism | governed rollback is exercised and externally observed |
 | `Justfile` workload validation/apply entrypoints | retain as GFTB-owned verbs, split by plan/apply authority as needed | replaced only by a separately ratified GFTB owner-overlay interface |
 | `/health` probe | retain for liveness only | never promoted to served-content oracle |
 | `k8s-stack-drift.yml` | retain/refit only as observational diagnostics; never a convergence loop or mutation trigger | delete if it duplicates the immutable terminal receipt/readback claim |
@@ -584,18 +651,21 @@ The following are gates, not workarounds:
 
 - owner-overlay-controller #5 must have a landed and adjudicated no-Flux
   source refit, governed installation, and live refusal/acceptance receipts;
-- the central chain must have the protected exact-request publisher/event
+- GF Ring-0 self-dogfood must have the protected exact-request publisher/event
   contract identified by `e0e74eb9-44bf-4f2f-aed0-52fa78395e65`, implemented
   as a separate create-only job inside #55. It exports canonical name and
   expected digest only; the exact-name reader verifies the object and emits UID
-  plus generation. #55/#56 do not currently create or advance the request;
+  plus generation. #55/#56 do not currently create or advance the request. This
+  publisher placement is Ring-0-only and is not the GFTB initiating edge;
 - tinyland-infra #55/#56 are held self-dogfood reference carriers whose current
   heads are incompatible with the RING-0 union, not deployed GFTB execution
   authority. Any refit must preserve protected main's
   `HONEY_ARC_PLAN_TOKEN_MINTER_KUBECONFIG` TokenRequest acquisition and must not
   revive the stored `HONEY_ARC_PLAN_KUBECONFIG` path;
-- GFTB does not yet have the authenticated GF-I09 producer and closed
-  owner-overlay adapter described here;
+- GFTB does not yet have the authenticated GF-I09 producer, authenticated
+  release-complete event contract into its existing owner lane, closed
+  owner-overlay adapter, or GFTB-owned protected executor described here. It
+  never invokes #56 for GFTB state;
 - GF #1500 exact `ef99e04f` is the source-released typed authority for the
   closed overlay requirement, pre-decision verification/Accept boundary,
   post-write activation evidence, and GF-Q18. Protected-source adoption requires
@@ -606,8 +676,11 @@ The following are gates, not workarounds:
   executor-local custody. Initial-bootstrap quarantine/resume and non-executing
   cold-pull proof must land on the GF/controller carriers rather than being
   reimplemented here;
-- protected plan/apply identities and terminal GFTB receipt publication require
+- protected plan/apply identities, durable pre-write attempt-claim readback,
+  single-use lost-result recovery, and terminal GFTB receipt publication require
   reviewed source and runtime proof;
+- a protected cutover receipt must prove both legacy mutation paths fail closed
+  before governed canary or rollback can consume an accepted decision;
 - a credentialed served-content probe is required; constant `/health` cannot
   substitute;
 - refusal, replay/expiry, failure isolation, rollback, and self-dogfood/MMS/GFTB
