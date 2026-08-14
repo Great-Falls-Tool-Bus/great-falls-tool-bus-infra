@@ -21,12 +21,21 @@
   `e0e74eb9-44bf-4f2f-aed0-52fa78395e65`
 - **Enrolment/controller MVP ruling:** TIN-3768 comment
   `27a1616e-b8d8-4560-81d6-d1dbf6fe7145`, grounded by correction
-  `48be6e96-86a8-470a-9db6-f175f58202b8`. RING-0 cross-link
+  `48be6e96-86a8-470a-9db6-f175f58202b8`. Its original direct-identity/GF-Q17
+  sketch is superseded by the projection structural authority in
+  tinyland-inc/GloriousFlywheel #1500 at exact signed head
+  `ef99e04fd59d31c42d044bd80061dbcf85b629bd`: a closed
+  `TenantOverlay.registryPullProjection` requirement, complete pre-decision
+  equality, independent post-write activation evidence, and GF-Q18. #1500 is
+  independently source-clean at #1500#pullrequestreview-4934195522 and released
+  only to the native protected queue by #1500#issuecomment-5289765539. It is not
+  runtime or activation authority. RING-0 cross-link
   `d96b78cd-368a-46d8-b961-9b29b93e1f88` proposes signed
   `OwnerInstallation/v2` and expiring `OwnerOverlayInstance/v1` coordinate
   sources plus executor-local custody; review
   `fde41451-c2ae-4213-93a7-dbeefe226241` records that this coherent shape still
-  requires an explicit operator-ratification carrier before Core/CRD work.
+  requires an explicit operator-ratification carrier before concrete
+  controller/CRD/runtime work.
 
 This is a design contract, not a second mutable status surface. Dated evidence
 below is retained only where it explains a required invariant. Current
@@ -298,17 +307,32 @@ For GFTB, the application release and image transition remain typed operands,
 not authority embedded in the tenant workflow. The accepted
 `ImagePinReplicaFlip/v1` binds the exact Deployment/container, current and
 desired immutable image, current and desired replicas, prior acceptance,
-rollout deadline, and—when the image is private—the exact successful projection
-receipt. The GFTB executor may consume only that closed intent.
+rollout deadline, and—when the image is private—the exact successful post-write
+projection activation receipt. The GFTB executor may consume only that closed
+intent.
 
-`RegistryPullProjection/v1` remains Ring 1. Its activation predicate binds the
-`Accept` for that exact projection request and operand, not an unrelated tenant
-decision. Its private-image audience comes from projection-owned publication
-evidence. The publisher may require only the applicable signed owner-coordinate,
-custody, policy, and publication facts for the projection operand; it must not
-require a Ring-2 `ApplicationRelease/v1` or `ImagePinReplicaFlip/v1`. A later
-Ring-2 transaction may consume the terminal successful projection receipt, but
-never becomes the projection's prerequisite.
+`RegistryPullProjection/v1` remains Ring 1. `TenantOverlay` registers one closed
+`NoProjection | PrivateProjection` requirement. A public-only tenant chooses
+`NoProjection` and cannot activate a supplied private-projection tuple. For a
+private projection, verifier-owned pre-decision evidence independently observes
+the tenant and opaque credential identity, registry authority, expected input
+digest, canonical target-coordinate set and count, canonical private-image
+audience and count, projection policy, custody, writer scope, and pre-state. The
+owner controller emits a separate `RegistryPullProjectionDecision` and refuses
+before write unless the overlay registers that exact projection and every
+verifier counterpart equals the declared operand. Exact `Accept` authorizes only
+the scoped subordinate write for that full operand. It requires neither
+post-write success nor a Ring-2 GF-I09
+`ApplicationRelease/v1`/overlay handoff or `ImagePinReplicaFlip/v1` operand.
+
+After the accepted write, an independent observer emits
+`RegistryPullProjectionActivationEvidence` for Secret readback, activity at all
+exact targets, and cold pull of the complete private-image audience. Activation
+requires equality across the registered overlay, declared operand, every
+pre-decision verifier observation, accepted decision operand, and independently
+observed post-write operand. A later Ring-2 transaction may consume that
+terminal successful activation receipt, but never becomes the projection's
+prerequisite.
 
 ### 3.4 Protected apply
 
@@ -355,33 +379,52 @@ TIN-3768 comment `27a1616e-b8d8-4560-81d6-d1dbf6fe7145` ratifies Secret
 projection as the controller's first `Accept`-consuming apply, keeps Core
 opaque, and requires GF self-dogfood first. Correction
 `48be6e96-86a8-470a-9db6-f175f58202b8` proves that the originally named
-coordinate sources do not exist. TIN-3768 proposal
+coordinate sources do not exist. The original direct-identity/projection-Q17
+sketch is superseded by GF #1500 exact
+`ef99e04fd59d31c42d044bd80061dbcf85b629bd`. TIN-3768 proposal
 `d96b78cd-368a-46d8-b961-9b29b93e1f88` supplies a coherent replacement, but
 review `fde41451-c2ae-4213-93a7-dbeefe226241` explicitly keeps that coordinate
 and custody shape pending operator ratification. This GFTB spec records the
-requirements and the hold; it does not promote the proposal or add another
-TenantOverlay field, registry, writer, or projection protocol.
+requirements and the hold; it does not promote the proposal, instantiate
+concrete coordinates, or add another registry, writer, decision authority, or
+projection protocol.
 
-The ratified envelope requirements are:
+The upstream typed source contract is:
 
-- `Core.dhall` stays opaque: TenantOverlay carries the Option-E-only
-  `credentialIdentityKey : Natural`;
-- declared `CredentialProjection` is separate from verifier-owned
-  `CredentialProjectionVerification`;
+- `Core.dhall` stays opaque: `TenantOverlay.registryPullProjection` is the
+  closed `NoProjection | PrivateProjection RegistryPullProjection/v1`
+  requirement. Public-only tenants carry no decorative pull identity;
+- a private `RegistryPullProjection/v1` binds tenant and Option-E credential
+  identities, registry authority, expected input digest, canonical target-set
+  digest/count, canonical private-image-audience digest/count, and projection
+  policy digest;
+- verifier-owned `RegistryPullProjectionVerification` independently observes
+  every declared field plus input, custody, writer-scope, and pre-state checks;
+- `RegistryPullProjectionDecision` refuses unless the overlay registers the
+  exact projection and every verifier counterpart equals the declared operand.
+  Exact `Accept` carries that full operand and is the immutable authorization
+  for the scoped subordinate write, independent from GF-I09 and post-write
+  success;
+- independent post-write `RegistryPullProjectionActivationEvidence` binds
+  Secret readback, all-target activity, and private-audience cold pull to the
+  same full operand. Activation rechecks overlay registration, verification,
+  decision, and observed-operand equality;
 - controller Go owns a closed authority type rather than payload bytes or an
   unstructured command;
 - projection is Ring 1 and the first accepted apply, with GF self-dogfood before
   MMS or GFTB activation; and
-- GF-Q17 is the required merge-blocking typed act for the new surface; source
+- GF-Q18 is the sole mutable projection-status question. GF-Q17 remains the
+  runner resource-envelope question and is not a projection carrier. Source
   green is not runtime projection evidence.
 
-The source-held coordinate proposal, which must be explicitly ratified or
-superseded before implementation, is:
+The source-held concrete-coordinate proposal, which must be explicitly ratified
+or superseded before controller/CRD/runtime implementation, is:
 
-- stable targets come from a protected-main tenant-owner
-  `OwnerInstallation/v2` carried by the authenticated overlay release. It binds
-  the exact namespace and cluster authority, Secret object identity,
-  private-image audience, writer-scope/quota source digests, and opaque Core
+- stable targets come from a signed protected-main tenant-owner
+  `OwnerInstallation/v2`, independently materialized as projection input rather
+  than supplied by a Ring-2 GF-I09 handoff. It binds the exact namespace and
+  cluster authority, Secret object identity, private-image audience,
+  writer-scope/quota source digests, and the projection operand's opaque
   credential identity key;
 - preview targets come from a signed, expiring `OwnerOverlayInstance/v1`
   produced by the same owner's protected instance-admission lane. It binds one
@@ -398,7 +441,8 @@ be ratified or superseded. Under that proposal, only the protected subordinate
 executor resolves opaque custody and sends dockerconfigjson bytes directly to
 the Kubernetes API. The bytes never enter Git, OCI, the CRD, controller
 memory/state, ConfigMaps, status, logs, plans, intents, results, or receipts.
-The controller sees only opaque identity/generation keys and verifier-owned,
+The controller sees only opaque identity/generation keys; the pre-decision
+verifier and independent post-write observer own their respective
 non-recoverable observations.
 
 Already-ruled operational boundaries remain:
@@ -426,15 +470,16 @@ non-atomic proof cases:
    image code from executing, for example through a ratified verified-absent,
    nonce-derived command plus strict Pod sandbox and observation of successful
    pull before the expected create failure, or through another ratified scoped
-   verifier. A normal cold Pod start is application execution and does not count
-   as projection proof.
+   independent observer. A normal cold Pod start is application execution and
+   does not count as projection proof.
 
 Rotation may revoke an old generation only after a non-executing cold-pull proof
 covers every accepted private digest in every exact target. Until the coordinate
-and custody design is ratified, GF-Q17 is defined with its rejection cases, the
-typed operand and scoped executor exist, initial-bootstrap quarantine/resume is
-proved, and rollback plus non-executing cold-pull controls pass, a private-image
-GFTB activation must refuse.
+and custody design is ratified, the #1500 typed source is landed and consumed by
+a scoped executor, initial-bootstrap quarantine/resume is proved, and rollback
+plus independent post-write readback and non-executing cold-pull controls pass,
+GF-Q18 remains `No` and a private-image GFTB activation must refuse. GF-Q17
+continues to report runner resource-envelope evidence only.
 
 ## 5. Acceptance oracle
 
@@ -474,7 +519,8 @@ show the chain refuses or fails on:
 - unknown/mutable release coordinates and a bad digest;
 - stale, expired, or replayed nonce/lease;
 - changed pre-state or a mismatched saved plan;
-- absent private-image projection when one is required;
+- absent or operand-mismatched post-write projection activation evidence when
+  private-image projection is required;
 - apply failure and served-content mismatch;
 - rollback evidence that does not bind the failed result and fresh pre-state.
 
@@ -550,8 +596,12 @@ The following are gates, not workarounds:
   revive the stored `HONEY_ARC_PLAN_KUBECONFIG` path;
 - GFTB does not yet have the authenticated GF-I09 producer and closed
   owner-overlay adapter described here;
-- TIN-3768's ratified projection-first/Core envelope must be joined by an
-  explicit operator carrier for the currently proposed signed
+- GF #1500 exact `ef99e04f` is the source-released typed authority for the
+  closed overlay requirement, pre-decision verification/Accept boundary,
+  post-write activation evidence, and GF-Q18. Protected-source adoption requires
+  a successful native merge-group and fresh protected-main receipt; neither
+  source green nor merge is runtime proof. Its concrete path must be joined by
+  an explicit operator carrier for the proposed signed
   `OwnerInstallation/v2` / expiring `OwnerOverlayInstance/v1` coordinates and
   executor-local custody. Initial-bootstrap quarantine/resume and non-executing
   cold-pull proof must land on the GF/controller carriers rather than being
@@ -583,6 +633,12 @@ GFTB's full-stack requirements from the reusable GF product.
   constraints
 - TIN-3578 — executable GF-gated production-convergence contract
 - TIN-3768 — first-class pull-credential projection
+- tinyland-inc/GloriousFlywheel #1500 exact
+  `ef99e04fd59d31c42d044bd80061dbcf85b629bd` — GF-Q18 typed projection source:
+  closed overlay requirement, pre-decision authorization, and independent
+  post-write activation evidence; exact-head clean review
+  #1500#pullrequestreview-4934195522 and source-release carrier
+  #1500#issuecomment-5289765539
 - TIN-3768 `d96b78cd-368a-46d8-b961-9b29b93e1f88` — source-held opaque-custody
   and signed stable/preview coordinate proposal
 - TIN-3768 `fde41451-c2ae-4213-93a7-dbeefe226241` — explicit ratification hold
