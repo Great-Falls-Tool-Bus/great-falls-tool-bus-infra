@@ -29,10 +29,13 @@
   `a2482191-62a7-4779-bdab-a33d3e238c2e`, plus the common-fence,
   transition-order, and recovery-successor re-review
   #104#pullrequestreview-4935101115 mirrored at TIN-2611 comment
-  `596d05b1-4f57-4957-bcf4-02ff0880ae22`. Their six historical, seven
-  full-source, two recovery/lifecycle, four interleaving/fail-closed, and three
-  final serialization/liveness findings are repaired here without releasing
-  this source or any runtime carrier.
+  `596d05b1-4f57-4957-bcf4-02ff0880ae22`, plus the legacy-quiescence,
+  recovery-wake, served-failure, and operand-set re-review
+  #104#pullrequestreview-4935297697 mirrored at TIN-2611 comment
+  `6ce50ecc-30a5-44ff-b889-b3e0109e5f9d`. Their six historical, seven
+  full-source, two recovery/lifecycle, four interleaving/fail-closed, three
+  final serialization/liveness, and four final cutover/observation findings
+  are repaired here without releasing this source or any runtime carrier.
 - **Enrolment/controller MVP ruling:** TIN-3768 comment
   `27a1616e-b8d8-4560-81d6-d1dbf6fe7145`, grounded by correction
   `48be6e96-86a8-470a-9db6-f175f58202b8`. Its original direct-identity/GF-Q17
@@ -82,8 +85,9 @@ the original attempt's outcome. There is no standing **mutation or
 convergence** loop. The existing scheduled drift/readback surface is
 nevertheless mandatory until an explicitly equivalent carrier replaces it: it
 is authenticated, report-only, and fail-closed on absent authority, readback
-error, ambiguity, or real drift from the exact latest accepted desired state and
-operation marker. It carries no decision, plan, apply, or lifecycle authority.
+error, ambiguity, or real drift from the complete operand-keyed set of active
+accepted desired state and operation markers. It carries no decision, plan,
+apply, or lifecycle authority.
 
 This diagram is the required **GFTB** chain, not a claim that its initiating
 edge exists. Two existing-carrier edges must not be conflated:
@@ -140,8 +144,8 @@ The design contains:
   `ImagePinReplicaFlip/v1`;
 - one tenant state owner: the GFTB owner overlay;
 - one protected executor chain owned by that overlay;
-- one immutable evidence graph binding release, decision, plan, result, served
-  state, and rollback.
+- one immutable evidence graph binding release, decision, plan, mutation and
+  convergence results, served state, and rollback.
 
 It contains no Flux, Argo CD, source-controller CRDs, shell/CronJob lifecycle
 controller, state-owning shared apply workflow, second backend, runtime Git
@@ -340,6 +344,25 @@ observation that every legacy mutation authority applicable to that operand is
 disabled. Fields belonging to another operand schema are forbidden, not
 optional decoration.
 
+Mutation-capable evidence does not trust a legacy run to observe a source-side
+latch. It binds one protected, append-only `LegacyAuthorityQuiesced/v1` cutover
+receipt for the environment and operand scope. That receipt becomes final only
+after repository-side legacy trigger admission is frozen, an authoritative
+workflow and Environment enumeration across **every** ref and workflow revision
+reports zero queued, waiting, pending-approval, or in-progress mutation-capable
+runs, every credential or authorization already issued to those runs is server-
+side revoked or independently expired, and an authoritative API-server
+quiescence barrier reports zero in-flight mutations by the legacy identities
+after ordering every pre-fence admitted request as committed or rejected. Fresh
+target readback follows that barrier. The receipt binds the frozen workflow/
+trigger revisions, enumeration cursor and run IDs, credential/authorization
+generations and revocation-or-expiry evidence, quiescence-barrier/admission-fence
+identity, and fresh target UID/resource-version/fencing epochs. Cancelling a
+run, editing only the latest workflow revision, observing an empty per-ref
+concurrency group, or asking an old client to read the latch is not quiescence.
+If any issued legacy authority or already-admitted write cannot be enumerated
+and fenced, the receipt cannot finalize and governed mutation refuses.
+
 For Ring-2 `ApplicationRelease/v1` and `ImagePinReplicaFlip/v1`, the GFTB plan
 identity acquires declared OCI content by digest, independently checks
 size/hash/media/source identity, and materializes it in a private, bounded
@@ -498,7 +521,7 @@ the subordinate write boundary. The result records:
 
 - environment/protection approval and apply identity;
 - decision, request, operand-specific evidence or plan, pre-state, artifact,
-  and cutover-latch digests/epochs;
+  cutover-latch digest/epoch, and exact `LegacyAuthorityQuiesced/v1` digest;
 - apply start/end, exit classification, and post-state fingerprint;
 - for Ring 2, the exact workload image, operation marker, Deployment generation,
   observedGeneration, desired replicas, and ready replicas;
@@ -515,9 +538,10 @@ UID/generation and accepted-decision digest. The create-only record contains the
 attempt claim and its one authoritative arbitration state. It binds the full
 operand-specific execution evidence (Ring-2 saved-plan digest or Ring-1
 projection-verification digest), decision-derived operation marker, exact
-cutover-latch digest/epoch, and the exact protected apply identity and workflow
-run ID that won creation. It also binds a bounded owner lease epoch/deadline and
-a closed monotonic owner phase machine: `Claimed` -> `PreWrite` -> `WriteIssued`.
+cutover-latch digest/epoch, exact `LegacyAuthorityQuiesced/v1` digest, and the
+exact protected apply identity and workflow run ID that won creation. It also
+binds a bounded owner lease epoch/deadline and a closed monotonic owner phase
+machine: `Claimed` -> `PreWrite` -> `WriteIssued`.
 The decision lease bounds the owner lease; only the exact winner may renew it or
 advance phase, using compare-and-swap while the independently observed workflow
 run remains active. Phase never moves backward, and an expired or independently
@@ -566,12 +590,18 @@ Immediately before its one mutation, the original winner must CAS the attempt
 to `WriteIssued` and freshly prove all of the following: its owner lease remains
 unexpired; its exact identity/run and arbitration/fencing epochs still own the
 attempt; the arbitration state is `OwnerActive`; the cutover-latch digest/epoch
-is unchanged; the executable legacy paths consume the latch fail-closed; and
-every legacy authority remains disabled. It then submits only the target-atomic
+is unchanged; the exact `LegacyAuthorityQuiesced/v1` receipt remains current;
+fresh server-side reads still show frozen trigger admission, zero nonterminal
+legacy runs across every ref/revision, revoked-or-expired issued legacy
+authority, and the receipt's target admission fence/quiescence coordinates; and
+no legacy authority has been recreated. It then submits only the target-atomic
 UID/resource-version/fencing-epoch commit defined above. A pause, expiry,
 owner-run termination, recovery takeover, phase mismatch, missing readback,
-rearmed path, latch change, target replacement, or target resource-version/
-fence change denies that commit.
+rearmed trigger, newly issued legacy authority, latch change, target replacement,
+or target resource-version/fence change denies that commit. An old workflow
+revision cannot bypass this boundary because the governed write is admitted
+only after the independent server-side cutover receipt, never on the old
+client's cooperation.
 
 After recovery wins arbitration, it never executes the saved plan or projection
 write. For every unresolved `WriteIssued` target, it must first advance the
@@ -584,6 +614,30 @@ commit fails its stale resource-version/fence precondition. Recovery may not
 publish unchanged or failed state until all targets are fenced or proven
 quiescent and then freshly read. An admitted but delayed owner request can never
 commit after a recovery failure.
+
+Recovery liveness has a durable wake edge in the existing GFTB owner lane; it
+does not depend on a surviving workflow process or a routine manual click. The
+attempt create, each bounded owner/recovery lease renewal, and every
+`RecoveryFencing` acquisition/successor CAS atomically register or advance a
+storage-backed recovery-wake generation for that exact attempt and lease
+deadline. The authenticated outbox/timer delivery is at-least-once and is
+redelivered with bounded backoff until the record is `Final` or a protected
+contender has atomically installed the next lease plus its successor wake. A
+delivery binds only attempt identity/digest, wake generation, and due deadline.
+It starts the existing owner-lane recovery entrypoint but grants no decision,
+plan, saved-plan execution, projection write, target-fence, or result authority.
+The started contender must independently read the authoritative attempt, prove
+owner or recovery-run termination/lease expiry, and win the same arbitration
+CAS before it may fence or finalize.
+
+Delivery acknowledgement cannot discard the only future wake. A contender that
+dies before acquisition leaves the current due generation redeliverable; a
+winner schedules the next deadline generation in the acquisition CAS; and the
+sole final CAS closes the outbox generation with the canonical outcome. Thus a
+lost delivery, a terminated runner, or a crash immediately after acquisition
+cannot strand `RecoveryFencing`. This deadline/outbox edge is non-authorizing
+recovery notification, not a standing mutation/convergence loop, second
+controller, or scheduled apply surface.
 
 Recovery ownership cannot wedge the attempt. Only the exact recovery owner may
 renew its bounded lease or advance its phase/journal, by CAS while its workflow
@@ -606,9 +660,10 @@ readback; an uncommitted fence is safely retried by CAS. Each successor may only
 advance fencing epochs and recovery phases. A crash immediately after recovery
 acquisition, between any two target fences, after fence commit but before
 journal CAS, after readback binding, or before final CAS therefore leaves a
-bounded successor path. Under an eventually available protected recovery run
-and authoritative API, one successor reaches the existing sole final slot; no
-successor executes a second apply or creates a second outcome.
+bounded successor path. Under eventual delivery to an available protected
+recovery run and an available authoritative API, one successor reaches the
+existing sole final slot; no successor executes a second apply or creates a
+second outcome.
 
 There is one canonical immutable `AttemptOutcome` name and one empty terminal
 slot in the attempt record. The same authoritative arbitration CAS that changes
@@ -625,7 +680,7 @@ unchanged pre-state or ambiguous/partial state yields immutable terminal failure
 only after target fencing/quiescence, and fences further mutation until a fresh
 accepted rollback or forward transaction. Recovery is result publication, not
 a second apply authority. The canonical `AttemptOutcome` digest is the sole
-terminal outcome and rollback operand.
+terminal mutation outcome; it is never rewritten by later observation.
 
 ### 3.5 Observe, serve, and rollback
 
@@ -638,18 +693,54 @@ An apply result is not a served result. The terminal chain separately records:
 - credentialed served-content evidence through the real protected origin;
 - the source revision/build marker observed in served content.
 
-Rollback is a distinct accepted transaction and may follow only an exact
-accepted transaction whose immutable terminal result is classified failure. It
-binds that failed request UID/generation, decision and attempt-record digests,
-plus the sole canonical create-only `AttemptOutcome` digest; a retained prior
-accepted release; fresh post-failure pre-state; a new saved rollback plan; the
-current cutover-latch digest/epoch; fresh nonce/lease; and an externally
-observed served result. A successful, noncanonical, conflicting, or merely
-missing result cannot be its failed-result operand. Reusing a pre-failure plan
-or merely reselecting an old image is not a rollback receipt.
+For Ring-2 application/image transactions, the mutation outcome and the
+convergence outcome are distinct. After a successful `AttemptOutcome`, the
+same attempt-finalization CAS registers a durable, non-authorizing observation
+wake in the existing owner lane. Its at-least-once delivery starts the protected
+observer, which creates or reads one canonical convergence record keyed by
+request UID/generation, decision, attempt-record, and `AttemptOutcome` digests.
+Its bounded `Observing` state contains write-once registry, cluster-readback,
+served-content, and final-outcome slots under one resource version. Evidence
+admission and the server-deadline finalizer contend on that same record; one CAS
+produces exactly one immutable
+`ConvergenceOutcome = Converged | Failed(typed reason)`. Exact
+registry, target, operation marker, generation/replica, and served source-marker
+agreement yields `Converged`. A definitive served source-marker mismatch, or a
+bounded terminal registry/readback/served failure after the observation
+deadline, yields typed failure. Missing, ambiguous, unauthenticated, or
+conflicting evidence cannot synthesize success; before the deadline it remains
+non-authorizing observation, and after the deadline it may only produce the
+corresponding typed terminal failure. This observer can publish evidence and
+the convergence result only; it carries no decision, plan, apply, recovery, or
+rollback authority. The successful `AttemptOutcome` remains successful and
+append-only even when its `ConvergenceOutcome` is failure.
 
-Attempt, refusal, outcome, served, and rollback receipts are append-only. Every
-original attempt ends in a terminal outcome receipt, including when a separate
+Ring-1 remains independent of this Ring-2 served-content finalizer. Its
+successful post-write terminal evidence is the exact
+`RegistryPullProjectionActivationEvidence` in Sections 3.3 and 4, with no
+GF-I09 application release, image-plan, or served-source prerequisite.
+
+Rollback is a distinct accepted transaction and may follow only one canonical
+`RollbackFailureOperand/v1`: either (a) an exact accepted transaction whose
+immutable `AttemptOutcome` is classified failure, or (b) an exact successful
+`AttemptOutcome` paired with its canonical terminal
+`ConvergenceOutcome(Failed)`. Case (b) is the governed rollback operand when O5
+is true but O8 proves that the protected origin serves the wrong revision. The
+operand binds the failed request UID/generation, decision and attempt-record
+digests, the canonical create-only `AttemptOutcome` digest, and, for case (b),
+the canonical convergence-record and failed `ConvergenceOutcome` digests and
+exact independent observations. It also binds a retained prior accepted
+release, fresh post-failure pre-state, a new saved rollback plan, the current
+cutover-latch and `LegacyAuthorityQuiesced/v1` digests/epochs, fresh nonce/lease,
+and an externally observed served result. A successful `AttemptOutcome` by
+itself, a successful convergence outcome, or a noncanonical, conflicting, or
+merely missing terminal result cannot be its failed-result operand. Reusing a
+pre-failure plan or merely reselecting an old image is not a rollback receipt.
+
+Attempt, refusal, mutation-outcome, convergence-outcome, served, and rollback
+receipts are append-only. Every original attempt ends in a terminal mutation
+outcome receipt; every successful Ring-2 mutation admitted to post-write
+observation ends in one terminal convergence outcome, including when a separate
 rollback transaction is accepted afterward. A terminal failure is evidence; it
 is never converted to green by skipping downstream jobs or by recording only
 the rollback outcome.
@@ -777,23 +868,37 @@ evidence proves all of the following:
 | O2 | GF-I09 binds `S` to immutable image/release coordinates | protected producer receipt |
 | O3 | materialization and saved plan bind the exact release and pre-state | GFTB plan receipt |
 | O4 | #5 accepted that exact plan under current policy/identity/nonce/lease | controller decision receipt |
-| O5 | the protected apply identity executed that exact saved plan once and the sole attempt-arbitration finalization produced the canonical successful `AttemptOutcome`, or the current recovery epoch owner (initial or successor) recovered that committed target state after proven owner termination/expiry and target fencing/quiescence; any terminal failure keeps O5 false for that request/generation | attempt/arbitration CAS, recovery lease/phase, target UID/resource-version/fence commit, and sole canonical `AttemptOutcome` |
+| O5 | the protected apply identity executed that exact saved plan once and the sole attempt-arbitration finalization produced the canonical successful `AttemptOutcome`, or the current recovery epoch owner (initial or successor) recovered that committed target state after proven owner termination/expiry and target fencing/quiescence; any terminal mutation failure keeps O5 false for that request/generation | attempt/arbitration CAS, recovery lease/phase, target UID/resource-version/fence commit, and sole canonical `AttemptOutcome` |
 | O6 | the registry independently serves the bound image digest | authenticated registry read |
 | O7 | live state carries the operation marker and caught-up generation with replicas greater than zero | cluster readback |
-| O8 | the protected served origin returns content built from `S` | credentialed served-content probe |
+| O8 | the protected served origin returns content built from `S` | credentialed served-content probe and canonical `ConvergenceOutcome` |
 
 The mandatory scheduled readback is a separate release gate, not a ninth
-mutation or decision authority. For each environment it derives one
-`LatestAcceptedDesired` view only from the controller's append-only accepted-
-decision order. That view binds the exact request UID/generation, decision and
-full desired-operand digests, decision-derived operation marker, and canonical
-outcome digest when present; it never derives desired state from repository
-HEAD, a mutable tag, workflow input, or the live object it is checking. Missing
-or ambiguous accepted desired state fails closed. Before `S` can be declared
-accepted as converged, a fresh authenticated scheduled invocation must select
-`S`'s accepted desired state and marker and report exact live readback. An
-accepted but not yet applied transaction may therefore make the scheduled run
-red; that is drift evidence and never authority to apply it.
+mutation or decision authority. For each environment it folds the controller's
+append-only accepted-decision order into a finite
+`LatestAcceptedDesiredByOperand` map. Its canonical key is tenant, environment,
+closed operand class, and exact target/authority coordinate; a multi-target
+operand expands to every canonical target coordinate while retaining the one
+full operand digest. Each accepted decision atomically updates only its exact
+keys. It cannot evict still-active keys from another operand class or target,
+and a removed target remains active until a later accepted same-class/same-
+coordinate operand explicitly binds its desired absence under that closed
+schema. Contradictory active
+entries for the same live field, duplicate keys, an unaccounted prior key, or a
+partial multi-target expansion is ambiguity and fails closed.
+
+Every active entry binds the exact request UID/generation, decision and full
+desired-operand digests, decision-derived operation marker, and canonical
+mutation/convergence outcome digests when present. The fold never derives
+desired state from repository HEAD, a mutable tag, workflow input, or the live
+object it is checking. Every scheduled invocation reads the complete active
+map, including projection, application-release, and image/replica surfaces; it
+cannot select only the most recently accepted union member. Before `S` can be
+declared accepted as converged, a fresh authenticated scheduled invocation must
+read every active entry and report exact live state, including `S`'s keyed
+desired state and marker. An accepted but not yet applied transaction may
+therefore make the scheduled run red; that is drift evidence and never
+authority to apply it.
 
 The oracle must preserve these known failure lessons:
 
@@ -814,6 +919,10 @@ The oracle must preserve these known failure lessons:
    classified failure remains failed forever and cannot satisfy O5 after later
    cluster or served observations. Only a fresh accepted transaction can
    produce a new outcome.
+8. **Mutation success is not served success.** A successful `AttemptOutcome`
+   followed by a canonical `ConvergenceOutcome(ServedContentMismatch)` keeps
+   O8 false and supplies case (b) of the rollback-failure operand without
+   rewriting the mutation result.
 
 Before the first production acceptance, mutation-proven negative controls must
 show the chain refuses or fails on:
@@ -853,24 +962,41 @@ show the chain refuses or fails on:
 - owner result publication concurrent with recovery acquisition: both contend
   on the same attempt-arbitration resource version, exactly one reaches
   `Final`, and exactly one canonical create-only `AttemptOutcome` exists as the
-  sole rollback operand;
+  immutable mutation-outcome anchor for any rollback-failure operand;
 - recovery-owner crashes immediately after `RecoveryFencing` acquisition,
   between every target-fence operation, after a fence commit but before journal
   publication, after readback binding, and immediately before finalization: an
   independently proven terminal/expired recovery lease must permit exactly one
-  successor CAS, monotonic fence/journal recovery, one eventual canonical
-  outcome, and no saved-plan/projection/desired-state re-execution;
-- either legacy mutation path remaining armed when governed apply is enabled,
-  or its cutover latch changing/rearming after plan or decision but before the
-  fresh pre-write read;
+  successor CAS, while a lost wake, delivery-before-run crash, and runner crash
+  after acquisition each leave a durable generation for bounded redelivery;
+  monotonic fence/journal recovery reaches one eventual canonical outcome with
+  no saved-plan/projection/desired-state re-execution;
+- a legacy run queued, waiting for Environment approval, or in progress from
+  any ref or old workflow revision across cutover; a legacy credential still
+  valid after the freeze; or a write already admitted before revocation but
+  delayed across governed enablement: each prevents
+  `LegacyAuthorityQuiesced/v1` finalization. The delayed write must be ordered
+  committed or rejected before the barrier and bound target snapshot, and must
+  never commit after the receipt or governed enablement;
+- either legacy mutation path rearmed after the cutover receipt, or its latch,
+  credential generation, run set, or target coordinates changing after plan or
+  decision but before the fresh pre-write read;
 - a recovered terminal failure followed by otherwise-positive live observations;
   O5 and the full oracle must remain false for that generation;
-- apply failure and served-content mismatch;
-- rollback evidence that does not bind the failed result and fresh pre-state;
+- apply failure and served-content mismatch, including a successful immutable
+  `AttemptOutcome` followed by a definitive wrong served revision: exactly one
+  terminal failed `ConvergenceOutcome` must exist and the apply outcome must not
+  be rewritten;
+- rollback evidence that does not bind the canonical apply-failure or
+  convergence-failure operand and fresh pre-state;
+- accept one operand class and then a disjoint class/target: the latter must not
+  replace or hide the former in `LatestAcceptedDesiredByOperand`; overlapping
+  contradictory keys, a missing active key, and partial multi-target expansion
+  each fail the entire scheduled run;
 - scheduled drift/readback with absent authentication, readback/API error, or
-  real drift from the exact `LatestAcceptedDesired` state/operation marker: each
-  must fail the scheduled run while emitting no decision, intent, plan, apply,
-  or mutation.
+  real drift from any entry in the exact complete
+  `LatestAcceptedDesiredByOperand` map: each must fail the scheduled run while
+  emitting no decision, intent, plan, apply, or mutation.
 
 Each control is restored and the same oracle must then return green. A check
 whose red path has not been observed is not acceptance evidence.
@@ -898,30 +1024,49 @@ The transition never runs two production mutation authorities.
    recovery takeover serialize on one arbitration resource version; a delayed
    already-admitted owner write cannot commit after recovery failure; crashes at
    every `RecoveryFencing` boundary admit a monotonic read/fence/finalize-only
-   successor; and exactly one canonical `AttemptOutcome` exists. The existing
-   scheduled readback family must also prove absent authentication, readback
-   error, and actual drift from the exact latest accepted desired state/marker
-   are red while every mutation surface is absent. Every new validator names
-   its claim and retirement trigger in the same change.
+   successor; lost/early/crashed recovery deliveries retain an at-least-once
+   wake generation; and exactly one canonical `AttemptOutcome` exists. Add the
+   successful-apply/wrong-served-revision fixture and require one failed
+   `ConvergenceOutcome` plus the exact case-(b) rollback operand without outcome
+   rewrite. Cutover fixtures hold an old-revision run queued, waiting, and
+   in-flight across the freeze and credential fence. The existing scheduled
+   readback family must also prove absent authentication, readback error, a
+   disjoint later operand acceptance, and actual drift from any active entry in
+   the complete `LatestAcceptedDesiredByOperand` map are red while every
+   mutation surface is absent. Every new validator names its claim and
+   retirement trigger in the same change.
 3. **Plan-only rehearsal.** Run the exact GFTB path with mutation disabled;
    independently verify materialization, pre-state, saved plan, controller
    refusal/acceptance semantics, and receipts. While either legacy path remains
    armed, the live decision must refuse; acceptance may be exercised only in a
    non-authoritative contract fixture. This is not a shadow controller or
    second workflow.
-4. **Fence legacy mutation authority.** Before the first governed write, a
-   protected, append-only monotonic cutover-latch receipt disables the existing
-   `repository_dispatch` apply and routine manual mutation path. Both old paths
-   consume that latch and fail closed while it is set; the governed executor
-   refuses while either old path remains armed. Every pre-latch plan or decision
-   is stale and must be regenerated with the new latch digest/epoch before the
-   canary. The disabled source may remain for comparison until parity, but it
-   has no credential or mutation authority.
+4. **Fence legacy mutation authority.** Before the first governed write, freeze
+   trigger admission for the existing `repository_dispatch` apply and routine
+   manual mutation path across every ref/revision; revoke the producer signal
+   authority; and prevent new legacy Environment approvals. Then enumerate the
+   authoritative workflow and Environment APIs until every legacy run ID is
+   terminal and none is queued, waiting, pending approval, or in progress.
+   Server-side revoke or independently expire every apply credential or
+   authorization issued to those runs, then cross an authoritative API-server
+   quiescence barrier that reports zero in-flight legacy mutations and orders
+   every pre-fence admitted request as committed or rejected. Fresh target
+   UID/resource-version/fencing-epoch readback follows that barrier. Only then
+   may the protected cutover operation finalize
+   the append-only `LegacyAuthorityQuiesced/v1` receipt and monotonic latch.
+   Asking refit clients to consume the latch, cancelling a run, or draining only
+   the current ref is insufficient because an old workflow revision can bypass
+   that source check. The governed executor refuses until the exact receipt is
+   bound through plan, decision, attempt, and fresh pre-write read. Every pre-
+   receipt plan or decision is stale and must be regenerated before the canary.
+   The disabled source may remain for comparison until parity, but it has no
+   credential or mutation authority.
 5. **Refit and prove live scheduled readback before canary.** Before the first
    governed GFTB write, refit the existing `k8s-stack-drift.yml` carrier in
    place to use protected short-lived authentication and the exact
-   `LatestAcceptedDesired` selection described in Section 5. Remove its current
-   skip-on-absent-credential and `fail_on_drift=false` behavior. Through that
+   complete `LatestAcceptedDesiredByOperand` fold described in Section 5.
+   Remove its current skip-on-absent-credential and `fail_on_drift=false`
+   behavior. Through that
    actual scheduled carrier, prove missing authentication, API/readback error,
    and a bounded real-drift fixture each fail red while no decision, intent,
    plan, apply, or mutation is emitted. If no governed accepted desired state
@@ -930,27 +1075,33 @@ The transition never runs two production mutation authorities.
    source refit and live negative proof must complete before step 6.
 6. **Governed successful canary.** After the self-dogfood and MMS prerequisite
    proofs, execute one accepted GFTB transaction through the protected identity.
-   Its accepted decision advances `LatestAcceptedDesired` to that exact full
-   desired operand and decision-derived operation marker before apply, so drift
-   remains visibly red until convergence. After its successful canonical
-   outcome, a fresh authenticated invocation of the already-refit scheduled
-   carrier must select and read back those exact values before O1-O8 can be
-   declared green. Retain this exact accepted release as the rollback target.
-7. **Create one exact failed transaction.** Execute a distinct, accepted,
-   mutation-proven canary transaction using a separately reviewed bounded
-   post-write failure fixture from the validation family in step 2. It must end
-   in its own immutable terminal failure, and its request UID/generation,
-   decision, attempt record, post-failure pre-state, and sole canonical
-   `AttemptOutcome` digest are captured as the only failed-transaction operand
-   for rollback; the fresh rollback inputs in Section 3.5 remain mandatory.
-   Expected failure is evidence, never a converged acceptance.
+   Its accepted decision updates only that operand/target key in
+   `LatestAcceptedDesiredByOperand` before apply, so drift remains visibly red
+   until convergence and every other active key stays covered. After its
+   successful canonical mutation and convergence outcomes, a fresh authenticated
+   invocation of the already-refit scheduled carrier must read the complete map
+   and those exact values before O1-O8 can be declared green. Retain this exact
+   accepted release as the rollback target.
+7. **Create one exact served-failure transaction.** Execute a distinct,
+   accepted, mutation-proven canary transaction using the separately reviewed
+   bounded wrong-served-revision fixture from step 2. It reaches an immutable
+   successful `AttemptOutcome`, then its independent credentialed O8 observation
+   produces one immutable terminal
+   `ConvergenceOutcome(ServedContentMismatch)`. Capture its request
+   UID/generation, decision, attempt and convergence records, fresh post-failure
+   pre-state, canonical `AttemptOutcome` digest, failed `ConvergenceOutcome`
+   digest, and exact observation evidence as the case-(b)
+   `RollbackFailureOperand/v1`; the apply outcome remains successful and
+   unchanged. The fresh rollback inputs in Section 3.5 remain mandatory.
+   Expected convergence failure is evidence, never a converged acceptance.
 8. **Rollback proof.** Consume exactly the failed transaction from step 7 and
    externally observe the retained successful release from step 6 through a
    fresh accepted rollback transaction. The governed rollback is the only
    enabled rollback mutation path.
 9. **Reconverge.** Execute a fresh forward transaction and require O1-O8 plus a
-   fresh scheduled readback of its exact accepted desired state/operation marker;
-   neither the failed result nor rollback result is rewritten or reused.
+   fresh scheduled readback of the complete operand-keyed accepted desired map;
+   neither the failed mutation/convergence results nor rollback result is
+   rewritten or reused.
 10. **Retire the bespoke authority.** Only after parity, exact failed-transaction
    rollback, and reconvergence evidence,
    remove producer `repository_dispatch`, bespoke signal credentials and
@@ -958,24 +1109,25 @@ The transition never runs two production mutation authorities.
    duplicate policy gates.
 11. **Continue scheduled observational enforcement.** The carrier refit and
    negative proof already completed in step 5 remain mandatory and recurring.
-   Every run reads the current exact `LatestAcceptedDesired` state/operation
-   marker, fails closed on missing authority, readback error, ambiguity, or
-   drift, and never substitutes for edge-triggered attempt/outcome/served
-   receipts. It may retire only in the same change that activates an explicitly
-   named equivalent scheduled carrier with the same latest-accepted binding,
-   authentication, fail-closed, report-only, and zero-mutation contract.
+   Every run reads every active entry in the current exact
+   `LatestAcceptedDesiredByOperand` map, fails closed on missing authority,
+   readback error, ambiguity, omitted keys, or drift, and never substitutes for
+   edge-triggered attempt/outcome/served receipts. It may retire only in the
+   same change that activates an explicitly named equivalent scheduled carrier
+   with the same complete operand-keyed binding, authentication, fail-closed,
+   report-only, and zero-mutation contract.
 
 ## 7. Existing surfaces and retirement triggers
 
 | Existing surface | Disposition | Retirement trigger |
 |---|---|---|
 | site `container-ghcr.yml` publish logic | retain build/publication, make GF-I09 the release authority | authenticated GFTB GF-I09 producer proof |
-| producer `signal-cd` / `repository_dispatch` | fence before the first governed mutation; remove after parity | cutover receipt proves old path disabled before canary; one governed successful transaction, one exact terminal failed transaction, its bound rollback, and reconvergence have immutable receipts |
+| producer `signal-cd` / `repository_dispatch` | freeze across every ref/revision and fence before the first governed mutation; remove after parity | `LegacyAuthorityQuiesced/v1` proves trigger freeze, zero queued/waiting/pending/in-progress legacy runs, credential revocation/expiry, and admitted-write quiescence before canary; one governed successful transaction, one exact terminal served-failure transaction, its bound rollback, and reconvergence have immutable receipts |
 | infra `web-stack.yml` | refit in place as the GFTB protected executor; do not clone it | accepted controller/executor contract and protected runtime proof |
-| manual `workflow_dispatch` steady-state apply | fence before the first governed mutation; retire as product mechanism | governed rollback is exercised and externally observed |
+| manual `workflow_dispatch` steady-state apply | freeze admission, drain every ref/revision, revoke/expire issued authority, and fence before the first governed mutation; retire as product mechanism | governed rollback is exercised and externally observed |
 | `Justfile` workload validation/apply entrypoints | retain as GFTB-owned verbs, split by plan/apply authority as needed | replaced only by a separately ratified GFTB owner-overlay interface |
 | `/health` probe | retain for liveness only | never promoted to served-content oracle |
-| `k8s-stack-drift.yml` | refit and prove before first governed canary; retain as mandatory authenticated, report-only, fail-closed scheduled readback of exact `LatestAcceptedDesired` state/operation marker; never a convergence loop or mutation trigger | replace only in the same change by an explicitly named equivalent scheduled carrier with the same latest-accepted binding that fails on absent authority, readback error, ambiguity, and real drift and retains zero mutation/decision authority |
+| `k8s-stack-drift.yml` | refit and prove before first governed canary; retain as mandatory authenticated, report-only, fail-closed scheduled readback of the complete `LatestAcceptedDesiredByOperand` map; never a convergence loop or mutation trigger | replace only in the same change by an explicitly named equivalent scheduled carrier with the same complete operand-keyed binding that fails on absent authority, readback error, omitted/ambiguous keys, and real drift and retains zero mutation/decision authority |
 | this spec | retire into an operator runbook and durable interface docs | #104's design is implemented, production/rollback receipts are accepted, and no mutable status remains here |
 
 Removing a superseded surface and its false documentation happens in the same
@@ -1021,21 +1173,30 @@ The following are gates, not workarounds:
   create-only run-bound attempt ownership; bounded owner lease/phase; one
   owner-publication/recovery arbitration CAS; target-commit-atomic
   UID/resource-version/fencing epochs or proved quiescence; bounded recovery
-  lease/phase and read/fence/finalize-only successor CAS; one canonical
-  create-only `AttemptOutcome`; single-use lost-result recovery; and terminal
-  GFTB receipt publication require reviewed source and runtime proof;
-- a protected monotonic cutover-latch receipt must bind through plan, decision,
-  attempt record, and fresh pre-write observation and prove both legacy mutation
-  paths fail closed before governed canary or rollback can consume an accepted
-  decision;
-- a credentialed served-content probe is required; constant `/health` cannot
-  substitute;
+  lease/phase, durable authenticated at-least-once recovery wake in the existing
+  owner lane, and read/fence/finalize-only successor CAS; one canonical
+  create-only `AttemptOutcome`; one canonical post-success
+  `ConvergenceOutcome`; the closed apply-failure/served-failure rollback-operand
+  union; single-use lost-result recovery; and terminal GFTB receipt publication
+  require reviewed source and runtime proof;
+- a protected monotonic cutover-latch and exact
+  `LegacyAuthorityQuiesced/v1` receipt must bind through plan, decision, attempt
+  record, and fresh pre-write observation. It proves trigger admission frozen
+  and zero queued/waiting/pending/in-progress legacy runs across every ref and
+  workflow revision, server-side revocation/expiry of all issued legacy
+  authority, and quiescence or rejection of every already-admitted write before
+  governed canary or rollback can consume an accepted decision;
+- a credentialed served-content probe and the canonical convergence finalizer
+  are required; constant `/health` cannot substitute, and a successful
+  `AttemptOutcome` followed by served mismatch must remain oracle-red while
+  supplying an immutable rollback-failure operand;
 - the existing scheduled drift/readback must be authenticated, report-only,
-  bind the exact latest accepted desired state/operation marker, and fail closed
-  on absent authority, readback/API error, ambiguity, and real desired/live
-  drift while carrying zero mutation or decision authority; its in-place refit
-  and live negative proof precede the first governed canary, and it may retire
-  only with an explicitly equivalent scheduled carrier;
+  bind and read every active entry in the complete
+  `LatestAcceptedDesiredByOperand` map, and fail closed on absent authority,
+  readback/API error, omitted or ambiguous keys, and real desired/live drift
+  while carrying zero mutation or decision authority; its in-place refit and
+  live negative proof precede the first governed canary, and it may retire only
+  with an explicitly equivalent scheduled carrier;
 - refusal, replay/expiry, failure isolation, rollback, and self-dogfood/MMS/GFTB
   canary order remain acceptance gates.
 
