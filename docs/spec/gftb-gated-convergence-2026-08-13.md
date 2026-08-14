@@ -19,20 +19,25 @@
   carrier but do not authorize Core, CRD, workflow, or runtime implementation.
 - **Executable edge audit:** TIN-2609 comment
   `e0e74eb9-44bf-4f2f-aed0-52fa78395e65`
-- **Full-source control-chain review:**
-  #104#pullrequestreview-4934324323. Its six findings are repaired here without
-  releasing this source or any runtime carrier.
+- **Full-source control-chain reviews:**
+  #104#pullrequestreview-4934324323 and
+  #104#pullrequestreview-4934482235, with the latter mirrored at TIN-2611
+  comment `c8b24a51-a23d-46e6-b430-c72ec9a31525`. Their six historical and
+  seven final-head findings are repaired here without releasing this source or
+  any runtime carrier.
 - **Enrolment/controller MVP ruling:** TIN-3768 comment
   `27a1616e-b8d8-4560-81d6-d1dbf6fe7145`, grounded by correction
   `48be6e96-86a8-470a-9db6-f175f58202b8`. Its original direct-identity/GF-Q17
   sketch is superseded by the projection structural authority in
-  tinyland-inc/GloriousFlywheel #1500 at exact signed head
-  `ef99e04fd59d31c42d044bd80061dbcf85b629bd`: a closed
+  tinyland-inc/GloriousFlywheel protected main at exact signed merge
+  `c885177118e6ee633f5c11223100271ffcab1e38` (#1500; reviewed source head
+  `ef99e04fd59d31c42d044bd80061dbcf85b629bd`): a closed
   `TenantOverlay.registryPullProjection` requirement, complete pre-decision
-  equality, independent post-write activation evidence, and GF-Q18. #1500 is
-  independently source-clean at #1500#pullrequestreview-4934195522 and released
-  only to the native protected queue by #1500#issuecomment-5289765539. It is not
-  runtime or activation authority. RING-0 cross-link
+  equality, independent post-write activation evidence, and GF-Q18. The final
+  protected-main receipt is #1500#issuecomment-5290087472; the automatic
+  registry-publication consequence is corrected at
+  #1500#issuecomment-5290032566. Neither source adoption nor publication is
+  runtime projection or activation authority. RING-0 cross-link
   `d96b78cd-368a-46d8-b961-9b29b93e1f88` proposes signed
   `OwnerInstallation/v2` and expiring `OwnerOverlayInstance/v1` coordinate
   sources plus executor-local custody; review
@@ -52,9 +57,8 @@ GFTB converges through the estate's existing receipt-driven, GF-gated model:
 reviewed site source
   -> immutable image + authenticated GF-I09 application release
   -> authenticated release-complete edge into the existing GFTB owner lane
-  -> create-only request publisher using the shared controller interface
-  -> owner-overlay-controller #5 typed request gate (default refusal)
-  -> GFTB owner-overlay protected materialize/check/plan
+  -> create-only immutable request generation using the shared interface
+  -> GFTB owner-overlay protected materialize/check/plan for that generation
   -> owner-overlay-controller #5: typed, exact-plan Accept | Refuse
   -> GFTB consumes the exact ImagePinReplicaFlip/v1 accepted intent
   -> separate protected GFTB apply identity
@@ -92,11 +96,15 @@ edge exists. Two existing-carrier edges must not be conflated:
 
 The GFTB plan identity invokes the same reviewed create-only publisher
 interface, then the exact-name reader verifies the object on create or
-`AlreadyExists` and emits UID plus generation. #5 emits one immutable decision;
-the separately protected apply job in the same GFTB owner lane invokes only the
-GFTB `Justfile`/owner executor. It never invokes #56 or transfers GFTB state to
-tinyland-infra. No new workflow, manual dispatch authority, or hand-created
-request is admitted.
+`AlreadyExists` and emits UID plus generation. #5 emits exactly one immutable
+terminal decision for each immutable request UID/generation. If evidence is not
+ready, that generation receives `Refuse:MaterializationPending`; later evidence
+can be considered only through a fresh request generation with a new canonical
+digest, nonce/lease, and independently derived decision. No decision is revised
+from Refuse to Accept. The separately protected apply job in the same GFTB
+owner lane invokes only the GFTB `Justfile`/owner executor. It never invokes #56
+or transfers GFTB state to tinyland-infra. No new workflow, manual dispatch
+authority, or hand-created request is admitted.
 
 The current exact #55 (`59c603467e033652097258652ad12d2bbd730986`) and
 #56 (`e57085a88cd17e9d6bf76653db301870574304c5`) heads remain incompatible
@@ -156,8 +164,11 @@ overlay remains the subordinate state, plan, apply, observe, and rollback
 executor.
 
 The no-Flux refit keeps #5 fail-closed while materialization or plan evidence
-is missing. A request may remain `Refuse: MaterializationPending` until the
-protected plan identity has produced exact, request-bound evidence. No
+is missing. An immutable request generation with missing evidence terminates in
+its own immutable `Refuse:MaterializationPending`; it never later becomes
+`Accept`. Once the protected plan identity has produced exact evidence, the
+publisher may author a fresh request generation whose new digest, UID/generation,
+nonce, lease, evidence, and decision remain distinct from the refusal. No
 application mutation is accepted merely because an image or release exists.
 
 ### 1.3 GFTB owner overlay
@@ -294,30 +305,51 @@ release that binds at least:
 A mutable tag, branch name, green workflow conclusion, or caller-authored
 `verified=true` field is not release authority.
 
-### 3.2 Materialization and plan
+### 3.2 Operand-scoped materialization and plan evidence
 
-The GFTB plan identity acquires declared OCI content by digest, independently
-checks size/hash/media/source identity, and materializes it in a private,
-bounded directory. It performs no runtime Git checkout and accepts no
-free-form executable.
+The verifier selects a closed evidence schema from the request's exact union
+member. Common fields bind the request digest and reader-observed UID/generation,
+the union tag and full operand digest, tenant, environment, policy, controller
+identity, nonce and lease epoch/expiry, pre-state fingerprint, backend identity,
+verifier identity, and protected workflow run. Every mutation-capable receipt
+also binds the exact monotonic cutover-latch digest and epoch plus the verifier's
+observation that every legacy mutation authority applicable to that operand is
+disabled. Fields belonging to another operand schema are forbidden, not
+optional decoration.
 
-The owner overlay supplies a closed adapter and exact path scope. The
-verifier-owned plan receipt binds:
+For Ring-2 `ApplicationRelease/v1` and `ImagePinReplicaFlip/v1`, the GFTB plan
+identity acquires declared OCI content by digest, independently checks
+size/hash/media/source identity, and materializes it in a private, bounded
+directory. It performs no runtime Git checkout and accepts no free-form
+executable. The owner overlay supplies a closed adapter and exact path scope.
+The Ring-2 extension to the common receipt binds:
 
-- request and release digests;
-- tenant, environment, policy digest, controller identity, nonce, and lease
-  epoch/expiry;
+- the exact GF-I09 application/overlay release digests;
 - exact materialized descriptor, payload, and owner-overlay root digests;
-- pre-state fingerprint and backend identity;
-- saved-plan artifact digest and machine-readable change summary;
+- saved-plan artifact digest and machine-readable change summary; and
 - plan identity and protected workflow run.
 
-The request does not author `verified=true`, `planDigest`, or
-`preStateFingerprint`. Protected materialization derives and records those
-observations independently before a final decision can accept.
+For Ring-1 `RegistryPullProjection/v1`, the verifier-owned evidence receipt
+instead binds only the independently signed and materialized
+`OwnerInstallation/v2` or `OwnerOverlayInstance/v1` input digest, the exact full
+projection operand, independently observed custody identity, policy and
+pre-state, and the exact `RegistryPullProjectionVerification` value/digest. A
+Ring-1 receipt must not contain a GF-I09 application/overlay release, image
+release, OCI descriptor or payload, owner-overlay release/root, application
+saved-plan, image-pin, or replica field. The concrete owner-input and custody
+shape remains source-held as stated in Section 4; this schema does not promote
+it.
 
-The saved plan is immutable and single-use. An apply must refuse if the plan,
-pre-state, decision, nonce, lease, policy, or identity no longer matches.
+The request does not author `verified=true`, `planDigest`,
+`preStateFingerprint`, verifier observations, or the cutover-latch observation.
+Protected materialization derives and records them independently before a final
+decision can accept.
+
+A Ring-2 saved plan is immutable and single-use. Ring 1 has no application
+saved-plan: its only executable authorization is the accepted full projection
+operand plus the exact verifier-owned evidence. An apply must refuse if its
+operand-specific evidence, pre-state, decision, nonce, lease, policy, identity,
+or cutover latch no longer matches.
 
 Prerequisite receipts form a closed, verifier-owned list before they enter the
 canonical binding. Their digests are sorted and unique; every receipt belongs to
@@ -328,16 +360,23 @@ receipt from another tenant is a refusal.
 
 ### 3.3 Controller decision
 
-Controller #5 validates the exact request-bound typed materialization and plan
-receipt and emits one closed decision:
+Controller #5 validates the exact request-bound, operand-scoped evidence receipt
+and emits exactly one immutable closed decision per request UID/generation:
 
-- `Accept` binds the only saved plan that the apply identity may execute; or
+- Ring-2 `Accept` binds the only saved plan that the apply identity may execute;
+- Ring-1 `Accept` binds the exact full projection operand, its verifier-owned
+  evidence, and no application saved plan; or
 - `Refuse` carries a typed reason and authorizes no mutation.
 
 Missing evidence, expiry, replay, unknown fields, digest mismatch, unexpected
 path, changed pre-state, unsafe plan semantics, or unproved credential
 projection fail closed. A newer request does not silently supersede an
-in-flight accepted transaction; lease and nonce rules serialize authority.
+in-flight accepted transaction; lease and nonce rules serialize authority. A
+`Refuse:MaterializationPending` is terminal for that request generation. Later
+materialization requires a fresh request generation and a separate decision;
+the original refusal remains append-only. Every `Accept` also binds the exact
+monotonic cutover-latch digest and epoch observed by its verifier. A changed or
+rearmed latch makes that decision ineligible for execution.
 
 For GFTB, the application release and image transition remain typed operands,
 not authority embedded in the tenant workflow. The accepted
@@ -375,30 +414,50 @@ prerequisite.
 
 ### 3.4 Protected apply
 
-Only the separate GFTB apply identity, behind the existing protected
-environment, may consume an unexpired `Accept` decision. It executes the exact
-saved plan and records:
+Only the separate operand-specific GFTB apply identity, behind the existing
+protected environment, may consume an unexpired `Accept` decision. Ring 2
+executes the exact saved plan. Ring 1 executes only the closed projection
+operand under its exact verifier evidence and resolves opaque custody only at
+the subordinate write boundary. The result records:
 
 - environment/protection approval and apply identity;
-- decision, request, plan, pre-state, and artifact digests;
+- decision, request, operand-specific evidence or plan, pre-state, artifact,
+  and cutover-latch digests/epochs;
 - apply start/end, exit classification, and post-state fingerprint;
-- exact workload image, operation marker, Deployment generation,
+- for Ring 2, the exact workload image, operation marker, Deployment generation,
   observedGeneration, desired replicas, and ready replicas;
+- for Ring 1, the exact projection operation marker and accepted projection
+  operand, without Secret bytes or a GF-I09/application-plan field;
 - immutable failure evidence when any step does not complete.
 
 No source merge, controller source green, scheduled run, or manual click may
 stand in for this terminal apply result.
 
-The apply records a durable attempt claim keyed by request UID/generation,
-accepted decision digest, saved-plan digest, and a decision-derived operation
-marker before mutation. Claim publication and independent readback are a
-precondition to write; failure to prove the claim refuses without mutation. If
-the runner is cancelled or crashes after a possible write but before result
-publication, retry never executes the saved plan again. An independent,
-read-only recovery observer uses that exact claim plus live Deployment
-UID/generation, operation marker, image, replicas, and post-state to publish the
-missing terminal outcome. Exact desired state with the decision-derived marker
-yields recovered success; exact unchanged pre-state or ambiguous/partial state
+Before mutation, the apply run atomically creates one durable attempt claim
+whose canonical name is deterministically derived from the request
+UID/generation and accepted-decision digest. The create-only claim binds the
+full operand-specific execution evidence (Ring-2 saved-plan digest or Ring-1
+projection-verification digest), decision-derived operation marker, exact
+cutover-latch digest/epoch, and the exact protected apply identity and workflow
+run ID that won creation. Authoritative-store create success is the ownership
+grant; the server-issued claim UID/generation and digest are independently read
+back. Only that exact creator identity/run may write. Every `AlreadyExists`
+path—including a retry by the same run—is read-only lost-result recovery and
+never executes the plan or projection write.
+
+Immediately before its one write, the winning run freshly reads the protected
+cutover latch and the executable enablement state of every applicable legacy
+path. It proves the bound digest/epoch is unchanged, the old paths consume the
+latch fail-closed, and every legacy authority remains disabled. Missing
+readback, a rearmed path, or any latch change invalidates the decision and
+terminates without mutation. If the winner is cancelled or crashes after a
+possible write but before result publication,
+an independent read-only recovery observer uses that exact claim plus live
+operation-marker and post-state evidence to publish the missing terminal
+outcome. For Ring 2 that includes Deployment UID/generation, image, replicas,
+and post-state; Ring 1 uses independently observed projection readback without
+recovering Secret bytes. Exact desired state with the decision-derived marker
+yields recovered success. Exact unchanged pre-state or ambiguous/partial state
 yields an immutable terminal failure and fences further mutation until a fresh
 accepted rollback or forward transaction. Recovery is result publication, not
 a second apply authority.
@@ -414,11 +473,14 @@ An apply result is not a served result. The terminal chain separately records:
 - credentialed served-content evidence through the real protected origin;
 - the source revision/build marker observed in served content.
 
-Rollback is a distinct accepted transaction. It binds a retained prior
-accepted release, fresh post-failure pre-state, a new saved rollback plan, the
-failed-result digest, fresh nonce/lease, and an externally observed served
-result. Reusing a pre-failure plan or merely reselecting an old image is not a
-rollback receipt.
+Rollback is a distinct accepted transaction and may follow only an exact
+accepted transaction whose immutable terminal result is classified failure. It
+binds that failed request UID/generation, decision, attempt-claim and terminal
+failed-result digests; a retained prior accepted release; fresh post-failure
+pre-state; a new saved rollback plan; the current cutover-latch digest/epoch;
+fresh nonce/lease; and an externally observed served result. A successful or
+merely missing result cannot be its failed-result operand. Reusing a pre-failure
+plan or merely reselecting an old image is not a rollback receipt.
 
 Attempt, refusal, outcome, served, and rollback receipts are append-only. Every
 original attempt ends in a terminal outcome receipt, including when a separate
@@ -433,8 +495,9 @@ projection as the controller's first `Accept`-consuming apply, keeps Core
 opaque, and requires GF self-dogfood first. Correction
 `48be6e96-86a8-470a-9db6-f175f58202b8` proves that the originally named
 coordinate sources do not exist. The original direct-identity/projection-Q17
-sketch is superseded by GF #1500 exact
-`ef99e04fd59d31c42d044bd80061dbcf85b629bd`. TIN-3768 proposal
+sketch is superseded by GF #1500 protected-main
+`c885177118e6ee633f5c11223100271ffcab1e38` (reviewed source
+`ef99e04fd59d31c42d044bd80061dbcf85b629bd`). TIN-3768 proposal
 `d96b78cd-368a-46d8-b961-9b29b93e1f88` supplies a coherent replacement, but
 review `fde41451-c2ae-4213-93a7-dbeefe226241` explicitly keeps that coordinate
 and custody shape pending operator ratification. This GFTB spec records the
@@ -529,11 +592,12 @@ non-atomic proof cases:
    does not count as projection proof.
 
 Rotation may revoke an old generation only after a non-executing cold-pull proof
-covers every accepted private digest in every exact target. Until the coordinate
-and custody design is ratified, the #1500 typed source is landed and consumed by
-a scoped executor, initial-bootstrap quarantine/resume is proved, and rollback
-plus independent post-write readback and non-executing cold-pull controls pass,
-GF-Q18 remains `No` and a private-image GFTB activation must refuse. GF-Q17
+covers every accepted private digest in every exact target. #1500's typed law is
+landed on protected main, but until the coordinate and custody design is
+ratified, that law is consumed by a scoped executor, initial-bootstrap
+quarantine/resume is proved, and rollback plus independent post-write readback
+and non-executing cold-pull controls pass, the GF `docs/current-state.md` GF-Q18
+answer remains `No` and a private-image GFTB activation must refuse. GF-Q17
 continues to report runner resource-envelope evidence only.
 
 ## 5. Acceptance oracle
@@ -547,7 +611,7 @@ evidence proves all of the following:
 | O2 | GF-I09 binds `S` to immutable image/release coordinates | protected producer receipt |
 | O3 | materialization and saved plan bind the exact release and pre-state | GFTB plan receipt |
 | O4 | #5 accepted that exact plan under current policy/identity/nonce/lease | controller decision receipt |
-| O5 | the protected apply identity executed that exact saved plan once, including a recovered terminal result after lost publication | attempt claim plus apply or independent recovery result receipt |
+| O5 | the protected apply identity executed that exact saved plan once and produced an explicitly successful apply outcome, or independent recovery produced an explicitly successful outcome; any terminal failure keeps O5 false for that request/generation | atomic attempt claim plus successful apply or successful independent recovery result receipt |
 | O6 | the registry independently serves the bound image digest | authenticated registry read |
 | O7 | live state carries the operation marker and caught-up generation with replicas greater than zero | cluster readback |
 | O8 | the protected served origin returns content built from `S` | credentialed served-content probe |
@@ -567,19 +631,31 @@ The oracle must preserve these known failure lessons:
 5. **Zero of zero is not healthy.** Desired replicas must be greater than zero.
 6. **Payload echo is not corroboration.** Registry, cluster, and served probes
    cannot use the request payload as their truth source.
+7. **Terminal is not synonymous with successful.** An apply or recovery result
+   classified failure remains failed forever and cannot satisfy O5 after later
+   cluster or served observations. Only a fresh accepted transaction can
+   produce a new outcome.
 
 Before the first production acceptance, mutation-proven negative controls must
 show the chain refuses or fails on:
 
 - unknown/mutable release coordinates and a bad digest;
 - stale, expired, or replayed nonce/lease;
+- an immutable `Refuse:MaterializationPending` followed by an attempted Accept
+  on the same request UID/generation rather than a fresh generation;
 - changed pre-state or a mismatched saved plan;
 - absent or operand-mismatched post-write projection activation evidence when
   private-image projection is required;
 - failure to publish/read back the attempt claim before mutation, and a crash
   after mutation but before result publication; retry must not reapply and the
   independent observer must recover a terminal result;
-- either legacy mutation path remaining armed when governed apply is enabled;
+- duplicate atomic claim creation, where exactly one protected run wins and
+  every `AlreadyExists` contender remains read-only;
+- either legacy mutation path remaining armed when governed apply is enabled,
+  or its cutover latch changing/rearming after plan or decision but before the
+  fresh pre-write read;
+- a recovered terminal failure followed by otherwise-positive live observations;
+  O5 and the full oracle must remain false for that generation;
 - apply failure and served-content mismatch;
 - rollback evidence that does not bind the failed result and fresh pre-state.
 
@@ -604,25 +680,41 @@ The transition never runs two production mutation authorities.
    its claim and retirement trigger in the same change.
 3. **Plan-only rehearsal.** Run the exact GFTB path with mutation disabled;
    independently verify materialization, pre-state, saved plan, controller
-   refusal/acceptance semantics, and receipts. This is not a shadow controller
-   or second workflow.
+   refusal/acceptance semantics, and receipts. While either legacy path remains
+   armed, the live decision must refuse; acceptance may be exercised only in a
+   non-authoritative contract fixture. This is not a shadow controller or
+   second workflow.
 4. **Fence legacy mutation authority.** Before the first governed write, a
-   protected, append-only cutover receipt disables the existing
+   protected, append-only monotonic cutover-latch receipt disables the existing
    `repository_dispatch` apply and routine manual mutation path. Both old paths
-   fail closed while the governed latch is set; the governed executor refuses
-   while either old path remains armed. The disabled source may remain for
-   comparison until parity, but it has no credential or mutation authority.
-5. **Governed canary.** After the self-dogfood and MMS prerequisite proofs,
-   execute one accepted GFTB transaction through the protected identity and
-   require O1-O8 plus negative controls.
-6. **Rollback proof.** Exercise and externally observe the retained prior
-   release through a fresh accepted rollback transaction, then reconverge.
-   The governed rollback is the only enabled rollback mutation path.
-7. **Retire the bespoke authority.** Only after parity and rollback evidence,
+   consume that latch and fail closed while it is set; the governed executor
+   refuses while either old path remains armed. Every pre-latch plan or decision
+   is stale and must be regenerated with the new latch digest/epoch before the
+   canary. The disabled source may remain for comparison until parity, but it
+   has no credential or mutation authority.
+5. **Governed successful canary.** After the self-dogfood and MMS prerequisite
+   proofs, execute one accepted GFTB transaction through the protected identity
+   and require O1-O8 plus the refusal-only negative controls. Retain this exact
+   accepted release as the rollback target.
+6. **Create one exact failed transaction.** Execute a distinct, accepted,
+   mutation-proven canary transaction using a separately reviewed bounded
+   post-write failure fixture from the validation family in step 2. It must end
+   in its own immutable terminal failure, and its request UID/generation,
+   decision, attempt claim, post-failure pre-state, and failed-result digest are
+   captured as the only rollback input. Expected failure is evidence, never a
+   converged acceptance.
+7. **Rollback proof.** Consume exactly the failed transaction from step 6 and
+   externally observe the retained successful release from step 5 through a
+   fresh accepted rollback transaction. The governed rollback is the only
+   enabled rollback mutation path.
+8. **Reconverge.** Execute a fresh forward transaction and require O1-O8 again;
+   neither the failed result nor rollback result is rewritten or reused.
+9. **Retire the bespoke authority.** Only after parity, exact failed-transaction
+   rollback, and reconvergence evidence,
    remove producer `repository_dispatch`, bespoke signal credentials and
    payload, routine manual apply, inline digest-resolution authority, and any
    duplicate policy gates.
-8. **Bound observational audit.** The existing scheduled drift surface may
+10. **Bound observational audit.** The existing scheduled drift surface may
    remain only as authenticated, report-only diagnostics. It never accepts
    intent, schedules convergence, mutates, or substitutes for the edge-triggered
    attempt/outcome/served receipts. Remove wording that makes it a standing
@@ -633,7 +725,7 @@ The transition never runs two production mutation authorities.
 | Existing surface | Disposition | Retirement trigger |
 |---|---|---|
 | site `container-ghcr.yml` publish logic | retain build/publication, make GF-I09 the release authority | authenticated GFTB GF-I09 producer proof |
-| producer `signal-cd` / `repository_dispatch` | fence before the first governed mutation; remove after parity | cutover receipt proves old path disabled before canary; one governed production transaction, negative controls, rollback, and reconvergence then have terminal receipts |
+| producer `signal-cd` / `repository_dispatch` | fence before the first governed mutation; remove after parity | cutover receipt proves old path disabled before canary; one governed successful transaction, one exact terminal failed transaction, its bound rollback, and reconvergence have immutable receipts |
 | infra `web-stack.yml` | refit in place as the GFTB protected executor; do not clone it | accepted controller/executor contract and protected runtime proof |
 | manual `workflow_dispatch` steady-state apply | fence before the first governed mutation; retire as product mechanism | governed rollback is exercised and externally observed |
 | `Justfile` workload validation/apply entrypoints | retain as GFTB-owned verbs, split by plan/apply authority as needed | replaced only by a separately ratified GFTB owner-overlay interface |
@@ -666,21 +758,26 @@ The following are gates, not workarounds:
   release-complete event contract into its existing owner lane, closed
   owner-overlay adapter, or GFTB-owned protected executor described here. It
   never invokes #56 for GFTB state;
-- GF #1500 exact `ef99e04f` is the source-released typed authority for the
-  closed overlay requirement, pre-decision verification/Accept boundary,
-  post-write activation evidence, and GF-Q18. Protected-source adoption requires
-  a successful native merge-group and fresh protected-main receipt; neither
-  source green nor merge is runtime proof. Its concrete path must be joined by
+- GF #1500 protected-main `c885177118e6ee633f5c11223100271ffcab1e38` is the
+  final typed authority for the closed overlay requirement, pre-decision
+  verification/Accept boundary, post-write activation evidence, and GF-Q18.
+  Its exact reviewed source is `ef99e04f`; the
+  terminal merge-group/fresh-main carrier is
+  #1500#issuecomment-5290087472. Automatic registry publication is recorded by
+  #1500#issuecomment-5290032566 and is not deployment or runtime proof. Its
+  concrete path must be joined by
   an explicit operator carrier for the proposed signed
   `OwnerInstallation/v2` / expiring `OwnerOverlayInstance/v1` coordinates and
   executor-local custody. Initial-bootstrap quarantine/resume and non-executing
   cold-pull proof must land on the GF/controller carriers rather than being
   reimplemented here;
-- protected plan/apply identities, durable pre-write attempt-claim readback,
-  single-use lost-result recovery, and terminal GFTB receipt publication require
-  reviewed source and runtime proof;
-- a protected cutover receipt must prove both legacy mutation paths fail closed
-  before governed canary or rollback can consume an accepted decision;
+- protected plan/apply identities, atomic create-only run-bound attempt-claim
+  acquisition/readback, single-use lost-result recovery, and terminal GFTB
+  receipt publication require reviewed source and runtime proof;
+- a protected monotonic cutover-latch receipt must bind through plan, decision,
+  attempt claim, and fresh pre-write observation and prove both legacy mutation
+  paths fail closed before governed canary or rollback can consume an accepted
+  decision;
 - a credentialed served-content probe is required; constant `/health` cannot
   substitute;
 - refusal, replay/expiry, failure isolation, rollback, and self-dogfood/MMS/GFTB
@@ -706,12 +803,13 @@ GFTB's full-stack requirements from the reusable GF product.
   constraints
 - TIN-3578 — executable GF-gated production-convergence contract
 - TIN-3768 — first-class pull-credential projection
-- tinyland-inc/GloriousFlywheel #1500 exact
-  `ef99e04fd59d31c42d044bd80061dbcf85b629bd` — GF-Q18 typed projection source:
+- tinyland-inc/GloriousFlywheel #1500 protected-main
+  `c885177118e6ee633f5c11223100271ffcab1e38` — GF-Q18 typed projection law:
   closed overlay requirement, pre-decision authorization, and independent
-  post-write activation evidence; exact-head clean review
-  #1500#pullrequestreview-4934195522 and source-release carrier
-  #1500#issuecomment-5289765539
+  post-write activation evidence; reviewed source `ef99e04f`, exact-head clean
+  review #1500#pullrequestreview-4934195522, protected-main terminal carrier
+  #1500#issuecomment-5290087472, and publication-truth correction
+  #1500#issuecomment-5290032566
 - TIN-3768 `d96b78cd-368a-46d8-b961-9b29b93e1f88` — source-held opaque-custody
   and signed stable/preview coordinate proposal
 - TIN-3768 `fde41451-c2ae-4213-93a7-dbeefe226241` — explicit ratification hold
