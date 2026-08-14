@@ -21,10 +21,11 @@
   `e0e74eb9-44bf-4f2f-aed0-52fa78395e65`
 - **Full-source control-chain reviews:**
   #104#pullrequestreview-4934324323 and
-  #104#pullrequestreview-4934482235, with the latter mirrored at TIN-2611
-  comment `c8b24a51-a23d-46e6-b430-c72ec9a31525`. Their six historical and
-  seven final-head findings are repaired here without releasing this source or
-  any runtime carrier.
+  #104#pullrequestreview-4934482235, plus the recovery/lifecycle re-review
+  #104#pullrequestreview-4934718957 mirrored at TIN-2611 comment
+  `181b9caf-8d65-4075-8fe9-9bee4c05c13a`. Their six historical, seven
+  full-source, and two surviving interleaving findings are repaired here without
+  releasing this source or any runtime carrier.
 - **Enrolment/controller MVP ruling:** TIN-3768 comment
   `27a1616e-b8d8-4560-81d6-d1dbf6fe7145`, grounded by correction
   `48be6e96-86a8-470a-9db6-f175f58202b8`. Its original direct-identity/GF-Q17
@@ -96,15 +97,16 @@ edge exists. Two existing-carrier edges must not be conflated:
 
 The GFTB plan identity invokes the same reviewed create-only publisher
 interface, then the exact-name reader verifies the object on create or
-`AlreadyExists` and emits UID plus generation. #5 emits exactly one immutable
-terminal decision for each immutable request UID/generation. If evidence is not
-ready, that generation receives `Refuse:MaterializationPending`; later evidence
-can be considered only through a fresh request generation with a new canonical
-digest, nonce/lease, and independently derived decision. No decision is revised
-from Refuse to Accept. The separately protected apply job in the same GFTB
-owner lane invokes only the GFTB `Justfile`/owner executor. It never invokes #56
-or transfers GFTB state to tinyland-infra. No new workflow, manual dispatch
-authority, or hand-created request is admitted.
+`AlreadyExists` and emits UID plus generation. While exact evidence for that
+server identity is absent, #5 records `MaterializationPending` only as a
+non-authorizing, non-decision deferred condition and requeues the same request
+generation. It creates no immutable decision or intent. Once exact evidence is
+available—or bounded expiry or malformed evidence makes refusal final—#5
+atomically emits exactly one immutable final `Accept | Refuse` for that same
+UID/generation. A final decision is never revised. The separately protected
+apply job in the same GFTB owner lane invokes only the GFTB `Justfile`/owner
+executor. It never invokes #56 or transfers GFTB state to tinyland-infra. No new
+workflow, manual dispatch authority, or hand-created request is admitted.
 
 The current exact #55 (`59c603467e033652097258652ad12d2bbd730986`) and
 #56 (`e57085a88cd17e9d6bf76653db301870574304c5`) heads remain incompatible
@@ -164,12 +166,16 @@ overlay remains the subordinate state, plan, apply, observe, and rollback
 executor.
 
 The no-Flux refit keeps #5 fail-closed while materialization or plan evidence
-is missing. An immutable request generation with missing evidence terminates in
-its own immutable `Refuse:MaterializationPending`; it never later becomes
-`Accept`. Once the protected plan identity has produced exact evidence, the
-publisher may author a fresh request generation whose new digest, UID/generation,
-nonce, lease, evidence, and decision remain distinct from the refusal. No
-application mutation is accepted merely because an image or release exists.
+is missing. `MaterializationPending` is a controller-owned deferred observation,
+not a decision variant, receipt, intent, or executor input. It carries the exact
+request UID/generation, last-observed time, retry count, and bounded
+materialization deadline; it authorizes nothing and may be refreshed only while
+no final decision exists. The protected plan identity can therefore publish
+exact evidence bound to the already-known server UID/generation, after which #5
+emits the generation's one immutable final decision. Malformed evidence refuses
+immediately; continued absence refuses when the bounded request/lease deadline
+expires. No application mutation is accepted merely because an image or release
+exists.
 
 ### 1.3 GFTB owner overlay
 
@@ -361,22 +367,39 @@ receipt from another tenant is a refusal.
 ### 3.3 Controller decision
 
 Controller #5 validates the exact request-bound, operand-scoped evidence receipt
-and emits exactly one immutable closed decision per request UID/generation:
+and emits exactly one immutable **final** closed decision per request
+UID/generation:
 
 - Ring-2 `Accept` binds the only saved plan that the apply identity may execute;
 - Ring-1 `Accept` binds the exact full projection operand, its verifier-owned
   evidence, and no application saved plan; or
 - `Refuse` carries a typed reason and authorizes no mutation.
 
-Missing evidence, expiry, replay, unknown fields, digest mismatch, unexpected
-path, changed pre-state, unsafe plan semantics, or unproved credential
-projection fail closed. A newer request does not silently supersede an
-in-flight accepted transaction; lease and nonce rules serialize authority. A
-`Refuse:MaterializationPending` is terminal for that request generation. Later
-materialization requires a fresh request generation and a separate decision;
-the original refusal remains append-only. Every `Accept` also binds the exact
-monotonic cutover-latch digest and epoch observed by its verifier. A changed or
-rearmed latch makes that decision ineligible for execution.
+Decision lifecycle is closed and race-independent:
+
+1. After create/read establishes the server UID/generation, absent evidence
+   before the bounded deadline records or refreshes only the non-authorizing
+   `MaterializationPending` condition and schedules a bounded requeue. No final
+   decision object, immutable intent, refusal receipt, or nonce consumption is
+   created.
+2. Exact evidence arriving before expiry is validated against that same
+   UID/generation. Complete matching evidence may produce `Accept`; complete
+   but mismatched, unsafe, replayed, or policy-invalid evidence produces a typed
+   terminal `Refuse`.
+3. Structurally malformed or unknown evidence produces a typed terminal
+   `Refuse` immediately. Continued absence at the request/lease deadline
+   produces a typed terminal expiry `Refuse`; pending is never unbounded.
+4. The canonical final-decision name is derived from request UID/generation and
+   is created atomically. Every later reconciliation reads the existing final
+   object and is non-authoring. Late evidence cannot create a second decision or
+   revise an expiry/malformed refusal.
+
+A newer independent source event does not silently supersede an in-flight
+accepted transaction; lease and nonce rules serialize authority. It is not a
+recovery workaround for normal same-generation materialization. Every `Accept`
+also binds the exact monotonic cutover-latch digest and epoch observed by its
+verifier. A changed or rearmed latch makes that decision ineligible for
+execution.
 
 For GFTB, the application release and image transition remain typed operands,
 not authority embedded in the tenant workflow. The accepted
@@ -439,28 +462,53 @@ UID/generation and accepted-decision digest. The create-only claim binds the
 full operand-specific execution evidence (Ring-2 saved-plan digest or Ring-1
 projection-verification digest), decision-derived operation marker, exact
 cutover-latch digest/epoch, and the exact protected apply identity and workflow
-run ID that won creation. Authoritative-store create success is the ownership
-grant; the server-issued claim UID/generation and digest are independently read
-back. Only that exact creator identity/run may write. Every `AlreadyExists`
-path—including a retry by the same run—is read-only lost-result recovery and
-never executes the plan or projection write.
+run ID that won creation. It also binds a bounded owner lease epoch/deadline and
+a closed monotonic phase machine: `Claimed` -> `PreWrite` -> `WriteIssued` ->
+`ResultPublished`. The decision lease bounds the owner lease; only the exact
+winner may renew it or advance phase, using atomic compare-and-swap while the
+independently observed workflow run remains active. Phase never moves backward,
+and an expired or independently terminal owner can never renew or resume its
+lease.
 
-Immediately before its one write, the winning run freshly reads the protected
-cutover latch and the executable enablement state of every applicable legacy
-path. It proves the bound digest/epoch is unchanged, the old paths consume the
-latch fail-closed, and every legacy authority remains disabled. Missing
-readback, a rearmed path, or any latch change invalidates the decision and
-terminates without mutation. If the winner is cancelled or crashes after a
-possible write but before result publication,
-an independent read-only recovery observer uses that exact claim plus live
-operation-marker and post-state evidence to publish the missing terminal
-outcome. For Ring 2 that includes Deployment UID/generation, image, replicas,
-and post-state; Ring 1 uses independently observed projection readback without
-recovering Secret bytes. Exact desired state with the decision-derived marker
-yields recovered success. Exact unchanged pre-state or ambiguous/partial state
-yields an immutable terminal failure and fences further mutation until a fresh
-accepted rollback or forward transaction. Recovery is result publication, not
-a second apply authority.
+Authoritative-store create success is the ownership grant; the server-issued
+claim UID/generation, digest, owner lease, and phase are independently read back.
+An `AlreadyExists` contender is initially observation-only. It may not classify
+unchanged pre-state, publish an outcome, or acquire recovery while the exact
+owner run is active with an unexpired lease. Recovery eligibility requires all
+of: no terminal outcome; independent proof that the original workflow run is
+terminal **or** its bounded owner lease is expired; exact readback of the latest
+owner phase; and the same decision, operation marker, and post-state bindings.
+
+An eligible recovery contender must atomically create the one canonical
+recovery-finalization claim for the attempt. That create-only claim binds the
+original owner/run, last owner phase and lease epoch/deadline, termination or
+expiry proof, recovery identity/run, and a new fencing epoch. Exactly one
+recovery contender can win; every `AlreadyExists` recovery contender reads the
+winner and remains observation-only. Creation immediately and permanently
+removes the original winner's write authority. Recovery never executes the
+saved plan or projection write.
+
+Immediately before its one mutation, the original winner must atomically enter
+`WriteIssued` and freshly prove all of the following: its owner lease remains
+unexpired; its exact identity/run and fencing epoch still own the attempt; no
+recovery-finalization claim or terminal outcome exists; the cutover-latch
+digest/epoch is unchanged; the executable legacy paths consume the latch
+fail-closed; and every legacy authority remains disabled. The protected write
+boundary validates that same current fencing epoch. A pause, expiry, owner-run
+termination, recovery takeover, phase mismatch, missing readback, rearmed path,
+or latch change denies the write. A slow original winner that resumes after
+recovery therefore cannot mutate.
+
+After a possible write but missing result publication, only the exact recovery
+finalization winner uses the attempt claim, last phase, and live operation-marker
+and post-state evidence to publish the terminal outcome. For Ring 2 that
+includes Deployment UID/generation, image, replicas, and post-state; Ring 1 uses
+independently observed projection readback without recovering Secret bytes.
+Exact desired state with the decision-derived marker yields recovered success.
+Exact unchanged pre-state or ambiguous/partial state yields an immutable
+terminal failure and fences further mutation until a fresh accepted rollback or
+forward transaction. Recovery is result publication, not a second apply
+authority.
 
 ### 3.5 Observe, serve, and rollback
 
@@ -611,7 +659,7 @@ evidence proves all of the following:
 | O2 | GF-I09 binds `S` to immutable image/release coordinates | protected producer receipt |
 | O3 | materialization and saved plan bind the exact release and pre-state | GFTB plan receipt |
 | O4 | #5 accepted that exact plan under current policy/identity/nonce/lease | controller decision receipt |
-| O5 | the protected apply identity executed that exact saved plan once and produced an explicitly successful apply outcome, or independent recovery produced an explicitly successful outcome; any terminal failure keeps O5 false for that request/generation | atomic attempt claim plus successful apply or successful independent recovery result receipt |
+| O5 | the protected apply identity executed that exact saved plan once and produced an explicitly successful apply outcome, or the sole atomically fenced recovery finalizer produced an explicitly successful outcome after proven owner termination/expiry; any terminal failure keeps O5 false for that request/generation | atomic attempt/owner-phase/recovery-finalization claims plus successful apply or successful independent recovery result receipt |
 | O6 | the registry independently serves the bound image digest | authenticated registry read |
 | O7 | live state carries the operation marker and caught-up generation with replicas greater than zero | cluster readback |
 | O8 | the protected served origin returns content built from `S` | credentialed served-content probe |
@@ -641,16 +689,24 @@ show the chain refuses or fails on:
 
 - unknown/mutable release coordinates and a bad digest;
 - stale, expired, or replayed nonce/lease;
-- an immutable `Refuse:MaterializationPending` followed by an attempted Accept
-  on the same request UID/generation rather than a fresh generation;
+- absent materialization evidence: it must create a non-authorizing pending
+  condition and **no final decision**, then later exact evidence must create
+  exactly one final decision for the same request UID/generation;
+- malformed evidence or bounded pending expiry: each must create exactly one
+  terminal `Refuse`, and late evidence must not create or revise a decision;
 - changed pre-state or a mismatched saved plan;
 - absent or operand-mismatched post-write projection activation evidence when
   private-image projection is required;
 - failure to publish/read back the attempt claim before mutation, and a crash
   after mutation but before result publication; retry must not reapply and the
   independent observer must recover a terminal result;
-- duplicate atomic claim creation, where exactly one protected run wins and
-  every `AlreadyExists` contender remains read-only;
+- duplicate atomic claim creation, where exactly one protected run wins and an
+  `AlreadyExists` contender cannot finalize recovery while that owner run is
+  merely slow but active with an unexpired lease;
+- owner termination/lease expiry with concurrent recovery contenders: exactly
+  one recovery-finalization claim wins, every other contender remains read-only,
+  and a late-resuming original owner must fail the final phase/fencing-epoch
+  check before mutation;
 - either legacy mutation path remaining armed when governed apply is enabled,
   or its cutover latch changing/rearming after plan or decision but before the
   fresh pre-write read;
@@ -676,8 +732,14 @@ The transition never runs two production mutation authorities.
    static plan kubeconfig. Source green is not runtime acceptance.
 2. **Refit tests and contracts in place.** Extend existing validation families
    with fixtures for release, plan, decision, terminal result, replay, refusal,
-   lost-result recovery, served-content, and rollback. Every new validator names
-   its claim and retirement trigger in the same change.
+   lost-result recovery, served-content, and rollback. The decision lifecycle
+   fixtures must prove pending creates no final object, exact later evidence
+   creates one final decision on the same generation, and malformed/expired
+   paths create one immutable refusal. Recovery interleavings must prove a slow
+   live owner excludes recovery, one finalizer wins after proven termination or
+   lease expiry, and a resumed original owner cannot pass the final write fence.
+   Every new validator names its claim and retirement trigger in the same
+   change.
 3. **Plan-only rehearsal.** Run the exact GFTB path with mutation disabled;
    independently verify materialization, pre-state, saved plan, controller
    refusal/acceptance semantics, and receipts. While either legacy path remains
@@ -771,9 +833,11 @@ The following are gates, not workarounds:
   executor-local custody. Initial-bootstrap quarantine/resume and non-executing
   cold-pull proof must land on the GF/controller carriers rather than being
   reimplemented here;
-- protected plan/apply identities, atomic create-only run-bound attempt-claim
-  acquisition/readback, single-use lost-result recovery, and terminal GFTB
-  receipt publication require reviewed source and runtime proof;
+- protected plan/apply identities, same-generation pending-to-final decision
+  lifecycle, atomic create-only run-bound attempt ownership, bounded owner
+  lease/phase, atomic recovery-finalization, final write fencing, single-use
+  lost-result recovery, and terminal GFTB receipt publication require reviewed
+  source and runtime proof;
 - a protected monotonic cutover-latch receipt must bind through plan, decision,
   attempt claim, and fresh pre-write observation and prove both legacy mutation
   paths fail closed before governed canary or rollback can consume an accepted
