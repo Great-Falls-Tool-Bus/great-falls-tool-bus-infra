@@ -9,8 +9,14 @@ set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 # tooling no longer assumes a sibling checkout for the #ci devshell.
 gf_core := env_var_or_default("GF_CORE_PATH", "../GloriousFlywheel")
 gf_core_ci := env_var_or_default("GF_CORE_CI_PATH", "github:tinyland-inc/GloriousFlywheel/2281b576bce0e8dd776a047b84e7464f5b508a62#ci")
+gf_core_sha := "2281b576bce0e8dd776a047b84e7464f5b508a62"
+arc_core_default := "../GloriousFlywheel-arc-df510"
+arc_core_sha := "df510574d17b85e7f15470caf3574fcabc4768f1"
+arc_core_ci_default := "github:tinyland-inc/GloriousFlywheel/df510574d17b85e7f15470caf3574fcabc4768f1#ci"
 arc_tfvars := "tofu/stacks/arc-runners/great-falls-tool-bus.tfvars"
-arc_backend := env_var_or_default("ARC_BACKEND", "tofu/backend/honey.s3.hcl")
+arc_backend_default := "tofu/backend/honey.s3.hcl"
+arc_cluster_uid := "cc121476-7a95-4b24-aa61-79d1f45713bd"
+arc_target_uid := "c768fdd2-e76f-4fbf-bc39-922430fedbb6"
 
 default:
     @just --list
@@ -85,23 +91,59 @@ changelog:
 changelog-preview:
     git-cliff --unreleased
 
-enrollment-preflight:
-    python3 "{{ gf_core }}/scripts/implementation-overlay-preflight.py" --overlay-root . --tfvars {{ arc_tfvars }} --repo Great-Falls-Tool-Bus/great-falls-tool-bus-infra
+enrollment-preflight: _reviewed-implementation-core _arc-kubeconfig-contract
+    #!/usr/bin/env bash
+    set -euo pipefail
+    core="${GF_CORE_PATH:-../GloriousFlywheel}"
+    KUBECONFIG="${GFTB_ARC_KUBECONFIG}" python3 "${core}/scripts/implementation-overlay-preflight.py" --overlay-root . --tfvars {{ arc_tfvars }} --repo Great-Falls-Tool-Bus/great-falls-tool-bus-infra | python3 -I -c 'import sys; text=sys.stdin.read(); print(text.replace("`just arc-app-secret-dry-run`, then `just arc-app-secret-apply`.", "`GFTB_APPLY_CONFIRM=apply just arc-app-secret-apply` (the secret-printing dry-run is retired)."), end="")'
 
-enrollment-preflight-strict:
-    python3 "{{ gf_core }}/scripts/implementation-overlay-preflight.py" --overlay-root . --tfvars {{ arc_tfvars }} --repo Great-Falls-Tool-Bus/great-falls-tool-bus-infra --strict
+enrollment-preflight-strict: _reviewed-implementation-core _arc-kubeconfig-contract
+    #!/usr/bin/env bash
+    set -euo pipefail
+    core="${GF_CORE_PATH:-../GloriousFlywheel}"
+    KUBECONFIG="${GFTB_ARC_KUBECONFIG}" python3 "${core}/scripts/implementation-overlay-preflight.py" --overlay-root . --tfvars {{ arc_tfvars }} --repo Great-Falls-Tool-Bus/great-falls-tool-bus-infra --strict | python3 -I -c 'import sys; text=sys.stdin.read(); print(text.replace("`just arc-app-secret-dry-run`, then `just arc-app-secret-apply`.", "`GFTB_APPLY_CONFIRM=apply just arc-app-secret-apply` (the secret-printing dry-run is retired)."), end="")'
 
 _arc-app-secret-inputs:
-    test -n "${GITHUB_APP_ID:-}" || { echo "Set GITHUB_APP_ID"; exit 1; }
-    test -n "${GITHUB_APP_INSTALLATION_ID:-}" || { echo "Set GITHUB_APP_INSTALLATION_ID"; exit 1; }
-    test -n "${GITHUB_APP_PRIVATE_KEY_PATH:-}" || { echo "Set GITHUB_APP_PRIVATE_KEY_PATH"; exit 1; }
-    test -f "${GITHUB_APP_PRIVATE_KEY_PATH}"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${GITHUB_APP_ID:?Set GITHUB_APP_ID}"
+    : "${GITHUB_APP_INSTALLATION_ID:?Set GITHUB_APP_INSTALLATION_ID}"
+    : "${GITHUB_APP_PRIVATE_KEY_PATH:?Set GITHUB_APP_PRIVATE_KEY_PATH}"
+    [[ "${GITHUB_APP_ID}" =~ ^[1-9][0-9]*$ ]] || { echo "GITHUB_APP_ID must be a positive decimal integer" >&2; exit 2; }
+    [[ "${GITHUB_APP_INSTALLATION_ID}" =~ ^[1-9][0-9]*$ ]] || { echo "GITHUB_APP_INSTALLATION_ID must be a positive decimal integer" >&2; exit 2; }
+    python3 -I - "${GITHUB_APP_PRIVATE_KEY_PATH}" "$(git rev-parse --show-toplevel)" <<'PY'
+    import os
+    import stat
+    import sys
+    from pathlib import Path
 
-arc-app-secret-dry-run: _arc-app-secret-inputs
-    bash "{{ gf_core }}/scripts/implementation-overlay-arc-secret.sh" --overlay-root . --dry-run
+    path = Path(sys.argv[1]).expanduser().resolve(strict=True)
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("GITHUB_APP_PRIVATE_KEY_PATH must remain outside the public repository")
+    metadata = path.stat()
+    if not path.is_file() or metadata.st_uid != os.getuid():
+        raise SystemExit("GITHUB_APP_PRIVATE_KEY_PATH must be a regular file owned by the operator")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise SystemExit("GITHUB_APP_PRIVATE_KEY_PATH must have mode 0600")
+    value = path.read_text(encoding="utf-8")
+    if "-----BEGIN" not in value or "PRIVATE KEY-----" not in value or "-----END" not in value:
+        raise SystemExit("GITHUB_APP_PRIVATE_KEY_PATH is not a PEM private key")
+    PY
+    command -v openssl >/dev/null || { echo "openssl is required to validate the GitHub App private key" >&2; exit 2; }
+    openssl pkey -check -noout -in "${GITHUB_APP_PRIVATE_KEY_PATH}" >/dev/null 2>&1 || { echo "GITHUB_APP_PRIVATE_KEY_PATH is not a valid private key" >&2; exit 2; }
 
-arc-app-secret-apply: _arc-app-secret-inputs
-    bash "{{ gf_core }}/scripts/implementation-overlay-arc-secret.sh" --overlay-root . --apply
+# A Secret dry-run would print the private key as base64 YAML. There is no
+# reviewable public diff, so only the guarded attended apply remains.
+arc-app-secret-apply: _arc-app-secret-inputs _reviewed-clean-main _reviewed-implementation-core _arc-kubeconfig-contract _operator-apply-confirm
+    #!/usr/bin/env bash
+    set -euo pipefail
+    core="${GF_CORE_PATH:-../GloriousFlywheel}"
+    KUBECONFIG="${GFTB_ARC_KUBECONFIG}" bash "${core}/scripts/implementation-overlay-arc-secret.sh" --overlay-root . --apply
 
 # No --allow-repo-registration-anchor: this org overlay registers ARC at the
 # ORG scope, so a repo-scoped github_config_url is a contract violation here
@@ -140,9 +182,11 @@ flywheel-enroll repo="Great-Falls-Tool-Bus/great-falls-tool-bus.github.io":
     @GF_CORE_PATH="{{ gf_core }}" bash scripts/flywheel-enroll-verify.sh "{{ repo }}"
     @echo ""
     @echo "Runner provisioning is operator-gated. To provision/update the scale set:"
-    @echo "  just arc-enrollment-plan   # enrollment-preflight + arc-init + arc-plan"
+    @echo "  GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-enrollment-plan"
     @echo "  just arc-plan-show         # review the plan (expect no unexpected destroys)"
-    @echo "  just arc-apply             # destroy-checked, ALLOW_ARC_DESTROY-gated"
+    @echo "  just arc-plan-scope-check  # exact 4/8Gi -> 8/16Gi plan only"
+    @echo "  GFTB_APPLY_CONFIRM=apply GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-apply"
+    @echo "  GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-capacity-readback"
     @echo "This umbrella does NOT mutate the cluster."
 
 # GloriousFlywheel org-tenancy cache-backed Bazel proof (TIN-2364 pre-soak
@@ -170,70 +214,860 @@ arc-fmt-check:
         nix develop "{{ gf_core_ci }}" -c tofu fmt -check {{ arc_tfvars }}
     fi
 
-arc-validate:
+arc-validate: _reviewed-arc-core _arc-tofu-environment-contract
     #!/usr/bin/env bash
     set -euo pipefail
-    test -d "{{ gf_core }}/tofu/stacks/arc-runners"
+    core="${GF_ARC_CORE_PATH:-{{ arc_core_default }}}"
+    core_ci="${GF_ARC_CORE_CI_PATH:-{{ arc_core_ci_default }}}"
+    test -d "${core}/tofu/stacks/arc-runners"
     tf_data_dir="$(mktemp -d -t great-falls-tool-bus-infra-tofu-data.XXXXXX)"
     trap 'rm -rf "${tf_data_dir}"' EXIT
-    nix develop "{{ gf_core_ci }}" -c bash -lc 'cd "{{ gf_core }}/tofu/stacks/arc-runners" && TF_DATA_DIR="'"${tf_data_dir}"'" tofu init -backend=false >/tmp/great-falls-tool-bus-infra-arc-init.log && TF_DATA_DIR="'"${tf_data_dir}"'" tofu validate'
+    TF_CLI_CONFIG_FILE=/dev/null TF_DATA_DIR="${tf_data_dir}" nix develop "${core_ci}" -c tofu -chdir="${core}/tofu/stacks/arc-runners" init -backend=false -input=false -lockfile=readonly >/dev/null
+    TF_CLI_CONFIG_FILE=/dev/null TF_DATA_DIR="${tf_data_dir}" nix develop "${core_ci}" -c tofu -chdir="${core}/tofu/stacks/arc-runners" validate
 
-arc-init:
+arc-init: _reviewed-arc-core _arc-exclusive-confirm _arc-backend-contract _arc-runtime-contract _arc-artifact-root-contract
     #!/usr/bin/env bash
     set -euo pipefail
-    backend="{{ arc_backend }}"
+    core="${GF_ARC_CORE_PATH:-{{ arc_core_default }}}"
+    core_ci="${GF_ARC_CORE_CI_PATH:-{{ arc_core_ci_default }}}"
+    kubeconfig="${GFTB_ARC_KUBECONFIG:?Set GFTB_ARC_KUBECONFIG to the reviewed ARC kubeconfig}"
+    data_dir="$(pwd)/.tofu-plans/arc-runners.tfdata"
+    if [[ ! -e "${data_dir}" && ! -L "${data_dir}" ]]; then
+        mkdir -m 700 "${data_dir}"
+    fi
+    [[ -d "${data_dir}" && ! -L "${data_dir}" ]] || { echo "ARC TF_DATA_DIR must be a real directory" >&2; exit 2; }
+    backend="${ARC_BACKEND:-{{ arc_backend_default }}}"
     test -f "${backend}"
     if [[ "${backend}" != /* ]]; then
         backend="$(pwd)/${backend}"
     fi
-    nix develop "{{ gf_core_ci }}" -c tofu -chdir="{{ gf_core }}/tofu/stacks/arc-runners" init -reconfigure -backend-config="${backend}"
+    TF_CLI_CONFIG_FILE=/dev/null TF_VAR_k8s_config_path="${kubeconfig}" TF_DATA_DIR="${data_dir}" nix develop "${core_ci}" -c tofu -chdir="${core}/tofu/stacks/arc-runners" init -reconfigure -input=false -lockfile=readonly -backend-config="${backend}"
+    workspace="$(TF_CLI_CONFIG_FILE=/dev/null TF_VAR_k8s_config_path="${kubeconfig}" TF_DATA_DIR="${data_dir}" nix develop "${core_ci}" -c tofu -chdir="${core}/tofu/stacks/arc-runners" workspace show)"
+    [[ "${workspace}" == "default" ]] || { echo "ARC state must use the default workspace, observed ${workspace}" >&2; exit 2; }
 
-arc-plan:
-    mkdir -p .tofu-plans
-    nix develop "{{ gf_core_ci }}" -c tofu -chdir="{{ gf_core }}/tofu/stacks/arc-runners" plan -var-file="$(pwd)/{{ arc_tfvars }}" -out="$(pwd)/.tofu-plans/arc-runners.tfplan"
-
-arc-plan-show:
-    test -f .tofu-plans/arc-runners.tfplan
-    nix develop "{{ gf_core_ci }}" -c tofu -chdir="{{ gf_core }}/tofu/stacks/arc-runners" show -no-color "$(pwd)/.tofu-plans/arc-runners.tfplan"
-
-_arc-plan-json:
-    test -f .tofu-plans/arc-runners.tfplan
-    nix develop "{{ gf_core_ci }}" -c tofu -chdir="{{ gf_core }}/tofu/stacks/arc-runners" show -json "$(pwd)/.tofu-plans/arc-runners.tfplan" > .tofu-plans/arc-runners.tfplan.json
-
-arc-plan-destroy-check:
+arc-plan: _reviewed-clean-main _reviewed-arc-core _arc-exclusive-confirm _arc-plan-input-snapshot arc-init
     #!/usr/bin/env bash
     set -euo pipefail
+    core="${GF_ARC_CORE_PATH:-{{ arc_core_default }}}"
+    core_ci="${GF_ARC_CORE_CI_PATH:-{{ arc_core_ci_default }}}"
+    kubeconfig="${GFTB_ARC_KUBECONFIG:?Set GFTB_ARC_KUBECONFIG to the reviewed ARC kubeconfig}"
+    data_dir="$(pwd)/.tofu-plans/arc-runners.tfdata"
+    backend="${ARC_BACKEND:-{{ arc_backend_default }}}"
+    if [[ "${backend}" != /* ]]; then
+        backend="$(pwd)/${backend}"
+    fi
+    umask 077
+    just _arc-artifact-root-contract
+    test -f .tofu-plans/arc-runners.source-sha
+    test -f .tofu-plans/arc-runners.core-sha
+    test -f .tofu-plans/arc-runners.backend-blob
+    test -f .tofu-plans/arc-runners.kubeconfig-blob
+    test -f .tofu-plans/arc-runners.cluster-uid
+    test -f .tofu-plans/arc-runners.target-uid
+    check_inputs() {
+        [[ -z "$(git status --porcelain)" ]] || { echo "Infra worktree changed after ARC input snapshot" >&2; exit 2; }
+        [[ -z "$(git -C "${core}" status --porcelain)" ]] || { echo "ARC core changed after input snapshot" >&2; exit 2; }
+        test "$(git rev-parse HEAD)" = "$(tr -d '\n' < .tofu-plans/arc-runners.source-sha)" || { echo "Infra revision changed after ARC input snapshot" >&2; exit 2; }
+        test "$(git -C "${core}" rev-parse HEAD)" = "$(tr -d '\n' < .tofu-plans/arc-runners.core-sha)" || { echo "ARC core revision changed after input snapshot" >&2; exit 2; }
+        test "$(python3 -I -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${backend}")" = "$(tr -d '\n' < .tofu-plans/arc-runners.backend-blob)" || { echo "ARC backend changed after input snapshot" >&2; exit 2; }
+        test "$(python3 -I -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${kubeconfig}")" = "$(tr -d '\n' < .tofu-plans/arc-runners.kubeconfig-blob)" || { echo "ARC kubeconfig changed after input snapshot" >&2; exit 2; }
+        cluster_uid="$(kubectl --kubeconfig "${kubeconfig}" --context honey get namespace kube-system -o jsonpath='{.metadata.uid}')"
+        test "${cluster_uid}" = "$(tr -d '\n' < .tofu-plans/arc-runners.cluster-uid)" || { echo "ARC target cluster changed after input snapshot" >&2; exit 2; }
+        target_uid="$(kubectl --kubeconfig "${kubeconfig}" --context honey -n arc-runners get autoscalingrunnerset great-falls-tool-bus-nix -o jsonpath='{.metadata.uid}')"
+        test "${target_uid}" = "$(tr -d '\n' < .tofu-plans/arc-runners.target-uid)" || { echo "ARC target cluster/release changed after input snapshot" >&2; exit 2; }
+    }
+    check_workspace() {
+        workspace="$(TF_CLI_CONFIG_FILE=/dev/null TF_VAR_k8s_config_path="${kubeconfig}" TF_DATA_DIR="${data_dir}" nix develop "${core_ci}" -c tofu -chdir="${core}/tofu/stacks/arc-runners" workspace show)"
+        [[ "${workspace}" == "default" ]] || { echo "ARC state must use the default workspace, observed ${workspace}" >&2; exit 2; }
+    }
+    just _reviewed-clean-main
+    just _reviewed-arc-core
+    just _arc-backend-contract
+    just _arc-runtime-contract
+    check_inputs
+    check_workspace
+    TF_CLI_CONFIG_FILE=/dev/null TF_VAR_k8s_config_path="${kubeconfig}" TF_DATA_DIR="${data_dir}" nix develop "${core_ci}" -c tofu -chdir="${core}/tofu/stacks/arc-runners" plan -input=false -var-file="$(pwd)/{{ arc_tfvars }}" -out="$(pwd)/.tofu-plans/arc-runners.tfplan"
+    just _reviewed-clean-main
+    just _reviewed-arc-core
+    just _arc-backend-contract
+    just _arc-runtime-contract
+    check_inputs
+    check_workspace
+    plan_digest="$(python3 -I -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' .tofu-plans/arc-runners.tfplan)"
+    printf '%s\n' "${plan_digest}" > .tofu-plans/arc-runners.plan-sha256
+    rm -f .tofu-plans/arc-runners.scope-sha256
+    chmod 600 .tofu-plans/arc-runners.tfplan .tofu-plans/arc-runners.source-sha .tofu-plans/arc-runners.core-sha .tofu-plans/arc-runners.backend-blob .tofu-plans/arc-runners.kubeconfig-blob .tofu-plans/arc-runners.cluster-uid .tofu-plans/arc-runners.target-uid .tofu-plans/arc-runners.plan-sha256
+
+arc-plan-show: _reviewed-arc-core _arc-tofu-environment-contract _arc-artifact-root-contract
+    #!/usr/bin/env bash
+    set -euo pipefail
+    core="${GF_ARC_CORE_PATH:-{{ arc_core_default }}}"
+    core_ci="${GF_ARC_CORE_CI_PATH:-{{ arc_core_ci_default }}}"
+    data_dir="$(pwd)/.tofu-plans/arc-runners.tfdata"
     test -f .tofu-plans/arc-runners.tfplan
+    TF_CLI_CONFIG_FILE=/dev/null TF_DATA_DIR="${data_dir}" nix develop "${core_ci}" -c tofu -chdir="${core}/tofu/stacks/arc-runners" show -no-color "$(pwd)/.tofu-plans/arc-runners.tfplan"
+
+arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-artifact-root-contract
+    #!/usr/bin/env bash
+    set -euo pipefail
+    core="${GF_ARC_CORE_PATH:-{{ arc_core_default }}}"
+    core_ci="${GF_ARC_CORE_CI_PATH:-{{ arc_core_ci_default }}}"
+    plan_path="${GFTB_ARC_RECONCILE_PLAN_PATH:-$(pwd)/.tofu-plans/arc-runners.tfplan}"
+    data_dir="${GFTB_ARC_RECONCILE_DATA_DIR:-$(pwd)/.tofu-plans/arc-runners.tfdata}"
+    reconcile=false
+    if [[ -n "${GFTB_ARC_RECONCILE_PLAN_PATH:-}" || -n "${GFTB_ARC_RECONCILE_DATA_DIR:-}" ]]; then
+        [[ "${GFTB_ARC_READBACK_MODE:-}" == "reconcile" && -n "${GFTB_ARC_RECONCILE_PLAN_PATH:-}" && -n "${GFTB_ARC_RECONCILE_DATA_DIR:-}" ]] || { echo "Temporary ARC scope review is reserved for reconcile readback" >&2; exit 2; }
+        test -f .tofu-plans/arc-runners.apply-attempted || { echo "No ambiguous ARC apply attempt requires reconciliation" >&2; exit 2; }
+        reconcile=true
+    else
+        test -f "${plan_path}"
+        test -f .tofu-plans/arc-runners.plan-sha256
+        test ! -e .tofu-plans/arc-runners.apply-attempted || { echo "ARC plan was already submitted; create and review a fresh plan" >&2; exit 2; }
+    fi
+    python3 -I - "${reconcile}" "${plan_path}" "${data_dir}" "$(pwd)/.tofu-plans" <<'PY'
+    import os
+    import stat
+    import sys
+    from pathlib import Path
+
+    reconcile_mode = sys.argv[1]
+    if reconcile_mode not in {"true", "false"}:
+        raise SystemExit("invalid ARC scope-review mode")
+    if reconcile_mode == "false":
+        raise SystemExit(0)
+    plan_input = Path(sys.argv[2])
+    data_input = Path(sys.argv[3])
+    if plan_input.is_symlink() or data_input.is_symlink():
+        raise SystemExit("reconcile plan and TF_DATA_DIR may not be symlinks")
+    plan = plan_input.resolve(strict=True)
+    data = data_input.resolve(strict=True)
+    root = Path(sys.argv[4]).resolve(strict=True)
+    if plan.parent != data.parent or plan.parent.parent != root or not plan.parent.name.startswith("arc-readback."):
+        raise SystemExit("reconcile plan and TF_DATA_DIR must share a private arc-readback directory")
+    plan_stat = plan.lstat()
+    data_stat = data.lstat()
+    if not stat.S_ISREG(plan_stat.st_mode) or stat.S_ISLNK(plan_stat.st_mode) or plan_stat.st_uid != os.getuid() or stat.S_IMODE(plan_stat.st_mode) != 0o600:
+        raise SystemExit("reconcile plan must be an operator-owned mode-0600 regular file")
+    if not stat.S_ISDIR(data_stat.st_mode) or stat.S_ISLNK(data_stat.st_mode) or data_stat.st_uid != os.getuid() or stat.S_IMODE(data_stat.st_mode) != 0o700:
+        raise SystemExit("reconcile TF_DATA_DIR must be an operator-owned mode-0700 directory")
+    PY
+    plan_digest="$(python3 -I -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${plan_path}")"
+    if [[ "${reconcile}" == "false" ]]; then
+        test "${plan_digest}" = "$(tr -d '\n' < .tofu-plans/arc-runners.plan-sha256)" || { echo "ARC plan digest changed before scope review" >&2; exit 2; }
+    fi
     plan_json="$(mktemp "${TMPDIR:-/tmp}/gftb-arc-plan.XXXXXX.json")"
     trap 'rm -f "${plan_json}"' EXIT
-    nix develop "{{ gf_core_ci }}" -c tofu -chdir="{{ gf_core }}/tofu/stacks/arc-runners" show -json "$(pwd)/.tofu-plans/arc-runners.tfplan" > "${plan_json}"
-    if python3 - "${plan_json}" <<'PY'
+    TF_CLI_CONFIG_FILE=/dev/null TF_DATA_DIR="${data_dir}" nix develop "${core_ci}" -c tofu -chdir="${core}/tofu/stacks/arc-runners" show -json "${plan_path}" > "${plan_json}"
+    python3 -I - "${plan_json}" <<'PY'
     import json
+    import re
     import sys
     from pathlib import Path
 
     plan = json.loads(Path(sys.argv[1]).read_text())
-    for change in plan.get("resource_changes", []):
-        if "delete" in change.get("change", {}).get("actions", []):
-            sys.exit(0)
-    sys.exit(1)
+    if not isinstance(plan, dict):
+        raise SystemExit("ERROR: ARC plan JSON must be an object")
+    if plan.get("errored") is not False or plan.get("complete") is not True or plan.get("applyable") is not True:
+        raise SystemExit("ERROR: ARC plan is incomplete, errored, or not applyable")
+    resource_drift = plan.get("resource_drift", [])
+    if not isinstance(resource_drift, list):
+        raise SystemExit("ERROR: ARC plan resource_drift must be a list")
+    if not all(isinstance(change, dict) for change in resource_drift):
+        raise SystemExit("ERROR: every ARC resource_drift entry must be an object")
+    if resource_drift:
+        raise SystemExit(
+            "ERROR: ARC plan contains resource drift: "
+            + repr([change.get("address") for change in resource_drift])
+        )
+    output_changes = plan.get("output_changes", {})
+    if not isinstance(output_changes, dict):
+        raise SystemExit("ERROR: ARC plan output_changes must be an object")
+    if not all(isinstance(output, dict) for output in output_changes.values()):
+        raise SystemExit("ERROR: every ARC output_changes value must be an object")
+    if output_changes:
+        raise SystemExit("ERROR: ARC plan contains output changes: " + repr(sorted(output_changes)))
+    deferred_changes = plan.get("deferred_changes", [])
+    if not isinstance(deferred_changes, list) or deferred_changes:
+        raise SystemExit("ERROR: ARC plan contains deferred changes")
+    all_changes = plan.get("resource_changes", [])
+    if not isinstance(all_changes, list):
+        raise SystemExit("ERROR: ARC plan resource_changes must be a list")
+    for index, resource in enumerate(all_changes):
+        if not isinstance(resource, dict):
+            raise SystemExit(f"ERROR: ARC resource_changes[{index}] must be an object")
+        resource_change = resource.get("change", {})
+        if not isinstance(resource_change, dict):
+            raise SystemExit(f"ERROR: ARC resource_changes[{index}].change must be an object")
+        actions = resource_change.get("actions")
+        if not isinstance(actions, list) or not actions or not all(isinstance(action, str) for action in actions):
+            raise SystemExit(f"ERROR: ARC resource_changes[{index}] must carry concrete actions")
+        forbidden_metadata = []
+        for owner, key in (
+            (resource, "previous_address"),
+            (resource, "deposed"),
+            (resource, "generated_config"),
+            (resource_change, "importing"),
+            (resource_change, "generated_config"),
+        ):
+            if key in owner and owner[key] not in (None, ""):
+                forbidden_metadata.append(key)
+        if forbidden_metadata:
+            raise SystemExit(
+                "ERROR: ARC plan contains move/import/deposed/generated metadata on "
+                + repr(resource.get("address"))
+                + ": "
+                + repr(sorted(set(forbidden_metadata)))
+            )
+    changes = [
+        change
+        for change in all_changes
+        if change.get("change", {}).get("actions", ["no-op"]) != ["no-op"]
+    ]
+    observed = [
+        (
+            change.get("address"),
+            change.get("mode"),
+            change.get("type"),
+            change.get("name"),
+            change.get("change", {}).get("actions", []),
+        )
+        for change in changes
+    ]
+    expected = [
+        (
+            "module.gh_nix.helm_release.arc_runner",
+            "managed",
+            "helm_release",
+            "arc_runner",
+            ["update"],
+        )
+    ]
+    if observed != expected:
+        print(
+            "ERROR: ARC plan must contain exactly one in-place update to "
+            "module.gh_nix.helm_release.arc_runner; observed " + repr(observed),
+            file=sys.stderr,
+        )
+        print(
+            "Land a separate reviewed ARC scope contract before applying any other plan.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    change = changes[0]["change"]
+    if change.get("replace_paths"):
+        raise SystemExit("ERROR: ARC capacity plan unexpectedly contains replacement paths")
+    if change.get("before_sensitive") != change.get("after_sensitive"):
+        raise SystemExit("ERROR: ARC capacity plan changes sensitive-field shape")
+    before = change.get("before")
+    after = change.get("after")
+    after_unknown = change.get("after_unknown") or {}
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        raise SystemExit("ERROR: ARC capacity plan must expose concrete before/after values")
+    if not isinstance(after_unknown, dict):
+        raise SystemExit("ERROR: ARC capacity plan after_unknown must be an object")
+
+    def has_unknown(value):
+        if value is True:
+            return True
+        if isinstance(value, dict):
+            return any(has_unknown(item) for item in value.values())
+        if isinstance(value, list):
+            return any(has_unknown(item) for item in value)
+        return False
+
+    unknown_keys = {key for key, value in after_unknown.items() if has_unknown(value)}
+    allowed_computed_unknowns = {"manifest", "metadata", "status"}
+    if not unknown_keys <= allowed_computed_unknowns:
+        raise SystemExit(
+            "ERROR: ARC capacity plan contains unexpected unknown after-values: "
+            + repr(sorted(unknown_keys - allowed_computed_unknowns))
+        )
+    changed_known = []
+    for key in sorted(set(before) | set(after)):
+        if key == "values" or key in unknown_keys:
+            continue
+        if before.get(key) != after.get(key):
+            changed_known.append(key)
+    if changed_known:
+        raise SystemExit(
+            "ERROR: gh_nix Helm plan changes fields outside values: "
+            + ", ".join(changed_known)
+        )
+    before_values = before.get("values")
+    after_values = after.get("values")
+    if not (
+        isinstance(before_values, list)
+        and isinstance(after_values, list)
+        and len(before_values) == 1
+        and len(after_values) == 1
+        and isinstance(before_values[0], str)
+        and isinstance(after_values[0], str)
+    ):
+        raise SystemExit("ERROR: gh_nix Helm values must be one concrete YAML document")
+
+    storage = re.compile(
+        r'(?m)^(?P<prefix>\s*"?ephemeral-storage"?\s*:\s*)'
+        r'(?P<quote>"?)(?P<value>[0-9]+Gi)(?P=quote)(?P<suffix>\s*)$'
+    )
+
+    def indentation(line):
+        return len(line) - len(line.lstrip(" "))
+
+    def header(line):
+        match = re.match(r'^\s*"?([A-Za-z0-9_-]+)"?\s*:\s*$', line)
+        return match.group(1) if match else None
+
+    def parent_header(lines, index):
+        child_indent = indentation(lines[index])
+        for cursor in range(index - 1, -1, -1):
+            if not lines[cursor].strip() or lines[cursor].lstrip().startswith("#"):
+                continue
+            if indentation(lines[cursor]) < child_indent:
+                return cursor, header(lines[cursor])
+        return None, None
+
+    def runner_storage(document):
+        lines = document.splitlines()
+        name_lines = [
+            index
+            for index, line in enumerate(lines)
+            if re.match(r'^\s*"?name"?\s*:\s*"?runner"?\s*$', line)
+        ]
+        if len(name_lines) != 1:
+            raise SystemExit("ERROR: ARC Helm values must contain one runner container")
+        name_index = name_lines[0]
+        name_indent = indentation(lines[name_index])
+        item_start = None
+        item_indent = None
+        for cursor in range(name_index - 1, -1, -1):
+            match = re.match(r'^(\s*)-\s+', lines[cursor])
+            if match and len(match.group(1)) < name_indent:
+                item_start = cursor
+                item_indent = len(match.group(1))
+                break
+        if item_start is None:
+            raise SystemExit("ERROR: runner container is not a YAML list item")
+        container_header = None
+        container_header_index = None
+        for cursor in range(item_start - 1, -1, -1):
+            if indentation(lines[cursor]) <= item_indent and header(lines[cursor]):
+                container_header = header(lines[cursor])
+                container_header_index = cursor
+                break
+        if container_header != "containers":
+            raise SystemExit("ERROR: runner item is not under template.spec.containers")
+        spec_index, spec_header = parent_header(lines, container_header_index)
+        _, template_header = parent_header(lines, spec_index)
+        if spec_header != "spec" or template_header != "template":
+            raise SystemExit("ERROR: runner item is not under template.spec.containers")
+        item_end = len(lines)
+        for cursor in range(item_start + 1, len(lines)):
+            line = lines[cursor]
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            if indentation(line) <= item_indent:
+                item_end = cursor
+                break
+
+        entries = {}
+        resources_indexes = set()
+        all_storage_lines = []
+        for index, line in enumerate(lines):
+            match = storage.match(line)
+            if not match:
+                continue
+            all_storage_lines.append(index)
+            if not item_start <= index < item_end:
+                raise SystemExit("ERROR: ephemeral-storage exists outside the runner container")
+            parent_index, parent = parent_header(lines, index)
+            grandparent_index, grandparent = parent_header(lines, parent_index)
+            if grandparent != "resources" or parent not in {"requests", "limits"}:
+                raise SystemExit("ERROR: runner ephemeral-storage is outside resources requests/limits")
+            if indentation(lines[grandparent_index]) != name_indent:
+                raise SystemExit("ERROR: resources must be a direct runner-container field")
+            resources_indexes.add(grandparent_index)
+            if parent in entries:
+                raise SystemExit("ERROR: duplicate runner ephemeral-storage field")
+            entries[parent] = match.group("value")
+        if len(all_storage_lines) != 2 or set(entries) != {"requests", "limits"} or len(resources_indexes) != 1:
+            raise SystemExit("ERROR: expected exactly runner request and limit storage fields")
+        return entries
+
+    before_storage = runner_storage(before_values[0])
+    after_storage = runner_storage(after_values[0])
+    if before_storage != {"requests": "4Gi", "limits": "8Gi"} or after_storage != {"requests": "8Gi", "limits": "16Gi"}:
+        raise SystemExit(
+            "ERROR: expected runner resources.requests.ephemeral-storage 4Gi->8Gi "
+            "and resources.limits.ephemeral-storage 8Gi->16Gi"
+        )
+
+    size_map = {"4Gi": "8Gi", "8Gi": "16Gi"}
+    expected_values = storage.sub(
+        lambda match: (
+            match.group("prefix")
+            + match.group("quote")
+            + size_map[match.group("value")]
+            + match.group("quote")
+            + match.group("suffix")
+        ),
+        before_values[0],
+    )
+    if expected_values != after_values[0]:
+        raise SystemExit("ERROR: gh_nix Helm values contain changes beyond 4/8Gi -> 8/16Gi")
+    print("ARC plan scope guard passed: exact gh_nix 4/8Gi -> 8/16Gi update only.")
     PY
-    then
-        if [ "${ALLOW_ARC_DESTROY:-}" = "1" ]; then
-            echo "WARNING: destructive ARC plan allowed because ALLOW_ARC_DESTROY=1"
-        else
-            echo "ERROR: destructive ARC plan detected. Review just arc-plan-show and record rehome/teardown before apply."
-            exit 1
+    plan_digest_after="$(python3 -I -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${plan_path}")"
+    test "${plan_digest_after}" = "${plan_digest}" || { echo "ARC plan changed during scope review" >&2; exit 2; }
+    if [[ "${reconcile}" == "false" ]]; then
+        printf '%s\n' "${plan_digest}" > .tofu-plans/arc-runners.scope-sha256
+        chmod 600 .tofu-plans/arc-runners.scope-sha256
+    fi
+
+arc-apply: _reviewed-clean-main _reviewed-arc-core _operator-apply-confirm _arc-exclusive-confirm _arc-plan-input-preflight arc-init arc-plan-scope-check
+    #!/usr/bin/env bash
+    set -euo pipefail
+    core="${GF_ARC_CORE_PATH:-{{ arc_core_default }}}"
+    core_ci="${GF_ARC_CORE_CI_PATH:-{{ arc_core_ci_default }}}"
+    kubeconfig="${GFTB_ARC_KUBECONFIG:?Set GFTB_ARC_KUBECONFIG to the reviewed ARC kubeconfig}"
+    data_dir="$(pwd)/.tofu-plans/arc-runners.tfdata"
+    backend="${ARC_BACKEND:-{{ arc_backend_default }}}"
+    if [[ "${backend}" != /* ]]; then
+        backend="$(pwd)/${backend}"
+    fi
+    test -f .tofu-plans/arc-runners.tfplan
+    test -f .tofu-plans/arc-runners.source-sha
+    test -f .tofu-plans/arc-runners.core-sha
+    test -f .tofu-plans/arc-runners.backend-blob
+    test -f .tofu-plans/arc-runners.plan-sha256
+    test -f .tofu-plans/arc-runners.scope-sha256
+    test ! -e .tofu-plans/arc-runners.apply-attempted || { echo "ARC plan was already submitted; create and review a fresh plan" >&2; exit 2; }
+    test "$(git rev-parse HEAD)" = "$(tr -d '\n' < .tofu-plans/arc-runners.source-sha)" || { echo "ARC plan was created from a different infra revision" >&2; exit 2; }
+    test "$(git -C "${core}" rev-parse HEAD)" = "$(tr -d '\n' < .tofu-plans/arc-runners.core-sha)" || { echo "ARC plan was created from a different GloriousFlywheel revision" >&2; exit 2; }
+    test "$(python3 -I -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${backend}")" = "$(tr -d '\n' < .tofu-plans/arc-runners.backend-blob)" || { echo "ARC plan was created with a different backend declaration" >&2; exit 2; }
+    [[ -z "$(git status --porcelain)" ]] || { echo "Infra worktree changed before ARC apply" >&2; exit 2; }
+    [[ -z "$(git -C "${core}" status --porcelain)" ]] || { echo "ARC core changed before apply" >&2; exit 2; }
+    just _arc-plan-input-preflight
+    workspace="$(TF_CLI_CONFIG_FILE=/dev/null TF_VAR_k8s_config_path="${kubeconfig}" TF_DATA_DIR="${data_dir}" nix develop "${core_ci}" -c tofu -chdir="${core}/tofu/stacks/arc-runners" workspace show)"
+    [[ "${workspace}" == "default" ]] || { echo "ARC state must use the default workspace, observed ${workspace}" >&2; exit 2; }
+    just _arc-plan-input-preflight
+    plan_digest="$(python3 -I -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' .tofu-plans/arc-runners.tfplan)"
+    test "${plan_digest}" = "$(tr -d '\n' < .tofu-plans/arc-runners.plan-sha256)" || { echo "ARC plan digest changed after planning" >&2; exit 2; }
+    test "${plan_digest}" = "$(tr -d '\n' < .tofu-plans/arc-runners.scope-sha256)" || { echo "ARC plan is not the exact scope-reviewed artifact" >&2; exit 2; }
+    printf '%s\n' "${plan_digest}" > .tofu-plans/arc-runners.apply-attempted
+    chmod 600 .tofu-plans/arc-runners.apply-attempted
+    TF_CLI_CONFIG_FILE=/dev/null TF_VAR_k8s_config_path="${kubeconfig}" TF_DATA_DIR="${data_dir}" nix develop "${core_ci}" -c tofu -chdir="${core}/tofu/stacks/arc-runners" apply -input=false "$(pwd)/.tofu-plans/arc-runners.tfplan"
+    rm -f .tofu-plans/arc-runners.tfplan .tofu-plans/arc-runners.source-sha .tofu-plans/arc-runners.core-sha .tofu-plans/arc-runners.backend-blob .tofu-plans/arc-runners.kubeconfig-blob .tofu-plans/arc-runners.cluster-uid .tofu-plans/arc-runners.target-uid .tofu-plans/arc-runners.plan-sha256 .tofu-plans/arc-runners.scope-sha256 .tofu-plans/arc-runners.apply-attempted
+    rm -rf -- "${data_dir}"
+
+# Read-only closure receipt for the capacity promotion. It proves canonical
+# remote state, refreshed plan, live ARC object, and listener all converge on
+# the reviewed 8Gi request / 16Gi limit without reusing the apply session.
+arc-capacity-readback: _reviewed-clean-main _reviewed-arc-core _arc-exclusive-confirm _arc-backend-contract _arc-runtime-contract _arc-artifact-root-contract
+    #!/usr/bin/env bash
+    set -euo pipefail
+    umask 077
+    core="${GF_ARC_CORE_PATH:-{{ arc_core_default }}}"
+    core_ci="${GF_ARC_CORE_CI_PATH:-{{ arc_core_ci_default }}}"
+    kubeconfig="${GFTB_ARC_KUBECONFIG:?Set GFTB_ARC_KUBECONFIG to the reviewed ARC kubeconfig}"
+    backend="${ARC_BACKEND:-{{ arc_backend_default }}}"
+    if [[ "${backend}" != /* ]]; then
+        backend="$(pwd)/${backend}"
+    fi
+    mode="${GFTB_ARC_READBACK_MODE:-promoted}"
+    [[ "${mode}" == "promoted" || "${mode}" == "reconcile" ]] || { echo "GFTB_ARC_READBACK_MODE must be promoted or reconcile" >&2; exit 2; }
+    if [[ "${mode}" == "reconcile" ]]; then
+        test -f .tofu-plans/arc-runners.apply-attempted || { echo "No ambiguous ARC apply attempt requires reconciliation" >&2; exit 2; }
+    fi
+    readback_dir="$(mktemp -d "$(pwd)/.tofu-plans/arc-readback.XXXXXX")"
+    data_dir="${readback_dir}/tfdata"
+    state_json="${readback_dir}/state.json"
+    nochange_plan="${readback_dir}/nochange.tfplan"
+    plan_log="${readback_dir}/plan.log"
+    mkdir -m 700 "${data_dir}"
+    trap 'rm -rf "${readback_dir}"' EXIT
+    TF_CLI_CONFIG_FILE=/dev/null TF_VAR_k8s_config_path="${kubeconfig}" TF_DATA_DIR="${data_dir}" nix develop "${core_ci}" -c tofu -chdir="${core}/tofu/stacks/arc-runners" init -reconfigure -input=false -lockfile=readonly -backend-config="${backend}" >/dev/null
+    workspace="$(TF_CLI_CONFIG_FILE=/dev/null TF_VAR_k8s_config_path="${kubeconfig}" TF_DATA_DIR="${data_dir}" nix develop "${core_ci}" -c tofu -chdir="${core}/tofu/stacks/arc-runners" workspace show)"
+    [[ "${workspace}" == "default" ]] || { echo "ARC state must use the default workspace, observed ${workspace}" >&2; exit 2; }
+    TF_CLI_CONFIG_FILE=/dev/null TF_VAR_k8s_config_path="${kubeconfig}" TF_DATA_DIR="${data_dir}" nix develop "${core_ci}" -c tofu -chdir="${core}/tofu/stacks/arc-runners" show -json > "${state_json}"
+    state_values="$(jq -er '
+      [.. | objects | select(.address? == "module.gh_nix.helm_release.arc_runner")]
+      | if length == 1 and (.[0].values.values | length) == 1
+        then .[0].values.values[0]
+        else error("expected exactly one gh_nix Helm state value")
+        end
+    ' "${state_json}")"
+    state_request="$(yq -r '.template.spec.containers[] | select(.name == "runner") | .resources.requests."ephemeral-storage"' <<<"${state_values}")"
+    state_limit="$(yq -r '.template.spec.containers[] | select(.name == "runner") | .resources.limits."ephemeral-storage"' <<<"${state_values}")"
+    live_json="$(kubectl --kubeconfig "${kubeconfig}" --context honey -n arc-runners get autoscalingrunnerset great-falls-tool-bus-nix -o json)"
+    jq -e --arg uid "{{ arc_target_uid }}" '
+      .metadata.uid == $uid
+      and .spec.minRunners == 0
+      and .spec.maxRunners == 4
+      and .status.phase == "Running"
+      and (.status.pendingEphemeralRunners // 0) == 0
+      and ([.spec.template.spec.containers[] | select(.name == "runner")] | length == 1)
+    ' <<<"${live_json}" >/dev/null || { echo "Live great-falls-tool-bus-nix is not healthy" >&2; exit 2; }
+    live_request="$(jq -er '[.spec.template.spec.containers[] | select(.name == "runner")] | if length == 1 then .[0].resources.requests["ephemeral-storage"] else error("expected one runner container") end' <<<"${live_json}")"
+    live_limit="$(jq -er '[.spec.template.spec.containers[] | select(.name == "runner")] | if length == 1 then .[0].resources.limits["ephemeral-storage"] else error("expected one runner container") end' <<<"${live_json}")"
+    [[ "${state_request}" == "${live_request}" && "${state_limit}" == "${live_limit}" ]] || { echo "Canonical ARC state and live runner capacity disagree" >&2; exit 2; }
+    [[ ( "${state_request}" == "4Gi" && "${state_limit}" == "8Gi" ) || ( "${state_request}" == "8Gi" && "${state_limit}" == "16Gi" ) ]] || { echo "ARC capacity is outside the reviewed pre/post states" >&2; exit 2; }
+    if [[ "${mode}" == "promoted" ]]; then
+        [[ "${state_request}" == "8Gi" && "${state_limit}" == "16Gi" ]] || { echo "ARC capacity promotion is not converged at 8Gi/16Gi" >&2; exit 2; }
+    fi
+    listener_json="$(kubectl --kubeconfig "${kubeconfig}" --context honey -n arc-systems get pods -l actions.github.com/scale-set-name=great-falls-tool-bus-nix,actions.github.com/scale-set-namespace=arc-runners,app.kubernetes.io/component=runner-scale-set-listener -o json)"
+    jq -e '
+      (.items | length) == 1
+      and .items[0].metadata.deletionTimestamp == null
+      and .items[0].status.phase == "Running"
+      and any(.items[0].status.conditions[]?; .type == "Ready" and .status == "True")
+      and (.items[0].status.containerStatuses | length) > 0
+      and all(.items[0].status.containerStatuses[]; .ready == true and .restartCount == 0)
+    ' <<<"${listener_json}" >/dev/null || { echo "GFTB ARC listener is not one Ready zero-restart pod" >&2; exit 2; }
+    set +e
+    TF_CLI_CONFIG_FILE=/dev/null TF_VAR_k8s_config_path="${kubeconfig}" TF_DATA_DIR="${data_dir}" nix develop "${core_ci}" -c tofu -chdir="${core}/tofu/stacks/arc-runners" plan -input=false -detailed-exitcode -var-file="$(pwd)/{{ arc_tfvars }}" -out="${nochange_plan}" >"${plan_log}" 2>&1
+    plan_status=$?
+    set -e
+    if [[ "${state_request}" == "8Gi" && "${state_limit}" == "16Gi" ]]; then
+        [[ "${plan_status}" == "0" ]] || { echo "Promoted ARC state/source/live refresh is not a no-change plan (status ${plan_status})" >&2; exit 2; }
+        receipt="promoted state/live 8Gi/16Gi with refreshed no-change plan"
+    else
+        [[ "${mode}" == "reconcile" && "${plan_status}" == "2" ]] || { echo "Pre-change ARC reconciliation expected the exact pending promotion plan (status ${plan_status})" >&2; exit 2; }
+        GFTB_ARC_READBACK_MODE=reconcile GFTB_ARC_RECONCILE_PLAN_PATH="${nochange_plan}" GFTB_ARC_RECONCILE_DATA_DIR="${data_dir}" just arc-plan-scope-check
+        receipt="pre-change state/live 4Gi/8Gi with exact pending 8Gi/16Gi promotion; create and review a fresh plan"
+    fi
+    just _reviewed-clean-main
+    just _reviewed-arc-core
+    just _arc-backend-contract
+    just _arc-runtime-contract
+    if [[ -e .tofu-plans/arc-runners.apply-attempted ]]; then
+        rm -f .tofu-plans/arc-runners.tfplan .tofu-plans/arc-runners.source-sha .tofu-plans/arc-runners.core-sha .tofu-plans/arc-runners.backend-blob .tofu-plans/arc-runners.kubeconfig-blob .tofu-plans/arc-runners.cluster-uid .tofu-plans/arc-runners.target-uid .tofu-plans/arc-runners.plan-sha256 .tofu-plans/arc-runners.scope-sha256 .tofu-plans/arc-runners.apply-attempted
+        attempted_data_dir="$(pwd)/.tofu-plans/arc-runners.tfdata"
+        if [[ -e "${attempted_data_dir}" || -L "${attempted_data_dir}" ]]; then
+            [[ -d "${attempted_data_dir}" && ! -L "${attempted_data_dir}" ]] || { echo "ARC attempted TF_DATA_DIR is not a real directory" >&2; exit 2; }
+            rm -rf -- "${attempted_data_dir}"
         fi
     fi
-    echo "ARC plan destroy guard passed."
+    echo "ARC capacity receipt passed: ${receipt}; listener Ready."
 
-arc-apply: arc-plan-destroy-check
+arc-enrollment-plan: enrollment-preflight arc-plan
+    @echo "Review with just arc-plan-show and just arc-plan-scope-check."
+    @echo "Then run: GFTB_APPLY_CONFIRM=apply GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-apply"
+    @echo "Then prove: GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-capacity-readback"
+
+# Production mutation must originate from clean, signed, current canonical main.
+# The remote readback prevents a stale local origin/main ref from becoming apply
+# authority.
+_reviewed-clean-main:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [[ "$(git branch --show-current)" == "main" ]] || { echo "Guarded ARC operation requires the main branch" >&2; exit 2; }
+    [[ -z "$(git status --porcelain)" ]] || { echo "Guarded ARC operation requires a clean worktree" >&2; exit 2; }
+    index_flags="$(git ls-files -v | awk '$1 != "H"')"
+    [[ -z "${index_flags}" ]] || { echo "Guarded ARC operation refuses assume-unchanged, skip-worktree, or non-cached index flags: ${index_flags}" >&2; exit 2; }
+    canonical_remote="https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git"
+    origin_url="$(git remote get-url origin)"
+    case "${origin_url}" in
+      https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra|https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git|git@github.com:Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git) ;;
+      *) echo "Guarded ARC operation origin is not the canonical GFTB infra repository: ${origin_url}" >&2; exit 2 ;;
+    esac
+    git show-ref --verify --quiet refs/remotes/origin/main || { echo "Fetch canonical origin/main before the guarded ARC operation" >&2; exit 2; }
+    head_sha="$(git rev-parse HEAD)"
+    origin_sha="$(git rev-parse origin/main)"
+    [[ "${head_sha}" == "${origin_sha}" ]] || { echo "Guarded ARC operation HEAD ${head_sha} is not origin/main ${origin_sha}" >&2; exit 2; }
+    remote_sha="$(git ls-remote --exit-code "${canonical_remote}" refs/heads/main | awk 'NR == 1 { print $1 }')"
+    [[ "${remote_sha}" =~ ^[0-9a-f]{40}$ ]] || { echo "Could not resolve the current remote main SHA" >&2; exit 2; }
+    [[ "${head_sha}" == "${remote_sha}" ]] || { echo "Guarded ARC operation HEAD ${head_sha} is not current remote main ${remote_sha}" >&2; exit 2; }
+    git verify-commit "${head_sha}" >/dev/null
+    echo "reviewed infra carrier: ${head_sha}"
+
+# Enrollment and GitHub App Secret materialization use the implementation-role
+# core pin. They may not execute an arbitrary sibling checkout.
+_reviewed-implementation-core:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    core="${GF_CORE_PATH:-../GloriousFlywheel}"
+    test -d "${core}/.git" -o -f "${core}/.git" || { echo "GF_CORE_PATH is not a Git checkout: ${core}" >&2; exit 2; }
+    [[ -z "$(git -C "${core}" status --porcelain)" ]] || { echo "GloriousFlywheel implementation core must be clean" >&2; exit 2; }
+    index_flags="$(git -C "${core}" ls-files -v | awk '$1 != "H"')"
+    [[ -z "${index_flags}" ]] || { echo "GloriousFlywheel implementation core refuses assume-unchanged, skip-worktree, or non-cached index flags: ${index_flags}" >&2; exit 2; }
+    [[ "$(git -C "${core}" rev-parse HEAD)" == "{{ gf_core_sha }}" ]] || { echo "GloriousFlywheel implementation core must be {{ gf_core_sha }}" >&2; exit 2; }
+    case "$(git -C "${core}" remote get-url origin)" in
+      https://github.com/tinyland-inc/GloriousFlywheel|https://github.com/tinyland-inc/GloriousFlywheel.git|git@github.com:tinyland-inc/GloriousFlywheel.git) ;;
+      *) echo "GloriousFlywheel implementation core origin is not canonical" >&2; exit 2 ;;
+    esac
+    git -C "${core}" verify-commit "{{ gf_core_sha }}" >/dev/null
+
+# ARC uses the role-specific, signed GloriousFlywheel source pin. The separate
+# checkout avoids silently substituting a newer implementation-core worktree.
+_reviewed-arc-core:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    core="${GF_ARC_CORE_PATH:-{{ arc_core_default }}}"
+    test -d "${core}/.git" -o -f "${core}/.git" || { echo "GF_ARC_CORE_PATH is not a Git checkout: ${core}" >&2; exit 2; }
+    [[ -z "$(git -C "${core}" status --porcelain)" ]] || { echo "GloriousFlywheel ARC core must be clean" >&2; exit 2; }
+    index_flags="$(git -C "${core}" ls-files -v | awk '$1 != "H"')"
+    [[ -z "${index_flags}" ]] || { echo "GloriousFlywheel ARC core refuses assume-unchanged, skip-worktree, or non-cached index flags: ${index_flags}" >&2; exit 2; }
+    [[ "$(git -C "${core}" rev-parse HEAD)" == "{{ arc_core_sha }}" ]] || { echo "GloriousFlywheel ARC core must be {{ arc_core_sha }}" >&2; exit 2; }
+    case "$(git -C "${core}" remote get-url origin)" in
+      https://github.com/tinyland-inc/GloriousFlywheel|https://github.com/tinyland-inc/GloriousFlywheel.git|git@github.com:tinyland-inc/GloriousFlywheel.git) ;;
+      *) echo "GloriousFlywheel ARC core origin is not canonical" >&2; exit 2 ;;
+    esac
+    git -C "${core}" verify-commit "{{ arc_core_sha }}" >/dev/null
+    core_abs="$(cd "${core}" && pwd -P)"
+    core_ci="${GF_ARC_CORE_CI_PATH:-{{ arc_core_ci_default }}}"
+    pinned_ci="github:tinyland-inc/GloriousFlywheel/{{ arc_core_sha }}#ci"
+    local_ci="path:${core_abs}#ci"
+    declared_local_ci="path:${core}#ci"
+    [[ "${core_ci}" == "${pinned_ci}" || "${core_ci}" == "${local_ci}" || "${core_ci}" == "${declared_local_ci}" ]] || { echo "GF_ARC_CORE_CI_PATH must be ${pinned_ci} or the reviewed local checkout ${local_ci}" >&2; exit 2; }
+    untracked="$(
+      {
+        git -C "${core}" ls-files --others --exclude-standard -- tofu/stacks/arc-runners tofu/modules
+        git -C "${core}" ls-files --others --ignored --exclude-standard -- tofu/stacks/arc-runners tofu/modules
+      } | sort -u
+    )"
+    unexpected="$(python3 -I -c 'import re,sys; pattern=re.compile(r"(^|/)\.terraform(/|$)|(^|/)(override\.(tf|tofu)|.*_override\.(tf|tofu)|.*\.auto\.tfvars(\.json)?|.*\.tfvars(\.json)?|.*\.(tf|tofu)(\.json)?)$"); print("\\n".join(line for line in sys.stdin.read().splitlines() if pattern.search(line)))' <<<"${untracked}")"
+    [[ -z "${unexpected}" ]] || { echo "GloriousFlywheel ARC core contains untracked/ignored Terraform input: ${unexpected}" >&2; exit 2; }
+
+# The canonical RustFS state identity is immutable here. A temporary backend may
+# replace only the S3 endpoint with a loopback port-forward; it must stay outside
+# the public repository and mode 0600.
+_arc-tofu-environment-contract:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    while IFS='=' read -r name _; do
+        case "${name}" in
+          TF_*|TOFU_*) echo "Refusing ambient ${name}; the ARC OpenTofu contract owns this input" >&2; exit 2 ;;
+        esac
+    done < <(env)
+
+_arc-backend-contract: _arc-tofu-environment-contract
+    #!/usr/bin/env bash
+    set -euo pipefail
+    backend="${ARC_BACKEND:-{{ arc_backend_default }}}"
+    : "${AWS_ACCESS_KEY_ID:?Set the exact RustFS ARC state access key}"
+    : "${AWS_SECRET_ACCESS_KEY:?Set the exact RustFS ARC state secret key}"
+    while IFS='=' read -r name _; do
+        case "${name}" in
+          AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY) ;;
+          AWS_*) echo "Refusing ambient ${name}; only the exact RustFS access-key pair is accepted" >&2; exit 2 ;;
+          HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|http_proxy|https_proxy|all_proxy) echo "Refusing ambient ${name}; ARC state traffic may not transit a proxy" >&2; exit 2 ;;
+        esac
+    done < <(env)
+    python3 -I - "${backend}" "$(pwd)/{{ arc_backend_default }}" "$(pwd)" <<'PY'
+    import os
+    import re
+    import stat
+    import sys
+    from pathlib import Path
+
+    candidate = Path(sys.argv[1]).expanduser()
+    canonical = Path(sys.argv[2]).resolve(strict=True)
+    repo = Path(sys.argv[3]).resolve(strict=True)
+    if not candidate.is_absolute():
+        candidate = repo / candidate
+    candidate = candidate.resolve(strict=True)
+    if not candidate.is_file():
+        raise SystemExit("ARC_BACKEND must be a regular file")
+
+    endpoint_pattern = re.compile(r'(?m)^(\s*s3\s*=\s*)"([^"]+)"(\s*)$')
+    canonical_text = canonical.read_text(encoding="utf-8")
+    candidate_text = candidate.read_text(encoding="utf-8")
+    canonical_matches = endpoint_pattern.findall(canonical_text)
+    candidate_matches = endpoint_pattern.findall(candidate_text)
+    if len(canonical_matches) != 1 or len(candidate_matches) != 1:
+        raise SystemExit("ARC backend must declare exactly one endpoints.s3 value")
+    normalized_canonical = endpoint_pattern.sub(r'\1"<ENDPOINT>"\3', canonical_text)
+    normalized_candidate = endpoint_pattern.sub(r'\1"<ENDPOINT>"\3', candidate_text)
+    if normalized_candidate != normalized_canonical:
+        raise SystemExit("ARC_BACKEND may differ from the reviewed backend only at endpoints.s3")
+
+    endpoint = candidate_matches[0][1]
+    if candidate == canonical:
+        if endpoint != "http://tofu-state-rustfs.nix-cache.svc:9000":
+            raise SystemExit("canonical ARC backend endpoint changed unexpectedly")
+    else:
+        try:
+            candidate.relative_to(repo)
+        except ValueError:
+            pass
+        else:
+            raise SystemExit("temporary ARC_BACKEND must remain outside the public repository")
+        metadata = candidate.stat()
+        if metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) != 0o600:
+            raise SystemExit("temporary ARC_BACKEND must be operator-owned and mode 0600")
+        match = re.fullmatch(r"http://127\.0\.0\.1:([0-9]{1,5})", endpoint)
+        if match is None or not 1 <= int(match.group(1)) <= 65535:
+            raise SystemExit("temporary ARC_BACKEND endpoint must be http://127.0.0.1:<port>")
+    print(f"reviewed ARC backend: tofu-state/great-falls-tool-bus-infra/arc-runners via {endpoint}")
+    PY
+
+_arc-kubeconfig-contract:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kubeconfig="${GFTB_ARC_KUBECONFIG:?Set GFTB_ARC_KUBECONFIG to the reviewed ARC kubeconfig}"
+    [[ -z "${KUBECONFIG:-}" ]] || { echo "Refusing ambient KUBECONFIG; GFTB_ARC_KUBECONFIG is authoritative" >&2; exit 2; }
+    [[ -z "${TF_VAR_k8s_config_path:-}" ]] || { echo "Refusing ambient TF_VAR_k8s_config_path; GFTB_ARC_KUBECONFIG is authoritative" >&2; exit 2; }
+    while IFS='=' read -r name _; do
+        case "${name}" in
+          KUBE_*|HELM_*) echo "Refusing ambient ${name}; the reviewed ARC kubeconfig is authoritative" >&2; exit 2 ;;
+          HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|http_proxy|https_proxy|all_proxy) echo "Refusing ambient ${name}; ARC Kubernetes traffic may not transit a proxy" >&2; exit 2 ;;
+        esac
+    done < <(env)
+    python3 -I - "${kubeconfig}" "$(pwd)" <<'PY'
+    import os
+    import stat
+    import sys
+    from pathlib import Path
+
+    path = Path(sys.argv[1]).expanduser().resolve(strict=True)
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("GFTB_ARC_KUBECONFIG must remain outside the public repository")
+    metadata = path.stat()
+    if not path.is_file() or metadata.st_uid != os.getuid():
+        raise SystemExit("GFTB_ARC_KUBECONFIG must be a regular file owned by the operator")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise SystemExit("GFTB_ARC_KUBECONFIG must have mode 0600")
+    PY
+    config_json="$(kubectl --kubeconfig "${kubeconfig}" config view --raw -o json)"
+    jq -e '
+      .["current-context"] == "honey"
+      and (.contexts | length == 1)
+      and (.contexts[0].name == "honey")
+      and (.contexts[0].context.cluster == "honey")
+      and (.contexts[0].context.user == "honey")
+      and (.clusters | length == 1)
+      and (.clusters[0].name == "honey")
+      and ((.clusters[0].cluster.server // "") | test("^https://[^/?#]+$"))
+      and ((.clusters[0].cluster["certificate-authority-data"] // "") | length > 0)
+      and ((.clusters[0].cluster["insecure-skip-tls-verify"] // false) == false)
+      and (.clusters[0].cluster | has("proxy-url") | not)
+      and (.users | length == 1)
+      and (.users[0].name == "honey")
+      and (.users[0].user | has("exec") | not)
+      and (.users[0].user | has("auth-provider") | not)
+      and (.users[0].user | has("tokenFile") | not)
+      and (.users[0].user | has("client-certificate") | not)
+      and (.users[0].user | has("client-key") | not)
+      and (
+        ((.users[0].user.token // "") | length > 0)
+        or (
+          ((.users[0].user["client-certificate-data"] // "") | length > 0)
+          and ((.users[0].user["client-key-data"] // "") | length > 0)
+        )
+      )
+    ' <<<"${config_json}" >/dev/null || { echo "GFTB_ARC_KUBECONFIG must be a single TLS-verified honey context with embedded credentials" >&2; exit 2; }
+    cluster_uid="$(kubectl --kubeconfig "${kubeconfig}" --context honey get namespace kube-system -o jsonpath='{.metadata.uid}')"
+    [[ "${cluster_uid}" == "{{ arc_cluster_uid }}" ]] || { echo "ARC kubeconfig does not target the reviewed Honey cluster UID" >&2; exit 2; }
+    echo "reviewed ARC cluster: honey (${cluster_uid})"
+
+_arc-runtime-contract: _arc-kubeconfig-contract
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kubeconfig="${GFTB_ARC_KUBECONFIG:?Set GFTB_ARC_KUBECONFIG to the reviewed ARC kubeconfig}"
+    target_uid="$(kubectl --kubeconfig "${kubeconfig}" --context honey -n arc-runners get autoscalingrunnerset great-falls-tool-bus-nix -o jsonpath='{.metadata.uid}')"
+    [[ "${target_uid}" == "{{ arc_target_uid }}" ]] || { echo "ARC kubeconfig does not target the reviewed great-falls-tool-bus-nix UID" >&2; exit 2; }
+    echo "reviewed ARC target: honey/arc-runners/great-falls-tool-bus-nix (${target_uid})"
+
+_arc-artifact-root-contract:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    python3 -I - "$(pwd)/.tofu-plans" <<'PY'
+    import os
+    import stat
+    import sys
+    from pathlib import Path
+
+    root = Path(sys.argv[1])
+    if not root.exists() and not root.is_symlink():
+        root.mkdir(mode=0o700)
+    metadata = root.lstat()
+    if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        raise SystemExit(".tofu-plans must be a real directory, not a symlink")
+    if metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) != 0o700:
+        raise SystemExit(".tofu-plans must be operator-owned and mode 0700")
+    for path in root.glob("arc-runners.*"):
+        item = path.lstat()
+        if path.name == "arc-runners.tfdata":
+            if not stat.S_ISDIR(item.st_mode) or stat.S_ISLNK(item.st_mode):
+                raise SystemExit("ARC TF_DATA_DIR must be a real directory")
+            expected_mode = 0o700
+        else:
+            if not stat.S_ISREG(item.st_mode) or stat.S_ISLNK(item.st_mode):
+                raise SystemExit(f"ARC plan artifact must be a regular file: {path.name}")
+            expected_mode = 0o600
+        if item.st_uid != os.getuid() or stat.S_IMODE(item.st_mode) != expected_mode:
+            raise SystemExit(
+                f"ARC artifact {path.name} must be operator-owned and mode {expected_mode:04o}"
+            )
+    PY
+
+_arc-plan-input-snapshot: _reviewed-clean-main _reviewed-arc-core _arc-exclusive-confirm _arc-backend-contract _arc-runtime-contract _arc-artifact-root-contract
+    #!/usr/bin/env bash
+    set -euo pipefail
+    umask 077
+    core="${GF_ARC_CORE_PATH:-{{ arc_core_default }}}"
+    kubeconfig="${GFTB_ARC_KUBECONFIG:?Set GFTB_ARC_KUBECONFIG to the reviewed ARC kubeconfig}"
+    data_dir="$(pwd)/.tofu-plans/arc-runners.tfdata"
+    backend="${ARC_BACKEND:-{{ arc_backend_default }}}"
+    if [[ "${backend}" != /* ]]; then
+        backend="$(pwd)/${backend}"
+    fi
+    just _reviewed-clean-main
+    just _reviewed-arc-core
+    just _arc-backend-contract
+    just _arc-runtime-contract
+    just _arc-artifact-root-contract
+    test ! -e .tofu-plans/arc-runners.apply-attempted || { echo "A prior ARC apply attempt must be reconciled before creating a fresh plan" >&2; exit 2; }
+    if [[ -e "${data_dir}" || -L "${data_dir}" ]]; then
+        [[ -d "${data_dir}" && ! -L "${data_dir}" ]] || { echo "ARC TF_DATA_DIR must be a real directory" >&2; exit 2; }
+        rm -rf -- "${data_dir}"
+    fi
+    mkdir -m 700 "${data_dir}"
+    rm -f .tofu-plans/arc-runners.tfplan .tofu-plans/arc-runners.source-sha .tofu-plans/arc-runners.core-sha .tofu-plans/arc-runners.backend-blob .tofu-plans/arc-runners.kubeconfig-blob .tofu-plans/arc-runners.cluster-uid .tofu-plans/arc-runners.target-uid .tofu-plans/arc-runners.plan-sha256 .tofu-plans/arc-runners.scope-sha256
+    git rev-parse HEAD > .tofu-plans/arc-runners.source-sha
+    git -C "${core}" rev-parse HEAD > .tofu-plans/arc-runners.core-sha
+    python3 -I -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${backend}" > .tofu-plans/arc-runners.backend-blob
+    python3 -I -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${kubeconfig}" > .tofu-plans/arc-runners.kubeconfig-blob
+    kubectl --kubeconfig "${kubeconfig}" --context honey get namespace kube-system -o jsonpath='{.metadata.uid}' > .tofu-plans/arc-runners.cluster-uid
+    kubectl --kubeconfig "${kubeconfig}" --context honey -n arc-runners get autoscalingrunnerset great-falls-tool-bus-nix -o jsonpath='{.metadata.uid}' > .tofu-plans/arc-runners.target-uid
+    chmod 600 .tofu-plans/arc-runners.source-sha .tofu-plans/arc-runners.core-sha .tofu-plans/arc-runners.backend-blob .tofu-plans/arc-runners.kubeconfig-blob .tofu-plans/arc-runners.cluster-uid .tofu-plans/arc-runners.target-uid
+
+_arc-plan-input-preflight: _reviewed-clean-main _reviewed-arc-core _arc-backend-contract _arc-runtime-contract _arc-artifact-root-contract
+    #!/usr/bin/env bash
+    set -euo pipefail
+    core="${GF_ARC_CORE_PATH:-{{ arc_core_default }}}"
+    kubeconfig="${GFTB_ARC_KUBECONFIG:?Set GFTB_ARC_KUBECONFIG to the reviewed ARC kubeconfig}"
+    backend="${ARC_BACKEND:-{{ arc_backend_default }}}"
+    if [[ "${backend}" != /* ]]; then
+        backend="$(pwd)/${backend}"
+    fi
     test -f .tofu-plans/arc-runners.tfplan
-    nix develop "{{ gf_core_ci }}" -c tofu -chdir="{{ gf_core }}/tofu/stacks/arc-runners" apply "$(pwd)/.tofu-plans/arc-runners.tfplan"
+    test -f .tofu-plans/arc-runners.source-sha
+    test -f .tofu-plans/arc-runners.core-sha
+    test -f .tofu-plans/arc-runners.backend-blob
+    test -f .tofu-plans/arc-runners.kubeconfig-blob
+    test -f .tofu-plans/arc-runners.cluster-uid
+    test -f .tofu-plans/arc-runners.target-uid
+    test "$(git rev-parse HEAD)" = "$(tr -d '\n' < .tofu-plans/arc-runners.source-sha)" || { echo "ARC plan was created from a different infra revision" >&2; exit 2; }
+    test "$(git -C "${core}" rev-parse HEAD)" = "$(tr -d '\n' < .tofu-plans/arc-runners.core-sha)" || { echo "ARC plan was created from a different GloriousFlywheel revision" >&2; exit 2; }
+    test "$(python3 -I -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${backend}")" = "$(tr -d '\n' < .tofu-plans/arc-runners.backend-blob)" || { echo "ARC plan was created with a different backend declaration" >&2; exit 2; }
+    test "$(python3 -I -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${kubeconfig}")" = "$(tr -d '\n' < .tofu-plans/arc-runners.kubeconfig-blob)" || { echo "ARC plan was created with a different kubeconfig" >&2; exit 2; }
+    cluster_uid="$(kubectl --kubeconfig "${kubeconfig}" --context honey get namespace kube-system -o jsonpath='{.metadata.uid}')"
+    test "${cluster_uid}" = "$(tr -d '\n' < .tofu-plans/arc-runners.cluster-uid)" || { echo "ARC plan was created for a different cluster" >&2; exit 2; }
+    target_uid="$(kubectl --kubeconfig "${kubeconfig}" --context honey -n arc-runners get autoscalingrunnerset great-falls-tool-bus-nix -o jsonpath='{.metadata.uid}')"
+    test "${target_uid}" = "$(tr -d '\n' < .tofu-plans/arc-runners.target-uid)" || { echo "ARC plan was created for a different target cluster/release" >&2; exit 2; }
 
-arc-enrollment-plan: enrollment-preflight arc-init arc-plan
-    @echo "Review with just arc-plan-show before running just arc-apply."
+_operator-apply-confirm:
+    [[ "${GFTB_APPLY_CONFIRM:-}" == "apply" ]] || { echo "Set GFTB_APPLY_CONFIRM=apply for this attended mutation" >&2; exit 2; }
+
+_arc-exclusive-confirm:
+    [[ "${GFTB_ARC_EXCLUSIVE_CONFIRM:-}" == "exclusive" ]] || { echo "Set GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive after confirming no concurrent ARC plan/apply" >&2; exit 2; }
 
 # --- edge zone stack (tofu/stacks/edge; TIN-2378 prep + TIN-2385) -----------
 # Console-created zones on the house CF account, looked up by name with a

@@ -2,8 +2,7 @@ name: Edge Zone Stack
 
 # TIN-2378 prep + TIN-2385 implementation: plan-on-PR/push for
 # tofu/stacks/edge (console-created zones, zone-scoped token), apply only
-# via manual workflow_dispatch action=apply — the same operator-gated
-# chassis as deploy-arc-runners.yml. The job binds to the protected `edge`
+# via manual workflow_dispatch action=apply. The job binds to the protected `edge`
 # environment, which holds the zone-scoped Cloudflare token plus the
 # operator-custody Access allowlist JSON (names only here; mint + rotation:
 # docs/runbooks/edge-token-and-zones.md). FAIL-SOFT: until those secrets

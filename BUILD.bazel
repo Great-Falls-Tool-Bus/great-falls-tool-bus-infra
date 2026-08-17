@@ -20,7 +20,6 @@ CORE_CHECKOUT_CONTRACT_SOURCES = [
     "config/organization.yaml",
     "docs/ci-credentials.md",
     "docs/implementation-overlay.md",
-    "docs/onboarding-runbook.md",
     "docs/runbooks/oncluster-web-cutover.md",
 ] + WORKFLOW_SOURCES
 

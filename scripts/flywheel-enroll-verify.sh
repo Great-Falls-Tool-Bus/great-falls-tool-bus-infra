@@ -77,7 +77,7 @@ fi
 echo "CHECK 3: live runner managed-by=Helm"
 if command -v kubectl >/dev/null 2>&1 && kubectl -n arc-runners get autoscalingrunnersets >/dev/null 2>&1; then
   mb="$(kubectl -n arc-runners get autoscalingrunnerset "${anchor}" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}' 2>/dev/null || true)"
-  [ "${mb}" = "Helm" ] || fail "live runner '${anchor}' managed-by='${mb:-<absent>}' (must be Helm — run the reconcile: delete the manual object, then just arc-apply)"
+  [ "${mb}" = "Helm" ] || fail "live runner '${anchor}' managed-by='${mb:-<absent>}' (must be Helm — use the documented fresh-plan, exact-scope, one-shot-confirm ARC path)"
   note "ok: ${anchor} managed-by=Helm"
 else
   note "skip: cluster not reachable — CHECK 3 is the live gate that earns enrolled:true"

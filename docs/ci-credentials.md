@@ -7,11 +7,10 @@ GloriousFlywheel repository or receive a cross-repository credential.
 
 The required `validate` workflow checks out only this public overlay with
 `persist-credentials: false`. Exact GloriousFlywheel source-dependent ARC
-validation is operator-local. Ten retained legacy self-hosted workflows still
-declare exact core pins, but the public repository token cannot fetch that
-private source; those declarations are not hosted validation or release
-authority and are scheduled for contraction rather than receiving a new PAT,
-deploy key, or reused ARC registration credential.
+validation and all ARC state plan/apply work are operator-local. The remaining
+core-consuming workflows declare exact core pins; the public repository token
+cannot fetch that private source. Do not add a PAT, deploy key, reused ARC App
+credential, or ARC kubeconfig to turn those declarations into ARC authority.
 
 ## Optional Site-CI Metadata Token
 
@@ -20,22 +19,14 @@ deploy key, or reused ARC registration credential.
 Actions result. Its default is the workflow's ephemeral `github.token`. It is
 not a GloriousFlywheel source credential and must not be named or reused as one.
 
-## ARC Runner Deploy Secrets
+## Edge Backend Secrets
 
-The ARC runner deploy workflow plans on pull requests and pushes, but applies
-only through manual `workflow_dispatch` with `action=apply`.
-
-Required secrets:
-
-- `ARC_RUNNERS_KUBECONFIG_B64`: base64-encoded Honey kubeconfig with access to
-  plan and reconcile the `arc-runners` namespace.
-- `ARC_RUNNERS_RUSTFS_ACCESS_KEY`: RustFS S3 backend access key for the
-  `tofu-state` bucket.
-- `ARC_RUNNERS_RUSTFS_SECRET_KEY`: RustFS S3 backend secret key for the
-  `tofu-state` bucket.
-
-If they are absent, pull-request and push runs skip ARC planning with notices;
-manual `action=apply` fails closed.
+The edge plan/drift workflows legitimately retain the existing RustFS backend
+secret names `ARC_RUNNERS_RUSTFS_ACCESS_KEY` and
+`ARC_RUNNERS_RUSTFS_SECRET_KEY`. The names are historical and shared with the
+edge backend; their presence does not authorize ARC state planning or apply.
+ARC uses the runtime AWS SDK access-key pair from operator custody. No ARC
+kubeconfig belongs in Actions.
 
 ## Mail CR Apply Secret
 
@@ -56,10 +47,9 @@ GFTB_MAIL_KUBECONFIG=/path/to/latoolb-us-production.kubeconfig just mail-cr-serv
 GFTB_MAIL_KUBECONFIG=/path/to/latoolb-us-production.kubeconfig just mail-cr-apply
 ```
 
-BOOTSTRAP NOTE: these secrets only matter AFTER the GFTB scale set exists.
-Secret-free `validate` runs on a GitHub-hosted runner; self-hosted and apply
-lanes remain separately gated. The first plan/apply always happens on the
-operator machine (see docs/implementation-overlay.md).
+Secret-free `validate` runs on a GitHub-hosted runner. Self-hosted workload and
+non-ARC apply lanes remain separately gated. ARC plan/apply always happens on
+the operator machine (see docs/implementation-overlay.md).
 
 ## Why It Exists
 
@@ -72,14 +62,14 @@ core product logic into this repo.
 
 ## Current Status
 
-Ten legacy core-consuming workflows retain the exact-SHA checkout declaration.
-The repository contains two workflows without a core checkout; the finite
-`.yml`/`.yaml` census deliberately covers them so a new source consumer cannot
+The finite `.yml`/`.yaml` census covers 11 workflows. Nine are core-checkout
+consumers with 14 exact-SHA checkout declarations. The other two workflows do
+not check out core; they remain in the census so a new source consumer cannot
 hide under the alternate extension.
 
 `just core-checkout` validates checkout action immutability, canonical repository,
 finite overlay/core paths, role pin, non-persistence, read-only workflow
-permission, closed HEAD assertion, all 29 exact `GF_CORE_CI_PATH` devshell
+permission, closed HEAD assertion, all 25 exact `GF_CORE_CI_PATH` devshell
 sources, the pinned-and-hashed OIDC helper URL, and absence of dedicated
 cross-repository credential inputs. `just core-checkout-selftest` proves the
 guard rejects adversarial mutations. The pinned pre-#1208 GloriousFlywheel

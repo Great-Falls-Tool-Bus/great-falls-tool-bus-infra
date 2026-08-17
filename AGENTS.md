@@ -8,6 +8,10 @@ Hard rules:
 
 - do not commit secrets, `.env` files, kubeconfigs, private keys, or backend
   credentials
+- keep the live tree current: delete superseded or historical docs, scripts,
+  JSON, workflows, and stacks; use Git history and the changelog for recovery.
+  Retain only live declarations and explicitly labelled state-continuity HOLDs
+  whose external state still requires readback or a reviewed retirement plan
 - do not introduce repo-specific or org-identity runner labels
 - keep runner labels capability-shaped and aligned with GloriousFlywheel;
   self-hosted workflows request shared `tinyland-*` labels only. The public
