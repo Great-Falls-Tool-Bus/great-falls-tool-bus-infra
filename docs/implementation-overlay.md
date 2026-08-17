@@ -69,7 +69,8 @@ four independent build/test pods crossed the former 8 GiB limit and were
 evicted, while the lightweight carrier validation completed. Before this or any
 later envelope is accepted, its PR must record max-runner node/quota fit and a
 representative natural-fanout soak. Every self-hosted check must receive a real
-runner, the runner root-filesystem peak must stay below 75% of its limit, and no
+runner, the runner container's combined writable-rootfs plus log peak
+(`rootfs.usedBytes + logs.usedBytes`) must stay below 75% of its limit, and no
 pod eviction, restart, or node `DiskPressure` may occur. A warm cache rerun must
 also pass. Failure rolls back through the guarded ARC path to the exact prior
 request/limit values after the scale set drains; it is not permission to raise
