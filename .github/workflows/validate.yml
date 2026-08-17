@@ -1,11 +1,8 @@
 name: Validate Overlay
 
-# BOOTSTRAP NOTE: this job runs on `tinyland-nix`, which for the GFTB org
-# resolves ONLY through the great-falls-tool-bus-nix scale set that this
-# overlay's ARC stack provisions. Until the first operator-machine
-# `just arc-apply` succeeds, these jobs queue unpicked. tinyland-nix (not
-# tinyland-nix-heavy, used by older overlays): GFTB provisions
-# only the nix lane, and labels resolve through this org's own scale sets.
+# This public repository's validation is deliberately secret-free and runs on
+# a GitHub-hosted runner. The selected `tinyland-nix` group remains restricted
+# to admitted private repositories; validation must not weaken that boundary.
 
 on:
   pull_request:
@@ -17,37 +14,20 @@ on:
 permissions:
   contents: read
 
-env:
-  GF_CORE_REF: 2281b576bce0e8dd776a047b84e7464f5b508a62
-  ATTIC_TOKEN: ${{ github.event_name == 'push' && secrets.ATTIC_TOKEN || '' }}
-
 jobs:
   validate:
-    runs-on: tinyland-nix
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - name: Checkout overlay
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           path: overlay
           persist-credentials: false
-      - name: Checkout public GloriousFlywheel core
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          repository: tinyland-inc/GloriousFlywheel
-          ref: ${{ env.GF_CORE_REF }}
-          path: GloriousFlywheel
-          persist-credentials: false
-      - name: Verify GloriousFlywheel core checkout
-        run: |
-          set -euo pipefail
-          actual="$(git -C GloriousFlywheel rev-parse --verify HEAD)"
-          if [ "${actual}" != "${GF_CORE_REF}" ]; then
-            echo "::error::GloriousFlywheel checkout mismatch: expected ${GF_CORE_REF}, got ${actual}"
-            exit 1
-          fi
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
       - name: Validate overlay contract
         env:
-          ATTIC_PUBLIC_KEY: ${{ github.event_name == 'push' && vars.ATTIC_PUBLIC_KEY || '' }}
           GH_ACTION_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -64,35 +44,8 @@ jobs:
           fi
 
           if ! nix store ping >/dev/null 2>&1; then
-            echo "::warning::Nix daemon socket is unavailable; starting the Nix daemon stack."
-            sudo rm -f /nix/var/nix/daemon-socket/socket || true
-            if command -v determinate-nixd >/dev/null 2>&1; then
-              sudo -b "$(command -v determinate-nixd)" daemon
-            else
-              nix_daemon_bin="$(command -v nix-daemon || true)"
-              if [ -z "${nix_daemon_bin}" ]; then
-                echo "::error::nix-daemon is not on PATH, and nix store ping failed."
-                exit 1
-              fi
-              sudo -b "${nix_daemon_bin}" --daemon
-            fi
-
-            (
-              for attempt in $(seq 1 30); do
-                if nix store ping >/dev/null 2>&1; then
-                  exit 0
-                fi
-                if [ "${attempt}" -eq 30 ]; then
-                  exit 1
-                fi
-                sleep 1
-              done
-            ) &
-            daemon_wait_pid="$!"
-            if ! wait "${daemon_wait_pid}"; then
-              echo "::error::nix-daemon did not become reachable after restart."
-              exit 1
-            fi
+            echo "::error::Nix daemon is unavailable after the pinned installer."
+            exit 1
           fi
 
           append_nix_config_line() {
@@ -111,49 +64,5 @@ jobs:
           append_nix_config_line "experimental-features" "nix-command flakes"
           append_nix_config_line "accept-flake-config" "true"
           append_nix_config_line "access-tokens" "github.com=${GH_ACTION_TOKEN}"
-          if [ -n "${ATTIC_PUBLIC_KEY:-}" ]; then
-            append_nix_config_line "extra-substituters" "http://attic.nix-cache.svc.cluster.local/main"
-            append_nix_config_line "extra-trusted-public-keys" "${ATTIC_PUBLIC_KEY}"
-          fi
-
           cd overlay
-          export GF_CORE_PATH=../GloriousFlywheel
-          export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
-
-          echo "::group::secrets scan"
-          nix develop . -c gitleaks dir --config .gitleaks.toml --redact --verbose .
-          echo "::endgroup::"
-
-          (
-            while true; do
-              echo "overlay validation still running at $(date -u +%H:%M:%SZ)"
-              sleep 30
-            done
-          ) &
-          heartbeat_pid="$!"
-          trap 'kill "${heartbeat_pid}" 2>/dev/null || true' EXIT
-
-          nix develop "${GF_CORE_CI_PATH}" -c bash -lc '
-            set -euo pipefail
-
-            echo "::group::public operator surface"
-            just public-surface
-            echo "::endgroup::"
-
-            echo "::group::runner taxonomy"
-            just taxonomy
-            just taxonomy-selftest
-            echo "::endgroup::"
-
-            echo "::group::mail CRs"
-            just mail-cr-validate
-            echo "::endgroup::"
-
-            echo "::group::ARC fmt"
-            just arc-fmt-check
-            echo "::endgroup::"
-
-            echo "::group::ARC validate"
-            just arc-validate
-            echo "::endgroup::"
-          '
+          nix develop . -c just check-hosted

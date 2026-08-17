@@ -21,14 +21,17 @@
         {
           default = pkgs.mkShell {
             packages = [
+              pkgs.actionlint
               pkgs.git
               pkgs.gh
               pkgs.gitleaks
               pkgs.git-cliff
               pkgs.jq
               pkgs.just
+              pkgs.kubectl
               pkgs.opentofu
               pkgs.python3
+              pkgs.yq
               # Toolchain for the declare-only org-tenancy cache-backed Bazel
               # proof (TIN-2364, just flywheel-cache-proof). Cache-first only.
               pkgs.bazelisk

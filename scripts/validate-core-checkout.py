@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the finite public GloriousFlywheel source-checkout contract."""
+"""Validate the finite GloriousFlywheel source-declaration contract."""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ EXPECTED_WORKFLOWS = {
     "web-stack.yml",
 }
 
-# One entry per workflow that checks out the public reusable core. Values are
+# One entry per workflow that declares the reusable core checkout. Values are
 # exact job-level checkout counts, not a loose minimum.
 EXPECTED_CORE_CHECKOUTS = {
     "archive-stack.yml": 2,
@@ -59,12 +59,11 @@ EXPECTED_CORE_CHECKOUTS = {
     "k8s-stack-drift.yml": 2,
     "list-crs.yml": 2,
     "mail-crs.yml": 2,
-    "validate.yml": 1,
     "web-crs.yml": 1,
     "web-stack.yml": 1,
 }
 
-# Preserve the reviewed executable authority for each role. Public-checkout
+# Preserve the reviewed executable authority for each role. Checkout
 # hardening must not silently import a newer core implementation into unrelated
 # apply, drift, or mail lanes.
 EXPECTED_CORE_PINS = {
@@ -86,7 +85,7 @@ EXPECTED_ACTION_CHECKOUTS = {
     "k8s-stack-drift.yml": 4,
     "list-crs.yml": 4,
     "mail-crs.yml": 4,
-    "validate.yml": 2,
+    "validate.yml": 1,
     "web-crs.yml": 2,
     "web-stack.yml": 2,
 }
@@ -101,7 +100,7 @@ EXPECTED_CORE_CI_PATH_EXPORTS = {
     "k8s-stack-drift.yml": 5,
     "list-crs.yml": 3,
     "mail-crs.yml": 3,
-    "validate.yml": 1,
+    "validate.yml": 0,
     "web-crs.yml": 1,
     "web-stack.yml": 3,
 }
@@ -139,6 +138,8 @@ VERIFY_SCRIPT = (
     "  exit 1",
     "fi",
 )
+HOSTED_SELFTEST_WORKFLOW = Path(".github/workflows/validate.yml")
+CORE_SELFTEST_WORKFLOW = Path(".github/workflows/archive-stack.yml")
 OIDC_INSTALL_SCRIPT = (
     "set -euo pipefail",
     'tools_dir="${RUNNER_TEMP}/gf-tools"',
@@ -351,7 +352,7 @@ def justfile_pin(source: str) -> str:
     )
     if match is None:
         raise ContractError(
-            "Justfile gf_core_ci default must be the canonical exact public #ci flake"
+            "Justfile gf_core_ci default must be the canonical exact #ci flake reference"
         )
     return _exact_sha(match.group(1), "Justfile gf_core_ci commit")
 
@@ -492,14 +493,14 @@ def _checkout_findings(sources: dict[str, str]) -> list[str]:
         expected_core_count = EXPECTED_CORE_CHECKOUTS.get(workflow, 0)
         if len(core_indexes) != expected_core_count:
             findings.append(
-                f"{workflow}: expected {expected_core_count} public core checkout(s), found {len(core_indexes)}"
+                f"{workflow}: expected {expected_core_count} core checkout declaration(s), found {len(core_indexes)}"
             )
 
         for index in core_indexes:
             step = steps[index]
             location = f"{workflow}:{step.line}"
-            if step.name != "Checkout public GloriousFlywheel core":
-                findings.append(f"{location}: core checkout name must state public authority")
+            if step.name != "Checkout pinned GloriousFlywheel core":
+                findings.append(f"{location}: core checkout name must state pinned source")
             if _with_values(step, "repository") != [CORE_REPOSITORY]:
                 findings.append(f"{location}: core repository must be {CORE_REPOSITORY}")
             if _with_values(step, "ref") != ["${{ env.GF_CORE_REF }}"]:
@@ -651,8 +652,6 @@ def validate(root: Path) -> list[str]:
         for credential in RETIRED_CORE_CREDENTIALS:
             if credential in source:
                 findings.append(f"{relative}: references retired {credential}")
-        if re.search(r"private\s+(?:GloriousFlywheel|core repo)", source, re.IGNORECASE):
-            findings.append(f"{relative}: claims the public core source is private")
 
     return findings
 
@@ -674,87 +673,87 @@ def _write_fixture(destination: Path, source_root: Path) -> None:
 def self_test(root: Path) -> None:
     mutations: dict[str, tuple[Path, str, str]] = {
         "floating workflow pin": (
-            Path(".github/workflows/validate.yml"),
+            CORE_SELFTEST_WORKFLOW,
             f"GF_CORE_REF: {IMPLEMENTATION_CORE_PIN}",
             "GF_CORE_REF: main",
         ),
         "job-level core ref override": (
-            Path(".github/workflows/validate.yml"),
+            CORE_SELFTEST_WORKFLOW,
             "    steps:\n",
             f"    env:\n      GF_CORE_REF: {'e' * 40}\n    steps:\n",
         ),
         "floating checkout action": (
-            Path(".github/workflows/validate.yml"),
+            HOSTED_SELFTEST_WORKFLOW,
             CHECKOUT_ACTION,
             "actions/checkout@v6",
         ),
         "credential persistence": (
-            Path(".github/workflows/validate.yml"),
+            HOSTED_SELFTEST_WORKFLOW,
             "persist-credentials: false",
             "persist-credentials: true",
         ),
         "wrong core path": (
-            Path(".github/workflows/validate.yml"),
+            CORE_SELFTEST_WORKFLOW,
             "path: GloriousFlywheel",
             "path: core",
         ),
         "explicit checkout token": (
-            Path(".github/workflows/validate.yml"),
+            CORE_SELFTEST_WORKFLOW,
             "          path: GloriousFlywheel\n",
             "          path: GloriousFlywheel\n          token: ${{ github.token }}\n",
         ),
         "explicit checkout SSH key": (
-            Path(".github/workflows/validate.yml"),
+            CORE_SELFTEST_WORKFLOW,
             "          path: GloriousFlywheel\n",
             "          path: GloriousFlywheel\n          ssh-key: ${{ secrets.SOME_KEY }}\n",
         ),
         "overlay checkout token": (
-            Path(".github/workflows/validate.yml"),
+            HOSTED_SELFTEST_WORKFLOW,
             "          path: overlay\n",
             "          path: overlay\n          token: ${{ secrets.SITE_CI_READ_TOKEN }}\n",
         ),
         "spaced checkout credential key": (
-            Path(".github/workflows/validate.yml"),
+            CORE_SELFTEST_WORKFLOW,
             "          path: GloriousFlywheel\n",
             "          path: GloriousFlywheel\n          token : ${{ secrets.NEW_GF_PAT }}\n",
         ),
         "wrong overlay path": (
-            Path(".github/workflows/validate.yml"),
+            HOSTED_SELFTEST_WORKFLOW,
             "          path: overlay\n",
             "          path: wrong-overlay\n",
         ),
         "duplicate core ref": (
-            Path(".github/workflows/validate.yml"),
+            CORE_SELFTEST_WORKFLOW,
             "          ref: ${{ env.GF_CORE_REF }}\n",
             "          ref: ${{ env.GF_CORE_REF }}\n          ref: main\n",
         ),
         "quoted hidden checkout": (
-            Path(".github/workflows/validate.yml"),
+            HOSTED_SELFTEST_WORKFLOW,
             "    steps:\n",
             "    steps:\n      - name: Hidden checkout\n        uses: 'actions/checkout@v6'\n",
         ),
         "shell core clone": (
-            Path(".github/workflows/validate.yml"),
+            HOSTED_SELFTEST_WORKFLOW,
             "    steps:\n",
             "    steps:\n      - name: Clone core\n        run: git clone https://github.com/tinyland-inc/GloriousFlywheel\n",
         ),
         "remote core action": (
-            Path(".github/workflows/validate.yml"),
+            HOSTED_SELFTEST_WORKFLOW,
             "    steps:\n",
             "    steps:\n      - name: Remote core action\n        uses: tinyland-inc/GloriousFlywheel/.github/actions/nix-job@main\n",
         ),
         "floating core devshell": (
-            Path(".github/workflows/validate.yml"),
+            CORE_SELFTEST_WORKFLOW,
             'export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"',
             'export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/main#ci"',
         ),
         "write contents permission": (
-            Path(".github/workflows/validate.yml"),
+            HOSTED_SELFTEST_WORKFLOW,
             "  contents: read",
             "  contents: write",
         ),
         "expanded workflow token permissions": (
-            Path(".github/workflows/validate.yml"),
+            HOSTED_SELFTEST_WORKFLOW,
             "  contents: read\n",
             "  contents: read\n  actions: write\n",
         ),
@@ -774,17 +773,17 @@ def self_test(root: Path) -> None:
             "if false; then",
         ),
         "legacy core credential": (
-            Path(".github/workflows/validate.yml"),
+            CORE_SELFTEST_WORKFLOW,
             "env:\n",
             "env:\n  GF_CORE_READ_TOKEN: ${{ secrets.GF_CORE_READ_TOKEN }}\n",
         ),
         "missing HEAD assertion": (
-            Path(".github/workflows/validate.yml"),
+            CORE_SELFTEST_WORKFLOW,
             "      - name: Verify GloriousFlywheel core checkout",
             "      - name: Do not verify GloriousFlywheel core checkout",
         ),
         "mutated HEAD assertion": (
-            Path(".github/workflows/validate.yml"),
+            CORE_SELFTEST_WORKFLOW,
             "rev-parse --verify HEAD",
             "rev-parse --verify HEAD || true",
         ),
@@ -799,7 +798,7 @@ def self_test(root: Path) -> None:
             "      - name: Checkout overlay\n        if: always()",
         ),
         "fail-soft HEAD assertion": (
-            Path(".github/workflows/validate.yml"),
+            CORE_SELFTEST_WORKFLOW,
             "      - name: Verify GloriousFlywheel core checkout\n        run: |",
             "      - name: Verify GloriousFlywheel core checkout\n        continue-on-error: true\n        run: |",
         ),
@@ -875,7 +874,7 @@ def main() -> int:
     print(
         "core-checkout contract passed: "
         f"{len(EXPECTED_CORE_CHECKOUTS)} workflow consumers, "
-        f"{sum(EXPECTED_CORE_CHECKOUTS.values())} public exact-SHA checkouts, "
+        f"{sum(EXPECTED_CORE_CHECKOUTS.values())} exact-SHA checkout declarations, "
         f"{sum(EXPECTED_CORE_CI_PATH_EXPORTS.values())} pinned #ci devshell sources, "
         f"implementation pin {IMPLEMENTATION_CORE_PIN}, "
         f"ARC/OIDC role pin {ARC_CORE_PIN}; "

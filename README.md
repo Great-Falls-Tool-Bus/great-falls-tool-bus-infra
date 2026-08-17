@@ -24,9 +24,9 @@ Grounded mermaid diagrams (mail flow, network/ports, planes, Bazel/GF) live in
 - ARC registration: `https://github.com/Great-Falls-Tool-Bus` (org-scoped, no
   repo anchors)
 - Cluster context: `honey`; shared ARC controller owner: Tinyland overlay
-- Workflow labels: shared `tinyland-*` capability labels. ONLY `tinyland-nix`
-  is provisioned for this org today (conservative posture); a GFTB workflow
-  requesting any other label will queue unpicked.
+- Self-hosted workflow labels: shared `tinyland-*` capability labels. ONLY
+  `tinyland-nix` is provisioned for this org today; the public repository's
+  secret-free `validate` job runs on GitHub-hosted infrastructure instead.
 - Scale set: `great-falls-tool-bus-nix` (ARC registration identity only;
   workflows use `runs-on: tinyland-nix`)
 - Shared Nix cache: `http://attic.nix-cache.svc.cluster.local`
@@ -100,12 +100,10 @@ operation (members, moderation, settings, stack) in
 
 ## Bootstrap (read first)
 
-This overlay's own CI runs on `tinyland-nix`, which for GFTB resolves ONLY
-through the scale set this overlay provisions. Until the first
-operator-machine `just arc-apply` succeeds, overlay CI jobs queue unpicked.
-The FIRST plan and FIRST apply run from the operator machine (kubectl context
-`honey`). Runs queued from the initial push are picked up once the listener
-registers; re-dispatch if they have expired. See
+Secret-free pull-request validation runs on a GitHub-hosted runner and does not
+depend on ARC admission. Cluster plans and applies remain operator-local; the
+first ARC plan and apply run from the operator machine (kubectl context
+`honey`). See
 [docs/implementation-overlay.md](docs/implementation-overlay.md) for the
 ordered runbook.
 
@@ -140,21 +138,16 @@ core-read-credential row; do not provision a key solely to satisfy that row.
 `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, and
 `GITHUB_APP_PRIVATE_KEY_PATH`.
 
-CI checks out the public `tinyland-inc/GloriousFlywheel` source at the exact
-declared commit. No dedicated cross-repository deploy key, PAT, or GitHub App
-secret is required. `actions/checkout` may use this repository's ephemeral
-per-run `github.token` for the public fetch, but the workflow supplies no
-private-GF grant, passes no explicit token or SSH key, and disables credential
-persistence. See [CI Credentials](docs/ci-credentials.md).
+Hosted `validate` is self-contained and does not fetch the private
+`tinyland-inc/GloriousFlywheel` repository. Source-dependent ARC module
+validation remains operator-local against an exact reviewed checkout. The
+legacy self-hosted workflow declarations retain exact pins but are not the
+required hosted validation authority; see [CI Credentials](docs/ci-credentials.md).
 
 ARC runner plan/apply uses `.github/workflows/deploy-arc-runners.yml`
 (plan-only on PR/push; apply only via manual `workflow_dispatch` with
 `action=apply`). It requires `ARC_RUNNERS_KUBECONFIG_B64`,
 `ARC_RUNNERS_RUSTFS_ACCESS_KEY`, and `ARC_RUNNERS_RUSTFS_SECRET_KEY`.
-
-Trusted push validation may also read from and publish warmed Nix outputs into
-the shared Attic cache when an `ATTIC_TOKEN` repository secret is present.
-Pull-request validation stays read-only.
 
 `just arc-apply` runs a destructive-plan guard backed by OpenTofu's JSON plan
 actions. If a recorded state rehome or teardown window intentionally allows

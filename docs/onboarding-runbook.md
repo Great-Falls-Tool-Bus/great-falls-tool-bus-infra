@@ -28,13 +28,14 @@ gh api /orgs/Great-Falls-Tool-Bus/installations --jq '.installations[] | select(
 
 ## 4. Create and populate the overlay repo
 ```bash
-gh repo create Great-Falls-Tool-Bus/great-falls-tool-bus-infra --private --description "GFTB implementation overlay for GloriousFlywheel"
+gh repo create Great-Falls-Tool-Bus/great-falls-tool-bus-infra --public --description "GFTB implementation overlay for GloriousFlywheel"
 cd ~/git && git clone git@github.com:Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git && cd great-falls-tool-bus-infra
 # materialize the files[] from this package, then:
 chmod +x scripts/*.sh
 git add -A && git commit -m "feat: GFTB implementation overlay (org-scoped ARC, conservative nix-only posture)" && git push -u origin main
 ```
-Note: the CI runs queued by this push stay pending until step 8 registers the scale set (expected).
+Note: hosted `validate` can run immediately. Only self-hosted ARC lanes wait for
+scale-set registration and explicit runner-group admission.
 
 ## 5. Local validation (no cluster needed)
 ```bash
@@ -55,7 +56,7 @@ just arc-app-secret-apply      # writes github-app-secret-great-falls-tool-bus i
 just enrollment-preflight      # read-only; expect App-secret check green, scale set absent (not yet applied)
 ```
 
-## 7. First plan (OPERATOR MACHINE, bootstrap circularity: overlay CI cannot run yet)
+## 7. First ARC plan (operator machine; hosted validation is independent)
 ```bash
 export AWS_ACCESS_KEY_ID=<rustfs-tofu-state-access-key>       # from operator secret store
 # set the S3 credential pair for the RustFS tofu-state backend from operator
@@ -80,17 +81,18 @@ kubectl -n arc-runners get autoscalingrunnerset great-falls-tool-bus-nix -o json
 just enrollment-preflight   # now fully green
 ```
 
-## 10. Arm overlay CI (steady-state plan-only lane)
+## 10. Arm the self-hosted ARC plan/apply lane
 ```bash
 kubectl config view --minify --flatten --context honey | base64 | gh secret set ARC_RUNNERS_KUBECONFIG_B64 -R Great-Falls-Tool-Bus/great-falls-tool-bus-infra
 gh secret set ARC_RUNNERS_RUSTFS_ACCESS_KEY -R Great-Falls-Tool-Bus/great-falls-tool-bus-infra --body "<rustfs-access-key>"
 gh secret set ARC_RUNNERS_RUSTFS_SECRET_KEY -R Great-Falls-Tool-Bus/great-falls-tool-bus-infra --body "<rustfs-secret-key>"
-gh workflow run validate.yml -R Great-Falls-Tool-Bus/great-falls-tool-bus-infra && gh run watch -R Great-Falls-Tool-Bus/great-falls-tool-bus-infra
 ```
-GloriousFlywheel source checkout needs no dedicated cross-repository secret:
-the public repository is bound to an exact commit, the action supplies no
-explicit token or SSH key, and credential persistence is disabled.
-Green validate run on `tinyland-nix` = end-to-end proof: App installation + org registration + scale set + label pickup.
+Hosted validation does not fetch the private GloriousFlywheel repository.
+Operator-local ARC validation uses an exact reviewed checkout; do not give this
+public repo a general cross-repository source credential.
+The hosted `validate` job proves repository source and contracts only. ARC
+installation, registration, scale-set health, and label pickup require the
+listener/readback checks in step 9 and a separate self-hosted job receipt.
 
 ## 11. First repo proof
 Execute first_repo_plan (**corrected 2026-07-02 per prompts-enqueue prompt 50 (greatfallstoolbus-mvp)**): repo #1 is the greatfallstoolbus.org MVP site, its creation is gated on the prompt-50 DAG step-1 operator decision packet, and site.scaffold spawning is skill-driven + USER-ONLY house doctrine (`tinyland-spawn-sister-site`). The coding agent prepares the ci.yml/enrollment wiring and drives the proof AFTER the operator spawn; timing measured vs goo's 114 s.
@@ -101,7 +103,7 @@ Execute first_repo_plan (**corrected 2026-07-02 per prompts-enqueue prompt 50 (g
 - [operator-browser] Generate + download the App private key (.pem), stash in ~/secrets, chmod 600 _(automatable via: L5, the manifest-conversion API response includes the PEM, eliminating this as a separate step once step 1 uses the manifest flow)_
 - [operator-browser] Install the App on the org, All repositories _(automatable via: L7, GitHub exposes no public API for installation consent; irreducibly one human click)_
 - [operator-terminal] Capture App ID + Installation ID _(automatable via: L3, gh api /orgs/Great-Falls-Tool-Bus/installations (already a one-liner; scriptable into the enroll flow))_
-- [operator-terminal] gh repo create Great-Falls-Tool-Bus/great-falls-tool-bus-infra --private _(automatable via: L3, gh CLI; delegable to an agent with permission)_
+- [operator-terminal] gh repo create Great-Falls-Tool-Bus/great-falls-tool-bus-infra --public _(automatable via: L3, gh CLI; delegable to an agent with permission)_
 - [agent] Materialize overlay files from this package, chmod scripts, commit, push _(automatable via: already-automated, this deliverable is the apply-ready file set)_
 - [agent] just check + just taxonomy-selftest (local static validation) _(automatable via: already-automated, repo Just verbs)_
 - [operator-terminal] Export GITHUB_APP_* env from PEM custody + just arc-app-secret-dry-run / arc-app-secret-apply _(automatable via: already-automated verbs; PEM custody keeps the operator in the loop, L5 with a cluster-side secret broker (external-secrets / mint authority))_
@@ -112,7 +114,7 @@ Execute first_repo_plan (**corrected 2026-07-02 per prompts-enqueue prompt 50 (g
 - [operator-terminal] just arc-apply (FIRST apply, operator machine) _(automatable via: L7, operator-gated by design; steady-state re-applies can use workflow_dispatch action=apply (already-automated lane))_
 - [agent] Verify listener: kubectl -n arc-runners get autoscalingrunnersets | grep great-falls + managed-by=Helm _(automatable via: already-automated, enrollment-preflight + flywheel-enroll-verify CHECK 3 cover this)_
 - [operator-terminal] Set overlay ARC plan/apply secrets (ARC_RUNNERS_KUBECONFIG_B64, ARC_RUNNERS_RUSTFS_*) _(automatable via: L3, gh secret set one-liners; secret-material custody keeps the operator in the loop (L5 with a broker))_
-- [agent] Dispatch validate.yml and watch for green on tinyland-nix (label-pickup proof) _(automatable via: already-automated, gh workflow run + gh run watch)_
+- [agent] Dispatch hosted validate.yml and watch for green source/contract proof; use listener/readback plus a separate self-hosted job for label-pickup proof _(automatable via: gh workflow run + gh run watch)_
 - [operator-terminal] Spawn repo #1 via the user-only `tinyland-spawn-sister-site` skill (gated on the prompt-50 step-1 decision packet; greatfallstoolbus.org MVP per prompts-enqueue prompt 50) _(automatable via: L7 provisioning seed, spawn stays user-only by doctrine)_
 - [agent] Wire the spawned repo: goo two-tier ci.yml + mint script + registry PR + proof runs _(automatable via: already-automated, this package's first_repo_plan)_
 - [agent] GF consumer-registry PR (entry + enrolled_via enum extension if required) _(automatable via: already-automated, PR flow; merge gate is Codex/operator review)_
@@ -126,7 +128,13 @@ Execute first_repo_plan (**corrected 2026-07-02 per prompts-enqueue prompt 50 (g
 
 **Repo**: `gh repo create Great-Falls-Tool-Bus/great-falls-tool-bus.github.io --public` (org Pages site must be public on the free plan), seeded from `~/git/site.scaffold` (SvelteKit static site + Nix devshell + Justfile + Bazel toolchain-only module graph, the tinyland-goo lineage).
 
-**Runner story (the org inversion)**: `runs-on: tinyland-nix` resolves via the GFTB App's org-wide installation + the `great-falls-tool-bus-nix` scale set. The arc-runner module publishes the shared `tinyland-nix` label alongside the owner-distinct registration name. NO personal-account overlay anchor, NO extra_runner_sets entry, NO tfvars change: org-scoped registration already reaches this repo. This is the structural payoff vs orgs #1/#2.
+**Runner story (the org inversion)**: `runs-on: tinyland-nix` resolves only
+after the GFTB App's org-wide installation, the
+`great-falls-tool-bus-nix` scale set, and explicit selected-repository
+runner-group admission all agree. The arc-runner module publishes the shared
+`tinyland-nix` label alongside the owner-distinct registration name. There is
+no personal-account overlay anchor and no `extra_runner_sets` entry; org scope
+does not bypass the GitHub runner-group boundary.
 
 **ci.yml**: copy tinyland-goo's two-tier shape verbatim, adjusted for GFTB:
 1. `check-build` + `bazel-graph` baseline lanes on `ubuntu-latest` (hosted; always green independent of the flywheel).

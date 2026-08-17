@@ -15,24 +15,31 @@ arc_backend := env_var_or_default("ARC_BACKEND", "tofu/backend/honey.s3.hcl")
 default:
     @just --list
 
-check:
+check-hosted:
+    just workflow-lint
     just secrets-scan-dir
+    just public-surface-selftest
     just public-surface
     just public-pii
     just core-checkout-selftest
     just core-checkout
     just taxonomy
+    just taxonomy-selftest
     just mail-cr-validate
     just list-stack-validate
     just form-stack-validate
     just archive-stack-validate
     just web-stack-validate
     just arc-fmt-check
-    just arc-validate
     just edge-zones-fmt-check
     just edge-zones-validate
     just substrate-boundary-selftest
     just substrate-boundary
+
+# Private GloriousFlywheel source-dependent ARC module validation remains an
+# operator-local extension. Public hosted CI runs only `check-hosted`.
+check: check-hosted
+    just arc-validate
 
 # Gitleaks scan of working tree files (AGENTS.md hard rule: no secrets in Git)
 secrets-scan-dir:
@@ -47,16 +54,17 @@ secrets-scan:
 public-surface:
     python3 scripts/validate-public-operator-surface.py
 
+public-surface-selftest:
+    python3 -B scripts/validate-public-operator-surface.py --self-test
+
 # Keep public-ready surfaces free of personal PII while allowing role/list
 # addresses and example domains.
 public-pii:
     python3 scripts/validate-public-pii-surface.py
 
-# Finite public-source checkout contract. GloriousFlywheel is read at the exact
-# reviewed commit for each role without a dedicated cross-repo deploy key, PAT,
-# or App secret.
-# actions/checkout may still use this repository's ephemeral GITHUB_TOKEN for
-# the public fetch; the workflow never supplies or persists it explicitly.
+# Finite pinned-source declaration contract. Legacy workflows bind
+# GloriousFlywheel to the exact reviewed commit for each role, but this public
+# repository supplies no private-core deploy key, PAT, or App credential.
 core-checkout:
     python3 -B scripts/validate-core-checkout.py
 
@@ -248,16 +256,21 @@ edge-zones-fmt-check:
         nix develop "{{ gf_core_ci }}" -c tofu fmt -check -recursive {{ edge_zones_stack }}
     fi
 
+# Regenerate the provider lock for the supported hosted-CI and operator
+# platforms. Review and commit the resulting lockfile change.
+edge-zones-lock:
+    tofu -chdir={{ edge_zones_stack }} providers lock -platform=linux_amd64 -platform=darwin_arm64
+
 edge-zones-validate:
     #!/usr/bin/env bash
     set -euo pipefail
     tf_data_dir="$(mktemp -d -t great-falls-tool-bus-infra-edge-zones-tofu-data.XXXXXX)"
     trap 'rm -rf "${tf_data_dir}"' EXIT
     if command -v tofu >/dev/null 2>&1; then
-        TF_DATA_DIR="${tf_data_dir}" tofu -chdir={{ edge_zones_stack }} init -backend=false >/tmp/great-falls-tool-bus-infra-edge-zones-init.log
+        TF_DATA_DIR="${tf_data_dir}" tofu -chdir={{ edge_zones_stack }} init -backend=false -lockfile=readonly >/tmp/great-falls-tool-bus-infra-edge-zones-init.log
         TF_DATA_DIR="${tf_data_dir}" tofu -chdir={{ edge_zones_stack }} validate
     else
-        nix develop "{{ gf_core_ci }}" -c bash -lc 'TF_DATA_DIR="'"${tf_data_dir}"'" tofu -chdir={{ edge_zones_stack }} init -backend=false >/tmp/great-falls-tool-bus-infra-edge-zones-init.log && TF_DATA_DIR="'"${tf_data_dir}"'" tofu -chdir={{ edge_zones_stack }} validate'
+        nix develop "{{ gf_core_ci }}" -c bash -lc 'TF_DATA_DIR="'"${tf_data_dir}"'" tofu -chdir={{ edge_zones_stack }} init -backend=false -lockfile=readonly >/tmp/great-falls-tool-bus-infra-edge-zones-init.log && TF_DATA_DIR="'"${tf_data_dir}"'" tofu -chdir={{ edge_zones_stack }} validate'
     fi
 
 edge-zones-init:
@@ -435,7 +448,7 @@ web-stack-validate:
 # Operator-supplied cutover inputs (env-delivered by web-stack.yml; never baked):
 #   WEB_APPLY_KUBECONFIG  path to the materialized namespace-scoped SA kubeconfig
 #   WEB_APPLY_IMAGE       image to serve (operator-resolved; not the PLACEHOLDER)
-#   WEB_APPLY_REPLICAS    replica count to flip to (default 2, the MI prod shape)
+# WEB_APPLY_REPLICAS    replica count to flip to (default 2, the MI prod shape)
 _web-apply-inputs:
     test -n "${WEB_APPLY_KUBECONFIG:-}" || { echo "Set WEB_APPLY_KUBECONFIG to the web-apply kubeconfig path"; exit 1; }
     test -f "${WEB_APPLY_KUBECONFIG}"

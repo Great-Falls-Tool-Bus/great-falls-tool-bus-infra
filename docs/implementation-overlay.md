@@ -9,7 +9,7 @@ personal-account overlay and the third owner overlay overall.
 - GFTB GitHub App installation binding
 - Honey ARC tfvars for org-scoped repo enrollment
 - S3 backend state coordinates for this overlay
-- private operator metadata and cache namespace choices
+- reviewed non-secret operator metadata and cache namespace choices
 
 ## What GloriousFlywheel Owns
 
@@ -22,15 +22,17 @@ personal-account overlay and the third owner overlay overall.
 
 GFTB is a GitHub organization, so ARC registers at the ORG scope:
 `github_config_url = https://github.com/Great-Falls-Tool-Bus`. The GFTB GitHub
-App is installed org-wide (all repositories), which makes the single
-`great-falls-tool-bus-nix` scale set reachable from every GFTB repo. There is
-no repo-scoped registration anchor and no per-repo `extra_runner_sets` entry.
+App is installed org-wide (all repositories). GitHub runner-group admission is
+a separate selected-repository boundary, so registration alone does not make
+the `great-falls-tool-bus-nix` scale set reachable from every GFTB repo. There
+is no repo-scoped registration anchor and no per-repo `extra_runner_sets` entry.
 The personal-account anchor pattern exists only because personal accounts lack
 org-level registration.
 
-Workflows use shared labels such as `tinyland-nix`. Reachability is solved by
-this overlay's GitHub App installation and ARC registration, not by minting
-`gftb-*` or repo-shaped labels. Only `tinyland-nix` is provisioned today.
+Workflows use shared labels such as `tinyland-nix`. Reachability requires this
+overlay's GitHub App installation, ARC registration, and the selected GitHub
+runner-group admission; it is not solved by minting `gftb-*` or repo-shaped
+labels. Only `tinyland-nix` is provisioned today.
 
 ## Shared Controller Boundary
 
@@ -73,15 +75,18 @@ Raising any of these is an explicit operator decision followed by
 
 ## Bootstrap Circularity And First Apply
 
-Overlay CI (`deploy-arc-runners.yml`, `validate.yml`) runs on `tinyland-nix`,
-which for GFTB resolves ONLY through the scale set this stack provisions, and
-needs `ARC_RUNNERS_KUBECONFIG_B64` and RustFS state keys for ARC planning.
-GloriousFlywheel source is public and exact-SHA-pinned, so it needs no
-dedicated cross-repository secret. The FIRST plan and FIRST apply must still
-run from the operator machine, where the `honey` kubectl context works. Order:
+Secret-free `validate.yml` runs on a GitHub-hosted runner. The separate
+`deploy-arc-runners.yml` lane runs on `tinyland-nix`, which for GFTB resolves
+ONLY through the scale set this stack provisions, and needs
+`ARC_RUNNERS_KUBECONFIG_B64` and RustFS state keys for ARC planning.
+GloriousFlywheel source is private. This public overlay supplies no
+cross-repository source credential, so the retained self-hosted workflow is not
+the bootstrap authority. The FIRST plan and FIRST apply must run from the
+operator machine against the exact reviewed core checkout, where the `honey`
+kubectl context works. Order:
 create App -> install App -> write App secret -> preflight ->
 `arc-init`/`arc-plan` (with RustFS creds exported) -> operator review ->
-`arc-apply` -> verify listener -> only then does overlay CI pick up.
+`arc-apply` -> verify listener -> only then do self-hosted ARC jobs pick up.
 
 ## Enrollment Preflight
 
@@ -93,8 +98,8 @@ just enrollment-preflight
 ```
 
 The preflight is read-only. Missing `github-app-secret-great-falls-tool-bus`,
-an absent live `great-falls-tool-bus-nix` scale set, queued validation runs, or
-core-pin drift are enrollment blockers, not reasons to create org- or
+an absent live `great-falls-tool-bus-nix` scale set, queued self-hosted ARC
+runs, or core-pin drift are enrollment blockers, not reasons to create org- or
 repo-specific labels. At the pinned pre-#1208 core revision, the shared preflight
 still prints a legacy core-read-credential row. Do not provision a key solely
 for that row; `just core-checkout` is the source-authority gate.
