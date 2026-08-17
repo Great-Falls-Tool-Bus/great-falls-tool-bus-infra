@@ -1274,8 +1274,29 @@ mail-cr-validate:
     bash scripts/validate-mail-crs.sh {{ mail_cr_dir }}
 
 _mail-kubeconfig-inputs:
-    test -n "${GFTB_MAIL_KUBECONFIG:-}" || { echo "Set GFTB_MAIL_KUBECONFIG to the namespace-scoped kubeconfig path"; exit 1; }
-    test -f "${GFTB_MAIL_KUBECONFIG}"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${GFTB_MAIL_KUBECONFIG:?Set GFTB_MAIL_KUBECONFIG to the namespace-scoped kubeconfig path}"
+    python3 -I - "${GFTB_MAIL_KUBECONFIG}" "$(git rev-parse --show-toplevel)" <<'PY'
+    import os
+    import stat
+    import sys
+    from pathlib import Path
+
+    path = Path(sys.argv[1]).expanduser().resolve(strict=True)
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("GFTB_MAIL_KUBECONFIG must remain outside the public repository")
+    metadata = path.stat()
+    if not path.is_file() or metadata.st_uid != os.getuid():
+        raise SystemExit("GFTB_MAIL_KUBECONFIG must be a regular file owned by the operator")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise SystemExit("GFTB_MAIL_KUBECONFIG must have mode 0600")
+    PY
 
 mail-cr-server-dry-run: mail-cr-validate _mail-kubeconfig-inputs
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply --dry-run=server -k {{ mail_cr_dir }}
@@ -1303,6 +1324,107 @@ list-stack-server-dry-run: list-stack-validate _mail-kubeconfig-inputs
 list-stack-apply: list-stack-server-dry-run
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ list_stack_dir }}
 
+_list-member-add-inputs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${GFTB_LIST_KUBECONFIG:?Set GFTB_LIST_KUBECONFIG to the dedicated namespace list-admin kubeconfig}"
+    : "${GFTB_LIST_ID:?Set GFTB_LIST_ID to keyholders.latoolb.us or discuss.latoolb.us}"
+    : "${GFTB_LIST_SUBSCRIBER:?Set GFTB_LIST_SUBSCRIBER to the consented address}"
+    [[ "${GFTB_LIST_ID}" == "keyholders.latoolb.us" || "${GFTB_LIST_ID}" == "discuss.latoolb.us" ]] || { echo "GFTB_LIST_ID is not an allowed GFTB list" >&2; exit 2; }
+    test "${GFTB_LIST_MEMBER_CONSENT:-}" = "confirmed" || { echo "Set GFTB_LIST_MEMBER_CONSENT=confirmed after consent readback" >&2; exit 2; }
+    expected_confirm="${GFTB_LIST_ID}:${GFTB_LIST_SUBSCRIBER}"
+    test "${GFTB_LIST_MEMBER_CONFIRM:-}" = "${expected_confirm}" || { echo "Set GFTB_LIST_MEMBER_CONFIRM to the exact list-id:subscriber target" >&2; exit 2; }
+    python3 -I - "${GFTB_LIST_KUBECONFIG}" "$(git rev-parse --show-toplevel)" <<'PY'
+    import os
+    import re
+    import stat
+    import sys
+    from pathlib import Path
+
+    path = Path(sys.argv[1]).expanduser().resolve(strict=True)
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("GFTB_LIST_KUBECONFIG must remain outside the public repository")
+    metadata = path.stat()
+    if not path.is_file() or metadata.st_uid != os.getuid():
+        raise SystemExit("GFTB_LIST_KUBECONFIG must be a regular file owned by the operator")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise SystemExit("GFTB_LIST_KUBECONFIG must have mode 0600")
+
+    address = os.environ["GFTB_LIST_SUBSCRIBER"]
+    display = os.environ.get("GFTB_LIST_DISPLAY_NAME", "")
+    if len(address) > 254 or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", address):
+        raise SystemExit("GFTB_LIST_SUBSCRIBER must be one valid email address")
+    if len(display) > 100 or any(ord(character) < 32 or ord(character) == 127 for character in display):
+        raise SystemExit("GFTB_LIST_DISPLAY_NAME must be at most 100 control-free characters")
+    PY
+
+# Idempotently add one consented person as a member of one exact GFTB list.
+# Owner/moderator grants, removals, moderation, and settings changes remain held
+# for their own lifecycle/rollback contracts rather than sharing this surface.
+list-member-add: _list-member-add-inputs _reviewed-clean-main _operator-apply-confirm
+    #!/usr/bin/env bash
+    set -euo pipefail
+    namespace="latoolb-us-production"
+    pod_json="$(kubectl --kubeconfig "${GFTB_LIST_KUBECONFIG}" --namespace "${namespace}" get pods -l app.kubernetes.io/name=mailman-core -o json)"
+    core_pod="$(jq -er '[.items[] | select(.metadata.deletionTimestamp == null)] as $active | if (($active | length) == 1 and $active[0].status.phase == "Running" and any($active[0].status.conditions[]?; .type == "Ready" and .status == "True")) then $active[0].metadata.name else error("expected exactly one active Ready mailman-core pod") end' <<<"${pod_json}")"
+    find_membership() {
+      printf '%s\n%s\n' "${GFTB_LIST_ID}" "${GFTB_LIST_SUBSCRIBER}" | \
+        kubectl --kubeconfig "${GFTB_LIST_KUBECONFIG}" --namespace "${namespace}" exec -i "${core_pod}" --container mailman-core -- sh -eu -c '
+          IFS= read -r list_id
+          IFS= read -r subscriber
+          curl --fail --silent --show-error \
+            --user "restadmin:${MAILMAN_REST_PASSWORD}" --get \
+            --data-urlencode "list_id=${list_id}" \
+            --data-urlencode "subscriber=${subscriber}" \
+            --data-urlencode "role=member" \
+            "http://$(hostname -i):8001/3.1/members/find"
+        '
+    }
+    classify_membership() {
+      jq -er --arg list_id "${GFTB_LIST_ID}" --arg subscriber "${GFTB_LIST_SUBSCRIBER}" '
+        (.entries // []) as $entries
+        | [$entries[]
+            | select(.list_id == $list_id)
+            | select((.email | ascii_downcase) == ($subscriber | ascii_downcase))
+            | select(.role == "member")] as $exact
+        | if (.total_size == 0 and ($entries | length) == 0) then "absent"
+          elif (.total_size == 1 and ($entries | length) == 1 and ($exact | length) == 1) then "present"
+          else error("ambiguous or mismatched Mailman membership readback")
+          end
+      '
+    }
+    before_json="$(find_membership)"
+    before_state="$(classify_membership <<<"${before_json}")"
+    if [[ "${before_state}" == "present" ]]; then
+      echo "Selected list membership already present; no mutation."
+      exit 0
+    fi
+    status="$(printf '%s\n%s\n%s\n' "${GFTB_LIST_ID}" "${GFTB_LIST_SUBSCRIBER}" "${GFTB_LIST_DISPLAY_NAME:-}" | \
+      kubectl --kubeconfig "${GFTB_LIST_KUBECONFIG}" --namespace "${namespace}" exec -i "${core_pod}" --container mailman-core -- sh -eu -c '
+        IFS= read -r list_id
+        IFS= read -r subscriber
+        IFS= read -r display_name
+        curl --silent --show-error --output /dev/null --write-out "%{http_code}" \
+          --user "restadmin:${MAILMAN_REST_PASSWORD}" --request POST \
+          --data-urlencode "list_id=${list_id}" \
+          --data-urlencode "subscriber=${subscriber}" \
+          --data-urlencode "display_name=${display_name}" \
+          --data-urlencode "pre_verified=true" \
+          --data-urlencode "pre_confirmed=true" \
+          --data-urlencode "pre_approved=true" \
+          --data-urlencode "role=member" \
+          "http://$(hostname -i):8001/3.1/members"
+      ')"
+    test "${status}" = "201" || { echo "Membership add returned HTTP ${status}." >&2; exit 2; }
+    after_json="$(find_membership)"
+    test "$(classify_membership <<<"${after_json}")" = "present" || { echo "Membership readback did not converge." >&2; exit 2; }
+    echo "Selected list membership added and read back."
+
 # --- GFTB contact-intake stack (TIN-2420 Path B) ----------------------------
 # Anubis PoW gate -> stdlib form-handler -> LMTP inject to keyholders@latoolb.us
 # (the list fans out to every keyholder; LMTP needs no SMTP credential).
@@ -1321,6 +1443,64 @@ form-stack-validate:
 # (no network, no cluster). Also runs inside form-stack-validate.
 form-altcha-test:
     python3 scripts/test-form-altcha.py
+
+# Create or rotate the names-only ALTCHA HMAC Secret from a mode-restricted
+# operator file without placing key bytes in argv, Git, or shell history.
+form-altcha-secret-apply: _mail-kubeconfig-inputs _reviewed-clean-main _operator-apply-confirm
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${FORM_ALTCHA_HMAC_KEY_PATH:?Set FORM_ALTCHA_HMAC_KEY_PATH to the retained operator key file outside this worktree}"
+    test "${GFTB_ALTCHA_SECRET_CONFIRM:-}" = "form-altcha-hmac" || { echo "Set GFTB_ALTCHA_SECRET_CONFIRM=form-altcha-hmac" >&2; exit 2; }
+    repo_root="$(git rev-parse --show-toplevel)"
+    key_path="$(python3 -I - "${FORM_ALTCHA_HMAC_KEY_PATH}" "${repo_root}" <<'PY'
+    import os
+    import re
+    import stat
+    import sys
+    from pathlib import Path
+
+    path = Path(sys.argv[1]).expanduser().resolve(strict=True)
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("FORM_ALTCHA_HMAC_KEY_PATH must remain outside the public repository")
+    if not path.is_file():
+        raise SystemExit("FORM_ALTCHA_HMAC_KEY_PATH must name a regular file")
+    metadata = path.stat()
+    if metadata.st_uid != os.getuid():
+        raise SystemExit("FORM_ALTCHA_HMAC_KEY_PATH must be owned by the operator")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise SystemExit("FORM_ALTCHA_HMAC_KEY_PATH must have mode 0600")
+    value = path.read_bytes()
+    if not re.fullmatch(rb"[0-9a-f]{64}", value):
+        raise SystemExit("FORM_ALTCHA_HMAC_KEY_PATH must contain exactly 64 lowercase hex bytes and no newline")
+    print(path)
+    PY
+    )"
+    namespace="latoolb-us-production"
+    pod_json="$(kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace "${namespace}" get pods -l app.kubernetes.io/name=form-handler -o json)"
+    active_count="$(jq -er '[.items[] | select(.metadata.deletionTimestamp == null)] | length' <<<"${pod_json}")"
+    [[ "${active_count}" =~ ^[01]$ ]] || { echo "Expected no more than one active form-handler pod." >&2; exit 2; }
+    old_name="$(jq -r '[.items[] | select(.metadata.deletionTimestamp == null)][0].metadata.name // ""' <<<"${pod_json}")"
+    old_uid="$(jq -r '[.items[] | select(.metadata.deletionTimestamp == null)][0].metadata.uid // ""' <<<"${pod_json}")"
+    umask 077
+    manifest="$(mktemp "${TMPDIR:-/tmp}/gftb-altcha-secret.XXXXXX.yaml")"
+    trap 'rm -f "${manifest}"' EXIT
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace "${namespace}" create secret generic form-altcha-hmac --from-file=hmac-key="${key_path}" --dry-run=client -o yaml > "${manifest}"
+    chmod 600 "${manifest}"
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace "${namespace}" apply --dry-run=server -f "${manifest}"
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace "${namespace}" apply -f "${manifest}"
+    if [[ -n "${old_name}" ]]; then
+      kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace "${namespace}" delete pod "${old_name}" --wait=true --timeout=120s
+    fi
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace "${namespace}" wait --for=create pod -l app.kubernetes.io/name=form-handler --timeout=180s
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace "${namespace}" wait --for=condition=Ready pod -l app.kubernetes.io/name=form-handler --timeout=180s
+    new_pod_json="$(kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace "${namespace}" get pods -l app.kubernetes.io/name=form-handler -o json)"
+    jq -e --arg old_uid "${old_uid}" '[.items[] | select(.metadata.deletionTimestamp == null)] as $active | ($active | length) == 1 and $active[0].status.phase == "Running" and any($active[0].status.conditions[]?; .type == "Ready" and .status == "True") and ($old_uid == "" or $active[0].metadata.uid != $old_uid)' <<<"${new_pod_json}" >/dev/null
+    echo "Secret applied and a replacement form-handler pod is Ready. Run the challenge and delivery smoke."
 
 form-stack-server-dry-run: form-stack-validate _mail-kubeconfig-inputs
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply --dry-run=server -k {{ form_stack_dir }}

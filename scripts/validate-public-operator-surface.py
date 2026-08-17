@@ -248,7 +248,7 @@ def _receipt(*chunks: str) -> str:
     """Build review receipts without secret-shaped contiguous source literals."""
     value = "".join(chunks)
     if re.fullmatch(r"[0-9a-f]{64}", value) is None:
-        raise ValueError("invalid ARC executable receipt")
+        raise ValueError("invalid executable receipt")
     return value
 
 
@@ -325,6 +325,46 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     "_arc-exclusive-confirm": _receipt(
         "9c8565974cf6f3b0", "f2aca232a5ff6978", "8d566d4ae8c96152", "900813ed27e88e7a"
     ),
+}
+
+# Purpose-bounded non-ARC mutations are operator-local for the same reason as
+# ARC applies: they consume operator-custody credentials and may change live
+# state. Dependencies are ordered, and executable bodies are receipt-bound so a
+# comment cannot stand in for a guard or move a check after the mutation.
+ATTENDED_RECIPE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
+    "_mail-kubeconfig-inputs": (),
+    "_list-member-add-inputs": (),
+    "list-member-add": (
+        "_list-member-add-inputs",
+        "_reviewed-clean-main",
+        "_operator-apply-confirm",
+    ),
+    "form-altcha-secret-apply": (
+        "_mail-kubeconfig-inputs",
+        "_reviewed-clean-main",
+        "_operator-apply-confirm",
+    ),
+}
+
+ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
+    "_mail-kubeconfig-inputs": _receipt(
+        "b36a412965f54de1", "e8fcf75164a74a91", "dee1debc1edd79dc", "dacb634cb85cfc5b"
+    ),
+    "_list-member-add-inputs": _receipt(
+        "8609c78a7ae5fb64", "8eb23bcb5e7352fc", "c21405b9c5c96605", "6df235e504c66699"
+    ),
+    "list-member-add": _receipt(
+        "86c91e13b7181939", "cc9fbdbf60931341", "6a9cb4d544265d41", "fbc321f6d1a32c86"
+    ),
+    "form-altcha-secret-apply": _receipt(
+        "d394883ac79138f4", "b78253e99505ee18", "f0931c8607f62fa9", "f5c1b30b25c115ce"
+    ),
+}
+
+ATTENDED_OPERATOR_LOCAL_ROOTS = {
+    "_list-member-add-inputs",
+    "list-member-add",
+    "form-altcha-secret-apply",
 }
 
 NEGATIVE_OR_DESCRIPTIVE_CONTEXT = re.compile(
@@ -599,8 +639,10 @@ def executable_just_calls(
     return calls, unresolved
 
 
-def arc_operator_recipe_closure(text: str) -> tuple[set[str], dict[str, set[str]]]:
-    """Return recipes that directly or transitively reach operator-local ARC."""
+def operator_recipe_closure(
+    text: str, roots: set[str], *, taint_unresolved: bool = True
+) -> tuple[set[str], dict[str, set[str]]]:
+    """Return recipes that directly or transitively reach operator-local roots."""
     definitions = all_just_recipe_blocks(text)
     aliases = all_just_aliases(text)
     recipe_names = set(definitions) | set(aliases)
@@ -623,7 +665,9 @@ def arc_operator_recipe_closure(text: str) -> tuple[set[str], dict[str, set[str]
     for name, declarations in aliases.items():
         edges.setdefault(name, set()).update(target for _, target in declarations)
 
-    tainted = set(ARC_OPERATOR_LOCAL_ROOTS) | unresolved_recipes
+    tainted = set(roots)
+    if taint_unresolved:
+        tainted.update(unresolved_recipes)
     changed = True
     while changed:
         changed = False
@@ -632,6 +676,31 @@ def arc_operator_recipe_closure(text: str) -> tuple[set[str], dict[str, set[str]
                 tainted.add(name)
                 changed = True
     return tainted, edges
+
+
+def arc_operator_recipe_closure(text: str) -> tuple[set[str], dict[str, set[str]]]:
+    """Return recipes that directly or transitively reach operator-local ARC."""
+    return operator_recipe_closure(text, ARC_OPERATOR_LOCAL_ROOTS)
+
+
+def attended_operator_recipe_closure(
+    text: str,
+) -> tuple[set[str], dict[str, set[str]]]:
+    """Return recipes reaching consented member or Secret mutation surfaces."""
+    # The ARC closure already fail-closes every unresolved Just invocation. This
+    # second closure only needs literal reverse reachability from its own roots.
+    return operator_recipe_closure(
+        text, ATTENDED_OPERATOR_LOCAL_ROOTS, taint_unresolved=False
+    )
+
+
+def all_operator_local_recipe_closure(
+    text: str,
+) -> tuple[set[str], dict[str, set[str]]]:
+    """Return the union of ARC and purpose-bounded attended operator surfaces."""
+    arc, edges = arc_operator_recipe_closure(text)
+    attended, _ = attended_operator_recipe_closure(text)
+    return arc | attended, edges
 
 
 def scan_arc_operator_contract_text(text: str, path: Path) -> list[Finding]:
@@ -757,6 +826,87 @@ def scan_arc_operator_contract_text(text: str, path: Path) -> list[Finding]:
     return findings
 
 
+def scan_attended_operator_contract_text(text: str, path: Path) -> list[Finding]:
+    """Bind each purpose-bounded non-ARC mutation to one reviewed implementation."""
+    findings: list[Finding] = []
+    dependency_names = set(ATTENDED_RECIPE_DEPENDENCIES)
+    digest_names = set(ATTENDED_CRITICAL_RECIPE_DIGESTS)
+    if dependency_names != digest_names:
+        findings.append(
+            Finding(
+                "attended-validator-receipt-set-mismatch",
+                Path(SELF),
+                1,
+                "Attended dependency and executable-receipt recipe sets differ: "
+                f"dependencies-only={sorted(dependency_names - digest_names)!r}, "
+                f"digests-only={sorted(digest_names - dependency_names)!r}.",
+            )
+        )
+
+    definitions = all_just_recipe_blocks(text)
+    aliases = all_just_aliases(text)
+    for name, expected_dependencies in ATTENDED_RECIPE_DEPENDENCIES.items():
+        recipes = definitions.get(name, [])
+        alias_count = len(aliases.get(name, []))
+        if len(recipes) != 1 or alias_count:
+            findings.append(
+                Finding(
+                    "attended-operator-recipe-missing",
+                    path,
+                    1,
+                    f"Required attended recipe {name!r} must have exactly one recipe "
+                    f"definition and no alias; observed {len(recipes)} recipe(s) and "
+                    f"{alias_count} alias(es).",
+                )
+            )
+            continue
+        line, dependencies, body = recipes[0]
+        observed_dependencies = tuple(dependencies.split())
+        if observed_dependencies != expected_dependencies:
+            findings.append(
+                Finding(
+                    "attended-recipe-dependencies-mismatch",
+                    path,
+                    line,
+                    f"{name} dependencies must be exactly "
+                    f"{expected_dependencies!r}; observed {observed_dependencies!r}.",
+                )
+            )
+
+        executable = executable_recipe_text(body)
+        observed_digest = hashlib.sha256(executable.encode("utf-8")).hexdigest()
+        expected_digest = ATTENDED_CRITICAL_RECIPE_DIGESTS.get(name)
+        if expected_digest is not None and observed_digest != expected_digest:
+            findings.append(
+                Finding(
+                    "attended-recipe-executable-receipt-mismatch",
+                    path,
+                    line,
+                    f"{name} executable SHA256 must be {expected_digest}; "
+                    f"observed {observed_digest}.",
+                )
+            )
+
+    tainted, edges = attended_operator_recipe_closure(text)
+    receipted = set(ATTENDED_RECIPE_DEPENDENCIES)
+    for name in sorted((tainted & set(edges)) - receipted):
+        targets = sorted(edges[name] & tainted)
+        if name in definitions:
+            line = definitions[name][0][0]
+        else:
+            line = aliases[name][0][0]
+        findings.append(
+            Finding(
+                "attended-unreceipted-operator-wrapper",
+                path,
+                line,
+                f"{name} reaches purpose-bound attended recipe(s) {targets!r} but "
+                "has no exact dependency/body receipt.",
+            )
+        )
+    return findings
+
+
 def is_negative_or_descriptive(line: str) -> bool:
     return bool(NEGATIVE_OR_DESCRIPTIVE_CONTEXT.search(line))
 
@@ -840,7 +990,8 @@ def scan_workflow_text(
                 path,
                 1,
                 "Hosted workflows must not invoke ARC plan/init/apply, enrollment, "
-                "readback, GitHub App Secret, or transitive operator recipes; "
+                "readback, GitHub App Secret, consented list membership, ALTCHA "
+                "Secret rotation, or transitive operator recipes; "
                 f"observed {arc_calls!r}.",
             )
         )
@@ -880,7 +1031,7 @@ def scan_workflows() -> list[Finding]:
     findings: list[Finding] = []
     observed_calls: set[str] = set()
     justfile = (REPO / "Justfile").read_text(encoding="utf-8")
-    forbidden_recipes, _ = arc_operator_recipe_closure(justfile)
+    forbidden_recipes, _ = all_operator_local_recipe_closure(justfile)
     known_recipes = set(all_just_recipe_blocks(justfile)) | set(
         all_just_aliases(justfile)
     )
@@ -1060,7 +1211,8 @@ def scan_operator_carrier_text(
                 path,
                 1,
                 "Scripts and composite actions must not invoke operator-local ARC "
-                f"recipes or wrappers; observed {arc_calls!r}.",
+                "or purpose-bound attended recipes or wrappers; "
+                f"observed {arc_calls!r}.",
             )
         )
     if unresolved and fail_on_unresolved:
@@ -1078,7 +1230,7 @@ def scan_operator_carrier_text(
 def scan_scripts() -> list[Finding]:
     findings: list[Finding] = []
     justfile = (REPO / "Justfile").read_text(encoding="utf-8")
-    forbidden_recipes, _ = arc_operator_recipe_closure(justfile)
+    forbidden_recipes, _ = all_operator_local_recipe_closure(justfile)
     known_recipes = set(all_just_recipe_blocks(justfile)) | set(
         all_just_aliases(justfile)
     )
@@ -1128,7 +1280,7 @@ def scan_scripts() -> list[Finding]:
 def scan_composite_actions() -> list[Finding]:
     findings: list[Finding] = []
     justfile = (REPO / "Justfile").read_text(encoding="utf-8")
-    forbidden_recipes, _ = arc_operator_recipe_closure(justfile)
+    forbidden_recipes, _ = all_operator_local_recipe_closure(justfile)
     known_recipes = set(all_just_recipe_blocks(justfile)) | set(
         all_just_aliases(justfile)
     )
@@ -1317,9 +1469,21 @@ def expect_arc_contract_rejection(
         )
 
 
+def expect_attended_contract_rejection(
+    text: str, label: str, expected_rule: str
+) -> None:
+    findings = scan_attended_operator_contract_text(text, Path("Justfile"))
+    if not any(finding.rule == expected_rule for finding in findings):
+        observed = sorted({finding.rule for finding in findings})
+        raise SystemExit(
+            f"self-test FAILED: attended contract accepted {label}; "
+            f"findings={observed!r}"
+        )
+
+
 def check_critical_recipe_shell_syntax() -> None:
     """Ask Just to expand dependency chains, then parse the exact shell output."""
-    for name in ARC_RECIPE_DEPENDENCIES:
+    for name in (*ARC_RECIPE_DEPENDENCIES, *ATTENDED_RECIPE_DEPENDENCIES):
         dry_run = subprocess.run(
             ["just", "--dry-run", name],
             cwd=REPO,
@@ -1368,6 +1532,147 @@ def self_test() -> None:
     if baseline:
         rules = ", ".join(sorted({finding.rule for finding in baseline}))
         raise SystemExit(f"self-test FAILED: ARC baseline is invalid ({rules})")
+
+    attended_baseline = scan_attended_operator_contract_text(
+        justfile, Path("Justfile")
+    )
+    if attended_baseline:
+        rules = ", ".join(
+            sorted({finding.rule for finding in attended_baseline})
+        )
+        raise SystemExit(
+            f"self-test FAILED: attended baseline is invalid ({rules})"
+        )
+
+    unguarded_member = mutate_recipe_dependencies(
+        justfile,
+        "list-member-add",
+        ("_list-member-add-inputs", "_operator-apply-confirm"),
+        "reviewed-main removal from member add",
+    )
+    expect_attended_contract_rejection(
+        unguarded_member,
+        "reviewed-main removal from member add",
+        "attended-recipe-dependencies-mismatch",
+    )
+
+    unconfirmed_altcha = mutate_recipe_dependencies(
+        justfile,
+        "form-altcha-secret-apply",
+        ("_mail-kubeconfig-inputs", "_reviewed-clean-main"),
+        "apply confirmation removal from ALTCHA rotation",
+    )
+    expect_attended_contract_rejection(
+        unconfirmed_altcha,
+        "apply confirmation removal from ALTCHA rotation",
+        "attended-recipe-dependencies-mismatch",
+    )
+
+    attended_body_mutations = (
+        (
+            "_mail-kubeconfig-inputs",
+            "    if stat.S_IMODE(metadata.st_mode) != 0o600:",
+            "    if stat.S_IMODE(metadata.st_mode) != 0o644:",
+            "mail kubeconfig mode weakening",
+        ),
+        (
+            "_list-member-add-inputs",
+            '    test "${GFTB_LIST_MEMBER_CONSENT:-}" = "confirmed" ||',
+            '    test -n "${GFTB_LIST_MEMBER_CONSENT:-}" ||',
+            "member consent weakening",
+        ),
+        (
+            "list-member-add",
+            "        | if (.total_size == 0 and ($entries | length) == 0) then \"absent\"",
+            "        | if (.total_size >= 0 and ($entries | length) == 0) then \"absent\"",
+            "Mailman absence ambiguity",
+        ),
+        (
+            "list-member-add",
+            '    test "${status}" = "201" ||',
+            '    test "${status}" != "500" ||',
+            "Mailman POST status weakening",
+        ),
+        (
+            "list-member-add",
+            '    core_pod="$(jq -er \'[.items[] | select(.metadata.deletionTimestamp == null)] as $active | if (($active | length) == 1 and',
+            '    core_pod="$(jq -er \'[.items[] | select(.metadata.deletionTimestamp == null)] as $active | if (($active | length) >= 1 and',
+            "Mailman pod cardinality weakening",
+        ),
+        (
+            "form-altcha-secret-apply",
+            '      kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace "${namespace}" delete pod "${old_name}" --wait=true --timeout=120s',
+            '      kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace "${namespace}" rollout restart deployment/form-handler',
+            "ALTCHA purpose-bounded replacement weakening",
+        ),
+        (
+            "form-altcha-secret-apply",
+            '    jq -e --arg old_uid "${old_uid}" \'[.items[] | select(.metadata.deletionTimestamp == null)] as $active | ($active | length) == 1 and',
+            '    jq -e --arg old_uid "${old_uid}" \'[.items[] | select(.metadata.deletionTimestamp == null)] as $active | ($active | length) >= 1 and',
+            "ALTCHA replacement cardinality weakening",
+        ),
+        (
+            "form-altcha-secret-apply",
+            '    trap \'rm -f "${manifest}"\' EXIT',
+            "    true",
+            "ALTCHA temporary Secret cleanup removal",
+        ),
+    )
+    for name, old, new, label in attended_body_mutations:
+        mutated = mutate_recipe_body(justfile, name, old, new, label)
+        expect_attended_contract_rejection(
+            mutated, label, "attended-recipe-executable-receipt-mismatch"
+        )
+
+    attended_short_circuit = mutate_recipe_body(
+        justfile,
+        "list-member-add",
+        "    #!/usr/bin/env bash\n",
+        "    #!/usr/bin/env bash\n    exit 0\n",
+        "member-add short circuit",
+    )
+    expect_attended_contract_rejection(
+        attended_short_circuit,
+        "member-add short circuit",
+        "attended-recipe-executable-receipt-mismatch",
+    )
+
+    attended_wrapper = justfile + "\nattended-ci: list-member-add\n    true\n"
+    expect_attended_contract_rejection(
+        attended_wrapper,
+        "unreceipted attended wrapper",
+        "attended-unreceipted-operator-wrapper",
+    )
+    attended_forbidden, _ = all_operator_local_recipe_closure(attended_wrapper)
+    attended_known = set(all_just_recipe_blocks(attended_wrapper)) | set(
+        all_just_aliases(attended_wrapper)
+    )
+    attended_arities = just_recipe_arities(attended_wrapper)
+    if not any(
+        finding.rule == "workflow-arc-operator-recipe"
+        for finding in scan_workflow_text(
+            "steps:\n  - run: just attended-ci\n",
+            Path(".github/workflows/fixture.yml"),
+            attended_forbidden,
+            attended_known,
+            attended_arities,
+        )
+    ):
+        raise SystemExit(
+            "self-test FAILED: workflow attended wrapper was accepted"
+        )
+    if not any(
+        finding.rule == "carrier-arc-operator-recipe"
+        for finding in scan_operator_carrier_text(
+            "#!/usr/bin/env bash\njust list-member-add\n",
+            Path("scripts/attended-ci.sh"),
+            attended_forbidden,
+            attended_known,
+            attended_arities,
+            fail_on_unresolved=True,
+        )
+    ):
+        raise SystemExit("self-test FAILED: script attended carrier was accepted")
 
     comment_only = mutate_recipe_body(
         justfile,
@@ -2026,6 +2331,9 @@ def main() -> int:
         + scan_scripts()
         + scan_composite_actions()
         + scan_arc_operator_contract_text(
+            (REPO / "Justfile").read_text(encoding="utf-8"), Path("Justfile")
+        )
+        + scan_attended_operator_contract_text(
             (REPO / "Justfile").read_text(encoding="utf-8"), Path("Justfile")
         )
     )
