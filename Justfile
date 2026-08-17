@@ -256,6 +256,11 @@ edge-zones-fmt-check:
         nix develop "{{ gf_core_ci }}" -c tofu fmt -check -recursive {{ edge_zones_stack }}
     fi
 
+# Regenerate the provider lock for the supported hosted-CI and operator
+# platforms. Review and commit the resulting lockfile change.
+edge-zones-lock:
+    tofu -chdir={{ edge_zones_stack }} providers lock -platform=linux_amd64 -platform=darwin_arm64
+
 edge-zones-validate:
     #!/usr/bin/env bash
     set -euo pipefail

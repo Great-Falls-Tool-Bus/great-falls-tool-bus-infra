@@ -308,6 +308,7 @@ the other stacks, key `great-falls-tool-bus-infra/edge/terraform.tfstate`.
 
 ```bash
 just edge-zones-fmt-check   # formatting
+just edge-zones-lock        # refresh Linux CI + Apple Silicon provider hashes
 just edge-zones-validate    # init -backend=false + validate (no state, no creds)
 just edge-zones-init        # backend: tofu/backend/honey-edge.s3.hcl
 just edge-zones-plan        # needs TF_VAR_cloudflare_api_token + backend keys
