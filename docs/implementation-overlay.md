@@ -54,12 +54,29 @@ Honey/sting pod budget is the scarce resource (TIN-2165/TIN-2234):
 - nix lane only (`deploy_docker_runner = false`, `deploy_dind_runner = false`)
 - `nix_min_runners = 0`, `nix_max_runners = 4`
 - `nix_warm_pool_enabled = false`
+- each nix runner requests 8 GiB and is limited to 16 GiB of ephemeral storage;
+  `/nix`, `_work`, and `.cache` remain on the container root filesystem while
+  the optional volumes are disabled
 - runner pods pinned to `sting` with the
   `dedicated.tinyland.dev/compute-expansion` toleration (the tinyland-goo-nix
   anchor shape)
 
 Raising any of these is an explicit operator decision followed by
 `just arc-plan` / `just arc-apply`.
+
+The 8/16 GiB envelope is the bounded response to the 2026-08-17 site-CI soak:
+four independent build/test pods crossed the former 8 GiB limit and were
+evicted, while the lightweight carrier validation completed. Before this or any
+later envelope is accepted, its PR must record max-runner node/quota fit and a
+representative natural-fanout soak. Every self-hosted check must receive a real
+runner, the runner container's combined writable-rootfs plus log peak
+(`rootfs.usedBytes + logs.usedBytes`) must stay below 75% of its limit, and no
+pod eviction, restart, or node `DiskPressure` may occur. A warm cache rerun must
+also pass. Failure rolls back through the guarded ARC path to the exact prior
+request/limit values after the scale set drains; it is not permission to raise
+the limit again without new evidence. Per-runner bounded volumes for `/nix`,
+`_work`, and `.cache` remain the durable follow-up once the primary core stack
+exposes storage-class inputs compatible with `sting`.
 
 ## Shared Substrate
 
