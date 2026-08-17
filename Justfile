@@ -367,8 +367,33 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
     plan = json.loads(Path(sys.argv[1]).read_text())
     if not isinstance(plan, dict):
         raise SystemExit("ERROR: ARC plan JSON must be an object")
-    if plan.get("errored") is not False or plan.get("complete") is not True or plan.get("applyable") is not True:
-        raise SystemExit("ERROR: ARC plan is incomplete, errored, or not applyable")
+    if plan.get("format_version") != "1.2":
+        raise SystemExit("ERROR: ARC plan format_version must be exactly 1.2")
+    if plan.get("terraform_version") != "1.11.6":
+        raise SystemExit("ERROR: ARC plan terraform_version must be exactly 1.11.6")
+    if plan.get("errored") is not False:
+        raise SystemExit("ERROR: ARC plan errored must be exactly false")
+    top_level_fields = {
+        "format_version",
+        "terraform_version",
+        "variables",
+        "planned_values",
+        "resource_drift",
+        "resource_changes",
+        "output_changes",
+        "prior_state",
+        "configuration",
+        "relevant_attributes",
+        "checks",
+        "timestamp",
+        "errored",
+    }
+    unexpected_top_level_fields = sorted(set(plan) - top_level_fields)
+    if unexpected_top_level_fields:
+        raise SystemExit(
+            "ERROR: ARC plan contains fields outside the pinned OpenTofu schema: "
+            + repr(unexpected_top_level_fields)
+        )
     resource_drift = plan.get("resource_drift", [])
     if not isinstance(resource_drift, list):
         raise SystemExit("ERROR: ARC plan resource_drift must be a list")
@@ -382,13 +407,60 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
     output_changes = plan.get("output_changes", {})
     if not isinstance(output_changes, dict):
         raise SystemExit("ERROR: ARC plan output_changes must be an object")
-    if not all(isinstance(output, dict) for output in output_changes.values()):
-        raise SystemExit("ERROR: every ARC output_changes value must be an object")
-    if output_changes:
-        raise SystemExit("ERROR: ARC plan contains output changes: " + repr(sorted(output_changes)))
-    deferred_changes = plan.get("deferred_changes", [])
-    if not isinstance(deferred_changes, list) or deferred_changes:
-        raise SystemExit("ERROR: ARC plan contains deferred changes")
+
+    output_fields = {
+        "actions",
+        "before",
+        "after",
+        "after_unknown",
+        "before_sensitive",
+        "after_sensitive",
+    }
+    for output_name, output in output_changes.items():
+        if not isinstance(output_name, str) or not output_name:
+            raise SystemExit("ERROR: every ARC output_changes name must be a nonempty string")
+        if not isinstance(output, dict):
+            raise SystemExit("ERROR: every ARC output_changes value must be an object")
+        observed_fields = set(output)
+        if observed_fields != output_fields:
+            raise SystemExit(
+                "ERROR: ARC output Change fields must be exact for "
+                + repr(output_name)
+                + "; missing="
+                + repr(sorted(output_fields - observed_fields))
+                + ", unexpected="
+                + repr(sorted(observed_fields - output_fields))
+            )
+        if output["actions"] != ["no-op"]:
+            raise SystemExit(
+                "ERROR: ARC output Change must have exactly no-op actions for "
+                + repr(output_name)
+            )
+        before_json = json.dumps(
+            output["before"], sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        )
+        after_json = json.dumps(
+            output["after"], sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        )
+        if before_json != after_json:
+            raise SystemExit(
+                "ERROR: ARC output Change modifies the value for " + repr(output_name)
+            )
+        if output["after_unknown"] is not False:
+            raise SystemExit(
+                "ERROR: ARC output Change contains unknown after-values for "
+                + repr(output_name)
+            )
+        if not isinstance(output["before_sensitive"], bool) or not isinstance(output["after_sensitive"], bool):
+            raise SystemExit(
+                "ERROR: ARC output Change has an invalid sensitive-field shape for "
+                + repr(output_name)
+            )
+        if output["before_sensitive"] != output["after_sensitive"]:
+            raise SystemExit(
+                "ERROR: ARC output Change changes sensitive-field shape for "
+                + repr(output_name)
+            )
     all_changes = plan.get("resource_changes", [])
     if not isinstance(all_changes, list):
         raise SystemExit("ERROR: ARC plan resource_changes must be a list")
@@ -457,8 +529,34 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
     change = changes[0]["change"]
     if change.get("replace_paths"):
         raise SystemExit("ERROR: ARC capacity plan unexpectedly contains replacement paths")
-    if change.get("before_sensitive") != change.get("after_sensitive"):
-        raise SystemExit("ERROR: ARC capacity plan changes sensitive-field shape")
+
+    def sensitive_true_paths(value, mask_name, path=()):
+        if isinstance(value, bool):
+            return {path} if value else set()
+        if isinstance(value, dict):
+            paths = set()
+            for key, item in value.items():
+                paths.update(sensitive_true_paths(item, mask_name, path + (key,)))
+            return paths
+        if isinstance(value, list):
+            paths = set()
+            for index, item in enumerate(value):
+                paths.update(sensitive_true_paths(item, mask_name, path + (index,)))
+            return paths
+        raise SystemExit(
+            "ERROR: ARC capacity plan contains a non-Boolean sensitive-field leaf in "
+            + mask_name
+        )
+
+    expected_sensitive_true_paths = {("repository_password",)}
+    for mask_name in ("before_sensitive", "after_sensitive"):
+        true_paths = sensitive_true_paths(change.get(mask_name), mask_name)
+        if true_paths != expected_sensitive_true_paths:
+            raise SystemExit(
+                "ERROR: ARC capacity plan must mark exactly repository_password "
+                "as sensitive in "
+                + mask_name
+            )
     before = change.get("before")
     after = change.get("after")
     after_unknown = change.get("after_unknown") or {}
