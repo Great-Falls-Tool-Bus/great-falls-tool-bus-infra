@@ -30,6 +30,7 @@
               pkgs.just
               pkgs.kubectl
               pkgs.opentofu
+              pkgs.openssl
               pkgs.python3
               pkgs.yq
               # Toolchain for the declare-only org-tenancy cache-backed Bazel

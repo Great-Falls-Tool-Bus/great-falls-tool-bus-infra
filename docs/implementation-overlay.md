@@ -64,17 +64,19 @@ Honey/sting pod budget is the scarce resource (TIN-2165/TIN-2234):
 Raising any of these is an explicit operator decision followed by
 `just arc-plan` / `just arc-apply`.
 
-The 8/16 GiB envelope is the bounded response to the 2026-08-17 site-CI soak:
+The 8/16 GiB envelope is the bounded response to the 2026-08-17 site-CI evidence:
 four independent build/test pods crossed the former 8 GiB limit and were
-evicted, while the lightweight carrier validation completed. Before this or any
-later envelope is accepted, its PR must record max-runner node/quota fit and a
-representative natural-fanout soak. Every self-hosted check must receive a real
-runner, the runner container's combined writable-rootfs plus log peak
+evicted, while the lightweight carrier validation completed. The source carrier
+records max-runner node/quota fit first. After its attended apply and exact
+state/live readback, a natural-fanout run and immediate warm rerun are recorded
+on TIN-2299 and a reviewed follow-up before the envelope is accepted. Every
+self-hosted check must receive a real runner, the runner container's combined writable-rootfs plus log peak
 (`rootfs.usedBytes + logs.usedBytes`) must stay below 75% of its limit, and no
 pod eviction, restart, or node `DiskPressure` may occur. A warm cache rerun must
-also pass. Failure rolls back through the guarded ARC path to the exact prior
-request/limit values after the scale set drains; it is not permission to raise
-the limit again without new evidence. Per-runner bounded volumes for `/nix`,
+also pass. Failure drains the scale set and requires a separate signed,
+reviewed rollback carrier whose scope guard permits only the exact 8/16 GiB to
+4/8 GiB reversal; the current promotion-only guard cannot perform that rollback.
+It is not permission to raise the limit again without new evidence. Per-runner bounded volumes for `/nix`,
 `_work`, and `.cache` remain the durable follow-up once the primary core stack
 exposes storage-class inputs compatible with `sting`.
 
@@ -90,20 +92,16 @@ exposes storage-class inputs compatible with `sting`.
 - state bucket: `tofu-state`, key prefix `great-falls-tool-bus-infra`
 - public token mint: `https://gf-token-exchange.tinyland.dev/v1/token/exchange`
 
-## Bootstrap Circularity And First Apply
+## ARC Apply Authority
 
-Secret-free `validate.yml` runs on a GitHub-hosted runner. The separate
-`deploy-arc-runners.yml` lane runs on `tinyland-nix`, which for GFTB resolves
-ONLY through the scale set this stack provisions, and needs
-`ARC_RUNNERS_KUBECONFIG_B64` and RustFS state keys for ARC planning.
-GloriousFlywheel source is private. This public overlay supplies no
-cross-repository source credential, so the retained self-hosted workflow is not
-the bootstrap authority. The FIRST plan and FIRST apply must run from the
-operator machine against the exact reviewed core checkout, where the `honey`
-kubectl context works. Order:
-create App -> install App -> write App secret -> preflight ->
-`arc-init`/`arc-plan` (with RustFS creds exported) -> operator review ->
-`arc-apply` -> verify listener -> only then do self-hosted ARC jobs pick up.
+Secret-free `validate.yml` runs on a GitHub-hosted runner. ARC state planning
+and mutation do not run in GitHub Actions. They run attended on the operator
+machine through the guarded Just surface, with exact reviewed source, runtime
+RustFS credentials, and an external kubeconfig bound to the reviewed Honey
+cluster and runner-set UIDs. Keep that kubeconfig's RBAC as narrow as the ARC
+plan/readback operations permit; the current guard does not certify RBAC. Do not add a
+repository ARC kubeconfig or cross-repository source credential to recreate a
+CI deploy lane.
 
 ## Enrollment Preflight
 
@@ -111,6 +109,7 @@ Run this before `arc-plan` or `arc-apply`:
 
 ```bash
 export GF_CORE_PATH=../GloriousFlywheel
+export GFTB_ARC_KUBECONFIG=/operator/path/gftb-arc.kubeconfig
 just enrollment-preflight
 ```
 
@@ -123,26 +122,78 @@ for that row; `just core-checkout` is the source-authority gate.
 
 ## ARC Runner Plan And Apply
 
-The steady-state deploy surface is `.github/workflows/deploy-arc-runners.yml`.
-Pull requests and pushes run a plan against the GFTB overlay state key only.
-Live apply requires manual `workflow_dispatch` with `action=apply`. If the
-scoped `ARC_RUNNERS_*` deploy secrets are absent, plan runs skip with notices
-and manual apply fails closed.
+The operator-local path is the only ARC deploy surface. Before beginning,
+fetch canonical `main`, use a clean `main` worktree at the exact signed current
+remote head, and prepare a clean, signed GloriousFlywheel checkout at
+`df510574d17b85e7f15470caf3574fcabc4768f1`. Set
+`GF_ARC_CORE_PATH` to that checkout and keep `GF_ARC_CORE_CI_PATH` on the same
+exact pin.
 
-The workflow uses the same GloriousFlywheel stack as the local Just targets:
+Set `GFTB_ARC_KUBECONFIG` to an operator-owned regular file outside the repo,
+mode 0600. It must contain exactly the `honey` context, use no credential exec
+plugin, and reach the existing
+`honey/arc-runners/great-falls-tool-bus-nix` AutoscalingRunnerSet. The plan
+receipt binds the target's exact live UID, so a different cluster, namespace,
+or replacement release refuses apply. Ambient `KUBECONFIG` and
+`TF_VAR_k8s_config_path` are rejected.
+
+The reviewed backend identity is bucket `tofu-state`, key
+`great-falls-tool-bus-infra/arc-runners/terraform.tfstate`. `ARC_BACKEND` may
+instead name an operator-owned mode-0600 file outside the repo for a temporary
+port-forward, but that file must be byte-equivalent to the reviewed backend
+except for an `http://127.0.0.1:<port>` S3 endpoint. State credentials remain
+runtime operator inputs. The workspace must be `default`; ambient workspace,
+backend, CLI, profile, logging, and credential indirection overrides are
+rejected.
+
+Run the finite sequence through Just:
 
 ```bash
-just arc-init
-just arc-plan
+GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-plan
 just arc-plan-show
-just arc-plan-destroy-check
-just arc-apply
+just arc-plan-scope-check
+GFTB_APPLY_CONFIRM=apply GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-apply
+GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-capacity-readback
 ```
 
-Apply remains guarded by OpenTofu JSON plan actions. In-place Helm release
-updates, such as raising `maxRunners`, are allowed. Any delete action is
-blocked unless the operator explicitly sets `allow_destroy=true` on the manual
-workflow dispatch or `ALLOW_ARC_DESTROY=1` for local apply.
+`arc-plan` refuses non-main, dirty, stale, forked, or unsigned infra source and
+records both the infra and core SHAs beside the mode-0600 binary plan.
+`arc-apply` repeats both source guards, requires the target-specific attended
+confirmation, checks the saved SHA markers, and deletes the plan and markers
+only after a successful apply. Pending plans are sensitive local artifacts;
+the binary plan and all source/backend/kubeconfig/target receipts are mode 0600.
+Never upload, commit, or copy them into a shared location.
+
+Apply remains guarded by OpenTofu JSON plan actions. For the 8/16 GiB runner
+envelope, the only acceptable plan is one in-place
+`module.gh_nix.helm_release.arc_runner` update with zero creates, deletes,
+replacements, or unrelated drift. A broader or destructive plan is a stop
+condition requiring a separate reviewed decision; this operator surface has no
+delete bypass.
+
+### Exclusive state window
+
+The RustFS S3 backend has **no remote state lock**. Before planning, establish
+an exclusive quiet window covering plan, human review, apply, and live/state
+readback. Confirm that no other operator and no workflow is planning or
+mutating this ARC stack, and keep that true for the whole window. Supply
+`GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive` only as a one-shot value on each plan,
+apply, and readback command after making that check; the value records an
+operator fact and is not itself a lock.
+
+When using the localhost backend override, loss of the port-forward is an
+ambiguous failure if cluster mutation may have started but the state write did
+not complete. Stop immediately. Read back the live
+`great-falls-tool-bus-nix` release and the canonical remote state before any
+new plan or retry. Do not assume a failed command means the cluster was
+unchanged, and do not blindly reapply the saved plan. The apply-attempt marker
+makes that saved plan non-retryable. After restoring backend connectivity, run
+`GFTB_ARC_READBACK_MODE=reconcile GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just
+arc-capacity-readback`. That mode accepts only matching state/live 4/8 GiB plus
+the exact pending promotion plan, or matching state/live 8/16 GiB plus an empty
+plan; it then invalidates the entire attempted bundle. A pre-change receipt
+permits a fresh plan. A promoted receipt does not permit retry. Any other result
+is a stop condition requiring a separate reviewed state/live reconciliation.
 
 ## ARC GitHub App Secret
 
@@ -158,9 +209,9 @@ export GF_CORE_PATH=../GloriousFlywheel
 export GITHUB_APP_ID=<APP_ID>
 export GITHUB_APP_INSTALLATION_ID=<INSTALLATION_ID>
 export GITHUB_APP_PRIVATE_KEY_PATH=<PATH_TO_PRIVATE_KEY>
+export GFTB_ARC_KUBECONFIG=/operator/path/gftb-arc.kubeconfig
 
-just arc-app-secret-dry-run
-just arc-app-secret-apply
+GFTB_APPLY_CONFIRM=apply just arc-app-secret-apply
 just enrollment-preflight
 ```
 

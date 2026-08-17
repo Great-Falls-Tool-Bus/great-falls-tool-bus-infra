@@ -22,6 +22,9 @@ kubeconfig*
 *~
 .gstack/
 
+__pycache__/
+*.py[cod]
+
 # Bazel convenience symlinks + lockfile for the org-tenancy cache proof workspace
 bazel-*
 bazel/flywheel-proof/bazel-*

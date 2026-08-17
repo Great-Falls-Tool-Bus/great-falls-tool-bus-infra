@@ -109,20 +109,23 @@ ordered runbook.
 
 ## Operator Flow
 
-Use this overlay from a side-by-side checkout with GloriousFlywheel:
+ARC plan/apply is an attended, operator-local operation. It must start from a
+clean, signed checkout of the current canonical `main` and the clean, signed
+role-specific GloriousFlywheel checkout at
+`df510574d17b85e7f15470caf3574fcabc4768f1`:
 
 ```bash
-export GF_CORE_PATH=../GloriousFlywheel   # already the default here (the
-                                          # template's ../GloriousFlywheel-infra-overlays
-                                          # dead name is fixed in this overlay)
-just check
+export GF_CORE_PATH=/operator/path/GloriousFlywheel-implementation-2281
+export GF_ARC_CORE_PATH=/operator/path/GloriousFlywheel-arc-df510
+export GF_ARC_CORE_CI_PATH=path:/operator/path/GloriousFlywheel-arc-df510#ci
+export GFTB_ARC_KUBECONFIG=/operator/path/gftb-arc.kubeconfig
+# Export the RustFS access-key pair from operator custody.
 just enrollment-preflight
-just arc-app-secret-dry-run
-just arc-app-secret-apply
-just arc-init
-just arc-plan
+GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-plan
 just arc-plan-show
-just arc-apply    # operator gate; destroy-checked, ALLOW_ARC_DESTROY-gated
+just arc-plan-scope-check
+GFTB_APPLY_CONFIRM=apply GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-apply
+GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-capacity-readback
 ```
 
 `just arc-plan` runs the GloriousFlywheel ARC stack with this repo's
@@ -131,12 +134,9 @@ just arc-apply    # operator gate; destroy-checked, ALLOW_ARC_DESTROY-gated
 live runner-set registration, and recent workflow blockers before any plan or
 apply. The pinned pre-#1208 GloriousFlywheel implementation still emits a legacy
 core-read-credential row; do not provision a key solely to satisfy that row.
-`just core-checkout` is this overlay's fail-closed source-authority check.
-`just arc-app-secret-*` writes the configured
-`github-app-secret-great-falls-tool-bus` secret into both `arc-systems` and
-`arc-runners` by calling the GloriousFlywheel core wrapper; it requires
-`GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, and
-`GITHUB_APP_PRIVATE_KEY_PATH`.
+`just core-checkout` is this overlay's fail-closed source-authority check. App
+secret rotation remains a separate operator-local action through
+`just arc-app-secret-apply`; it is not part of ARC state plan/apply.
 
 Hosted `validate` is self-contained and does not fetch the private
 `tinyland-inc/GloriousFlywheel` repository. Source-dependent ARC module
@@ -144,14 +144,30 @@ validation remains operator-local against an exact reviewed checkout. The
 legacy self-hosted workflow declarations retain exact pins but are not the
 required hosted validation authority; see [CI Credentials](docs/ci-credentials.md).
 
-ARC runner plan/apply uses `.github/workflows/deploy-arc-runners.yml`
-(plan-only on PR/push; apply only via manual `workflow_dispatch` with
-`action=apply`). It requires `ARC_RUNNERS_KUBECONFIG_B64`,
-`ARC_RUNNERS_RUSTFS_ACCESS_KEY`, and `ARC_RUNNERS_RUSTFS_SECRET_KEY`.
+There is no ARC plan/apply workflow and no repository ARC kubeconfig. The
+guarded Just recipes, an external operator-owned mode-0600 kubeconfig, and
+runtime RustFS credentials are the only ARC state-mutation path.
 
-`just arc-apply` runs a destructive-plan guard backed by OpenTofu's JSON plan
-actions. If a recorded state rehome or teardown window intentionally allows
-destruction, set `ALLOW_ARC_DESTROY=1` for that one apply.
+`just arc-apply` runs an exact plan-scope guard backed by OpenTofu's JSON plan
+actions. The current carrier accepts only one in-place `gh_nix` Helm update;
+other updates, creates, deletes, and replacements refuse until a separate
+reviewed contract changes the allowlist.
+
+The ARC S3 backend has no remote state lock. Hold an exclusive quiet window
+from before `arc-plan` through post-apply readback: no concurrent operator and
+no workflow may plan or mutate the same ARC state. Supply
+`GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive` as a one-shot value on each plan, apply,
+and readback command only after checking that condition. The normal promoted
+readback passes only when canonical state and the live scale set both report
+8Gi/16Gi, the listener is one Ready zero-restart pod, and a refreshed plan is empty. If a
+localhost RustFS port-forward is lost after cluster mutation may have begun but
+before state is written, stop; the apply-attempt marker prevents blind reuse.
+Restore connectivity and reconcile the ambiguous attempt directly with
+`GFTB_ARC_READBACK_MODE=reconcile GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just
+arc-capacity-readback`. Reconciliation succeeds only for matching state/live
+4/8 GiB plus the exact pending 8/16 GiB plan, or matching promoted 8/16 GiB plus
+an empty refreshed plan. It consumes the attempted plan bundle; only the
+pre-change outcome permits creating and reviewing a fresh plan.
 
 ## Boundary
 

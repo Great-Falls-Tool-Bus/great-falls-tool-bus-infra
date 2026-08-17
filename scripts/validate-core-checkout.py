@@ -35,7 +35,6 @@ EXACT_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 EXPECTED_WORKFLOWS = {
     "archive-stack.yml",
-    "deploy-arc-runners.yml",
     "edge-drift.yml",
     "edge-plan.yml",
     "flywheel-cache-proof.yml",
@@ -52,7 +51,6 @@ EXPECTED_WORKFLOWS = {
 # exact job-level checkout counts, not a loose minimum.
 EXPECTED_CORE_CHECKOUTS = {
     "archive-stack.yml": 2,
-    "deploy-arc-runners.yml": 1,
     "edge-drift.yml": 1,
     "edge-plan.yml": 1,
     "form-crs.yml": 2,
@@ -67,9 +65,7 @@ EXPECTED_CORE_CHECKOUTS = {
 # hardening must not silently import a newer core implementation into unrelated
 # apply, drift, or mail lanes.
 EXPECTED_CORE_PINS = {
-    workflow: (
-        ARC_CORE_PIN if workflow == "deploy-arc-runners.yml" else IMPLEMENTATION_CORE_PIN
-    )
+    workflow: IMPLEMENTATION_CORE_PIN
     for workflow in EXPECTED_CORE_CHECKOUTS
 }
 
@@ -77,7 +73,6 @@ EXPECTED_CORE_PINS = {
 # not persist the source repository's per-run GITHUB_TOKEN into Git config.
 EXPECTED_ACTION_CHECKOUTS = {
     "archive-stack.yml": 4,
-    "deploy-arc-runners.yml": 2,
     "edge-drift.yml": 2,
     "edge-plan.yml": 2,
     "flywheel-cache-proof.yml": 1,
@@ -92,7 +87,6 @@ EXPECTED_ACTION_CHECKOUTS = {
 
 EXPECTED_CORE_CI_PATH_EXPORTS = {
     "archive-stack.yml": 3,
-    "deploy-arc-runners.yml": 4,
     "edge-drift.yml": 1,
     "edge-plan.yml": 3,
     "flywheel-cache-proof.yml": 0,
@@ -115,7 +109,6 @@ EXPECTED_PERMISSIONS = {
 }
 
 CONDITIONAL_CHECKOUTS = {
-    "deploy-arc-runners.yml": "if: steps.secrets.outputs.arc-deploy-secrets-present == 'true'",
     "edge-drift.yml": "if: steps.secrets.outputs.edge-deploy-secrets-present == 'true'",
     "edge-plan.yml": "if: steps.secrets.outputs.edge-deploy-secrets-present == 'true'",
     "k8s-stack-drift.yml": "if: steps.secrets.outputs.kubeconfig-present == 'true'",
@@ -126,7 +119,6 @@ AUTHORITY_DOCS = (
     Path("README.md"),
     Path("docs/ci-credentials.md"),
     Path("docs/implementation-overlay.md"),
-    Path("docs/onboarding-runbook.md"),
     Path("docs/runbooks/oncluster-web-cutover.md"),
     Path("bazel/flywheel-proof/MODULE.bazel"),
 )
@@ -355,6 +347,27 @@ def justfile_pin(source: str) -> str:
             "Justfile gf_core_ci default must be the canonical exact #ci flake reference"
         )
     return _exact_sha(match.group(1), "Justfile gf_core_ci commit")
+
+
+def justfile_arc_pin(source: str) -> str:
+    sha_definition = _one(
+        re.findall(r'(?m)^arc_core_sha\s*:=\s*"([0-9a-f]{40})"\s*$', source),
+        "Justfile arc_core_sha authority",
+    )
+    ci_definition = _one(
+        re.findall(
+            r'(?m)^arc_core_ci_default\s*:=\s*"'
+            + re.escape(CORE_FLAKE_PREFIX)
+            + r'([0-9a-f]{40})#ci"\s*$',
+            source,
+        ),
+        "Justfile arc_core_ci_default authority",
+    )
+    sha = _exact_sha(sha_definition, "Justfile ARC core commit")
+    ci_sha = _exact_sha(ci_definition, "Justfile ARC core #ci commit")
+    if sha != ci_sha:
+        raise ContractError("Justfile ARC checkout and #ci pins must match")
+    return sha
 
 
 def _workflow_census_findings(sources: dict[str, str]) -> list[str]:
@@ -589,6 +602,15 @@ def validate(root: Path) -> list[str]:
         except ContractError as exc:
             findings.append(str(exc))
 
+    try:
+        observed_arc_pin = justfile_arc_pin(_read(root, Path("Justfile"), "Justfile"))
+        if observed_arc_pin != ARC_CORE_PIN:
+            findings.append(
+                f"Justfile: ARC authority must preserve role pin {ARC_CORE_PIN}"
+            )
+    except ContractError as exc:
+        findings.append(str(exc))
+
     proof = sources.get("flywheel-cache-proof.yml", "")
     oidc_refs = re.findall(
         r"(?m)^[ \t]+GF_OIDC_PROFILE_REF[ \t]*:[ \t]*([^\s#]+)[ \t]*$",
@@ -818,9 +840,9 @@ def self_test(root: Path) -> None:
             f"pinned_commit: {'b' * 40}",
         ),
         "mismatched ARC role pin": (
-            Path(".github/workflows/deploy-arc-runners.yml"),
-            f"GF_CORE_REF: {ARC_CORE_PIN}",
-            f"GF_CORE_REF: {'c' * 40}",
+            Path("Justfile"),
+            f'arc_core_sha := "{ARC_CORE_PIN}"',
+            f'arc_core_sha := "{"c" * 40}"',
         ),
         "mismatched OIDC profile pin": (
             Path(".github/workflows/flywheel-cache-proof.yml"),
