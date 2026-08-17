@@ -28,14 +28,6 @@ ladder and do not reuse the org-scoped ARC registration App.
 Actions result. Its default is the workflow's ephemeral `github.token`. It is
 not a GloriousFlywheel source credential and must not be named or reused as one.
 
-## Optional Cache-Warming Secret
-
-`ATTIC_TOKEN` may be configured as a repository Actions secret when trusted
-push validation should read from and publish warmed Nix outputs into the shared
-Attic cache. The workflow only exposes this token on `push` events.
-Pull-request validation stays read-only and skips private Attic attachment
-unless a separate authenticated read path is added.
-
 ## ARC Runner Deploy Secrets
 
 The ARC runner deploy workflow plans on pull requests and pushes, but applies
@@ -73,17 +65,18 @@ GFTB_MAIL_KUBECONFIG=/path/to/latoolb-us-production.kubeconfig just mail-cr-appl
 ```
 
 BOOTSTRAP NOTE: these secrets only matter AFTER the GFTB scale set exists.
-Overlay CI itself runs on `tinyland-nix`, which resolves through the scale set
-this stack provisions. The first plan/apply always happens on the operator
-machine (see docs/implementation-overlay.md).
+Secret-free `validate` runs on a GitHub-hosted runner; self-hosted and apply
+lanes remain separately gated. The first plan/apply always happens on the
+operator machine (see docs/implementation-overlay.md).
 
 ## Why It Exists
 
-The overlay owns private implementation facts for the Great-Falls-Tool-Bus
-organization boundary. The core repo owns reusable OpenTofu modules, runner
-images, actions, and docs. CI therefore needs to check out both repos to prove
-that the overlay still consumes the current core contract without copying core
-product logic into this repo.
+The overlay owns reviewed implementation declarations and public names for the
+Great-Falls-Tool-Bus organization boundary; private values stay in operator
+custody. The core repo owns reusable OpenTofu modules, runner images, actions,
+and docs. CI therefore needs to check out both repos to prove that the overlay
+still consumes the current core contract without copying core product logic
+into this repo.
 
 ## Current Status
 

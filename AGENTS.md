@@ -1,7 +1,8 @@
 # great-falls-tool-bus-infra Agent Guidance
 
-This repository is the private Great-Falls-Tool-Bus (GFTB) organization
-implementation overlay for GloriousFlywheel.
+This repository is the public Great-Falls-Tool-Bus (GFTB) organization
+implementation overlay for GloriousFlywheel. Secret-free validation may run on
+GitHub-hosted runners; credentials and apply authority remain operator-owned.
 
 Hard rules:
 
@@ -9,11 +10,12 @@ Hard rules:
   credentials
 - do not introduce repo-specific or org-identity runner labels
 - keep runner labels capability-shaped and aligned with GloriousFlywheel;
-  workflows request shared `tinyland-*` labels only
+  self-hosted workflows request shared `tinyland-*` labels only. The public
+  validation workflow uses a GitHub-hosted runner
 - ARC registration for this org is org-scoped
   (`https://github.com/Great-Falls-Tool-Bus`); do not add repo-scoped
-  registration anchors (org-level registration already reaches every GFTB
-  repo, so the personal-account anchor pattern does not apply here)
+  registration anchors. Org-scoped registration does not override the
+  separately selected GitHub runner-group admission policy
 - keep the capacity posture conservative (nix lane only,
   `nix_max_runners = 4`, no warm pool, docker/dind off) unless an explicit
   operator decision raises it; the honey/sting pod budget is the scarce

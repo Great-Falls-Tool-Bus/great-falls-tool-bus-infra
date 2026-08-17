@@ -435,7 +435,7 @@ web-stack-validate:
 # Operator-supplied cutover inputs (env-delivered by web-stack.yml; never baked):
 #   WEB_APPLY_KUBECONFIG  path to the materialized namespace-scoped SA kubeconfig
 #   WEB_APPLY_IMAGE       image to serve (operator-resolved; not the PLACEHOLDER)
-#   WEB_APPLY_REPLICAS    replica count to flip to (default 2, the MI prod shape)
+# WEB_APPLY_REPLICAS    replica count to flip to (default 2, the MI prod shape)
 _web-apply-inputs:
     test -n "${WEB_APPLY_KUBECONFIG:-}" || { echo "Set WEB_APPLY_KUBECONFIG to the web-apply kubeconfig path"; exit 1; }
     test -f "${WEB_APPLY_KUBECONFIG}"
