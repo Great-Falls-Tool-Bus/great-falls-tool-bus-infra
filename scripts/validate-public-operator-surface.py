@@ -278,7 +278,7 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "c37fb8c36e826dc6", "3676b9eafb3336d0", "87893f2ae0d1c1ec", "c957b577fd505498"
     ),
     "arc-plan-scope-check": _receipt(
-        "1ce928c20000ecce", "8996352001f8c137", "ea83132d635e7dc9", "2b814d94d9b8b59f"
+        "e68966736986a4ee", "8df1bb890018175a", "13c48e6c55ab5c31", "e395368aca18a8d3"
     ),
     "arc-apply": _receipt(
         "fe8c324732148b38", "c967bad1c1ccab8e", "fd3840cedf78db82", "9b5a73294ec96ef6"
@@ -1210,12 +1210,20 @@ template:
 
 def valid_arc_scope_plan() -> dict[str, object]:
     return {
+        "format_version": "1.2",
+        "terraform_version": "1.11.6",
         "errored": False,
-        "complete": True,
-        "applyable": True,
         "resource_drift": [],
-        "output_changes": {},
-        "deferred_changes": [],
+        "output_changes": {
+            "fixture_output": {
+                "actions": ["no-op"],
+                "before": "opaque-fixture-value",
+                "after": "opaque-fixture-value",
+                "after_unknown": False,
+                "before_sensitive": False,
+                "after_sensitive": False,
+            }
+        },
         "resource_changes": [
             {
                 "address": "module.gh_nix.helm_release.arc_runner",
@@ -1228,8 +1236,16 @@ def valid_arc_scope_plan() -> dict[str, object]:
                     "before": {"values": [ARC_BEFORE_VALUES]},
                     "after": {"values": [ARC_AFTER_VALUES]},
                     "after_unknown": {},
-                    "before_sensitive": {},
-                    "after_sensitive": {},
+                    "before_sensitive": {
+                        "metadata": [{}],
+                        "repository_password": True,
+                        "values": [False],
+                    },
+                    "after_sensitive": {
+                        "metadata": [],
+                        "repository_password": True,
+                        "values": [False],
+                    },
                     "replace_paths": [],
                 },
             }
@@ -1711,15 +1727,75 @@ def self_test() -> None:
             "self-test FAILED: exact valid ARC scope was rejected: "
             + (valid_result.stdout + valid_result.stderr).strip()
         )
+    resource_change = valid["resource_changes"][0]["change"]  # type: ignore[index]
+    if resource_change["before_sensitive"] == resource_change["after_sensitive"]:  # type: ignore[index]
+        raise SystemExit(
+            "self-test FAILED: asymmetric resource sensitivity scaffolding fixture collapsed"
+        )
 
-    for flag in ("errored", "complete", "applyable"):
+    positive_output_plans: list[tuple[str, dict[str, object]]] = []
+    plan = copy.deepcopy(valid)
+    plan["output_changes"] = {}
+    positive_output_plans.append(("empty output_changes", plan))
+    plan = copy.deepcopy(valid)
+    plan["output_changes"]["fixture_output"]["before"] = {  # type: ignore[index]
+        "alpha": 1,
+        "nested": {"first": True, "second": [None, "fixture"]},
+    }
+    plan["output_changes"]["fixture_output"]["after"] = {  # type: ignore[index]
+        "nested": {"second": [None, "fixture"], "first": True},
+        "alpha": 1,
+    }
+    positive_output_plans.append(("reordered structured no-op output", plan))
+    plan = copy.deepcopy(valid)
+    plan["output_changes"]["fixture_output"]["before_sensitive"] = True  # type: ignore[index]
+    plan["output_changes"]["fixture_output"]["after_sensitive"] = True  # type: ignore[index]
+    positive_output_plans.append(("sensitive no-op output", plan))
+    for label, plan in positive_output_plans:
+        result = run_arc_scope_checker(scope_source, plan)
+        if result.returncode != 0:
+            raise SystemExit(
+                f"self-test FAILED: valid {label} was rejected: "
+                + (result.stdout + result.stderr).strip()
+            )
+
+    for field, diagnostic in (
+        ("format_version", "format_version must be exactly 1.2"),
+        ("terraform_version", "terraform_version must be exactly 1.11.6"),
+        ("errored", "errored must be exactly false"),
+    ):
         plan = copy.deepcopy(valid)
-        plan.pop(flag)
-        expect_scope_rejection(scope_source, f"missing {flag} flag", plan, "incomplete")
-    for flag, value in (("errored", True), ("complete", False), ("applyable", False)):
+        plan.pop(field)
+        expect_scope_rejection(scope_source, f"missing {field}", plan, diagnostic)
+    for field, value, diagnostic in (
+        ("format_version", "1.1", "format_version must be exactly 1.2"),
+        ("format_version", 1.2, "format_version must be exactly 1.2"),
+        ("terraform_version", "1.11.5", "terraform_version must be exactly 1.11.6"),
+        ("terraform_version", 1.116, "terraform_version must be exactly 1.11.6"),
+        ("errored", True, "errored must be exactly false"),
+        ("errored", 0, "errored must be exactly false"),
+    ):
         plan = copy.deepcopy(valid)
-        plan[flag] = value
-        expect_scope_rejection(scope_source, f"unsafe {flag} flag", plan, "incomplete")
+        plan[field] = value
+        expect_scope_rejection(scope_source, f"wrong {field}", plan, diagnostic)
+    for field in ("complete", "applyable"):
+        plan = copy.deepcopy(valid)
+        plan[field] = True
+        expect_scope_rejection(
+            scope_source,
+            f"unexpected {field}",
+            plan,
+            "fields outside the pinned OpenTofu schema",
+        )
+
+    plan = copy.deepcopy(valid)
+    plan["foreign_schema_field"] = False
+    expect_scope_rejection(
+        scope_source,
+        "foreign top-level field",
+        plan,
+        "fields outside the pinned OpenTofu schema",
+    )
 
     for field, value in (("mode", "data"), ("type", "other"), ("name", "other")):
         plan = copy.deepcopy(valid)
@@ -1743,16 +1819,81 @@ def self_test() -> None:
     output_cases = (
         ("non-object outputs", [], "output_changes must be an object"),
         ("malformed output", {"x": "bad"}, "value must be an object"),
-        ("changed output", {"x": {"actions": ["update"]}}, "output changes"),
     )
     for label, value, diagnostic in output_cases:
         plan = copy.deepcopy(valid)
         plan["output_changes"] = value
         expect_scope_rejection(scope_source, label, plan, diagnostic)
 
+    for actions in (["create"], ["update"], ["delete"], ["delete", "create"]):
+        plan = copy.deepcopy(valid)
+        plan["output_changes"]["fixture_output"]["actions"] = actions  # type: ignore[index]
+        expect_scope_rejection(
+            scope_source, f"output actions {actions!r}", plan, "exactly no-op actions"
+        )
+
     plan = copy.deepcopy(valid)
-    plan["deferred_changes"] = [{"reason": "deferred"}]
-    expect_scope_rejection(scope_source, "deferred change", plan, "deferred changes")
+    plan["output_changes"]["fixture_output"]["after"] = "changed-fixture-value"  # type: ignore[index]
+    expect_scope_rejection(scope_source, "changed output value", plan, "modifies the value")
+
+    plan = copy.deepcopy(valid)
+    plan["output_changes"]["fixture_output"]["before"] = True  # type: ignore[index]
+    plan["output_changes"]["fixture_output"]["after"] = 1  # type: ignore[index]
+    expect_scope_rejection(
+        scope_source, "type-drifted output value", plan, "modifies the value"
+    )
+
+    plan = copy.deepcopy(valid)
+    plan["output_changes"][""] = plan["output_changes"].pop("fixture_output")  # type: ignore[union-attr]
+    expect_scope_rejection(scope_source, "empty output name", plan, "nonempty string")
+
+    for unknown_mask in (True, {}, [], {"opaque": False}, "false"):
+        plan = copy.deepcopy(valid)
+        plan["output_changes"]["fixture_output"]["after_unknown"] = unknown_mask  # type: ignore[index]
+        expect_scope_rejection(
+            scope_source, "output unknown after-value", plan, "unknown after-values"
+        )
+
+    plan = copy.deepcopy(valid)
+    plan["output_changes"]["fixture_output"]["after_sensitive"] = True  # type: ignore[index]
+    expect_scope_rejection(
+        scope_source, "output sensitive-shape drift", plan, "sensitive-field shape"
+    )
+
+    plan = copy.deepcopy(valid)
+    plan["output_changes"]["fixture_output"]["before_sensitive"] = "false"  # type: ignore[index]
+    plan["output_changes"]["fixture_output"]["after_sensitive"] = "false"  # type: ignore[index]
+    expect_scope_rejection(
+        scope_source, "invalid output sensitive mask", plan, "invalid sensitive-field shape"
+    )
+
+    for field, value in (
+        ("replace_paths", []),
+        ("importing", {}),
+        ("generated_config", "fixture"),
+        ("before_identity", {}),
+        ("after_identity", {}),
+        ("unknown", False),
+    ):
+        plan = copy.deepcopy(valid)
+        plan["output_changes"]["fixture_output"][field] = value  # type: ignore[index]
+        expect_scope_rejection(
+            scope_source, f"output {field} metadata", plan, "unexpected="
+        )
+
+    plan = copy.deepcopy(valid)
+    del plan["output_changes"]["fixture_output"]["after_unknown"]  # type: ignore[index]
+    expect_scope_rejection(scope_source, "incomplete output Change", plan, "missing=")
+
+    for deferred in ([], [{"reason": "fixture"}]):
+        plan = copy.deepcopy(valid)
+        plan["deferred_changes"] = deferred
+        expect_scope_rejection(
+            scope_source,
+            "unsupported deferred_changes field",
+            plan,
+            "fields outside the pinned OpenTofu schema",
+        )
 
     for owner, key, value in (
         ("resource", "previous_address", "module.old.helm_release.arc_runner"),
@@ -1786,9 +1927,35 @@ def self_test() -> None:
     plan["resource_changes"][0]["change"]["after_unknown"] = {"values": True}  # type: ignore[index]
     expect_scope_rejection(scope_source, "unexpected unknown", plan, "unexpected unknown")
 
-    plan = copy.deepcopy(valid)
-    plan["resource_changes"][0]["change"]["after_sensitive"] = {"values": True}  # type: ignore[index]
-    expect_scope_rejection(scope_source, "sensitive shape drift", plan, "sensitive-field")
+    sensitive_mask_cases = (
+        ("missing true path", {"repository_password": False}, "mark exactly"),
+        (
+            "extra true path",
+            {"repository_password": True, "unexpected": True},
+            "mark exactly",
+        ),
+        (
+            "moved true path",
+            {"nested": {"repository_password": True}},
+            "mark exactly",
+        ),
+        ("non-Boolean true mask", {"repository_password": 1}, "non-Boolean"),
+        (
+            "non-Boolean false scaffolding",
+            {"metadata": [None], "repository_password": True},
+            "non-Boolean",
+        ),
+    )
+    for mask_name in ("before_sensitive", "after_sensitive"):
+        for label, mask, diagnostic in sensitive_mask_cases:
+            plan = copy.deepcopy(valid)
+            plan["resource_changes"][0]["change"][mask_name] = mask  # type: ignore[index]
+            expect_scope_rejection(
+                scope_source,
+                f"resource {mask_name} {label}",
+                plan,
+                diagnostic,
+            )
 
     plan = copy.deepcopy(valid)
     plan["resource_changes"][0]["change"]["before"]["timeout"] = 1  # type: ignore[index]
