@@ -1,25 +1,17 @@
 # CI Credentials
 
-This overlay validates by checking out the public GloriousFlywheel core repo at
-an exact role-bound commit next to the overlay repo.
+Hosted validation is self-contained. It does not fetch the private
+GloriousFlywheel repository or receive a cross-repository credential.
 
 ## Core Source Checkout
 
-The core checkout needs no dedicated cross-repository deploy key, PAT, or
-GitHub App secret. Each workflow supplies the canonical public repository,
-exact `GF_CORE_REF`, explicit `GloriousFlywheel` path, and
-`persist-credentials: false`, then compares the checked-out `HEAD` with the
-declared ref before consuming any core action or devshell.
-
-Pinned `actions/checkout` still defaults its `token` input to the workflow
-repository's ephemeral per-run `github.token`. That token can fetch public
-source but carries no private-GloriousFlywheel grant; the workflow neither
-passes it explicitly nor persists it in Git configuration.
-
-If GloriousFlywheel becomes private later, that is a new reviewed authority
-change. Use a dedicated, per-overlay GitHub App installation token scoped only
-to `contents:read` on that repository; do not silently restore a deploy-key/PAT
-ladder and do not reuse the org-scoped ARC registration App.
+The required `validate` workflow checks out only this public overlay with
+`persist-credentials: false`. Exact GloriousFlywheel source-dependent ARC
+validation is operator-local. Ten retained legacy self-hosted workflows still
+declare exact core pins, but the public repository token cannot fetch that
+private source; those declarations are not hosted validation or release
+authority and are scheduled for contraction rather than receiving a new PAT,
+deploy key, or reused ARC registration credential.
 
 ## Optional Site-CI Metadata Token
 
@@ -74,25 +66,25 @@ operator machine (see docs/implementation-overlay.md).
 The overlay owns reviewed implementation declarations and public names for the
 Great-Falls-Tool-Bus organization boundary; private values stay in operator
 custody. The core repo owns reusable OpenTofu modules, runner images, actions,
-and docs. CI therefore needs to check out both repos to prove that the overlay
-still consumes the current core contract without copying core product logic
-into this repo.
+and docs. Hosted CI proves this repo's own declarations. An operator-local
+exact checkout supplies the additional ARC module validation without copying
+core product logic into this repo.
 
 ## Current Status
 
-All eleven core-consuming workflows use the public exact-SHA checkout contract.
-The repository contains a twelfth workflow without a core checkout; the finite
-`.yml`/`.yaml` census deliberately covers it so a new source consumer cannot
+Ten legacy core-consuming workflows retain the exact-SHA checkout declaration.
+The repository contains two workflows without a core checkout; the finite
+`.yml`/`.yaml` census deliberately covers them so a new source consumer cannot
 hide under the alternate extension.
 
-`just core-checkout` validates checkout action immutability, public repository,
+`just core-checkout` validates checkout action immutability, canonical repository,
 finite overlay/core paths, role pin, non-persistence, read-only workflow
-permission, closed HEAD assertion, all 30 exact `GF_CORE_CI_PATH` devshell
+permission, closed HEAD assertion, all 29 exact `GF_CORE_CI_PATH` devshell
 sources, the pinned-and-hashed OIDC helper URL, and absence of dedicated
 cross-repository credential inputs. `just core-checkout-selftest` proves the
 guard rejects adversarial mutations. The pinned pre-#1208 GloriousFlywheel
 `implementation-overlay-preflight.py` still reports its legacy source-key row;
-that row is not authority for this public checkout and is not a reason to mint
+that row is not hosted-CI authority and is not a reason to mint
 a new credential.
 
 The overlay's implementation authority remains

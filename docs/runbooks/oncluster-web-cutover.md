@@ -386,8 +386,9 @@ protected environment. That cutover workflow now exists as
 (TIN-2543): the same chassis, but **apply-only**. It triggers ONLY on
 `workflow_dispatch` with a required `confirm=apply` sentinel (no push/PR), gates
 fail-closed on the protected `web-apply` environment holding
-`web-apply-kubeconfig`, checks public GloriousFlywheel source at the repository's
-exact pin with no dedicated cross-repository grant, takes the operator-resolved
+`web-apply-kubeconfig`. Its retained private-core checkout is not executable
+from this public repo without a separately governed source grant, so it is not
+the current release authority. It takes the operator-resolved
 image as a dispatch `image` input (never a committed pin), and runs `just web-stack-apply`
 (workload apply, image pin, `replicas` flip 0 to N) followed by an in-cluster
 `/health` readiness gate. It does **not** un-park the overlay: the `k8s/web/`

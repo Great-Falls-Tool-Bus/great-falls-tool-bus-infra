@@ -79,9 +79,11 @@ Secret-free `validate.yml` runs on a GitHub-hosted runner. The separate
 `deploy-arc-runners.yml` lane runs on `tinyland-nix`, which for GFTB resolves
 ONLY through the scale set this stack provisions, and needs
 `ARC_RUNNERS_KUBECONFIG_B64` and RustFS state keys for ARC planning.
-GloriousFlywheel source is public and exact-SHA-pinned, so it needs no
-dedicated cross-repository secret. The FIRST plan and FIRST apply must still
-run from the operator machine, where the `honey` kubectl context works. Order:
+GloriousFlywheel source is private. This public overlay supplies no
+cross-repository source credential, so the retained self-hosted workflow is not
+the bootstrap authority. The FIRST plan and FIRST apply must run from the
+operator machine against the exact reviewed core checkout, where the `honey`
+kubectl context works. Order:
 create App -> install App -> write App secret -> preflight ->
 `arc-init`/`arc-plan` (with RustFS creds exported) -> operator review ->
 `arc-apply` -> verify listener -> only then do self-hosted ARC jobs pick up.

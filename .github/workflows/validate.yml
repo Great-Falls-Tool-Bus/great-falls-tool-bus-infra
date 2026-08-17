@@ -14,9 +14,6 @@ on:
 permissions:
   contents: read
 
-env:
-  GF_CORE_REF: 2281b576bce0e8dd776a047b84e7464f5b508a62
-
 jobs:
   validate:
     runs-on: ubuntu-24.04
@@ -27,21 +24,6 @@ jobs:
         with:
           path: overlay
           persist-credentials: false
-      - name: Checkout public GloriousFlywheel core
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          repository: tinyland-inc/GloriousFlywheel
-          ref: ${{ env.GF_CORE_REF }}
-          path: GloriousFlywheel
-          persist-credentials: false
-      - name: Verify GloriousFlywheel core checkout
-        run: |
-          set -euo pipefail
-          actual="$(git -C GloriousFlywheel rev-parse --verify HEAD)"
-          if [ "${actual}" != "${GF_CORE_REF}" ]; then
-            echo "::error::GloriousFlywheel checkout mismatch: expected ${GF_CORE_REF}, got ${actual}"
-            exit 1
-          fi
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
       - name: Validate overlay contract
@@ -83,6 +65,4 @@ jobs:
           append_nix_config_line "accept-flake-config" "true"
           append_nix_config_line "access-tokens" "github.com=${GH_ACTION_TOKEN}"
           cd overlay
-          export GF_CORE_PATH=../GloriousFlywheel
-          export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
-          nix develop . -c just check
+          nix develop . -c just check-hosted

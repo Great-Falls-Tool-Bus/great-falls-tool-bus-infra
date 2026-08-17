@@ -87,9 +87,9 @@ kubectl config view --minify --flatten --context honey | base64 | gh secret set 
 gh secret set ARC_RUNNERS_RUSTFS_ACCESS_KEY -R Great-Falls-Tool-Bus/great-falls-tool-bus-infra --body "<rustfs-access-key>"
 gh secret set ARC_RUNNERS_RUSTFS_SECRET_KEY -R Great-Falls-Tool-Bus/great-falls-tool-bus-infra --body "<rustfs-secret-key>"
 ```
-GloriousFlywheel source checkout needs no dedicated cross-repository secret:
-the public repository is bound to an exact commit, the action supplies no
-explicit token or SSH key, and credential persistence is disabled.
+Hosted validation does not fetch the private GloriousFlywheel repository.
+Operator-local ARC validation uses an exact reviewed checkout; do not give this
+public repo a general cross-repository source credential.
 The hosted `validate` job proves repository source and contracts only. ARC
 installation, registration, scale-set health, and label pickup require the
 listener/readback checks in step 9 and a separate self-hosted job receipt.

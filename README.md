@@ -138,12 +138,11 @@ core-read-credential row; do not provision a key solely to satisfy that row.
 `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, and
 `GITHUB_APP_PRIVATE_KEY_PATH`.
 
-CI checks out the public `tinyland-inc/GloriousFlywheel` source at the exact
-declared commit. No dedicated cross-repository deploy key, PAT, or GitHub App
-secret is required. `actions/checkout` may use this repository's ephemeral
-per-run `github.token` for the public fetch, but the workflow supplies no
-private-GF grant, passes no explicit token or SSH key, and disables credential
-persistence. See [CI Credentials](docs/ci-credentials.md).
+Hosted `validate` is self-contained and does not fetch the private
+`tinyland-inc/GloriousFlywheel` repository. Source-dependent ARC module
+validation remains operator-local against an exact reviewed checkout. The
+legacy self-hosted workflow declarations retain exact pins but are not the
+required hosted validation authority; see [CI Credentials](docs/ci-credentials.md).
 
 ARC runner plan/apply uses `.github/workflows/deploy-arc-runners.yml`
 (plan-only on PR/push; apply only via manual `workflow_dispatch` with

@@ -21,6 +21,7 @@
         {
           default = pkgs.mkShell {
             packages = [
+              pkgs.actionlint
               pkgs.git
               pkgs.gh
               pkgs.gitleaks
