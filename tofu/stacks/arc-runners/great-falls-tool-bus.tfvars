@@ -6,6 +6,8 @@
 # The scale-set NAME is the ARC registration identity ONLY; workflows request
 # the shared `tinyland-nix` capability label (the arc-runner module publishes
 # runner_label alongside the owner-distinct runnerScaleSetName).
+# Registration is not admission: which GFTB repositories may actually be
+# assigned this scale set's work is the runner_group boundary below.
 #
 # CONSERVATIVE CAPACITY POSTURE (TIN-2165/TIN-2234 pod-cap crunch): nix lane
 # only, max 4, min 0, no warm pool, docker/dind lanes OFF. Sting placement +
@@ -17,6 +19,28 @@ cluster_context       = "honey"
 github_config_url     = "https://github.com/Great-Falls-Tool-Bus"
 github_config_secret  = "github-app-secret-great-falls-tool-bus"
 ghcr_pull_secret_name = "ghcr-pull"
+
+# TIN-3902 RUNNER GROUP. Every scale set in this stack registers into the
+# dedicated, selected-repository `great-falls-tool-bus-infra` GitHub runner
+# group instead of GitHub's shared `Default` group. TIN-3209 closed the
+# Default-group grandfather exception on 2026-08-15; that exception's roster
+# (`legacy-default`) is a stack-coded list of nine tinyland-inc scale sets and
+# never included `great-falls-tool-bus-nix`, so `organization-restricted` is
+# the only policy this overlay may use. Under that policy the stack's
+# `terraform_data.runner_group_policy` precondition rejects any scale set whose
+# group resolves to `default`.
+#
+# The group name is an owner/tenancy identity, not a runner capability, so it
+# does not violate the shared-label taxonomy: workflows still request
+# `tinyland-nix`. The roster, visibility, and public-repository posture are
+# declared in config/organization.yaml `runner_contract.runner_group`.
+#
+# NOT module-created: the GloriousFlywheel arc-runners stack loads only the
+# kubernetes and helm providers and owns no `github_actions_runner_group`
+# resource, so the GitHub-side group must exist BEFORE the first plan/apply.
+# See docs/implementation-overlay.md "Runner group cutover".
+runner_group        = "great-falls-tool-bus-infra"
+runner_group_policy = "organization-restricted"
 
 deploy_arc_controller       = false
 create_controller_namespace = false
@@ -44,6 +68,10 @@ dind_runner_scale_set_name   = "great-falls-tool-bus-dind"
 # build/test pods were evicted after crossing the former 8Gi container limit.
 # 8Gi/16Gi preserves the max-four posture while restoring the last known
 # nix-build limit; docs/implementation-overlay.md defines the measured soak gate.
+# Capacity is unchanged by TIN-3902: the runner-group cutover is an admission
+# fix, not a capacity change. min 0 / max 4 is the reviewed TIN-2165/TIN-2234
+# posture and must stay non-zero — a dedicated group with zero capacity admits
+# nobody, which was the defect in the unmerged 2026-07-31 quarantine draft.
 nix_min_runners               = 0
 nix_max_runners               = 4
 nix_cpu_limit                 = "4"

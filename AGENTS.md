@@ -20,6 +20,14 @@ Hard rules:
   (`https://github.com/Great-Falls-Tool-Bus`); do not add repo-scoped
   registration anchors. Org-scoped registration does not override the
   separately selected GitHub runner-group admission policy
+- the scale sets bind to the dedicated `great-falls-tool-bus-infra` GitHub
+  runner group (`runner_group` / `runner_group_policy` in the ARC tfvars,
+  roster in `config/organization.yaml` `runner_contract.runner_group`,
+  TIN-3902). That group name is an owner/tenancy admission identity, NOT a
+  runner label and NOT an org-identity label — it does not violate the label
+  rule above and must not be removed as if it did. Never re-point these scale
+  sets at GitHub's `Default` group, and never admit a public repository to the
+  group
 - keep the capacity posture conservative (nix lane only,
   `nix_max_runners = 4`, no warm pool, docker/dind off) unless an explicit
   operator decision raises it; the honey/sting pod budget is the scarce
