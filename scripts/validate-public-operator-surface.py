@@ -390,6 +390,29 @@ WEB_RELEASE_RECIPE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     "_web-release-kubeconfig-inputs": (),
     "web-release-pinned-running-proof": ("_web-release-candidate-inputs",),
     "web-release-served-proof": ("_web-release-candidate-inputs",),
+    # The mutating complement to the proofs above. It reuses their input guard
+    # verbatim and it reuses web-release-render as the single renderer, so the
+    # reviewed bytes and the applied bytes are the same bytes.
+    "_web-release-plan-root-contract": (),
+    "_web-release-apply-kubeconfig-contract": (),
+    "web-release-plan": (
+        "_web-release-candidate-inputs",
+        "_web-release-plan-root-contract",
+    ),
+    "_web-release-plan-preflight": (
+        "_web-release-candidate-inputs",
+        "_web-release-plan-root-contract",
+    ),
+    "web-release-server-dry-run": (
+        "_web-release-apply-kubeconfig-contract",
+        "_web-release-plan-preflight",
+    ),
+    "web-release-apply": (
+        "_reviewed-clean-main",
+        "_operator-apply-confirm",
+        "_web-release-apply-kubeconfig-contract",
+        "_web-release-plan-preflight",
+    ),
 }
 
 WEB_RELEASE_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
@@ -411,6 +434,24 @@ WEB_RELEASE_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     "web-release-served-proof": _receipt(
         "6ded71468ff6b068", "2af42983faec1ed2", "fa3f69fb10d46f86", "e169c0219ff4c7c3"
     ),
+    "_web-release-plan-root-contract": _receipt(
+        "271460cb71ceda56", "0bbca7e8b57d0ddf", "eb68c983d72ab455", "a44e713d9007bbf9"
+    ),
+    "_web-release-apply-kubeconfig-contract": _receipt(
+        "c8da70b7387e79c4", "a8143e1c81e22381", "c4026a69992bfc76", "98a6cb5e03a9a6d4"
+    ),
+    "web-release-plan": _receipt(
+        "4c521b684de15316", "694df6eec8402abd", "e6fb365e2cb8a4d1", "79d6b8a69379a844"
+    ),
+    "_web-release-plan-preflight": _receipt(
+        "c8e58b12435c19a4", "036eb9a012fd322c", "31b494258d97824d", "f243bbec666716a6"
+    ),
+    "web-release-server-dry-run": _receipt(
+        "b478fca65de1ae58", "a37038565e80d6f6", "23d5318412fc919d", "77382267087b8707"
+    ),
+    "web-release-apply": _receipt(
+        "027bfae6f72ee45f", "6bd86a57e1b5d921", "d5df538b3905589c", "f111051c06f3da5e"
+    ),
 }
 
 WEB_RELEASE_OPERATOR_LOCAL_ROOTS = set(WEB_RELEASE_RECIPE_DEPENDENCIES)
@@ -418,6 +459,28 @@ WEB_RELEASE_JUST_GLOBAL_ASSIGNMENTS = {
     "dotenv-load": "set dotenv-load := false",
     "shell": 'set shell := ["bash", "-eu", "-o", "pipefail", "-c"]',
 }
+# Redirecting the stack the release chain renders and applies is the single
+# highest-leverage silent mutation available, so both globals are pinned exactly.
+WEB_RELEASE_STACK_GLOBAL_ASSIGNMENTS = {
+    "web_stack_dir": '"k8s/web/greatfallstoolbus-org-production"',
+    "web_stack_ns": '"greatfallstoolbus-org-production"',
+}
+
+# Imperative pinning -- `kubectl set image`, `kubectl scale ... deployment`, or a
+# `replicas` patch -- makes live state stop equalling the reviewed tree. The scan
+# covers the WHOLE Justfile (every recipe body plus every executable line outside
+# a recipe), not an enumerated recipe list, so a brand-new unlisted recipe cannot
+# reintroduce it. Exactly one recipe is allowed to do this: the legacy
+# `web-stack-apply` adapter-node carrier, whose imperative pin predates the
+# release chain and is documented in _k8s-drift-check's header.
+IMPERATIVE_PIN = re.compile(
+    r"kubectl\b[^\n]*\bset\s+image\b"
+    r"|kubectl\b[^\n]*\bscale\b[^\n]*\bdeployment"
+    r"|kubectl\b[^\n]*\bpatch\b[^\n]*\breplicas"
+    r"|[\"']replicas[\"']\s*:"
+)
+IMPERATIVE_PIN_ALLOWED_RECIPES = frozenset({"web-stack-apply"})
+
 WEB_RELEASE_VALIDATION_CALLEE = "web-stack-validate"
 WEB_RELEASE_VALIDATION_CALLEE_DEPENDENCIES: tuple[str, ...] = ()
 WEB_RELEASE_VALIDATION_CALLEE_DIGEST = _receipt(
@@ -1017,6 +1080,21 @@ def scan_web_release_operator_contract_text(
                     f"observed {observed!r}.",
                 )
             )
+    for name, expected_assignment in WEB_RELEASE_STACK_GLOBAL_ASSIGNMENTS.items():
+        observed = re.findall(
+            rf"^{re.escape(name)}\s*:=\s*(.*?)\s*$", text, flags=re.MULTILINE
+        )
+        if observed != [expected_assignment]:
+            findings.append(
+                Finding(
+                    "web-release-stack-global-contract-mismatch",
+                    path,
+                    1,
+                    f"The release chain renders and applies {name}; it must be "
+                    f"declared exactly once as {expected_assignment!r}; observed "
+                    f"{observed!r}.",
+                )
+            )
     dependency_names = set(WEB_RELEASE_RECIPE_DEPENDENCIES)
     digest_names = set(WEB_RELEASE_CRITICAL_RECIPE_DIGESTS)
     if dependency_names != digest_names:
@@ -1195,6 +1273,67 @@ def scan_web_release_operator_contract_text(
                 "dependency/body receipt.",
             )
         )
+    return findings
+
+
+def scan_imperative_pin_text(text: str, path: Path) -> list[Finding]:
+    """Refuse imperative image/replica pinning anywhere in the Justfile."""
+    findings: list[Finding] = []
+    lines = text.splitlines()
+    covered: dict[int, str] = {}
+    for name, declarations in all_just_recipe_blocks(text).items():
+        for line, _, body in declarations:
+            for offset in range(line, line + len(body.splitlines()) + 1):
+                covered[offset] = name
+
+    for name, declarations in all_just_recipe_blocks(text).items():
+        if name in IMPERATIVE_PIN_ALLOWED_RECIPES:
+            continue
+        for line, _, body in declarations:
+            match = IMPERATIVE_PIN.search(executable_recipe_text(body))
+            if match:
+                findings.append(
+                    Finding(
+                        "imperative-pin",
+                        path,
+                        line,
+                        f"{name} imperatively pins an image or replica count "
+                        f"({match.group(0).strip()!r}). The reviewed release "
+                        "chain renders the pin into the manifest bytes and "
+                        "applies those bytes; only "
+                        f"{sorted(IMPERATIVE_PIN_ALLOWED_RECIPES)!r} may still "
+                        "patch the live workload imperatively.",
+                    )
+                )
+
+    for index, line_text in enumerate(lines, start=1):
+        if index in covered or line_text.lstrip().startswith("#"):
+            continue
+        match = IMPERATIVE_PIN.search(line_text)
+        if match:
+            findings.append(
+                Finding(
+                    "imperative-pin",
+                    path,
+                    index,
+                    "Justfile top level imperatively pins an image or replica "
+                    f"count ({match.group(0).strip()!r}); the release chain "
+                    "pins declaratively.",
+                )
+            )
+
+    for name in sorted(IMPERATIVE_PIN_ALLOWED_RECIPES):
+        if len(all_just_recipe_blocks(text).get(name, [])) != 1:
+            findings.append(
+                Finding(
+                    "imperative-pin-allowlist-stale",
+                    path,
+                    1,
+                    f"{name} is allowlisted for imperative pinning but is not "
+                    "defined exactly once; the allowlist must never outlive the "
+                    "recipe it was written for.",
+                )
+            )
     return findings
 
 
@@ -4854,6 +4993,162 @@ def self_test() -> None:
         "web-release-just-global-contract-mismatch",
     )
 
+    # --- the mutating half of the release chain -----------------------------
+    # Every named way the reviewed apply chain could be silently weakened must
+    # produce a finding. Dependency edits are caught by the ordered dependency
+    # contract; body edits are caught by the exact executable receipt; stack
+    # redirection is caught by the pinned Just globals; and an imperative pin is
+    # caught anywhere in the file, including in a brand-new unlisted recipe.
+    apply_dependency_mutations = (
+        (
+            (
+                "_operator-apply-confirm",
+                "_web-release-apply-kubeconfig-contract",
+                "_web-release-plan-preflight",
+            ),
+            "apply without the reviewed-clean-main carrier check",
+        ),
+        (
+            (
+                "_reviewed-clean-main",
+                "_web-release-apply-kubeconfig-contract",
+                "_web-release-plan-preflight",
+            ),
+            "apply without the operator confirmation",
+        ),
+        (
+            (
+                "_reviewed-clean-main",
+                "_web-release-apply-kubeconfig-contract",
+                "_web-release-plan-preflight",
+                "_operator-apply-confirm",
+            ),
+            "apply with the confirmation moved after the plan preflight",
+        ),
+        (
+            (
+                "_reviewed-clean-main",
+                "_operator-apply-confirm",
+                "_web-release-apply-kubeconfig-contract",
+            ),
+            "apply without the plan preflight",
+        ),
+    )
+    for dependencies, label in apply_dependency_mutations:
+        expect_web_release_contract_rejection(
+            mutate_recipe_dependencies(
+                justfile, "web-release-apply", dependencies, label
+            ),
+            label,
+            "web-release-recipe-dependencies-mismatch",
+        )
+
+    apply_body_mutations = (
+        (
+            "web-release-apply",
+            '    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply -f "${plan}"\n',
+            '    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply -k {{ web_stack_dir }}\n',
+            "apply detached from the recorded plan bytes",
+        ),
+        (
+            "_web-release-plan-preflight",
+            '    just --justfile "${repo_root}/Justfile" --working-directory "${repo_root}" web-release-render > "${recheck}"\n',
+            "    : re-render skipped\n",
+            "plan preflight without the re-render equality proof",
+        ),
+        (
+            "_web-release-plan-preflight",
+            '    [[ "$(git -C "${repo_root}" rev-parse HEAD)" == "$(tr -d \'\\n\' < "${plan_root}/web-release.carrier-sha")" ]] ||',
+            '    [[ -n "$(git -C "${repo_root}" rev-parse HEAD)" ]] ||',
+            "plan preflight without the carrier binding",
+        ),
+        (
+            "_web-release-apply-kubeconfig-contract",
+            "    if stat.S_IMODE(metadata.st_mode) != 0o600:\n",
+            "    if False:\n",
+            "kubeconfig custody without the mode check",
+        ),
+        (
+            "web-release-plan",
+            '    just --justfile "${repo_root}/Justfile" --working-directory "${repo_root}" web-release-render > "${plan_root}/web-release.rendered.yaml"\n',
+            '    kubectl kustomize {{ web_stack_dir }} > "${plan_root}/web-release.rendered.yaml"\n',
+            "plan rendered by a second renderer",
+        ),
+    )
+    for name, old, new, label in apply_body_mutations:
+        expect_web_release_contract_rejection(
+            mutate_recipe_body(justfile, name, old, new, label),
+            label,
+            "web-release-recipe-executable-receipt-mismatch",
+        )
+
+    for global_name, weakened in (
+        ('web_stack_dir := "k8s/web/greatfallstoolbus-org-production"', 'web_stack_dir := "k8s/web"'),
+        ('web_stack_ns := "greatfallstoolbus-org-production"', 'web_stack_ns := "default"'),
+    ):
+        expect_web_release_contract_rejection(
+            justfile.replace(global_name, weakened, 1),
+            f"redirected release stack global {weakened!r}",
+            "web-release-stack-global-contract-mismatch",
+        )
+
+    if scan_imperative_pin_text(justfile, Path("Justfile")):
+        raise SystemExit(
+            "self-test FAILED: the committed Justfile already trips the "
+            "imperative-pin scan"
+        )
+    imperative_pin_cases = (
+        (
+            "unlisted hotfix recipe",
+            justfile
+            + "\nweb-release-hotfix:\n"
+            + '    kubectl --namespace {{ web_stack_ns }} set image deployment/greatfallstoolbus-org greatfallstoolbus-org="${IMAGE}"\n',
+        ),
+        (
+            "unlisted scale recipe",
+            justfile
+            + "\nweb-release-scale:\n"
+            + "    kubectl --namespace {{ web_stack_ns }} scale deployment/greatfallstoolbus-org --replicas=3\n",
+        ),
+        (
+            "unlisted replica patch recipe",
+            justfile
+            + "\nweb-release-bump:\n"
+            + '    kubectl --namespace {{ web_stack_ns }} patch deployment/greatfallstoolbus-org --type merge --patch \'{"spec":{"replicas":3}}\'\n',
+        ),
+        (
+            "imperative pin injected into the reviewed apply",
+            mutate_recipe_body(
+                justfile,
+                "web-release-apply",
+                '    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply -f "${plan}"\n',
+                '    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} set image deployment/greatfallstoolbus-org greatfallstoolbus-org="${WEB_APPLY_IMAGE}"\n',
+                "imperative pin injected into the reviewed apply",
+            ),
+        ),
+    )
+    for label, fixture in imperative_pin_cases:
+        if not any(
+            finding.rule == "imperative-pin"
+            for finding in scan_imperative_pin_text(fixture, Path("Justfile"))
+        ):
+            raise SystemExit(
+                f"self-test FAILED: imperative-pin scan accepted {label}"
+            )
+    stale_allowlist = justfile.replace(
+        "web-stack-apply: web-stack-server-dry-run",
+        "web-stack-apply-renamed: web-stack-server-dry-run",
+        1,
+    )
+    if not any(
+        finding.rule == "imperative-pin-allowlist-stale"
+        for finding in scan_imperative_pin_text(stale_allowlist, Path("Justfile"))
+    ):
+        raise SystemExit(
+            "self-test FAILED: imperative-pin allowlist survived the removal of "
+            "the recipe it names"
+        )
+
     release_wrapper_cases = (
         "web-release-ci: web-release-candidate-proof\n    true\n",
         "web-release-ci:\n    just web-release-candidate-proof\n",
@@ -5722,6 +6017,9 @@ def main() -> int:
             (REPO / "Justfile").read_text(encoding="utf-8"), Path("Justfile")
         )
         + scan_web_release_operator_contract_text(
+            (REPO / "Justfile").read_text(encoding="utf-8"), Path("Justfile")
+        )
+        + scan_imperative_pin_text(
             (REPO / "Justfile").read_text(encoding="utf-8"), Path("Justfile")
         )
         + scan_web_release_validation_script_bytes(
