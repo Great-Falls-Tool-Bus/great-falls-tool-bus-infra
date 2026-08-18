@@ -473,3 +473,183 @@ decommission decision. The standing safety net is no longer "single-DNS-flip
 rollback to CF Pages" (that target no longer exists) — it is the on-cluster
 re-pin-previous-digest primitive via `web-stack.yml` (see P7's corrected
 rollback).
+
+---
+
+# S — gftb-site static origin promotion (NOT executed)
+
+Everything above is the **executed** adapter-node cutover, retained as
+apply-wiring reference. This section is the separate, not-yet-run promotion of
+the static `gftb-site` origin. Tracking: **TIN-3816** (prove interim apex
+served), under the **TIN-2543** web stack.
+
+## Topology: the cutover is IN PLACE, not into a second namespace
+
+The static origin replaces the adapter-node workload **inside the existing
+`greatfallstoolbus-org-production` namespace**, on the existing
+`Deployment/greatfallstoolbus-org` and behind the existing
+`Service/greatfallstoolbus-org`. Nothing about the public path changes: the apex
+and www already resolve to the honey-ingress tunnel, and the tunnel already
+routes to that Service. There is **no** Cloudflare change in this promotion and
+**no** second namespace, which is precisely why the landed proofs
+(`web-release-pinned-running-proof`, `web-release-served-proof`) can observe the
+result at all — they read that namespace and that external URL.
+
+## One renderer, one set of bytes
+
+`just web-release-render` (landed in PR #109) is the **only** renderer in this
+repository. It reads the committed adapter-node manifests, transforms them into
+the reviewed static-Caddy shape for `${WEB_APPLY_IMAGE}`, asserts the rendered
+object census and the NetworkPolicy semantic digest, and writes YAML to stdout.
+The mutation chain added here never renders anything of its own:
+
+- `just web-release-plan` runs that renderer once and records the exact bytes,
+  their SHA-256, the selected image and source SHA, and the infra carrier commit
+  under the operator-private `.k8s-plans/` root (0700; artifacts 0600, gitignored).
+- `just web-release-apply` re-runs the renderer and **refuses** unless the
+  re-render is byte-identical to the recorded plan and the carrier commit and
+  inputs are unchanged — then applies *the recorded bytes*.
+
+No step in the chain resolves an image, runs `kubectl set image`, or patches
+replicas. `web-release-render` bakes `${WEB_APPLY_IMAGE}` and `replicas: 2` into
+the bytes, so the live pod template can only ever be a render of reviewed inputs.
+`scripts/validate-public-operator-surface.py` scans the **whole** Justfile for
+imperative pinning and allows it in exactly one legacy recipe
+(`web-stack-apply`, the adapter-node carrier).
+
+## Inputs (the contract is PR #109's, unchanged)
+
+`_web-release-candidate-inputs` is the single input guard for both the proofs
+and the mutation chain:
+
+| Variable | Contract |
+|---|---|
+| `WEB_APPLY_IMAGE` | exactly `ghcr.io/great-falls-tool-bus/gftb-site@sha256:<64 lowercase hex>` |
+| `WEB_APPLY_SHA` | exactly 40 lowercase hex (the `gftb-site` source commit built into that image) |
+| `WEB_APPLY_REPLICAS` | must be exactly `2` if set at all |
+| `HTTP(S)_PROXY`/`ALL_PROXY`/`NO_PROXY` | must be empty — release work does not transit an ambient proxy |
+| `WEB_APPLY_KUBECONFIG` | operator-custody regular file, mode `0600`, outside every repository tree; ambient `KUBECONFIG` is refused |
+
+The committed manifests are **not** where the gftb-site digest lives.
+`scripts/validate-web-stack.sh` binds image admission to the stack under
+validation: `greatfallstoolbus-org-production` admits
+`ghcr.io/great-falls-tool-bus/greatfallstoolbus.org` and nothing else, so
+substituting the gftb-site candidate into `deployment.yaml` **fails `just
+check`** rather than widening the guard.
+
+## S1 — Prove the candidate (read-only, no cluster)
+
+```bash
+export WEB_APPLY_IMAGE=ghcr.io/great-falls-tool-bus/gftb-site@sha256:<64 hex>
+export WEB_APPLY_SHA=<40 hex gftb-site commit>
+
+just web-release-candidate-proof
+```
+
+Anonymous, credential-free `crane` readback: the digest resolves to itself, the
+manifest is a single OCI/Docker image, the config carries the reviewed
+static-Caddy runtime identity, and `org.opencontainers.image.revision` equals
+`WEB_APPLY_SHA`. Produces **receipt line 8** (package name, tag, digest).
+
+## S2 — Plan (offline, no cluster, no registry)
+
+```bash
+just web-release-plan
+```
+
+Records the rendered bytes and their receipt. Review them before applying:
+
+```bash
+just web-release-render | less
+```
+
+## S3 — Dry-run and apply (attended)
+
+```bash
+export WEB_APPLY_KUBECONFIG=/operator/path/web-apply.kubeconfig
+
+just web-release-server-dry-run
+GFTB_APPLY_CONFIRM=apply just web-release-apply
+```
+
+`web-release-apply` refuses unless the worktree is a clean, signed checkout equal
+to canonical `main` (`_reviewed-clean-main`), `GFTB_APPLY_CONFIRM=apply` is set,
+the kubeconfig satisfies its custody contract, and the plan still reproduces
+byte-for-byte. It server-dry-runs, applies the recorded bytes, deletes the two
+legacy adapter-node egress policies the render deliberately omits
+(`allow-egress-dns`, `allow-egress-discuss-archive` — `kubectl apply` does not
+prune omissions), and waits for the rollout.
+
+**Rollback** is the same chain with the previous `WEB_APPLY_IMAGE` /
+`WEB_APPLY_SHA`: re-plan, re-apply. The previous digest is receipt line 12 and
+must be recorded *before* S3 so the rehearsal is possible.
+
+## S4 — PINNED → RUNNING → SERVED
+
+Each stage is a landed proof recipe, not a prose assertion:
+
+| Stage | Recipe | What it establishes |
+|---|---|---|
+| **PINNED** | `just web-release-pinned-running-proof` | the live Deployment's pod template is the reviewed static-Caddy shape carrying `${WEB_APPLY_IMAGE}` and the `${WEB_APPLY_SHA}` source annotation; yields the deployment generation for **receipt line 9** |
+| **RUNNING** | `just web-release-pinned-running-proof` (same run) | exactly one active ReplicaSet at `2/2`, old ReplicaSets fully scaled down, both pods `Ready` with an `imageID` ending in the selected digest, the Service EndpointSlice binding exactly those two pods, and the NetworkPolicy census + semantic digest intact; yields the pod `imageID` for **receipt line 9** |
+| **SERVED** | `just web-release-served-proof` | the external URL returns `200` for `/`, `/health`, `/health.sha`, and the QR asset, the homepage marker is present, and `/health.sha` equals `${WEB_APPLY_SHA}`; yields **receipt line 10** |
+
+`web-release-pinned-running-proof` requires `WEB_RELEASE_KUBECONFIG` — the
+**proof-only** identity, which `_web-release-kubeconfig-inputs` proves cannot
+mutate any release object. It is deliberately not the apply identity.
+
+Receipt line 11 (real-device / QR / member-flow) stays a human observation: a
+clean desktop and mobile browser, and a physical phone camera against the
+rendered QR. No curl replaces it.
+
+## S5 — Record the receipt
+
+The release note records **exactly** the thirteen lines below. This list is
+reproduced from **meta spec `launch-member-v0-system-2026-08-16` §9**; that
+spec, not this runbook, is the authority for their wording and order. Every
+value is non-secret by construction — never add cookies, tokens, kubeconfig
+data, addresses, or any other private-plane material.
+
+```text
+1  issue and milestone
+2  source repository and exact head SHA
+3  tree hash and diff hash
+4  reviewer identity, verdict, and reviewed SHA
+5  required check names, run IDs, conclusions, and completion time
+6  human ship authorization and author
+7  merge SHA and time
+8  package name, tag, and digest
+9  infra pin commit, deployment generation, pod imageID
+10 external URL, served SHA/marker, observation time
+11 real-device/QR or member-flow result
+12 previous digest and rollback rehearsal/result
+13 Linear receipt link
+```
+
+Where each line comes from in this chain:
+
+| Line | Source |
+|---|---|
+| 1, 4, 6, 13 | Linear + the reviewing human; not machine-derived |
+| 2, 3 | the `gftb-site` source repository at `${WEB_APPLY_SHA}` |
+| 5 | the `gftb-site` required checks (`gh run list`); `web-cd-ci-green-gate` gates the CD path on the same conclusion |
+| 7 | the `gftb-site` merge commit |
+| 8 | `just web-release-candidate-proof` |
+| 9 | the infra carrier commit recorded by `just web-release-plan`, plus `just web-release-pinned-running-proof` |
+| 10 | `just web-release-served-proof` |
+| 11 | operator observation (S4) |
+| 12 | the previous `WEB_APPLY_IMAGE` digest and the S3 rollback rehearsal result |
+
+## Invariants this promotion must not break
+
+- **The pin is rendered, never patched.** Reintroducing `kubectl set image`, a
+  `scale`, or a replicas patch anywhere in the Justfile outside the allowlisted
+  legacy `web-stack-apply` fails `just public-surface`.
+- **One renderer.** A second renderer in the plan or apply path changes the
+  recipe body digest and fails `just public-surface`.
+- **The committed manifests never carry the gftb-site digest.** Image admission
+  is bound to the stack under validation.
+- **No namespace, no Secret, no Cloudflare.** The package is anonymously
+  pullable, so the namespace needs no registry credential, and the tunnel route
+  is untouched.
+- **Names-only, always.** Same rule as the executed cutover above.

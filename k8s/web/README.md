@@ -145,3 +145,41 @@ of band (the SA cannot create namespaces), and the tunnel route stays
 dashboard-managed. `scripts/validate-web-stack.sh` still guards this
 declare-only tree (`replicas: 0` + placeholder image + no namespace), and the
 DNS flip (P6) plus CF Pages decommission (P7) remain separate operator steps.
+
+## Image admission is bound to THIS stack
+
+`scripts/validate-web-stack.sh` derives the admitted container repository from
+the Deployment's own target namespace, not from a shared list:
+
+| Namespace | Admitted workload | Admitted image |
+|---|---|---|
+| `greatfallstoolbus-org-production` | `greatfallstoolbus-org` | `ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:<64 lowercase hex>` |
+
+Any other namespace fails closed, and any other repository — including the
+`ghcr.io/great-falls-tool-bus/gftb-site` static-origin candidate — is rejected
+in this stack. Tag references, truncated digests, and uppercase digests are
+rejected too.
+
+## The gftb-site static-origin release chain
+
+The static `gftb-site` origin is promoted **in place**, on this same Deployment
+and Service, and its digest is never committed here. It arrives as
+`WEB_APPLY_IMAGE`, is proved anonymously, is rendered into the reviewed
+static-Caddy shape by the single renderer `just web-release-render`, and is
+applied as recorded bytes:
+
+```bash
+just web-release-candidate-proof   # PR #109 — anonymous registry proof (line 8)
+just web-release-plan              # render once, record the bytes + carrier
+just web-release-server-dry-run    # server-side dry-run of those bytes
+GFTB_APPLY_CONFIRM=apply just web-release-apply
+just web-release-pinned-running-proof   # PR #109 — PINNED + RUNNING (line 9)
+just web-release-served-proof           # PR #109 — SERVED (line 10)
+```
+
+Nothing in that chain runs `kubectl set image`, `kubectl scale`, or a replicas
+patch; `scripts/validate-public-operator-surface.py` scans the whole Justfile and
+allows imperative pinning only in the legacy `web-stack-apply` carrier. Full
+procedure, inputs, rollback, and the thirteen-line release receipt:
+[`../../docs/runbooks/oncluster-web-cutover.md`](../../docs/runbooks/oncluster-web-cutover.md)
+section **S**.
