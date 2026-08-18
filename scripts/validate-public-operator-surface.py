@@ -438,7 +438,7 @@ WEB_RELEASE_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "271460cb71ceda56", "0bbca7e8b57d0ddf", "eb68c983d72ab455", "a44e713d9007bbf9"
     ),
     "_web-release-apply-kubeconfig-contract": _receipt(
-        "c8da70b7387e79c4", "a8143e1c81e22381", "c4026a69992bfc76", "98a6cb5e03a9a6d4"
+        "5cd12307160b8a71", "3ad1307f87ee1298", "5a28a484924cd275", "23f3bbd56a1e97fb"
     ),
     "web-release-plan": _receipt(
         "4c521b684de15316", "694df6eec8402abd", "e6fb365e2cb8a4d1", "79d6b8a69379a844"
@@ -473,13 +473,51 @@ WEB_RELEASE_STACK_GLOBAL_ASSIGNMENTS = {
 # reintroduce it. Exactly one recipe is allowed to do this: the legacy
 # `web-stack-apply` adapter-node carrier, whose imperative pin predates the
 # release chain and is documented in _k8s-drift-check's header.
+#
+# The command anchor covers wrapper names built on `kubectl` (this repo's own
+# `kubectl_clean`), and IMPERATIVE_PIN_CONTINUATION folds backslash line
+# continuations into one logical line before matching, so splitting the verb onto
+# the next line is not an evasion. Same-intent rewrites of the live pod template
+# are covered too: `rollout undo`, `replace -f`, `delete ... deployment`,
+# `scale` in any form, and a JSON patch of the container image path.
+#
+# KNOWN RESIDUAL, deliberately not chased: shell *variable indirection*
+# (`KC=kubectl; "${KC}" ... set image`, or building the patch body into a
+# variable on one line and passing it to `kubectl patch` on the next) defeats a
+# textual scan. The runbook states the guarantee at exactly this strength rather
+# than claiming the scan is exhaustive. The recipe-body digests in
+# WEB_RELEASE_CRITICAL_RECIPE_DIGESTS, not this scan, are what make an edit to a
+# reviewed release recipe fail closed.
+IMPERATIVE_PIN_CONTINUATION = re.compile(r"\\\n[ \t]*")
+_IMPERATIVE_PIN_KUBECTL = r"\bkubectl[A-Za-z0-9_]*\b"
 IMPERATIVE_PIN = re.compile(
-    r"kubectl\b[^\n]*\bset\s+image\b"
-    r"|kubectl\b[^\n]*\bscale\b[^\n]*\bdeployment"
-    r"|kubectl\b[^\n]*\bpatch\b[^\n]*\breplicas"
-    r"|[\"']replicas[\"']\s*:"
+    rf"{_IMPERATIVE_PIN_KUBECTL}[^\n]*\bset\s+image\b"
+    rf"|{_IMPERATIVE_PIN_KUBECTL}[^\n]*\bscale\b[^\n]*--replicas\b"
+    rf"|{_IMPERATIVE_PIN_KUBECTL}[^\n]*\bscale\b[^\n]*"
+    rf"\b(?:deployment|deployments|deploy|statefulset|replicaset)\b"
+    rf"|{_IMPERATIVE_PIN_KUBECTL}[^\n]*\bpatch\b[^\n]*\breplicas\b"
+    rf"|{_IMPERATIVE_PIN_KUBECTL}[^\n]*\brollout\s+undo\b"
+    rf"|{_IMPERATIVE_PIN_KUBECTL}[^\n]*\breplace\b[^\n]*(?:\s-f\b|\s--filename\b)"
+    rf"|{_IMPERATIVE_PIN_KUBECTL}[^\n]*\bdelete\b[^\n]*"
+    rf"\b(?:deployment|deployments|deploy)\b"
+    rf"|{_IMPERATIVE_PIN_KUBECTL}[^\n]*[\"']replicas[\"']\s*:"
+    rf"|/spec/template/spec/containers/[0-9*]+/image\b"
 )
 IMPERATIVE_PIN_ALLOWED_RECIPES = frozenset({"web-stack-apply"})
+
+# The legacy adapter-node carrier and the reviewed release chain mutate the SAME
+# Deployment. web-stack.yml fires `just web-stack-apply` unattended from a
+# repository_dispatch the public site repo sends on every push to main, so after
+# the gftb-site promotion that path would silently revert it. The interlock reads
+# the LIVE image and refuses; this contract makes removing or bypassing the
+# interlock a `just public-surface` failure.
+WEB_STACK_PROMOTION_INTERLOCK = "_web-stack-promotion-interlock"
+WEB_STACK_PROMOTION_INTERLOCK_DEPENDENTS = ("web-stack-apply",)
+WEB_STACK_PROMOTION_INTERLOCK_REQUIRED_TEXT = (
+    "get deployment/greatfallstoolbus-org",
+    "ghcr.io/great-falls-tool-bus/gftb-site@",
+    "exit 1",
+)
 
 WEB_RELEASE_VALIDATION_CALLEE = "web-stack-validate"
 WEB_RELEASE_VALIDATION_CALLEE_DEPENDENCIES: tuple[str, ...] = ()
@@ -1290,7 +1328,9 @@ def scan_imperative_pin_text(text: str, path: Path) -> list[Finding]:
         if name in IMPERATIVE_PIN_ALLOWED_RECIPES:
             continue
         for line, _, body in declarations:
-            match = IMPERATIVE_PIN.search(executable_recipe_text(body))
+            match = IMPERATIVE_PIN.search(
+                IMPERATIVE_PIN_CONTINUATION.sub(" ", executable_recipe_text(body))
+            )
             if match:
                 findings.append(
                     Finding(
@@ -1306,9 +1346,21 @@ def scan_imperative_pin_text(text: str, path: Path) -> list[Finding]:
                     )
                 )
 
+    # Fold backslash continuations into one logical line, keeping the ORIGINAL
+    # line number of the first physical line so findings stay navigable.
+    top_level_logical: list[tuple[int, str]] = []
+    open_continuation = 0
     for index, line_text in enumerate(lines, start=1):
         if index in covered or line_text.lstrip().startswith("#"):
+            open_continuation = 0
             continue
+        if open_continuation == index - 1 and top_level_logical:
+            start, previous = top_level_logical[-1]
+            top_level_logical[-1] = (start, previous[:-1] + " " + line_text.lstrip())
+        else:
+            top_level_logical.append((index, line_text))
+        open_continuation = index if line_text.endswith("\\") else 0
+    for index, line_text in top_level_logical:
         match = IMPERATIVE_PIN.search(line_text)
         if match:
             findings.append(
@@ -1335,6 +1387,78 @@ def scan_imperative_pin_text(text: str, path: Path) -> list[Finding]:
                 )
             )
     return findings
+
+
+def scan_web_stack_promotion_interlock_text(
+    text: str, path: Path
+) -> list[Finding]:
+    """The legacy adapter-node carrier must refuse to revert the promotion."""
+    findings: list[Finding] = []
+    blocks = all_just_recipe_blocks(text)
+    declarations = blocks.get(WEB_STACK_PROMOTION_INTERLOCK, [])
+    if len(declarations) != 1:
+        findings.append(
+            Finding(
+                "web-stack-promotion-interlock-missing",
+                path,
+                1,
+                f"{WEB_STACK_PROMOTION_INTERLOCK} must be defined exactly once. "
+                "It is the only mechanical stop between the unattended legacy "
+                "CD carrier and a silent revert of the gftb-site promotion.",
+            )
+        )
+    else:
+        line, _, body = declarations[0]
+        executable = executable_recipe_text(body)
+        for required in WEB_STACK_PROMOTION_INTERLOCK_REQUIRED_TEXT:
+            if required not in executable:
+                findings.append(
+                    Finding(
+                        "web-stack-promotion-interlock-weakened",
+                        path,
+                        line,
+                        f"{WEB_STACK_PROMOTION_INTERLOCK} no longer reads the "
+                        f"live Deployment image and refuses on it ({required!r} "
+                        "is gone); the legacy carrier could revert the "
+                        "promotion unattended.",
+                    )
+                )
+
+    dependencies = parse_just_recipe_dependencies(text)
+    for dependent in WEB_STACK_PROMOTION_INTERLOCK_DEPENDENTS:
+        declared = dependencies.get(dependent)
+        if declared is None:
+            findings.append(
+                Finding(
+                    "web-stack-promotion-interlock-detached",
+                    path,
+                    1,
+                    f"{dependent} is not declared; the promotion interlock "
+                    "contract names a recipe that no longer exists.",
+                )
+            )
+        elif not declared or declared[0] != WEB_STACK_PROMOTION_INTERLOCK:
+            findings.append(
+                Finding(
+                    "web-stack-promotion-interlock-detached",
+                    path,
+                    1,
+                    f"{dependent} must take {WEB_STACK_PROMOTION_INTERLOCK} as "
+                    f"its FIRST dependency; it declares {list(declared)!r}. The "
+                    "interlock has to run before the dry-run and before any "
+                    "mutation.",
+                )
+            )
+    return findings
+
+
+def parse_just_recipe_dependencies(text: str) -> dict[str, tuple[str, ...]]:
+    """Map every recipe name to its declared dependency list, in order."""
+    dependencies: dict[str, tuple[str, ...]] = {}
+    for name, declarations in all_just_recipe_blocks(text).items():
+        for _, declared, _ in declarations:
+            dependencies[name] = tuple(declared.split())
+    return dependencies
 
 
 def scan_web_release_validation_script_bytes(
@@ -2003,6 +2127,7 @@ def check_critical_recipe_shell_syntax() -> None:
         *ARC_RECIPE_DEPENDENCIES,
         *ATTENDED_RECIPE_DEPENDENCIES,
         *WEB_RELEASE_RECIPE_DEPENDENCIES,
+        WEB_STACK_PROMOTION_INTERLOCK,
     ):
         dry_run = subprocess.run(
             ["just", "--dry-run", name],
@@ -2598,7 +2723,9 @@ def normalized_ssrr_snapshot(response: dict[str, object]) -> str:
     return json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
 
 
-def install_web_release_fixture_mocks(root: Path) -> tuple[Path, Path, Path]:
+def install_web_release_fixture_mocks(
+    root: Path,
+) -> tuple[Path, Path, Path, Path]:
     mock_bin = root / "bin"
     fixture_dir = root / "fixtures"
     mock_bin.mkdir(mode=0o700)
@@ -2637,6 +2764,12 @@ def install_web_release_fixture_mocks(root: Path) -> tuple[Path, Path, Path]:
     log_path = fixture_dir / "calls.log"
     state_path.write_text("ok\n", encoding="utf-8")
     log_path.write_text("", encoding="utf-8")
+    # Which directory the mocked `git rev-parse --show-toplevel` reports. The
+    # proof fixtures run against the real REPO; the mutation fixtures point it at
+    # a symlink sandbox so `web-release-plan` writes its .k8s-plans/ receipt
+    # OUTSIDE the operator's checkout and can never clobber a real recorded plan.
+    toplevel_path = fixture_dir / "toplevel"
+    toplevel_path.write_text(str(REPO) + "\n", encoding="utf-8")
 
     (
         deployment,
@@ -2736,6 +2869,7 @@ def install_web_release_fixture_mocks(root: Path) -> tuple[Path, Path, Path]:
         "__SHA__": repr(WEB_RELEASE_FIXTURE_SHA),
         "__IMAGE__": repr(WEB_RELEASE_FIXTURE_IMAGE),
         "__REPO__": repr(str(REPO)),
+        "__TOPLEVEL__": repr(str(toplevel_path)),
         "__REAL_JUST__": repr(shutil.which("just") or ""),
         "__AUTHORITY_DIGEST__": repr(authority_digest),
         "__KUBECTL_BACKEND__": shlex.quote(str(mock_bin / "kubectl-python")),
@@ -2815,6 +2949,7 @@ def install_web_release_fixture_mocks(root: Path) -> tuple[Path, Path, Path]:
             """
             #!__FIXTURE_PYTHON__
             import copy
+            import hashlib
             import json
             import os
             import pathlib
@@ -3409,6 +3544,83 @@ def install_web_release_fixture_mocks(root: Path) -> tuple[Path, Path, Path]:
                     value["metadata"] = {"resourceVersion": "fixture-np-list-drift"}
                 sys.stdout.write(json.dumps(value))
                 raise SystemExit(0)
+            # --- the mutating half (web-release-apply / the legacy interlock) ---
+            interlock_jsonpath = (
+                "jsonpath={.spec.template.spec.containers"
+                '[?(@.name=="greatfallstoolbus-org")].image}'
+            )
+            if args == namespace_prefix + [
+                "get",
+                "deployment/greatfallstoolbus-org",
+                "--ignore-not-found",
+                "-o",
+                interlock_jsonpath,
+            ]:
+                if state == "stack-live-absent":
+                    sys.stdout.write("")
+                elif state == "stack-live-promoted":
+                    sys.stdout.write(__IMAGE__)
+                else:
+                    sys.stdout.write(
+                        "ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:"
+                        + "9" * 64
+                    )
+                raise SystemExit(0)
+            if args[: len(namespace_prefix) + 1] == namespace_prefix + ["apply"]:
+                apply_args = args[len(namespace_prefix) + 1 :]
+                dry_run = apply_args[:1] == ["--dry-run=server"]
+                if dry_run:
+                    apply_args = apply_args[1:]
+                if len(apply_args) != 2 or apply_args[0] != "-f":
+                    raise SystemExit("mock kubectl rejected unexpected apply argv")
+                plan = pathlib.Path(apply_args[1])
+                if not plan.is_file() or (plan.stat().st_mode & 0o777) != 0o600:
+                    raise SystemExit(
+                        "mock kubectl received a missing or world-readable plan"
+                    )
+                recorded_digest = (
+                    (plan.parent / "web-release.render-sha256")
+                    .read_text(encoding="utf-8")
+                    .strip()
+                )
+                if (
+                    hashlib.sha256(plan.read_bytes()).hexdigest()
+                    != recorded_digest
+                ):
+                    raise SystemExit("mock kubectl received unrecorded bytes")
+                sys.stdout.write(
+                    "deployment.apps/greatfallstoolbus-org configured"
+                    + (" (server dry run)" if dry_run else "")
+                    + "\\n"
+                )
+                raise SystemExit(0)
+            if args == namespace_prefix + [
+                "delete",
+                "networkpolicy",
+                "allow-egress-dns",
+                "allow-egress-discuss-archive",
+                "--ignore-not-found",
+            ]:
+                if state == "apply-delete-fails":
+                    sys.stderr.write(
+                        'Error from server (Forbidden): networkpolicies '
+                        '"allow-egress-dns" is forbidden\\n'
+                    )
+                    raise SystemExit(1)
+                sys.stdout.write(
+                    'networkpolicy.networking.k8s.io "allow-egress-dns" deleted\\n'
+                )
+                raise SystemExit(0)
+            if args == namespace_prefix + [
+                "rollout",
+                "status",
+                "deployment/greatfallstoolbus-org",
+                "--timeout=300s",
+            ]:
+                sys.stdout.write(
+                    'deployment "greatfallstoolbus-org" successfully rolled out\\n'
+                )
+                raise SystemExit(0)
             raise SystemExit("mock kubectl rejected unexpected argv: " + " ".join(args))
             """
         ),
@@ -3479,6 +3691,17 @@ def install_web_release_fixture_mocks(root: Path) -> tuple[Path, Path, Path]:
               if [[ "${state}" == "pinned-allows-observed-pod-exec" && "${scope}:${verb}:${base_resource}:${resource_name}:${subresource}" == "namespaced:create:pods:greatfallstoolbus-org-abc123-1:exec" ]]; then allowed=1; fi
               if [[ "${state}" == "pinned-named-auth-transport-error" && "${scope}:${verb}:${base_resource}:${resource_name}:${subresource}" == "namespaced:update:pods:greatfallstoolbus-org-abc123-1:" ]]; then echo "mock named authorization transport failure" >&2; exit 2; fi
               if [[ "${state}" == "kube-allows-wildcard" && "${verb}:${resource}" == "*:*" ]]; then allowed=1; fi
+              # The APPLY identity's grant matrix. Scoped to apply-* states so it
+              # cannot loosen the proof-only identity the mutation-denial proof
+              # depends on.
+              if [[ "${state}" == apply-* && "${scope}" == "namespaced" && -z "${resource_name}" && -z "${subresource}" ]]; then
+                case "${verb}:${base_resource}" in
+                  get:deployments.apps|list:deployments.apps|watch:deployments.apps|create:deployments.apps|update:deployments.apps|patch:deployments.apps|get:services|create:services|update:services|patch:services|get:networkpolicies.networking.k8s.io|create:networkpolicies.networking.k8s.io|update:networkpolicies.networking.k8s.io|patch:networkpolicies.networking.k8s.io|delete:networkpolicies.networking.k8s.io) allowed=1 ;;
+                esac
+              fi
+              if [[ "${state}" == "apply-authz-denied-delete" && "${verb}:${base_resource}" == "delete:networkpolicies.networking.k8s.io" ]]; then allowed=0; fi
+              if [[ "${state}" == "apply-authz-denied-create-policy" && "${verb}:${base_resource}" == "create:networkpolicies.networking.k8s.io" ]]; then allowed=0; fi
+              if [[ "${state}" == "apply-authz-transport-error" && "${verb}:${base_resource}" == "delete:networkpolicies.networking.k8s.io" ]]; then echo "mock authorization transport failure" >&2; exit 2; fi
               if [[ "${allowed}" -eq 1 ]]; then printf 'yes\\n'; exit 0; fi
               printf 'no\\n'
               exit 1
@@ -3588,13 +3811,17 @@ def install_web_release_fixture_mocks(root: Path) -> tuple[Path, Path, Path]:
             with pathlib.Path(__LOG__).open("a", encoding="utf-8") as stream:
                 stream.write("nested-just " + " ".join(sys.argv[1:]) + "\\n")
             state = pathlib.Path(__STATE__).read_text(encoding="utf-8").strip()
-            helper_argv = [
-                "--justfile",
-                str(pathlib.Path(__REPO__) / "Justfile"),
-                "--working-directory",
-                __REPO__,
-                "_web-release-kubeconfig-inputs",
-            ]
+            toplevel = pathlib.Path(__TOPLEVEL__).read_text(encoding="utf-8").strip()
+            def child(recipe):
+                return [
+                    "--justfile",
+                    str(pathlib.Path(toplevel) / "Justfile"),
+                    "--working-directory",
+                    toplevel,
+                    recipe,
+                ]
+            helper_argv = child("_web-release-kubeconfig-inputs")
+            render_argv = child("web-release-render")
             if sys.argv[1:] == helper_argv and state.startswith("pinned-"):
                 print(
                     "reviewed stable web release-object mutation denial: "
@@ -3602,7 +3829,7 @@ def install_web_release_fixture_mocks(root: Path) -> tuple[Path, Path, Path]:
                     + __AUTHORITY_DIGEST__
                 )
                 raise SystemExit(0)
-            if sys.argv[1:] == ["web-stack-validate"] or sys.argv[1:] == helper_argv:
+            if sys.argv[1:] in (["web-stack-validate"], helper_argv, render_argv):
                 os.execv(__REAL_JUST__, [__REAL_JUST__, *sys.argv[1:]])
             raise SystemExit("mock nested just rejected unexpected argv")
             """
@@ -3618,13 +3845,43 @@ def install_web_release_fixture_mocks(root: Path) -> tuple[Path, Path, Path]:
 
             with pathlib.Path(__LOG__).open("a", encoding="utf-8") as stream:
                 stream.write("git " + " ".join(sys.argv[1:]) + "\\n")
-            if sys.argv[1:] != ["rev-parse", "--show-toplevel"]:
-                raise SystemExit("mock git rejected unexpected argv")
-            print(__REPO__)
+            toplevel = pathlib.Path(__TOPLEVEL__).read_text(encoding="utf-8").strip()
+            head = "1" * 40
+            canonical = (
+                "https://github.com/Great-Falls-Tool-Bus/"
+                "great-falls-tool-bus-infra.git"
+            )
+            args = sys.argv[1:]
+            if args[:2] == ["-C", toplevel]:
+                args = args[2:]
+            if args == ["rev-parse", "--show-toplevel"]:
+                print(toplevel)
+            elif args in (["rev-parse", "HEAD"], ["rev-parse", "origin/main"]):
+                print(head)
+            elif args == ["branch", "--show-current"]:
+                print("main")
+            elif args in (["status", "--porcelain"], ["ls-files", "-v"]):
+                pass
+            elif args == ["remote", "get-url", "origin"]:
+                print(canonical)
+            elif args == [
+                "show-ref", "--verify", "--quiet", "refs/remotes/origin/main"
+            ]:
+                pass
+            elif args[:2] == ["ls-remote", "--exit-code"] and args[3:] == [
+                "refs/heads/main"
+            ]:
+                print(head + "\\trefs/heads/main")
+            elif args == ["verify-commit", head]:
+                pass
+            else:
+                raise SystemExit(
+                    "mock git rejected unexpected argv: " + " ".join(sys.argv[1:])
+                )
             """
         ),
     )
-    return mock_bin, state_path, log_path
+    return mock_bin, state_path, log_path, toplevel_path
 
 
 def expect_web_release_fixture_result(
@@ -3675,7 +3932,9 @@ def run_web_release_semantic_fixtures() -> None:
         prefix="gftb-web-release-selftest."
     ) as directory:
         root = Path(directory)
-        mock_bin, state_path, log_path = install_web_release_fixture_mocks(root)
+        mock_bin, state_path, log_path, _ = install_web_release_fixture_mocks(
+            root
+        )
         home = root / "home"
         temporary = root / "tmp"
         home.mkdir(mode=0o700)
@@ -4780,6 +5039,320 @@ def run_web_release_semantic_fixtures() -> None:
             )
 
 
+
+# The verbs web-release-apply's identity must hold before it touches anything,
+# in the exact order _web-release-apply-kubeconfig-contract asks for them.
+WEB_RELEASE_APPLY_AUTHZ_CONTRACT: tuple[tuple[str, str], ...] = (
+    ("get", "deployments.apps"),
+    ("list", "deployments.apps"),
+    ("watch", "deployments.apps"),
+    ("create", "deployments.apps"),
+    ("update", "deployments.apps"),
+    ("patch", "deployments.apps"),
+    ("get", "services"),
+    ("create", "services"),
+    ("update", "services"),
+    ("patch", "services"),
+    ("get", "networkpolicies.networking.k8s.io"),
+    ("create", "networkpolicies.networking.k8s.io"),
+    ("update", "networkpolicies.networking.k8s.io"),
+    ("patch", "networkpolicies.networking.k8s.io"),
+    ("delete", "networkpolicies.networking.k8s.io"),
+)
+
+
+def build_web_release_sandbox_repo(root: Path) -> Path:
+    """A symlink view of the repository for the mutation fixtures.
+
+    `web-release-plan` writes its receipt to `$(git rev-parse --show-toplevel)/
+    .k8s-plans`. Pointing the mocked toplevel at this sandbox keeps the self-test
+    from ever writing into -- or clobbering a real recorded plan in -- the
+    operator's own checkout.
+    """
+    sandbox = root / "repo"
+    sandbox.mkdir(mode=0o700)
+    for child in sorted(REPO.iterdir()):
+        if child.name in {".git", ".k8s-plans", ".tofu-plans"}:
+            continue
+        (sandbox / child.name).symlink_to(child)
+    return sandbox
+
+
+def run_web_release_mutation_fixtures() -> None:
+    """Exercise the MUTATING half as real children against mocked binaries.
+
+    The proof recipes have had this coverage since PR #109; the plan/dry-run/
+    apply chain and the legacy-carrier promotion interlock did not. These
+    fixtures assert behavior a body digest cannot: argument order, that the
+    authorization preflight runs before anything is applied, that the legacy
+    egress prune carries --ignore-not-found and happens AFTER the apply and
+    BEFORE the rollout wait, and that every refusal path refuses before the
+    first mutation.
+    """
+    just_binary = shutil.which("just")
+    if just_binary is None:
+        raise SystemExit("self-test FAILED: just is required for release fixtures")
+    namespace = "greatfallstoolbus-org-production"
+    with tempfile.TemporaryDirectory(
+        prefix="gftb-web-mutation-selftest."
+    ) as directory:
+        root = Path(directory)
+        (
+            mock_bin,
+            state_path,
+            log_path,
+            toplevel_path,
+        ) = install_web_release_fixture_mocks(root)
+        sandbox = build_web_release_sandbox_repo(root)
+        toplevel_path.write_text(str(sandbox) + "\n", encoding="utf-8")
+        home = root / "home"
+        temporary = root / "tmp"
+        home.mkdir(mode=0o700)
+        temporary.mkdir(mode=0o700)
+        kubeconfig = root / "web-apply.kubeconfig"
+        kubeconfig.write_text(
+            "apiVersion: v1\nkind: Config\npreferences: {}\n", encoding="utf-8"
+        )
+        kubeconfig.chmod(0o600)
+        plan_root = sandbox / ".k8s-plans"
+        plan = plan_root / "web-release.rendered.yaml"
+        environment = {
+            "PATH": str(mock_bin),
+            "HOME": str(home),
+            "TMPDIR": str(temporary),
+            "LANG": "C",
+            "LC_ALL": "C",
+            "WEB_APPLY_IMAGE": WEB_RELEASE_FIXTURE_IMAGE,
+            "WEB_APPLY_SHA": WEB_RELEASE_FIXTURE_SHA,
+            "WEB_APPLY_REPLICAS": "2",
+            "WEB_APPLY_KUBECONFIG": str(kubeconfig),
+            "GFTB_APPLY_CONFIRM": "apply",
+        }
+
+        def kubectl_calls() -> list[str]:
+            return [
+                line.removeprefix("kubectl ")
+                for line in log_path.read_text(encoding="utf-8").splitlines()
+                if line.startswith("kubectl ")
+            ]
+
+        def authorization_calls(calls: list[str]) -> list[str]:
+            return [call for call in calls if " auth can-i " in call]
+
+        def cluster_mutations(calls: list[str]) -> list[str]:
+            return [
+                call
+                for call in calls
+                if f" --namespace {namespace} " in call
+                and " auth can-i " not in call
+            ]
+
+        expected_authorization = [
+            f"--kubeconfig {kubeconfig} auth can-i {verb} {resource} "
+            f"--namespace {namespace}"
+            for verb, resource in WEB_RELEASE_APPLY_AUTHZ_CONTRACT
+        ]
+
+        # PLAN is offline: it may render, and it may not reach the cluster.
+        expect_web_release_fixture_result(
+            just_binary,
+            "web-release-plan",
+            state_path,
+            log_path,
+            environment,
+            "apply-ok",
+            success=True,
+            diagnostic="web release plan recorded",
+        )
+        plan_calls = kubectl_calls()
+        if authorization_calls(plan_calls) or cluster_mutations(plan_calls):
+            raise SystemExit(
+                "self-test FAILED: web-release-plan contacted the cluster: "
+                f"{plan_calls!r}"
+            )
+        for artifact in (
+            "rendered.yaml",
+            "render-sha256",
+            "image",
+            "source-sha",
+            "carrier-sha",
+        ):
+            recorded = plan_root / f"web-release.{artifact}"
+            if not recorded.is_file() or (recorded.stat().st_mode & 0o777) != 0o600:
+                raise SystemExit(
+                    f"self-test FAILED: plan artifact {artifact} is missing or "
+                    "not operator-private"
+                )
+
+        expect_web_release_fixture_result(
+            just_binary,
+            "_web-release-plan-preflight",
+            state_path,
+            log_path,
+            environment,
+            "apply-ok",
+            success=True,
+            diagnostic="web release plan preflight passed",
+        )
+
+        # SERVER DRY-RUN: authorize first, then dry-run the recorded bytes, and
+        # mutate nothing.
+        expect_web_release_fixture_result(
+            just_binary,
+            "web-release-server-dry-run",
+            state_path,
+            log_path,
+            environment,
+            "apply-ok",
+            success=True,
+            diagnostic="web release apply authorization preflight passed",
+        )
+        dry_run_calls = kubectl_calls()
+        if authorization_calls(dry_run_calls) != expected_authorization:
+            raise SystemExit(
+                "self-test FAILED: server dry-run did not run the exact "
+                f"authorization preflight: {authorization_calls(dry_run_calls)!r}"
+            )
+        if cluster_mutations(dry_run_calls) != [
+            f"--kubeconfig {kubeconfig} --namespace {namespace} apply "
+            f"--dry-run=server -f {plan}"
+        ]:
+            raise SystemExit(
+                "self-test FAILED: server dry-run touched the cluster beyond a "
+                f"server-side dry-run: {cluster_mutations(dry_run_calls)!r}"
+            )
+
+        # APPLY: the full ordered chain.
+        expect_web_release_fixture_result(
+            just_binary,
+            "web-release-apply",
+            state_path,
+            log_path,
+            environment,
+            "apply-ok",
+            success=True,
+            diagnostic="web release applied",
+        )
+        apply_calls = kubectl_calls()
+        if not apply_calls or " auth can-i " not in apply_calls[0]:
+            raise SystemExit(
+                "self-test FAILED: the first cluster call web-release-apply "
+                f"makes is not an authorization review: {apply_calls[:1]!r}"
+            )
+        if authorization_calls(apply_calls) != expected_authorization:
+            raise SystemExit(
+                "self-test FAILED: web-release-apply did not run the exact "
+                f"authorization preflight: {authorization_calls(apply_calls)!r}"
+            )
+        last_authorization = max(
+            index
+            for index, call in enumerate(apply_calls)
+            if " auth can-i " in call
+        )
+        first_mutation = min(
+            index
+            for index, call in enumerate(apply_calls)
+            if f" --namespace {namespace} " in call and " auth can-i " not in call
+        )
+        if last_authorization > first_mutation:
+            raise SystemExit(
+                "self-test FAILED: web-release-apply mutated before finishing "
+                "its authorization preflight"
+            )
+        expected_mutations = [
+            f"--kubeconfig {kubeconfig} --namespace {namespace} apply "
+            f"--dry-run=server -f {plan}",
+            f"--kubeconfig {kubeconfig} --namespace {namespace} apply -f {plan}",
+            f"--kubeconfig {kubeconfig} --namespace {namespace} delete "
+            "networkpolicy allow-egress-dns allow-egress-discuss-archive "
+            "--ignore-not-found",
+            f"--kubeconfig {kubeconfig} --namespace {namespace} rollout status "
+            "deployment/greatfallstoolbus-org --timeout=300s",
+        ]
+        if cluster_mutations(apply_calls) != expected_mutations:
+            raise SystemExit(
+                "self-test FAILED: web-release-apply did not dry-run, apply the "
+                "recorded bytes, prune the legacy egress policies with "
+                "--ignore-not-found, and then wait for the rollout, in that "
+                f"order: {cluster_mutations(apply_calls)!r}"
+            )
+
+        # REFUSALS. Each must refuse with nothing applied.
+        for state, diagnostic in (
+            (
+                "apply-authz-denied-delete",
+                f"cannot delete networkpolicies.networking.k8s.io in {namespace}",
+            ),
+            (
+                "apply-authz-denied-create-policy",
+                f"cannot create networkpolicies.networking.k8s.io in {namespace}",
+            ),
+            (
+                "apply-authz-transport-error",
+                "emitted diagnostics; refusing before any mutation",
+            ),
+        ):
+            expect_web_release_fixture_result(
+                just_binary,
+                "web-release-apply",
+                state_path,
+                log_path,
+                environment,
+                state,
+                success=False,
+                diagnostic=diagnostic,
+            )
+            if cluster_mutations(kubectl_calls()):
+                raise SystemExit(
+                    f"self-test FAILED: web-release-apply state {state!r} "
+                    "reached the cluster after refusing: "
+                    f"{cluster_mutations(kubectl_calls())!r}"
+                )
+
+        # A denied delete is caught by the preflight, so the half-done promotion
+        # the preflight exists to prevent must be unreachable; prove the recipe
+        # would in fact abort there if it ever were.
+        expect_web_release_fixture_result(
+            just_binary,
+            "web-release-apply",
+            state_path,
+            log_path,
+            environment,
+            "apply-delete-fails",
+            success=False,
+            diagnostic="is forbidden",
+        )
+        if any(
+            "rollout status" in call for call in cluster_mutations(kubectl_calls())
+        ):
+            raise SystemExit(
+                "self-test FAILED: web-release-apply reported a rollout after a "
+                "failed egress prune"
+            )
+
+        # THE LEGACY-CD PROMOTION INTERLOCK.
+        expect_web_release_fixture_result(
+            just_binary,
+            "_web-stack-promotion-interlock",
+            state_path,
+            log_path,
+            environment,
+            "stack-live-promoted",
+            success=False,
+            diagnostic="already carries the promoted gftb-site origin",
+        )
+        for state in ("ok", "stack-live-absent"):
+            expect_web_release_fixture_result(
+                just_binary,
+                "_web-stack-promotion-interlock",
+                state_path,
+                log_path,
+                environment,
+                state,
+                success=True,
+                diagnostic="the legacy carrier may proceed",
+            )
+
 def self_test() -> None:
     if not RETIRED_EDGE_RECIPE.search("just edge-plan"):
         raise SystemExit("self-test FAILED: retired edge recipe was not detected")
@@ -5126,6 +5699,51 @@ def self_test() -> None:
                 "imperative pin injected into the reviewed apply",
             ),
         ),
+        # Evasions the earlier line- and literal-`kubectl`-anchored scan missed.
+        (
+            "backslash line continuation",
+            justfile
+            + "\nweb-release-hotfix:\n"
+            + '    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" \\\n'
+            + '      set image deployment/greatfallstoolbus-org app="${IMAGE}"\n',
+        ),
+        (
+            "kubectl_clean wrapper",
+            justfile
+            + "\nweb-release-hotfix:\n"
+            + '    kubectl_clean set image deployment/greatfallstoolbus-org app="${IMAGE}"\n',
+        ),
+        (
+            "rollout undo",
+            justfile
+            + "\nweb-release-revert:\n"
+            + "    kubectl --namespace {{ web_stack_ns }} rollout undo deployment/greatfallstoolbus-org\n",
+        ),
+        (
+            "replace -f",
+            justfile
+            + "\nweb-release-force:\n"
+            + "    kubectl --namespace {{ web_stack_ns }} replace -f /tmp/rendered.yaml\n",
+        ),
+        (
+            "delete deployment",
+            justfile
+            + "\nweb-release-nuke:\n"
+            + "    kubectl --namespace {{ web_stack_ns }} delete deployment greatfallstoolbus-org\n",
+        ),
+        (
+            "scale --all without the literal deployment",
+            justfile
+            + "\nweb-release-scale-all:\n"
+            + "    kubectl --namespace {{ web_stack_ns }} scale --all --replicas=5\n",
+        ),
+        (
+            "JSON patch of the container image path",
+            justfile
+            + "\nweb-release-jsonpatch:\n"
+            + "    kubectl --namespace {{ web_stack_ns }} patch deployment/greatfallstoolbus-org --type json"
+            + ' -p \'[{"op":"replace","path":"/spec/template/spec/containers/0/image","value":"x"}]\'\n',
+        ),
     )
     for label, fixture in imperative_pin_cases:
         if not any(
@@ -5136,8 +5754,8 @@ def self_test() -> None:
                 f"self-test FAILED: imperative-pin scan accepted {label}"
             )
     stale_allowlist = justfile.replace(
-        "web-stack-apply: web-stack-server-dry-run",
-        "web-stack-apply-renamed: web-stack-server-dry-run",
+        "web-stack-apply: _web-stack-promotion-interlock",
+        "web-stack-apply-renamed: _web-stack-promotion-interlock",
         1,
     )
     if not any(
@@ -5148,6 +5766,74 @@ def self_test() -> None:
             "self-test FAILED: imperative-pin allowlist survived the removal of "
             "the recipe it names"
         )
+
+    # The legacy-CD promotion interlock: it must exist, keep reading live state,
+    # and stay the FIRST thing web-stack-apply does.
+    if scan_web_stack_promotion_interlock_text(justfile, Path("Justfile")):
+        raise SystemExit(
+            "self-test FAILED: the committed tree fails its own promotion "
+            "interlock contract"
+        )
+    interlock_cases = (
+        (
+            "interlock removed",
+            re.sub(
+                r"\n_web-stack-promotion-interlock:.*?\n(?=\n# Operator-gated)",
+                "\n",
+                justfile,
+                count=1,
+                flags=re.DOTALL,
+            ),
+            "web-stack-promotion-interlock-missing",
+        ),
+        (
+            "interlock stops reading live state",
+            mutate_recipe_body(
+                justfile,
+                "_web-stack-promotion-interlock",
+                "get deployment/greatfallstoolbus-org",
+                "get service/greatfallstoolbus-org",
+                "interlock stops reading live state",
+            ),
+            "web-stack-promotion-interlock-weakened",
+        ),
+        (
+            "interlock detached from the legacy carrier",
+            justfile.replace(
+                "web-stack-apply: _web-stack-promotion-interlock "
+                "web-stack-server-dry-run",
+                "web-stack-apply: web-stack-server-dry-run",
+                1,
+            ),
+            "web-stack-promotion-interlock-detached",
+        ),
+        (
+            "interlock demoted behind the dry-run",
+            justfile.replace(
+                "web-stack-apply: _web-stack-promotion-interlock "
+                "web-stack-server-dry-run",
+                "web-stack-apply: web-stack-server-dry-run "
+                "_web-stack-promotion-interlock",
+                1,
+            ),
+            "web-stack-promotion-interlock-detached",
+        ),
+    )
+    for label, fixture, rule in interlock_cases:
+        if fixture == justfile:
+            raise SystemExit(
+                f"self-test FAILED: promotion interlock mutation {label!r} did "
+                "not change the Justfile"
+            )
+        if not any(
+            finding.rule == rule
+            for finding in scan_web_stack_promotion_interlock_text(
+                fixture, Path("Justfile")
+            )
+        ):
+            raise SystemExit(
+                f"self-test FAILED: promotion interlock scan accepted {label}"
+            )
 
     release_wrapper_cases = (
         "web-release-ci: web-release-candidate-proof\n    true\n",
@@ -5995,6 +6681,7 @@ def self_test() -> None:
         expect_scope_rejection(scope_source, label, plan, diagnostic)
 
     run_web_release_semantic_fixtures()
+    run_web_release_mutation_fixtures()
     check_critical_recipe_shell_syntax()
     print("public-operator-surface self-test passed")
 
@@ -6020,6 +6707,9 @@ def main() -> int:
             (REPO / "Justfile").read_text(encoding="utf-8"), Path("Justfile")
         )
         + scan_imperative_pin_text(
+            (REPO / "Justfile").read_text(encoding="utf-8"), Path("Justfile")
+        )
+        + scan_web_stack_promotion_interlock_text(
             (REPO / "Justfile").read_text(encoding="utf-8"), Path("Justfile")
         )
         + scan_web_release_validation_script_bytes(

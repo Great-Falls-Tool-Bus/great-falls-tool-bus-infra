@@ -24,7 +24,18 @@ name: Web Stack Apply
 #     ghcr.io/great-falls-tool-bus/greatfallstoolbus.org:sha-<commit> reference
 #     (ideally @sha256:<digest>) as the `image` input at dispatch (runbook P2),
 #     so the public tree stays declare-only. scripts/validate-web-stack.sh keeps
-#     the k8s/web overlay at replicas:0 + placeholder image + no namespace.
+#     the k8s/web overlay DISPATCH-GATED declare-only: replicas 2, a digest-pinned
+#     ghcr.io/great-falls-tool-bus/greatfallstoolbus.org image, and no Namespace
+#     object.
+#
+# PROMOTION INTERLOCK (TIN-3816): `just web-stack-apply` now runs
+# `_web-stack-promotion-interlock` FIRST. Once the gftb-site static origin has
+# been promoted onto Deployment/greatfallstoolbus-org by the reviewed
+# web-release chain, this workflow -- including the unattended
+# `repository_dispatch: web-image-published` path -- refuses instead of re-pinning
+# the adapter-node image and recreating the legacy egress NetworkPolicies over
+# it. Retiring this workflow is Phase-5 work; see
+# docs/runbooks/oncluster-web-cutover.md section S.
 #
 # WHAT IT APPLIES (runbook P3): kubectl-apply the workload kustomization
 # (Deployment + Service + NetworkPolicy) into the ALREADY-PROVISIONED

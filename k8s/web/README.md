@@ -134,17 +134,27 @@ A cutover still replaces the placeholder pin, creates the namespace, flips
 just web-stack-validate     # invariant checks + `kubectl kustomize` render
 ```
 
-The operator-gated cutover now has a real apply plane: `just web-stack-apply`
-(with `just web-stack-server-dry-run` and `just web-stack-health`) runs ONLY
-through [`.github/workflows/web-stack.yml`](../../.github/workflows/web-stack.yml)
-(`workflow_dispatch` + `confirm=apply`, the protected `web-apply` environment,
-the operator-supplied `image` input). It does **not** un-park this skeleton: the
-pin arrives at dispatch (never committed), `replicas` are flipped imperatively
-post-apply, the namespace and `web-apply` SA/RBAC are minted by the operator out
-of band (the SA cannot create namespaces), and the tunnel route stays
-dashboard-managed. `scripts/validate-web-stack.sh` still guards this
-declare-only tree (`replicas: 0` + placeholder image + no namespace), and the
-DNS flip (P6) plus CF Pages decommission (P7) remain separate operator steps.
+The operator-gated cutover has a real apply plane: `just web-stack-apply` (with
+`just web-stack-server-dry-run` and `just web-stack-health`) runs ONLY through
+[`.github/workflows/web-stack.yml`](../../.github/workflows/web-stack.yml) — its
+`workflow_dispatch` (`confirm=apply`, the protected `web-apply` environment, the
+operator-supplied `image` input) and its `repository_dispatch`
+(`web-image-published`, sent by the site repo after it pushes an image). This
+tree is **DISPATCH-GATED declare-only**, not parked:
+`scripts/validate-web-stack.sh` requires `replicas: 2` and a digest-pinned
+`ghcr.io/great-falls-tool-bus/greatfallstoolbus.org` image here, and forbids a
+`Namespace` object — the namespace and the `web-apply` SA/RBAC are minted by the
+operator out of band (the SA cannot create namespaces), the tunnel route stays
+dashboard-managed, and the DNS flip (P6) plus CF Pages decommission (P7) remain
+separate operator steps. The live pin still diverges from this tree, because
+`web-stack-apply` re-pins the dispatch-supplied image imperatively after it
+applies the kustomization.
+
+Because `web-stack-apply` mutates the same Deployment the gftb-site release chain
+promotes, it is interlocked: `_web-stack-promotion-interlock` runs first, reads
+the live image, and refuses when the promotion is already in place. See
+[`../../docs/runbooks/oncluster-web-cutover.md`](../../docs/runbooks/oncluster-web-cutover.md)
+section **S**, "Invariants this promotion must not break".
 
 ## Image admission is bound to THIS stack
 
