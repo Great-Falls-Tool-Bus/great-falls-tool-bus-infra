@@ -1607,6 +1607,1371 @@ web-stack-health:
     fi
     echo "web stack health gate passed"
 
+# --- Reviewed gftb-site release candidate proofs ----------------------------
+# These recipes are read-only/proof-only. They deliberately do not replace the
+# legacy web-stack.yml mutation carrier: that workflow still supports the
+# current adapter-node image and must not receive the static Caddy candidate
+# until a separately reviewed exact-render/apply/rollback contract lands.
+
+_web-release-candidate-inputs:
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
+    set +x
+    set -euo pipefail
+    : "${WEB_APPLY_IMAGE:?Set WEB_APPLY_IMAGE to the reviewed gftb-site digest}"
+    : "${WEB_APPLY_SHA:?Set WEB_APPLY_SHA to the exact gftb-site source commit}"
+    [[ "${WEB_APPLY_IMAGE}" =~ ^ghcr\.io/great-falls-tool-bus/gftb-site@sha256:[0-9a-f]{64}$ ]] || { echo "WEB_APPLY_IMAGE must be the exact gftb-site sha256 digest" >&2; exit 2; }
+    [[ "${WEB_APPLY_SHA}" =~ ^[0-9a-f]{40}$ ]] || { echo "WEB_APPLY_SHA must be 40 lowercase hex characters" >&2; exit 2; }
+    [[ "${WEB_APPLY_REPLICAS:-2}" == "2" ]] || { echo "WEB_APPLY_REPLICAS must be exactly 2 for the ratified production shape" >&2; exit 2; }
+    while IFS='=' read -r name value; do
+      case "${name}" in
+        HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|http_proxy|https_proxy|all_proxy|no_proxy)
+          if [[ -n "${value}" ]]; then
+            echo "Refusing ambient ${name}; release proofs must use the direct reviewed route" >&2
+            exit 2
+          fi
+          ;;
+      esac
+    done < <(env)
+
+# Prove the package is anonymously readable, is the selected immutable digest,
+# and carries the exact static-Caddy runtime/source identity. Every registry
+# call runs with an empty process environment and fresh Docker credential root.
+web-release-candidate-proof: _web-release-candidate-inputs
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
+    set +x
+    set -euo pipefail
+    command -v crane >/dev/null 2>&1 || { echo "crane is required (nix develop provides it)" >&2; exit 1; }
+    command -v jq >/dev/null 2>&1 || { echo "jq is required (nix develop provides it)" >&2; exit 1; }
+    umask 077
+    temp_root="$(python3 -I - "${TMPDIR:-/tmp}" "$(git rev-parse --show-toplevel)" <<'PY'
+    import os
+    import stat
+    import sys
+    from pathlib import Path
+
+    path = Path(sys.argv[1]).resolve(strict=True)
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("TMPDIR must remain outside the public repository")
+    metadata = path.stat()
+    mode = stat.S_IMODE(metadata.st_mode)
+    private = metadata.st_uid == os.getuid() and (mode & 0o022) == 0
+    shared_sticky = metadata.st_uid == 0 and bool(mode & stat.S_ISVTX)
+    if not path.is_dir() or not (private or shared_sticky):
+        raise SystemExit("TMPDIR must be operator-private or a root-owned sticky directory")
+    print(path)
+    PY
+    )"
+    proof_dir="$(mktemp -d "${temp_root}/gftb-web-candidate.XXXXXX")"
+    trap 'rm -rf "${proof_dir}"' EXIT
+    mkdir -m 700 "${proof_dir}/home" "${proof_dir}/xdg" "${proof_dir}/docker"
+    printf '{}\n' > "${proof_dir}/docker/config.json"
+    chmod 600 "${proof_dir}/docker/config.json"
+    crane_clean() {
+      env -i PATH="${PATH}" HOME="${proof_dir}/home" XDG_CONFIG_HOME="${proof_dir}/xdg" DOCKER_CONFIG="${proof_dir}/docker" crane "$@"
+    }
+    expected_digest="${WEB_APPLY_IMAGE##*@}"
+    actual_digest="$(crane_clean digest "${WEB_APPLY_IMAGE}")"
+    [[ "${actual_digest}" == "${expected_digest}" ]] || { echo "anonymous digest mismatch" >&2; exit 1; }
+    crane_clean manifest "${WEB_APPLY_IMAGE}" > "${proof_dir}/manifest.json"
+    crane_clean config "${WEB_APPLY_IMAGE}" > "${proof_dir}/config.json"
+    jq -e '
+      .schemaVersion == 2
+      and ((.mediaType == "application/vnd.oci.image.manifest.v1+json") or (.mediaType == "application/vnd.docker.distribution.manifest.v2+json"))
+      and (has("manifests") | not)
+      and ((.config.digest // "") | test("^sha256:[0-9a-f]{64}$"))
+      and ((.config.size // 0) > 0)
+      and ((.layers | length) > 0)
+      and all(.layers[]; ((.digest // "") | test("^sha256:[0-9a-f]{64}$")) and ((.size // 0) > 0))
+    ' "${proof_dir}/manifest.json" >/dev/null || { echo "candidate is not one valid OCI/Docker image manifest" >&2; exit 1; }
+    jq -e --arg sha "${WEB_APPLY_SHA}" '
+      .os == "linux"
+      and .architecture == "amd64"
+      and .config.User == "65532:65532"
+      and .config.Entrypoint == ["/bin/dumb-init", "--"]
+      and .config.Cmd == ["/bin/caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+      and .config.WorkingDir == "/srv"
+      and (.config.Env | sort) == (["HOME=/tmp", "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt", "XDG_CONFIG_HOME=/tmp", "XDG_DATA_HOME=/tmp"] | sort)
+      and (.config.ExposedPorts | type == "object" and (keys == ["3000/tcp"]))
+      and .config.Labels["org.opencontainers.image.source"] == "https://github.com/Great-Falls-Tool-Bus/gftb-site"
+      and .config.Labels["org.opencontainers.image.revision"] == $sha
+    ' "${proof_dir}/config.json" >/dev/null || { echo "candidate OCI runtime/source contract mismatch" >&2; exit 1; }
+    crane_clean pull "${WEB_APPLY_IMAGE}" "${proof_dir}/image.tar"
+    test -s "${proof_dir}/image.tar" || { echo "anonymous candidate pull produced no image" >&2; exit 1; }
+    echo "anonymous candidate proof passed: source=${WEB_APPLY_SHA} digest=${expected_digest}"
+
+# Render the exact hypothetical static-Caddy workload to stdout. The checked-in
+# adapter-node manifest remains unchanged; callers may redirect stdout only to a
+# caller-owned temporary receipt. No cluster or registry is contacted here.
+web-release-render: _web-release-candidate-inputs
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
+    set +x
+    set -euo pipefail
+    command -v kubectl >/dev/null 2>&1 || { echo "kubectl is required (nix develop provides it)" >&2; exit 1; }
+    command -v yq >/dev/null 2>&1 || { echo "yq is required (nix develop provides it)" >&2; exit 1; }
+    umask 077
+    temp_root="$(python3 -I - "${TMPDIR:-/tmp}" "$(git rev-parse --show-toplevel)" <<'PY'
+    import os
+    import stat
+    import sys
+    from pathlib import Path
+
+    path = Path(sys.argv[1]).resolve(strict=True)
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("TMPDIR must remain outside the public repository")
+    metadata = path.stat()
+    mode = stat.S_IMODE(metadata.st_mode)
+    private = metadata.st_uid == os.getuid() and (mode & 0o022) == 0
+    shared_sticky = metadata.st_uid == 0 and bool(mode & stat.S_ISVTX)
+    if not path.is_dir() or not (private or shared_sticky):
+        raise SystemExit("TMPDIR must be operator-private or a root-owned sticky directory")
+    print(path)
+    PY
+    )"
+    render_dir="$(mktemp -d "${temp_root}/gftb-web-render.XXXXXX")"
+    trap 'rm -rf "${render_dir}"' EXIT
+    mkdir -m 700 "${render_dir}/home"
+    env -i PATH="${PATH}" HOME="${render_dir}/home" just web-stack-validate >/dev/null
+    base="${render_dir}/base.yaml"
+    rendered="${render_dir}/rendered.yaml"
+    kubectl kustomize {{ web_stack_dir }} > "${base}"
+    yq -y --arg image "${WEB_APPLY_IMAGE}" --arg sha "${WEB_APPLY_SHA}" '
+      if .kind == "NetworkPolicy" and (.metadata.name == "allow-egress-dns" or .metadata.name == "allow-egress-discuss-archive") then
+        empty
+      elif .kind == "Deployment" and .metadata.name == "greatfallstoolbus-org" and .metadata.namespace == "greatfallstoolbus-org-production" then
+        .spec.replicas = 2
+        | .spec.template.metadata.annotations["app.tinyland.dev/source-sha"] = $sha
+        | .spec.template.spec.automountServiceAccountToken = false
+        | .spec.template.spec.enableServiceLinks = false
+        | .spec.template.spec.securityContext = {
+            "runAsNonRoot": true,
+            "runAsUser": 65532,
+            "runAsGroup": 65532,
+            "fsGroup": 65532,
+            "seccompProfile": {"type": "RuntimeDefault"}
+          }
+        | del(
+            .spec.template.spec.hostNetwork,
+            .spec.template.spec.hostPID,
+            .spec.template.spec.hostIPC,
+            .spec.template.spec.shareProcessNamespace
+          )
+        | .spec.template.spec.containers |= map(
+            if .name == "greatfallstoolbus-org" then
+              .image = $image
+              | .securityContext = {
+                  "allowPrivilegeEscalation": false,
+                  "readOnlyRootFilesystem": true,
+                  "capabilities": {"drop": ["ALL"]}
+                }
+              | del(.command, .args, .env, .envFrom, .volumeMounts, .lifecycle, .workingDir, .stdin, .stdinOnce, .tty)
+              | .ports |= map(del(.hostIP, .hostPort))
+            else . end
+          )
+      elif .kind == "NetworkPolicy" and .metadata.name == "default-deny-ingress" and .metadata.namespace == "greatfallstoolbus-org-production" then
+        .,
+        {
+          "apiVersion": "networking.k8s.io/v1",
+          "kind": "NetworkPolicy",
+          "metadata": {
+            "name": "default-deny-egress",
+            "namespace": "greatfallstoolbus-org-production",
+            "labels": {
+              "app.kubernetes.io/managed-by": "great-falls-tool-bus-infra",
+              "app.kubernetes.io/part-of": "great-falls-tool-bus",
+              "app.tinyland.dev/lifecycle": "declare-only",
+              "app.tinyland.dev/tenant": "great-falls-tool-bus"
+            }
+          },
+          "spec": {
+            "podSelector": {
+              "matchLabels": {
+                "app.kubernetes.io/name": "greatfallstoolbus-org",
+                "app.kubernetes.io/component": "web"
+              }
+            },
+            "policyTypes": ["Egress"],
+            "egress": []
+          }
+        }
+      else . end
+    ' "${base}" > "${rendered}"
+    # The later mutation lane must explicitly delete the two omitted legacy
+    # adapter-node egress policies; `kubectl apply` does not prune omissions.
+    expected_census=$'Deployment\tgreatfallstoolbus-org\tgreatfallstoolbus-org-production\nNetworkPolicy\tallow-cloudflared-tunnel-ingress\tgreatfallstoolbus-org-production\nNetworkPolicy\tallow-prometheus-scrape\tgreatfallstoolbus-org-production\nNetworkPolicy\tdefault-deny-egress\tgreatfallstoolbus-org-production\nNetworkPolicy\tdefault-deny-ingress\tgreatfallstoolbus-org-production\nService\tgreatfallstoolbus-org\tgreatfallstoolbus-org-production'
+    actual_census="$(yq -r '[.kind, .metadata.name, (.metadata.namespace // "")] | @tsv' "${rendered}" | LC_ALL=C sort)"
+    [[ "${actual_census}" == "${expected_census}" ]] || { echo "rendered object census mismatch" >&2; exit 1; }
+    yq -s -e --arg image "${WEB_APPLY_IMAGE}" --arg sha "${WEB_APPLY_SHA}" '
+      [.[] | select(.kind == "Deployment" and .metadata.name == "greatfallstoolbus-org" and .metadata.namespace == "greatfallstoolbus-org-production")] as $deployments
+      | [.[] | select(.kind == "Service" and .metadata.name == "greatfallstoolbus-org" and .metadata.namespace == "greatfallstoolbus-org-production")] as $services
+      | ($deployments | length) == 1
+        and ($deployments[0].spec.replicas == 2)
+        and ($deployments[0].spec.template.metadata.annotations["app.tinyland.dev/source-sha"] == $sha)
+        and ($deployments[0].spec.template.spec.automountServiceAccountToken == false)
+        and ($deployments[0].spec.template.spec.enableServiceLinks == false)
+        and ($deployments[0].spec.template.spec.securityContext.runAsNonRoot == true)
+        and ($deployments[0].spec.template.spec.securityContext.runAsUser == 65532)
+        and ($deployments[0].spec.template.spec.securityContext.runAsGroup == 65532)
+        and ($deployments[0].spec.template.spec.securityContext.fsGroup == 65532)
+        and ($deployments[0].spec.template.spec.securityContext.seccompProfile.type == "RuntimeDefault")
+        and (($deployments[0].spec.template.spec.securityContext | keys | sort) == (["fsGroup", "runAsGroup", "runAsNonRoot", "runAsUser", "seccompProfile"] | sort))
+        and (($deployments[0].spec.template.spec.securityContext.seccompProfile | keys) == ["type"])
+        and (($deployments[0].spec.template.spec | has("hostNetwork")) | not)
+        and (($deployments[0].spec.template.spec | has("hostPID")) | not)
+        and (($deployments[0].spec.template.spec | has("hostIPC")) | not)
+        and (($deployments[0].spec.template.spec | has("shareProcessNamespace")) | not)
+        and (($deployments[0].spec.template.spec | has("initContainers")) | not)
+        and (($deployments[0].spec.template.spec | has("ephemeralContainers")) | not)
+        and (($deployments[0].spec.template.spec | has("imagePullSecrets")) | not)
+        and (($deployments[0].spec.template.spec | has("volumes")) | not)
+        and (($deployments[0].spec.template.spec.containers | length) == 1)
+        and ($deployments[0].spec.template.spec.containers[0].name == "greatfallstoolbus-org")
+        and ($deployments[0].spec.template.spec.containers[0].image == $image)
+        and (($deployments[0].spec.template.spec.containers[0] | has("command")) | not)
+        and (($deployments[0].spec.template.spec.containers[0] | has("args")) | not)
+        and (($deployments[0].spec.template.spec.containers[0] | has("env")) | not)
+        and (($deployments[0].spec.template.spec.containers[0] | has("envFrom")) | not)
+        and (($deployments[0].spec.template.spec.containers[0] | has("volumeMounts")) | not)
+        and (($deployments[0].spec.template.spec.containers[0] | has("lifecycle")) | not)
+        and (($deployments[0].spec.template.spec.containers[0] | has("workingDir")) | not)
+        and (($deployments[0].spec.template.spec.containers[0] | has("stdin")) | not)
+        and (($deployments[0].spec.template.spec.containers[0] | has("stdinOnce")) | not)
+        and (($deployments[0].spec.template.spec.containers[0] | has("tty")) | not)
+        and ($deployments[0].spec.template.spec.containers[0].ports == [{"containerPort": 3000, "name": "http", "protocol": "TCP"}])
+        and ($deployments[0].spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation == false)
+        and ($deployments[0].spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem == true)
+        and ($deployments[0].spec.template.spec.containers[0].securityContext.capabilities.drop == ["ALL"])
+        and (($deployments[0].spec.template.spec.containers[0].securityContext | keys | sort) == (["allowPrivilegeEscalation", "capabilities", "readOnlyRootFilesystem"] | sort))
+        and (($deployments[0].spec.template.spec.containers[0].securityContext.capabilities | keys) == ["drop"])
+        and ($services | length) == 1
+        and ($services[0].apiVersion == "v1")
+        and ($services[0].kind == "Service")
+        and (($services[0].spec | keys | sort) == (["ports", "selector", "type"] | sort))
+        and ($services[0].spec.type == "ClusterIP")
+        and ($services[0].spec.selector == {"app.kubernetes.io/component": "web", "app.kubernetes.io/name": "greatfallstoolbus-org"})
+        and ($services[0].spec.ports == [{"name": "http", "port": 80, "protocol": "TCP", "targetPort": "http"}])
+        and ([.[] | select(.kind == "Namespace" or .kind == "Secret" or .kind == "SecretList")] | length) == 0
+    ' "${rendered}" >/dev/null || { echo "rendered static-Caddy workload contract mismatch" >&2; exit 1; }
+    rendered_network_policies_semantic="$(yq -s -c '{items: [.[] | select(.kind == "NetworkPolicy")]}' "${rendered}" | jq -S -c '
+      def canonical_rule:
+        (if ((.from? // null) | type) == "array" then .from |= sort_by(tojson) else . end)
+        | (if ((.to? // null) | type) == "array" then (if .to == [] then del(.to) else .to |= sort_by(tojson) end) else . end)
+        | (if ((.ports? // null) | type) == "array" then .ports |= sort_by(tojson) else . end);
+      [.items[] | {
+        apiVersion,
+        kind,
+        metadata: {name: .metadata.name, namespace: .metadata.namespace, labels: .metadata.labels},
+        spec: (.spec
+          | .ingress = (.ingress // [])
+          | .egress = (.egress // [])
+          | (if ((.policyTypes? // null) | type) == "array" then .policyTypes |= sort else . end)
+          | (if ((.ingress? // null) | type) == "array" then .ingress |= (map(canonical_rule) | sort_by(tojson)) else . end)
+          | (if ((.egress? // null) | type) == "array" then .egress |= (map(canonical_rule) | sort_by(tojson)) else . end))
+      }] | sort_by(.metadata.name)
+    ')"
+    rendered_network_policies_digest="$(python3 -I -c 'import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest())' "${rendered_network_policies_semantic}")"
+    [[ "${rendered_network_policies_digest}" == "301eecb4ad234fdd7258ac7351a5a563e1b53cb250bce6f51a68824854b28220" ]] || { echo "rendered static-Caddy NetworkPolicy contract mismatch" >&2; exit 1; }
+    cat "${rendered}"
+
+_web-release-kubeconfig-inputs:
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
+    set +x
+    set -euo pipefail
+    : "${WEB_RELEASE_KUBECONFIG:?Set WEB_RELEASE_KUBECONFIG to the proof-only web release kubeconfig}"
+    source_kubeconfig="${WEB_RELEASE_KUBECONFIG}"
+    [[ -z "${KUBECONFIG:-}" ]] || { echo "Refusing ambient KUBECONFIG; WEB_RELEASE_KUBECONFIG is authoritative" >&2; exit 2; }
+    while IFS='=' read -r name value; do
+      case "${name}" in
+        HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|http_proxy|https_proxy|all_proxy|no_proxy)
+          if [[ -n "${value}" ]]; then
+            echo "Refusing ambient ${name}; web release readback may not transit a proxy" >&2
+            exit 2
+          fi
+          ;;
+      esac
+    done < <(env)
+    umask 077
+    temp_root="$(python3 -I - "${TMPDIR:-/tmp}" "$(git rev-parse --show-toplevel)" <<'PY'
+    import os
+    import stat
+    import sys
+    from pathlib import Path
+
+    path = Path(sys.argv[1]).resolve(strict=True)
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("TMPDIR must remain outside the public repository")
+    metadata = path.stat()
+    mode = stat.S_IMODE(metadata.st_mode)
+    private = metadata.st_uid == os.getuid() and (mode & 0o022) == 0
+    shared_sticky = metadata.st_uid == 0 and bool(mode & stat.S_ISVTX)
+    if not path.is_dir() or not (private or shared_sticky):
+        raise SystemExit("TMPDIR must be operator-private or a root-owned sticky directory")
+    print(path)
+    PY
+    )"
+    kube_dir="$(mktemp -d "${temp_root}/gftb-web-kubeconfig.XXXXXX")"
+    trap 'rm -rf "${kube_dir}"' EXIT
+    mkdir -m 700 "${kube_dir}/home"
+    release_kubeconfig="${kube_dir}/kubeconfig"
+    python3 -I - "${source_kubeconfig}" "$(git rev-parse --show-toplevel)" "${release_kubeconfig}" <<'PY'
+    import os
+    import shutil
+    import stat
+    import sys
+    from pathlib import Path
+
+    raw = Path(sys.argv[1])
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    destination = Path(sys.argv[3])
+    destination_parent = destination.parent.stat()
+    if not stat.S_ISDIR(destination_parent.st_mode) or destination_parent.st_uid != os.getuid() or stat.S_IMODE(destination_parent.st_mode) != 0o700:
+        raise SystemExit("private kubeconfig staging directory failed custody validation")
+    if not raw.is_absolute() or raw.is_symlink():
+        raise SystemExit("WEB_RELEASE_KUBECONFIG must be an absolute non-symlink path")
+    path = raw.resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("WEB_RELEASE_KUBECONFIG must remain outside the public repository")
+    expected = path.stat()
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    source_fd = os.open(raw, flags)
+    metadata = os.fstat(source_fd)
+    if (metadata.st_dev, metadata.st_ino) != (expected.st_dev, expected.st_ino):
+        os.close(source_fd)
+        raise SystemExit("WEB_RELEASE_KUBECONFIG changed during custody validation")
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid() or metadata.st_nlink != 1:
+        os.close(source_fd)
+        raise SystemExit("WEB_RELEASE_KUBECONFIG must be a regular file owned by the operator")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        os.close(source_fd)
+        raise SystemExit("WEB_RELEASE_KUBECONFIG must have mode 0600")
+    destination_fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(source_fd, "rb") as source, os.fdopen(destination_fd, "wb") as target:
+        shutil.copyfileobj(source, target)
+        target.flush()
+        os.fsync(target.fileno())
+    PY
+    kubectl_clean() {
+      env -i PATH="${PATH}" HOME="${kube_dir}/home" kubectl --kubeconfig "${release_kubeconfig}" "$@"
+    }
+    auth_stdout="${kube_dir}/auth.stdout"
+    auth_stderr="${kube_dir}/auth.stderr"
+    auth_decision() {
+      local status output
+      : > "${auth_stdout}"
+      : > "${auth_stderr}"
+      if kubectl_clean "$@" > "${auth_stdout}" 2> "${auth_stderr}"; then
+        status=0
+      else
+        status=$?
+      fi
+      output="$(tr -d '\r\n' < "${auth_stdout}")"
+      if [[ -s "${auth_stderr}" ]] || { [[ "${status}" -ne 0 ]] && [[ "${status}" -ne 1 ]]; } || { [[ "${status}" -eq 0 ]] && [[ "${output}" != "yes" ]]; } || { [[ "${status}" -eq 1 ]] && [[ "${output}" != "no" ]]; }; then
+        echo "Kubernetes authorization decision was not an exact yes/no result" >&2
+        return 2
+      fi
+      printf '%s\n' "${output}"
+    }
+    capture_kubectl_output() {
+      local destination="$1"
+      local requirement="$2"
+      shift 2
+      : > "${auth_stderr}"
+      if ! kubectl_clean "$@" > "${destination}" 2> "${auth_stderr}"; then
+        echo "Kubernetes authorization/discovery request failed" >&2
+        return 2
+      fi
+      [[ ! -s "${auth_stderr}" ]] || { echo "Kubernetes authorization/discovery request emitted diagnostics" >&2; return 2; }
+      [[ "${requirement}" == "allow-empty" ]] || test -s "${destination}" || { echo "Kubernetes authorization/discovery request returned no data" >&2; return 2; }
+    }
+    raw_ssar_decision() {
+      local verb="$1" api_group="$2" resource="$3"
+      local request="${kube_dir}/raw-ssar-request.json"
+      local response="${kube_dir}/raw-ssar-response.json"
+      jq -n --arg verb "${verb}" --arg api_group "${api_group}" --arg resource "${resource}" '
+        {
+          apiVersion: "authorization.k8s.io/v1",
+          kind: "SelfSubjectAccessReview",
+          spec: {resourceAttributes: {verb: $verb, group: $api_group, resource: $resource}}
+        }
+      ' > "${request}"
+      capture_kubectl_output "${response}" require-data create --raw /apis/authorization.k8s.io/v1/selfsubjectaccessreviews -f "${request}" || return 2
+      jq -e '
+        .apiVersion == "authorization.k8s.io/v1"
+        and .kind == "SelfSubjectAccessReview"
+        and (.status.allowed | type == "boolean")
+        and ((.status.denied // false) | type == "boolean")
+        and ((.status.evaluationError // "") == "")
+        and ((.status.allowed == false) or ((.status.denied // false) == false))
+      ' "${response}" >/dev/null || { echo "Kubernetes raw authorization review was malformed" >&2; return 2; }
+      if jq -e '.status.allowed == true' "${response}" >/dev/null; then printf 'yes\n'; else printf 'no\n'; fi
+    }
+    config_parse_stderr="${kube_dir}/config-parse.stderr"
+    if ! { env -i PATH="${PATH}" HOME="${kube_dir}/home" yq -c -s 'if length == 1 then .[0] else error("expected exactly one kubeconfig document") end' "${release_kubeconfig}" | env -i PATH="${PATH}" HOME="${kube_dir}/home" jq -e '
+      .["current-context"] as $current
+      | type == "object"
+        and ((keys | sort) == (["apiVersion", "clusters", "contexts", "current-context", "kind", "preferences", "users"] | sort))
+        and .apiVersion == "v1"
+        and .kind == "Config"
+        and .preferences == {}
+        and ($current | type == "string" and length > 0)
+        and (.clusters | length) == 1
+        and (.contexts | length) == 1
+        and (.users | length) == 1
+        and ((.clusters[0] | keys | sort) == ["cluster", "name"])
+        and ((.contexts[0] | keys | sort) == ["context", "name"])
+        and ((.users[0] | keys | sort) == ["name", "user"])
+        and ((.clusters[0].cluster | keys | sort) == ["certificate-authority-data", "server"])
+        and ((.contexts[0].context | keys | sort) == ["cluster", "namespace", "user"])
+        and ((.users[0].user | keys) == ["token"])
+        and (.contexts[0].name == $current)
+        and (.contexts[0].context.cluster == .clusters[0].name)
+        and (.contexts[0].context.user == .users[0].name)
+        and (.contexts[0].context.namespace == "greatfallstoolbus-org-production")
+        and ((.clusters[0].cluster.server // "") | test("^https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$"))
+        and ((.clusters[0].cluster["certificate-authority-data"] // "") | type == "string" and test("^[A-Za-z0-9+/]+={0,2}$") and length >= 16)
+        and ((.users[0].user.token // "") | type == "string" and test("^[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}$"))
+    '; } >/dev/null 2> "${config_parse_stderr}"; then
+      echo "WEB_RELEASE_KUBECONFIG must be one TLS-verified namespace-bound token context" >&2
+      exit 2
+    fi
+    [[ ! -s "${config_parse_stderr}" ]] || { echo "WEB_RELEASE_KUBECONFIG parsing emitted unexpected diagnostics" >&2; exit 2; }
+    cluster_uid="$(kubectl_clean get namespace kube-system -o jsonpath='{.metadata.uid}')"
+    [[ "${cluster_uid}" == "cc121476-7a95-4b24-aa61-79d1f45713bd" ]] || { echo "WEB_RELEASE_KUBECONFIG does not target the reviewed Honey cluster" >&2; exit 2; }
+    for read_contract in "get deployments" "list replicasets" "list pods" "get services" "list endpointslices.discovery.k8s.io" "list networkpolicies.networking.k8s.io"; do
+      read -r verb resource <<<"${read_contract}"
+      decision="$(auth_decision auth can-i "${verb}" "${resource}" --namespace {{ web_stack_ns }})" || exit 2
+      [[ "${decision}" == "yes" ]] || { echo "WEB_RELEASE_KUBECONFIG cannot ${verb} ${resource}" >&2; exit 2; }
+    done
+    decision="$(auth_decision auth can-i get namespaces --all-namespaces)" || exit 2
+    [[ "${decision}" == "yes" ]] || { echo "WEB_RELEASE_KUBECONFIG cannot read the Honey cluster identity" >&2; exit 2; }
+
+    # SelfSubjectRulesReview is only an auxiliary, reject-only grant census.
+    # Kubernetes explicitly warns that it may be incomplete and must not be the
+    # authority for external decisions. Every mutation decision below is made
+    # independently through SelfSubjectAccessReview (`kubectl auth can-i`).
+    rules_request="${kube_dir}/rules-request.json"
+    rules_response="${kube_dir}/rules-response.json"
+    jq -n --arg namespace "{{ web_stack_ns }}" '{apiVersion:"authorization.k8s.io/v1",kind:"SelfSubjectRulesReview",spec:{namespace:$namespace}}' > "${rules_request}"
+    capture_kubectl_output "${rules_response}" require-data create --raw /apis/authorization.k8s.io/v1/selfsubjectrulesreviews -f "${rules_request}"
+    python3 -I - "${rules_response}" <<'PY'
+    import json
+    import sys
+    from pathlib import Path
+
+    review = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    if review.get("apiVersion") != "authorization.k8s.io/v1" or review.get("kind") != "SelfSubjectRulesReview":
+        raise SystemExit("unexpected SelfSubjectRulesReview response shape")
+    status = review.get("status")
+    if not isinstance(status, dict) or status.get("incomplete") is not False or status.get("evaluationError", "") != "":
+        raise SystemExit("SelfSubjectRulesReview is incomplete or reported an evaluation error")
+    allowed_resource_actions = {
+        ("", "namespaces", "get"),
+        ("", "pods", "list"),
+        ("", "services", "get"),
+        ("apps", "deployments", "get"),
+        ("apps", "replicasets", "list"),
+        ("authentication.k8s.io", "selfsubjectreviews", "create"),
+        ("authorization.k8s.io", "selfsubjectaccessreviews", "create"),
+        ("authorization.k8s.io", "selfsubjectrulesreviews", "create"),
+        ("discovery.k8s.io", "endpointslices", "list"),
+        ("networking.k8s.io", "networkpolicies", "list"),
+    }
+    observed_resource_actions = set()
+    for rule in status.get("resourceRules", []):
+        if not isinstance(rule, dict):
+            raise SystemExit("malformed SelfSubjectRulesReview resource rule")
+        api_groups = rule.get("apiGroups")
+        resources = rule.get("resources")
+        verbs = rule.get("verbs")
+        resource_names = rule.get("resourceNames", [])
+        if not isinstance(api_groups, list) or not api_groups or not all(isinstance(value, str) for value in api_groups):
+            raise SystemExit("malformed SelfSubjectRulesReview apiGroups field")
+        if not all(isinstance(values, list) and values and all(isinstance(value, str) and value for value in values) for values in (resources, verbs)):
+            raise SystemExit("malformed SelfSubjectRulesReview resource rule fields")
+        if resource_names not in (None, []) or any("*" in values for values in (api_groups, resources, verbs)):
+            raise SystemExit("named or wildcard resource authority is outside the web proof contract")
+        for api_group in api_groups:
+            for resource in resources:
+                for verb in verbs:
+                    action = (api_group, resource, verb)
+                    if action not in allowed_resource_actions:
+                        raise SystemExit(f"unexpected reported resource authority: {api_group}/{resource}:{verb}")
+                    observed_resource_actions.add(action)
+    allowed_non_resource_urls = {
+        "/.well-known/openid-configuration",
+        "/.well-known/openid-configuration/",
+        "/api",
+        "/api/*",
+        "/apis",
+        "/apis/*",
+        "/healthz",
+        "/livez",
+        "/openid/v1/jwks",
+        "/openid/v1/jwks/",
+        "/openapi",
+        "/openapi/*",
+        "/readyz",
+        "/version",
+        "/version/",
+    }
+    for rule in status.get("nonResourceRules", []):
+        if not isinstance(rule, dict):
+            raise SystemExit("malformed SelfSubjectRulesReview non-resource rule")
+        urls = rule.get("nonResourceURLs")
+        verbs = rule.get("verbs")
+        if not isinstance(urls, list) or not urls or not isinstance(verbs, list) or not verbs:
+            raise SystemExit("malformed SelfSubjectRulesReview non-resource fields")
+        if not all(isinstance(url, str) and url in allowed_non_resource_urls for url in urls):
+            raise SystemExit("unexpected reported non-resource URL authority")
+        if not all(isinstance(verb, str) and verb in {"get", "head"} for verb in verbs):
+            raise SystemExit("unexpected reported non-resource verb authority")
+    required_resource_actions = {
+        ("", "namespaces", "get"),
+        ("", "pods", "list"),
+        ("", "services", "get"),
+        ("apps", "deployments", "get"),
+        ("apps", "replicasets", "list"),
+        ("discovery.k8s.io", "endpointslices", "list"),
+        ("networking.k8s.io", "networkpolicies", "list"),
+    }
+    if not required_resource_actions <= observed_resource_actions:
+        raise SystemExit("SelfSubjectRulesReview omitted a required reported read grant")
+    PY
+    rules_snapshot="$(jq -S -c '
+      def resource_rule: {
+        apiGroups: ((.apiGroups // []) | sort | unique),
+        resources: ((.resources // []) | sort | unique),
+        resourceNames: ((.resourceNames // []) | sort | unique),
+        verbs: ((.verbs // []) | sort | unique)
+      };
+      def non_resource_rule: {
+        nonResourceURLs: ((.nonResourceURLs // []) | sort | unique),
+        verbs: ((.verbs // []) | sort | unique)
+      };
+      {
+        incomplete: .status.incomplete,
+        evaluationError: (.status.evaluationError // ""),
+        resourceRules: ([.status.resourceRules[]? | resource_rule] | sort_by(tojson) | unique),
+        nonResourceRules: ([.status.nonResourceRules[]? | non_resource_rule] | sort_by(tojson) | unique)
+      }
+    ' "${rules_response}")"
+    rules_digest="$(python3 -I -c 'import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest())' "${rules_snapshot}")"
+
+    for scope in namespaced cluster; do
+      if [[ "${scope}" == "namespaced" ]]; then
+        discovery_scope=(--namespaced=true)
+        auth_scope=(--namespace {{ web_stack_ns }})
+      else
+        discovery_scope=(--namespaced=false)
+        auth_scope=(--all-namespaces)
+      fi
+      for verb in create update patch delete deletecollection; do
+        resources_file="${kube_dir}/resources-${scope}-${verb}.txt"
+        normalized_resources_file="${kube_dir}/resources-${scope}-${verb}.normalized"
+        capture_kubectl_output "${resources_file}" allow-empty api-resources --cached=false "${discovery_scope[@]}" --verbs="${verb}" -o name
+        python3 -I - "${resources_file}" "${normalized_resources_file}" <<'PY'
+    import re
+    import sys
+    from pathlib import Path
+
+    resources = [line for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines() if line]
+    if len(resources) != len(set(resources)) or any(not re.fullmatch(r"[a-z0-9.-]+(?:/[a-z0-9.-]+)?", resource) for resource in resources):
+        raise SystemExit("Kubernetes API discovery returned malformed or duplicate resource names")
+    normalized = []
+    for discovered in resources:
+        if "/" not in discovered:
+            normalized.append((discovered, ""))
+            continue
+        base, qualified_subresource = discovered.split("/", 1)
+        if "." in qualified_subresource:
+            subresource, api_group = qualified_subresource.split(".", 1)
+            if "." in base or not api_group:
+                raise SystemExit("Kubernetes API discovery returned an ambiguous grouped subresource")
+            base = f"{base}.{api_group}"
+        else:
+            subresource = qualified_subresource
+        if not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", base) or not re.fullmatch(r"[a-z0-9][a-z0-9-]*", subresource):
+            raise SystemExit("Kubernetes API discovery returned a malformed subresource")
+        normalized.append((base, subresource))
+    if len(normalized) != len(set(normalized)):
+        raise SystemExit("Kubernetes API discovery returned duplicate normalized resources")
+    Path(sys.argv[2]).write_text("".join(f"{base}|{subresource}\n" for base, subresource in normalized), encoding="utf-8")
+    PY
+        while IFS='|' read -r resource subresource; do
+          [[ -n "${resource}" ]] || continue
+          auth_args=(auth can-i "${verb}" "${resource}")
+          display_resource="${resource}"
+          if [[ -n "${subresource}" ]]; then
+            auth_args+=(--subresource="${subresource}")
+            display_resource="${resource}/${subresource}"
+          fi
+          decision="$(auth_decision "${auth_args[@]}" "${auth_scope[@]}")" || exit 2
+          if [[ "${decision}" == "yes" ]]; then
+            case "${scope}:${verb}:${display_resource}" in
+              cluster:create:selfsubjectaccessreviews.authorization.k8s.io|cluster:create:selfsubjectrulesreviews.authorization.k8s.io|cluster:create:selfsubjectreviews.authentication.k8s.io) ;;
+              *) echo "WEB_RELEASE_KUBECONFIG can mutate ${scope} resource ${display_resource} (${verb})" >&2; exit 2 ;;
+            esac
+          fi
+        done < "${normalized_resources_file}"
+      done
+    done
+    for resource in secrets configmaps serviceaccounts roles.rbac.authorization.k8s.io rolebindings.rbac.authorization.k8s.io; do
+      for verb in get list watch create update patch delete deletecollection; do
+        decision="$(auth_decision auth can-i "${verb}" "${resource}" --namespace {{ web_stack_ns }})" || exit 2
+        [[ "${decision}" == "no" ]] || { echo "WEB_RELEASE_KUBECONFIG must not access ${resource} (${verb})" >&2; exit 2; }
+      done
+    done
+    for resource in clusterroles.rbac.authorization.k8s.io clusterrolebindings.rbac.authorization.k8s.io; do
+      for verb in get list watch create update patch delete deletecollection; do
+        decision="$(auth_decision auth can-i "${verb}" "${resource}" --all-namespaces)" || exit 2
+        [[ "${decision}" == "no" ]] || { echo "WEB_RELEASE_KUBECONFIG must not access ${resource} (${verb})" >&2; exit 2; }
+      done
+    done
+    for named_contract in \
+      "namespaces|greatfallstoolbus-org-production|cluster" \
+      "deployments.apps|greatfallstoolbus-org|namespaced" \
+      "services|greatfallstoolbus-org|namespaced" \
+      "networkpolicies.networking.k8s.io|allow-cloudflared-tunnel-ingress|namespaced" \
+      "networkpolicies.networking.k8s.io|allow-prometheus-scrape|namespaced" \
+      "networkpolicies.networking.k8s.io|default-deny-egress|namespaced" \
+      "networkpolicies.networking.k8s.io|default-deny-ingress|namespaced" \
+      "networkpolicies.networking.k8s.io|allow-egress-dns|namespaced" \
+      "networkpolicies.networking.k8s.io|allow-egress-discuss-archive|namespaced"; do
+      IFS='|' read -r resource resource_name scope <<<"${named_contract}"
+      if [[ "${scope}" == "namespaced" ]]; then auth_scope=(--namespace {{ web_stack_ns }}); else auth_scope=(--all-namespaces); fi
+      for verb in update patch delete; do
+        decision="$(auth_decision auth can-i "${verb}" "${resource}/${resource_name}" "${auth_scope[@]}")" || exit 2
+        [[ "${decision}" == "no" ]] || { echo "WEB_RELEASE_KUBECONFIG must not mutate named release object ${resource}/${resource_name} (${verb})" >&2; exit 2; }
+      done
+    done
+    for named_subresource_contract in \
+      "namespaces|greatfallstoolbus-org-production|status|cluster|update patch" \
+      "namespaces|greatfallstoolbus-org-production|finalize|cluster|update patch" \
+      "deployments.apps|greatfallstoolbus-org|status|namespaced|update patch" \
+      "deployments.apps|greatfallstoolbus-org|scale|namespaced|update patch" \
+      "services|greatfallstoolbus-org|status|namespaced|update patch" \
+      "services|greatfallstoolbus-org|proxy|namespaced|get create update patch delete"; do
+      IFS='|' read -r resource resource_name subresource scope verbs <<<"${named_subresource_contract}"
+      if [[ "${scope}" == "namespaced" ]]; then auth_scope=(--namespace {{ web_stack_ns }}); else auth_scope=(--all-namespaces); fi
+      read -r -a verb_list <<<"${verbs}"
+      for verb in "${verb_list[@]}"; do
+        decision="$(auth_decision auth can-i "${verb}" "${resource}/${resource_name}" --subresource="${subresource}" "${auth_scope[@]}")" || exit 2
+        [[ "${decision}" == "no" ]] || { echo "WEB_RELEASE_KUBECONFIG must not access named release subresource ${resource}/${resource_name}/${subresource} (${verb})" >&2; exit 2; }
+      done
+    done
+    for resource_contract in \
+      "deployments scale namespaced" \
+      "deployments status namespaced" \
+      "replicasets scale namespaced" \
+      "replicasets status namespaced" \
+      "pods exec namespaced" \
+      "pods attach namespaced" \
+      "pods portforward namespaced" \
+      "pods ephemeralcontainers namespaced" \
+      "pods eviction namespaced" \
+      "pods binding namespaced" \
+      "pods log namespaced" \
+      "pods proxy namespaced" \
+      "pods resize namespaced" \
+      "pods status namespaced" \
+      "services proxy namespaced" \
+      "services status namespaced" \
+      "namespaces finalize cluster" \
+      "namespaces status cluster" \
+      "nodes log cluster" \
+      "nodes metrics cluster" \
+      "nodes proxy cluster" \
+      "nodes stats cluster" \
+      "endpointslices.discovery.k8s.io status namespaced" \
+      "networkpolicies.networking.k8s.io status namespaced" \
+      "serviceaccounts token namespaced"; do
+      read -r resource subresource scope <<<"${resource_contract}"
+      if [[ "${scope}" == "namespaced" ]]; then auth_scope=(--namespace {{ web_stack_ns }}); else auth_scope=(--all-namespaces); fi
+      for verb in get list watch create update patch delete deletecollection; do
+        decision="$(auth_decision auth can-i "${verb}" "${resource}" --subresource="${subresource}" "${auth_scope[@]}")" || exit 2
+        [[ "${decision}" == "no" ]] || { echo "WEB_RELEASE_KUBECONFIG must not access privileged subresource ${resource}/${subresource} (${verb})" >&2; exit 2; }
+      done
+    done
+    for special_contract in \
+      "bind roles.rbac.authorization.k8s.io namespaced" \
+      "bind clusterroles.rbac.authorization.k8s.io cluster" \
+      "escalate roles.rbac.authorization.k8s.io namespaced" \
+      "escalate clusterroles.rbac.authorization.k8s.io cluster" \
+      "impersonate users cluster" \
+      "impersonate groups cluster" \
+      "impersonate serviceaccounts cluster"; do
+      read -r verb resource scope <<<"${special_contract}"
+      if [[ "${scope}" == "namespaced" ]]; then auth_scope=(--namespace {{ web_stack_ns }}); else auth_scope=(--all-namespaces); fi
+      decision="$(auth_decision auth can-i "${verb}" "${resource}" "${auth_scope[@]}")" || exit 2
+      [[ "${decision}" == "no" ]] || { echo "WEB_RELEASE_KUBECONFIG must not ${verb} ${resource}" >&2; exit 2; }
+    done
+    for signer_verb in approve attest sign; do
+      decision="$(raw_ssar_decision "${signer_verb}" certificates.k8s.io signers)" || exit 2
+      [[ "${decision}" == "no" ]] || { echo "WEB_RELEASE_KUBECONFIG must not ${signer_verb} certificates.k8s.io signers" >&2; exit 2; }
+    done
+    for auth_scope_flag in "--namespace={{ web_stack_ns }}" "--all-namespaces"; do
+      decision="$(auth_decision auth can-i '*' '*' "${auth_scope_flag}")" || exit 2
+      [[ "${decision}" == "no" ]] || { echo "WEB_RELEASE_KUBECONFIG must not hold wildcard authority" >&2; exit 2; }
+    done
+    echo "reviewed stable web release-object mutation denial: Honey/{{ web_stack_ns }} authority=${rules_digest}"
+
+# Read-only PINNED/RUNNING proof for the later static release. It accepts only a
+# fully observed two-replica rollout whose Deployment, active ReplicaSet, and
+# both pods all bind the selected source SHA and immutable image digest.
+web-release-pinned-running-proof: _web-release-candidate-inputs
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
+    set +x
+    set -euo pipefail
+    : "${WEB_RELEASE_KUBECONFIG:?Set WEB_RELEASE_KUBECONFIG to the proof-only web release kubeconfig}"
+    source_kubeconfig="${WEB_RELEASE_KUBECONFIG}"
+    repo_root="$(git rev-parse --show-toplevel)"
+    umask 077
+    temp_root="$(python3 -I - "${TMPDIR:-/tmp}" "${repo_root}" <<'PY'
+    import os
+    import stat
+    import sys
+    from pathlib import Path
+
+    path = Path(sys.argv[1]).resolve(strict=True)
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("TMPDIR must remain outside the public repository")
+    metadata = path.stat()
+    mode = stat.S_IMODE(metadata.st_mode)
+    private = metadata.st_uid == os.getuid() and (mode & 0o022) == 0
+    shared_sticky = metadata.st_uid == 0 and bool(mode & stat.S_ISVTX)
+    if not path.is_dir() or not (private or shared_sticky):
+        raise SystemExit("TMPDIR must be operator-private or a root-owned sticky directory")
+    print(path)
+    PY
+    )"
+    proof_dir="$(mktemp -d "${temp_root}/gftb-web-running.XXXXXX")"
+    trap 'rm -rf "${proof_dir}"' EXIT
+    mkdir -m 700 "${proof_dir}/home"
+    release_kubeconfig="${proof_dir}/kubeconfig"
+    kubeconfig_digest="$(python3 -I - "${source_kubeconfig}" "${repo_root}" "${release_kubeconfig}" <<'PY'
+    import hashlib
+    import os
+    import stat
+    import sys
+    from pathlib import Path
+
+    raw = Path(sys.argv[1])
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    destination = Path(sys.argv[3])
+    destination_parent = destination.parent.stat()
+    if not stat.S_ISDIR(destination_parent.st_mode) or destination_parent.st_uid != os.getuid() or stat.S_IMODE(destination_parent.st_mode) != 0o700:
+        raise SystemExit("private kubeconfig staging directory failed custody validation")
+    if not raw.is_absolute() or raw.is_symlink():
+        raise SystemExit("WEB_RELEASE_KUBECONFIG must be an absolute non-symlink path")
+    path = raw.resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("WEB_RELEASE_KUBECONFIG must remain outside the public repository")
+    expected = path.stat()
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    source_fd = os.open(raw, flags)
+    metadata = os.fstat(source_fd)
+    if (metadata.st_dev, metadata.st_ino) != (expected.st_dev, expected.st_ino):
+        os.close(source_fd)
+        raise SystemExit("WEB_RELEASE_KUBECONFIG changed during custody validation")
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid() or metadata.st_nlink != 1:
+        os.close(source_fd)
+        raise SystemExit("WEB_RELEASE_KUBECONFIG must be a regular file owned by the operator")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        os.close(source_fd)
+        raise SystemExit("WEB_RELEASE_KUBECONFIG must have mode 0600")
+    destination_fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    digest = hashlib.sha256()
+    with os.fdopen(source_fd, "rb") as source, os.fdopen(destination_fd, "wb") as target:
+        while chunk := source.read(131072):
+            digest.update(chunk)
+            target.write(chunk)
+        target.flush()
+        os.fsync(target.fileno())
+    print(digest.hexdigest())
+    PY
+    )"
+    kube_contract_receipt="$(env -i PATH="${PATH}" HOME="${proof_dir}/home" WEB_RELEASE_KUBECONFIG="${release_kubeconfig}" just --justfile "${repo_root}/Justfile" --working-directory "${repo_root}" _web-release-kubeconfig-inputs)"
+    [[ "${kube_contract_receipt}" =~ ^reviewed\ stable\ web\ release-object\ mutation\ denial:\ Honey/greatfallstoolbus-org-production\ authority=([0-9a-f]{64})$ ]] || { echo "WEB_RELEASE_KUBECONFIG helper returned an invalid authority receipt" >&2; exit 2; }
+    authority_digest="${BASH_REMATCH[1]}"
+    kubectl_clean() {
+      env -i PATH="${PATH}" HOME="${proof_dir}/home" kubectl --kubeconfig "${release_kubeconfig}" "$@"
+    }
+    current_auth_decision() {
+      local output status error_file="${proof_dir}/current-auth.stderr"
+      : > "${error_file}"
+      set +e
+      output="$(kubectl_clean "$@" 2>"${error_file}")"
+      status=$?
+      set -e
+      if [[ -s "${error_file}" ]]; then
+        echo "Kubernetes named-object authorization review returned diagnostics" >&2
+        return 2
+      fi
+      rm -f "${error_file}"
+      if [[ "${status}" -eq 0 && "${output}" == "yes" ]]; then
+        printf 'yes\n'
+      elif [[ "${status}" -eq 1 && "${output}" == "no" ]]; then
+        printf 'no\n'
+      else
+        echo "Kubernetes named-object authorization review returned an unexpected result" >&2
+        return 2
+      fi
+    }
+    deny_current_base_mutation() {
+      local resource="$1" resource_name="$2" verb decision
+      for verb in update patch delete; do
+        decision="$(current_auth_decision auth can-i "${verb}" "${resource}/${resource_name}" --namespace {{ web_stack_ns }})" || return 2
+        [[ "${decision}" == "no" ]] || { echo "WEB_RELEASE_KUBECONFIG can mutate observed release object ${resource}/${resource_name} (${verb})" >&2; return 2; }
+      done
+    }
+    deny_current_subresource_access() {
+      local resource="$1" resource_name="$2" subresource="$3" verbs="$4" verb decision
+      local -a verb_list
+      read -r -a verb_list <<<"${verbs}"
+      for verb in "${verb_list[@]}"; do
+        decision="$(current_auth_decision auth can-i "${verb}" "${resource}/${resource_name}" --subresource="${subresource}" --namespace {{ web_stack_ns }})" || return 2
+        [[ "${decision}" == "no" ]] || { echo "WEB_RELEASE_KUBECONFIG can access observed release subresource ${resource}/${resource_name}/${subresource} (${verb})" >&2; return 2; }
+      done
+    }
+    rules_request="${proof_dir}/rules-request.json"
+    jq -n --arg namespace "{{ web_stack_ns }}" '{apiVersion:"authorization.k8s.io/v1",kind:"SelfSubjectRulesReview",spec:{namespace:$namespace}}' > "${rules_request}"
+    deployment="$(kubectl_clean --namespace {{ web_stack_ns }} get deployment/greatfallstoolbus-org -o json)"
+    deployment_uid="$(jq -er '.metadata.uid | select(test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"))' <<<"${deployment}")"
+    generation="$(jq -er '.metadata.generation | select(type == "number" and . > 0)' <<<"${deployment}")"
+    revision="$(jq -er '.metadata.annotations["deployment.kubernetes.io/revision"] | select(test("^[1-9][0-9]*$"))' <<<"${deployment}")"
+    jq -e --arg image "${WEB_APPLY_IMAGE}" --arg sha "${WEB_APPLY_SHA}" '
+      .metadata.name == "greatfallstoolbus-org"
+      and .metadata.namespace == "greatfallstoolbus-org-production"
+      and .metadata.deletionTimestamp == null
+      and (.metadata.generation == .status.observedGeneration)
+      and .spec.replicas == 2
+      and .spec.selector.matchLabels == {"app.kubernetes.io/component": "web", "app.kubernetes.io/name": "greatfallstoolbus-org"}
+      and .status.replicas == 2
+      and .status.updatedReplicas == 2
+      and .status.readyReplicas == 2
+      and .status.availableReplicas == 2
+      and ((.status.unavailableReplicas // 0) == 0)
+      and any(.status.conditions[]?; .type == "Available" and .status == "True")
+      and any(.status.conditions[]?; .type == "Progressing" and .status == "True")
+      and .spec.template.metadata.annotations["app.tinyland.dev/source-sha"] == $sha
+      and .spec.template.metadata.labels["app.kubernetes.io/name"] == "greatfallstoolbus-org"
+      and .spec.template.metadata.labels["app.kubernetes.io/component"] == "web"
+      and .spec.template.metadata.labels["app.kubernetes.io/part-of"] == "great-falls-tool-bus"
+      and .spec.template.spec.automountServiceAccountToken == false
+      and .spec.template.spec.enableServiceLinks == false
+      and (.spec.template.spec.serviceAccountName // "default") == "default"
+      and .spec.template.spec.securityContext.runAsNonRoot == true
+      and .spec.template.spec.securityContext.runAsUser == 65532
+      and .spec.template.spec.securityContext.runAsGroup == 65532
+      and .spec.template.spec.securityContext.fsGroup == 65532
+      and .spec.template.spec.securityContext.seccompProfile.type == "RuntimeDefault"
+      and ((.spec.template.spec.securityContext | keys | sort) == (["fsGroup", "runAsGroup", "runAsNonRoot", "runAsUser", "seccompProfile"] | sort))
+      and ((.spec.template.spec.securityContext.seccompProfile | keys) == ["type"])
+      and ((.spec.template.spec | has("hostNetwork")) | not)
+      and ((.spec.template.spec | has("hostPID")) | not)
+      and ((.spec.template.spec | has("hostIPC")) | not)
+      and ((.spec.template.spec | has("shareProcessNamespace")) | not)
+      and ((.spec.template.spec | has("initContainers")) | not)
+      and ((.spec.template.spec | has("ephemeralContainers")) | not)
+      and ((.spec.template.spec | has("imagePullSecrets")) | not)
+      and ((.spec.template.spec | has("volumes")) | not)
+      and ((.spec.template.spec.containers | length) == 1)
+      and .spec.template.spec.containers[0].name == "greatfallstoolbus-org"
+      and .spec.template.spec.containers[0].image == $image
+      and ((.spec.template.spec.containers[0] | has("command")) | not)
+      and ((.spec.template.spec.containers[0] | has("args")) | not)
+      and ((.spec.template.spec.containers[0] | has("env")) | not)
+      and ((.spec.template.spec.containers[0] | has("envFrom")) | not)
+      and ((.spec.template.spec.containers[0] | has("volumeMounts")) | not)
+      and ((.spec.template.spec.containers[0] | has("lifecycle")) | not)
+      and ((.spec.template.spec.containers[0] | has("workingDir")) | not)
+      and ((.spec.template.spec.containers[0] | has("stdin")) | not)
+      and ((.spec.template.spec.containers[0] | has("stdinOnce")) | not)
+      and ((.spec.template.spec.containers[0] | has("tty")) | not)
+      and (.spec.template.spec.containers[0].ports == [{"containerPort": 3000, "name": "http", "protocol": "TCP"}])
+      and .spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation == false
+      and .spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem == true
+      and .spec.template.spec.containers[0].securityContext.capabilities.drop == ["ALL"]
+      and ((.spec.template.spec.containers[0].securityContext | keys | sort) == (["allowPrivilegeEscalation", "capabilities", "readOnlyRootFilesystem"] | sort))
+      and ((.spec.template.spec.containers[0].securityContext.capabilities | keys) == ["drop"])
+    ' <<<"${deployment}" >/dev/null || { echo "PINNED Deployment contract mismatch" >&2; exit 1; }
+    deployment_snapshot="$(jq -S -c . <<<"${deployment}")"
+    replica_sets="$(kubectl_clean --namespace {{ web_stack_ns }} get replicasets -o json)"
+    active_rs="$(jq -e -c --arg owner "${deployment_uid}" --arg revision "${revision}" '
+      [.items[] | select(.metadata.deletionTimestamp == null) | select([.metadata.ownerReferences[]? | select(.controller == true) | .uid] == [$owner]) | select(.metadata.annotations["deployment.kubernetes.io/revision"] == $revision) | select(.spec.replicas == 2)] as $active
+      | if ($active | length) == 1 then $active[0] else error("expected exactly one active ReplicaSet") end
+    ' <<<"${replica_sets}")"
+    active_rs_uid="$(jq -er '.metadata.uid | select(test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"))' <<<"${active_rs}")"
+    pod_hash="$(jq -er '.metadata.labels["pod-template-hash"] | select(test("^[a-z0-9]+$"))' <<<"${active_rs}")"
+    jq -e --arg image "${WEB_APPLY_IMAGE}" --arg sha "${WEB_APPLY_SHA}" --arg hash "${pod_hash}" '
+      .metadata.namespace == "greatfallstoolbus-org-production"
+      and (.metadata.name | startswith("greatfallstoolbus-org-"))
+      and .metadata.labels["app.kubernetes.io/name"] == "greatfallstoolbus-org"
+      and .metadata.labels["app.kubernetes.io/component"] == "web"
+      and .metadata.labels["app.kubernetes.io/part-of"] == "great-falls-tool-bus"
+      and .metadata.labels["pod-template-hash"] == $hash
+      and .spec.selector.matchLabels["pod-template-hash"] == $hash
+      and .status.replicas == 2 and .status.readyReplicas == 2 and .status.availableReplicas == 2 and .status.fullyLabeledReplicas == 2
+      and .spec.template.metadata.annotations["app.tinyland.dev/source-sha"] == $sha
+      and .spec.template.metadata.labels["app.kubernetes.io/name"] == "greatfallstoolbus-org"
+      and .spec.template.metadata.labels["app.kubernetes.io/component"] == "web"
+      and .spec.template.metadata.labels["app.kubernetes.io/part-of"] == "great-falls-tool-bus"
+      and .spec.template.metadata.labels["pod-template-hash"] == $hash
+      and .spec.template.spec.automountServiceAccountToken == false
+      and .spec.template.spec.enableServiceLinks == false
+      and (.spec.template.spec.serviceAccountName // "default") == "default"
+      and .spec.template.spec.securityContext.runAsNonRoot == true
+      and .spec.template.spec.securityContext.runAsUser == 65532
+      and .spec.template.spec.securityContext.runAsGroup == 65532
+      and .spec.template.spec.securityContext.fsGroup == 65532
+      and .spec.template.spec.securityContext.seccompProfile.type == "RuntimeDefault"
+      and ((.spec.template.spec.securityContext | keys | sort) == (["fsGroup", "runAsGroup", "runAsNonRoot", "runAsUser", "seccompProfile"] | sort))
+      and ((.spec.template.spec.securityContext.seccompProfile | keys) == ["type"])
+      and ((.spec.template.spec | has("hostNetwork")) | not)
+      and ((.spec.template.spec | has("hostPID")) | not)
+      and ((.spec.template.spec | has("hostIPC")) | not)
+      and ((.spec.template.spec | has("shareProcessNamespace")) | not)
+      and ((.spec.template.spec | has("initContainers")) | not)
+      and ((.spec.template.spec | has("ephemeralContainers")) | not)
+      and ((.spec.template.spec | has("imagePullSecrets")) | not)
+      and ((.spec.template.spec | has("volumes")) | not)
+      and ((.spec.template.spec.containers | length) == 1)
+      and .spec.template.spec.containers[0].name == "greatfallstoolbus-org"
+      and .spec.template.spec.containers[0].image == $image
+      and ((.spec.template.spec.containers[0] | has("command")) | not)
+      and ((.spec.template.spec.containers[0] | has("args")) | not)
+      and ((.spec.template.spec.containers[0] | has("env")) | not)
+      and ((.spec.template.spec.containers[0] | has("envFrom")) | not)
+      and ((.spec.template.spec.containers[0] | has("volumeMounts")) | not)
+      and ((.spec.template.spec.containers[0] | has("lifecycle")) | not)
+      and ((.spec.template.spec.containers[0] | has("workingDir")) | not)
+      and ((.spec.template.spec.containers[0] | has("stdin")) | not)
+      and ((.spec.template.spec.containers[0] | has("stdinOnce")) | not)
+      and ((.spec.template.spec.containers[0] | has("tty")) | not)
+      and (.spec.template.spec.containers[0].ports == [{"containerPort": 3000, "name": "http", "protocol": "TCP"}])
+      and .spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation == false
+      and .spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem == true
+      and .spec.template.spec.containers[0].securityContext.capabilities.drop == ["ALL"]
+      and ((.spec.template.spec.containers[0].securityContext | keys | sort) == (["allowPrivilegeEscalation", "capabilities", "readOnlyRootFilesystem"] | sort))
+      and ((.spec.template.spec.containers[0].securityContext.capabilities | keys) == ["drop"])
+    ' <<<"${active_rs}" >/dev/null || { echo "RUNNING active ReplicaSet contract mismatch" >&2; exit 1; }
+    jq -e --arg owner "${deployment_uid}" --arg active "${active_rs_uid}" '[.items[] | select([.metadata.ownerReferences[]? | select(.controller == true) | .uid] == [$owner]) | select(.metadata.uid != $active)] | all(.[]; ((.spec.replicas // 0) == 0) and ((.status.replicas // 0) == 0))' <<<"${replica_sets}" >/dev/null || { echo "RUNNING old ReplicaSet is not fully scaled down" >&2; exit 1; }
+    replica_sets_snapshot="$(jq -S -c '.items | sort_by(.metadata.uid)' <<<"${replica_sets}")"
+    pods="$(kubectl_clean --namespace {{ web_stack_ns }} get pods -o json)"
+    expected_digest="${WEB_APPLY_IMAGE##*@}"
+    jq -e --arg owner "${active_rs_uid}" --arg image "${WEB_APPLY_IMAGE}" --arg digest "${expected_digest}" --arg sha "${WEB_APPLY_SHA}" --arg hash "${pod_hash}" '
+      [.items[] | select(.metadata.deletionTimestamp == null) | select([.metadata.ownerReferences[]? | select(.controller == true) | .uid] == [$owner])] as $pods
+      | [.items[] | select(.metadata.deletionTimestamp == null) | select(.metadata.labels["app.kubernetes.io/name"] == "greatfallstoolbus-org" and .metadata.labels["app.kubernetes.io/component"] == "web")] as $labeled
+      | ($pods | length) == 2
+        and ($labeled | length) == 2
+        and (([$pods[].metadata.uid] | sort) == ([$labeled[].metadata.uid] | sort))
+        and all($pods[];
+          .metadata.namespace == "greatfallstoolbus-org-production"
+          and ([.metadata.ownerReferences[]? | select(.controller == true) | .uid] == [$owner])
+          and .metadata.labels["app.kubernetes.io/part-of"] == "great-falls-tool-bus"
+          and .metadata.labels["pod-template-hash"] == $hash
+          and .metadata.annotations["app.tinyland.dev/source-sha"] == $sha
+          and (.metadata.uid | test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"))
+          and .status.phase == "Running"
+          and (.status.podIP | test("^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}$"))
+          and .status.podIPs == [{"ip": .status.podIP}]
+          and any(.status.conditions[]?; .type == "Ready" and .status == "True")
+          and any(.status.conditions[]?; .type == "ContainersReady" and .status == "True")
+          and .spec.automountServiceAccountToken == false
+          and .spec.enableServiceLinks == false
+          and (.spec.serviceAccountName // "default") == "default"
+          and .spec.securityContext.runAsNonRoot == true
+          and .spec.securityContext.runAsUser == 65532
+          and .spec.securityContext.runAsGroup == 65532
+          and .spec.securityContext.fsGroup == 65532
+          and .spec.securityContext.seccompProfile.type == "RuntimeDefault"
+          and ((.spec.securityContext | keys | sort) == (["fsGroup", "runAsGroup", "runAsNonRoot", "runAsUser", "seccompProfile"] | sort))
+          and ((.spec.securityContext.seccompProfile | keys) == ["type"])
+          and ((.spec | has("hostNetwork")) | not)
+          and ((.spec | has("hostPID")) | not)
+          and ((.spec | has("hostIPC")) | not)
+          and ((.spec | has("shareProcessNamespace")) | not)
+          and ((.spec | has("initContainers")) | not)
+          and ((.spec | has("ephemeralContainers")) | not)
+          and ((.spec | has("imagePullSecrets")) | not)
+          and ((.spec | has("volumes")) | not)
+          and ((.spec.containers | length) == 1)
+          and .spec.containers[0].name == "greatfallstoolbus-org"
+          and .spec.containers[0].image == $image
+          and ((.spec.containers[0] | has("command")) | not)
+          and ((.spec.containers[0] | has("args")) | not)
+          and ((.spec.containers[0] | has("env")) | not)
+          and ((.spec.containers[0] | has("envFrom")) | not)
+          and ((.spec.containers[0] | has("volumeMounts")) | not)
+          and ((.spec.containers[0] | has("lifecycle")) | not)
+          and ((.spec.containers[0] | has("workingDir")) | not)
+          and ((.spec.containers[0] | has("stdin")) | not)
+          and ((.spec.containers[0] | has("stdinOnce")) | not)
+          and ((.spec.containers[0] | has("tty")) | not)
+          and (.spec.containers[0].ports == [{"containerPort": 3000, "name": "http", "protocol": "TCP"}])
+          and .spec.containers[0].securityContext.allowPrivilegeEscalation == false
+          and .spec.containers[0].securityContext.readOnlyRootFilesystem == true
+          and .spec.containers[0].securityContext.capabilities.drop == ["ALL"]
+          and ((.spec.containers[0].securityContext | keys | sort) == (["allowPrivilegeEscalation", "capabilities", "readOnlyRootFilesystem"] | sort))
+          and ((.spec.containers[0].securityContext.capabilities | keys) == ["drop"])
+          and ((.status.containerStatuses | length) == 1)
+          and .status.containerStatuses[0].name == "greatfallstoolbus-org"
+          and .status.containerStatuses[0].ready == true
+          and .status.containerStatuses[0].started == true
+          and ((.status.containerStatuses[0].state.running.startedAt // "") | length > 0)
+          and .status.containerStatuses[0].restartCount == 0
+          and (.status.containerStatuses[0].imageID | endswith("@" + $digest)))
+    ' <<<"${pods}" >/dev/null || { echo "RUNNING pod ownership/readiness/image contract mismatch" >&2; exit 1; }
+    pods_snapshot="$(jq -S -c '.items | sort_by(.metadata.uid)' <<<"${pods}")"
+    pod_uids="$(jq -c --arg owner "${active_rs_uid}" '[.items[] | select(.metadata.deletionTimestamp == null) | select([.metadata.ownerReferences[]? | select(.controller == true) | .uid] == [$owner]) | .metadata.uid] | sort' <<<"${pods}")"
+    pod_network="$(jq -c --arg owner "${active_rs_uid}" '[.items[] | select(.metadata.deletionTimestamp == null) | select([.metadata.ownerReferences[]? | select(.controller == true) | .uid] == [$owner]) | {key: .metadata.uid, value: .status.podIP}] | from_entries' <<<"${pods}")"
+    service="$(kubectl_clean --namespace {{ web_stack_ns }} get service/greatfallstoolbus-org -o json)"
+    service_uid="$(jq -er '.metadata.uid | select(test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"))' <<<"${service}")"
+    jq -e '
+      .metadata.name == "greatfallstoolbus-org"
+      and .metadata.namespace == "greatfallstoolbus-org-production"
+      and .metadata.deletionTimestamp == null
+      and (.metadata.uid | test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"))
+      and .spec.type == "ClusterIP"
+      and ((.spec.clusterIP // "") | length > 0 and . != "None")
+      and .spec.selector == {"app.kubernetes.io/component": "web", "app.kubernetes.io/name": "greatfallstoolbus-org"}
+      and (.spec.ports | length) == 1
+      and .spec.ports[0].name == "http"
+      and .spec.ports[0].port == 80
+      and .spec.ports[0].targetPort == "http"
+      and .spec.ports[0].protocol == "TCP"
+      and ((.spec | has("externalName")) | not)
+      and ((.spec.externalIPs // []) | length) == 0
+      and ((.spec | has("loadBalancerIP")) | not)
+      and ((.spec.loadBalancerSourceRanges // []) | length) == 0
+      and ((.spec | has("healthCheckNodePort")) | not)
+      and ((.spec.publishNotReadyAddresses // false) == false)
+    ' <<<"${service}" >/dev/null || { echo "RUNNING Service selector/port contract mismatch" >&2; exit 1; }
+    service_snapshot="$(jq -S -c . <<<"${service}")"
+    endpoint_slices="$(kubectl_clean --namespace {{ web_stack_ns }} get endpointslices.discovery.k8s.io --selector kubernetes.io/service-name=greatfallstoolbus-org -o json)"
+    jq -e --argjson expected_uids "${pod_uids}" --argjson expected_network "${pod_network}" --arg service_uid "${service_uid}" '
+      [.items[] | select(.metadata.deletionTimestamp == null)] as $slices
+      | [$slices[].endpoints[]] as $endpoints
+      | (.items | length) == ($slices | length)
+        and ($slices | length) > 0
+        and all($slices[];
+          .metadata.namespace == "greatfallstoolbus-org-production"
+          and .metadata.labels["kubernetes.io/service-name"] == "greatfallstoolbus-org"
+          and (.metadata.uid | test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"))
+          and ([.metadata.ownerReferences[]? | select(.controller == true)] | length) == 1
+          and any(.metadata.ownerReferences[]?;
+            .controller == true
+            and .apiVersion == "v1"
+            and .kind == "Service"
+            and .name == "greatfallstoolbus-org"
+            and .uid == $service_uid)
+          and .addressType == "IPv4"
+          and (.ports | length) == 1
+          and .ports[0].name == "http"
+          and .ports[0].port == 3000
+          and .ports[0].protocol == "TCP")
+        and ($endpoints | length) == 2
+        and all($endpoints[];
+          .conditions.ready == true
+          and ((.conditions.serving // true) == true)
+          and ((.conditions.terminating // false) == false)
+          and .targetRef.kind == "Pod"
+          and .targetRef.namespace == "greatfallstoolbus-org-production"
+          and (.targetRef.uid | test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"))
+          and (.addresses | length) == 1
+          and .addresses[0] == $expected_network[.targetRef.uid])
+        and (([$endpoints[].targetRef.uid] | sort) == $expected_uids)
+    ' <<<"${endpoint_slices}" >/dev/null || { echo "RUNNING Service EndpointSlice does not bind the two reviewed pods" >&2; exit 1; }
+    endpoint_slices_snapshot="$(jq -S -c '.items | (sort_by(.metadata.uid) | map(.endpoints |= sort_by(.targetRef.uid)))' <<<"${endpoint_slices}")"
+    network_policies="$(kubectl_clean --namespace {{ web_stack_ns }} get networkpolicies.networking.k8s.io -o json)"
+    jq -e '
+      (.items | length) == 4
+      and all(.items[];
+        .apiVersion == "networking.k8s.io/v1"
+        and .kind == "NetworkPolicy"
+        and .metadata.namespace == "greatfallstoolbus-org-production"
+        and .metadata.deletionTimestamp == null
+        and (.metadata.uid | test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")))
+    ' <<<"${network_policies}" >/dev/null || { echo "RUNNING NetworkPolicy object census/identity mismatch" >&2; exit 1; }
+    network_policies_semantic="$(jq -S -c '
+      def canonical_rule:
+        (if ((.from? // null) | type) == "array" then .from |= sort_by(tojson) else . end)
+        | (if ((.to? // null) | type) == "array" then (if .to == [] then del(.to) else .to |= sort_by(tojson) end) else . end)
+        | (if ((.ports? // null) | type) == "array" then .ports |= sort_by(tojson) else . end);
+      [.items[] | {
+        apiVersion,
+        kind,
+        metadata: {name: .metadata.name, namespace: .metadata.namespace, labels: .metadata.labels},
+        spec: (.spec
+          | .ingress = (.ingress // [])
+          | .egress = (.egress // [])
+          | (if ((.policyTypes? // null) | type) == "array" then .policyTypes |= sort else . end)
+          | (if ((.ingress? // null) | type) == "array" then .ingress |= (map(canonical_rule) | sort_by(tojson)) else . end)
+          | (if ((.egress? // null) | type) == "array" then .egress |= (map(canonical_rule) | sort_by(tojson)) else . end))
+      }] | sort_by(.metadata.name)
+    ' <<<"${network_policies}")"
+    network_policies_digest="$(python3 -I -c 'import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest())' "${network_policies_semantic}")"
+    [[ "${network_policies_digest}" == "301eecb4ad234fdd7258ac7351a5a563e1b53cb250bce6f51a68824854b28220" ]] || { echo "RUNNING NetworkPolicy semantic content mismatch" >&2; exit 1; }
+    network_policies_snapshot="$(jq -S -c '.items | sort_by(.metadata.uid)' <<<"${network_policies}")"
+    mapfile -t observed_rs_names < <(jq -r --arg owner "${deployment_uid}" '.items[] | select([.metadata.ownerReferences[]? | select(.controller == true) | .uid] == [$owner]) | .metadata.name' <<<"${replica_sets}" | LC_ALL=C sort -u)
+    mapfile -t observed_pod_names < <(jq -r --arg owner "${active_rs_uid}" '.items[] | select(.metadata.deletionTimestamp == null) | select([.metadata.ownerReferences[]? | select(.controller == true) | .uid] == [$owner]) | .metadata.name' <<<"${pods}" | LC_ALL=C sort -u)
+    mapfile -t observed_slice_names < <(jq -r '.items[].metadata.name' <<<"${endpoint_slices}" | LC_ALL=C sort -u)
+    [[ "${#observed_rs_names[@]}" -ge 1 && "${#observed_pod_names[@]}" -eq 2 && "${#observed_slice_names[@]}" -ge 1 ]] || { echo "RUNNING observed-object authorization census mismatch" >&2; exit 1; }
+    for resource_name in "${observed_rs_names[@]}" "${observed_pod_names[@]}" "${observed_slice_names[@]}"; do
+      [[ "${resource_name}" =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ && "${#resource_name}" -le 253 ]] || { echo "RUNNING observed object name is malformed" >&2; exit 1; }
+    done
+    for resource_name in "${observed_rs_names[@]}"; do
+      deny_current_base_mutation replicasets.apps "${resource_name}"
+      deny_current_subresource_access replicasets.apps "${resource_name}" status "update patch"
+      deny_current_subresource_access replicasets.apps "${resource_name}" scale "update patch"
+    done
+    for resource_name in "${observed_pod_names[@]}"; do
+      deny_current_base_mutation pods "${resource_name}"
+      deny_current_subresource_access pods "${resource_name}" status "update patch"
+      deny_current_subresource_access pods "${resource_name}" ephemeralcontainers "update patch"
+      deny_current_subresource_access pods "${resource_name}" eviction "create"
+      deny_current_subresource_access pods "${resource_name}" binding "create"
+      deny_current_subresource_access pods "${resource_name}" exec "get create"
+      deny_current_subresource_access pods "${resource_name}" attach "get create"
+      deny_current_subresource_access pods "${resource_name}" portforward "get create"
+      deny_current_subresource_access pods "${resource_name}" log "get"
+      deny_current_subresource_access pods "${resource_name}" proxy "get create update patch delete"
+      deny_current_subresource_access pods "${resource_name}" resize "update patch"
+    done
+    for resource_name in "${observed_slice_names[@]}"; do
+      deny_current_base_mutation endpointslices.discovery.k8s.io "${resource_name}"
+      deny_current_subresource_access endpointslices.discovery.k8s.io "${resource_name}" status "update patch"
+    done
+    final_deployment="$(kubectl_clean --namespace {{ web_stack_ns }} get deployment/greatfallstoolbus-org -o json)"
+    final_replica_sets="$(kubectl_clean --namespace {{ web_stack_ns }} get replicasets -o json)"
+    final_pods="$(kubectl_clean --namespace {{ web_stack_ns }} get pods -o json)"
+    final_service="$(kubectl_clean --namespace {{ web_stack_ns }} get service/greatfallstoolbus-org -o json)"
+    final_endpoint_slices="$(kubectl_clean --namespace {{ web_stack_ns }} get endpointslices.discovery.k8s.io --selector kubernetes.io/service-name=greatfallstoolbus-org -o json)"
+    final_network_policies="$(kubectl_clean --namespace {{ web_stack_ns }} get networkpolicies.networking.k8s.io -o json)"
+    [[ "$(jq -S -c . <<<"${final_deployment}")" == "${deployment_snapshot}" ]] || { echo "RUNNING Deployment changed or degraded during readback" >&2; exit 1; }
+    [[ "$(jq -S -c '.items | sort_by(.metadata.uid)' <<<"${final_replica_sets}")" == "${replica_sets_snapshot}" ]] || { echo "RUNNING ReplicaSet state changed during readback" >&2; exit 1; }
+    [[ "$(jq -S -c '.items | sort_by(.metadata.uid)' <<<"${final_pods}")" == "${pods_snapshot}" ]] || { echo "RUNNING pod state changed during readback" >&2; exit 1; }
+    [[ "$(jq -S -c . <<<"${final_service}")" == "${service_snapshot}" ]] || { echo "RUNNING Service changed during readback" >&2; exit 1; }
+    [[ "$(jq -S -c '.items | (sort_by(.metadata.uid) | map(.endpoints |= sort_by(.targetRef.uid)))' <<<"${final_endpoint_slices}")" == "${endpoint_slices_snapshot}" ]] || { echo "RUNNING EndpointSlice state changed during readback" >&2; exit 1; }
+    [[ "$(jq -S -c '.items | sort_by(.metadata.uid)' <<<"${final_network_policies}")" == "${network_policies_snapshot}" ]] || { echo "RUNNING NetworkPolicy state changed during readback" >&2; exit 1; }
+    final_rules_response="${proof_dir}/rules-response-final.json"
+    final_rules_stderr="${proof_dir}/rules-response-final.stderr"
+    if ! kubectl_clean create --raw /apis/authorization.k8s.io/v1/selfsubjectrulesreviews -f "${rules_request}" > "${final_rules_response}" 2> "${final_rules_stderr}"; then
+      echo "Kubernetes authority reread failed" >&2
+      exit 1
+    fi
+    [[ ! -s "${final_rules_stderr}" ]] && test -s "${final_rules_response}" || { echo "Kubernetes authority reread returned diagnostics or no data" >&2; exit 1; }
+    jq -e '.apiVersion == "authorization.k8s.io/v1" and .kind == "SelfSubjectRulesReview" and .status.incomplete == false and ((.status.evaluationError // "") == "")' "${final_rules_response}" >/dev/null || { echo "Kubernetes authority reread was incomplete or malformed" >&2; exit 1; }
+    final_rules_snapshot="$(jq -S -c '
+      def resource_rule: {
+        apiGroups: ((.apiGroups // []) | sort | unique),
+        resources: ((.resources // []) | sort | unique),
+        resourceNames: ((.resourceNames // []) | sort | unique),
+        verbs: ((.verbs // []) | sort | unique)
+      };
+      def non_resource_rule: {
+        nonResourceURLs: ((.nonResourceURLs // []) | sort | unique),
+        verbs: ((.verbs // []) | sort | unique)
+      };
+      {
+        incomplete: .status.incomplete,
+        evaluationError: (.status.evaluationError // ""),
+        resourceRules: ([.status.resourceRules[]? | resource_rule] | sort_by(tojson) | unique),
+        nonResourceRules: ([.status.nonResourceRules[]? | non_resource_rule] | sort_by(tojson) | unique)
+      }
+    ' "${final_rules_response}")"
+    final_authority_digest="$(python3 -I -c 'import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest())' "${final_rules_snapshot}")"
+    [[ "${final_authority_digest}" == "${authority_digest}" ]] || { echo "WEB_RELEASE_KUBECONFIG authority changed during readback" >&2; exit 1; }
+    python3 -I - "${release_kubeconfig}" "${kubeconfig_digest}" <<'PY'
+    import hashlib
+    import hmac
+    import sys
+    from pathlib import Path
+
+    observed = hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest()
+    if not hmac.compare_digest(observed, sys.argv[2]):
+        raise SystemExit("WEB_RELEASE_KUBECONFIG changed during readback")
+    PY
+    echo "PINNED/RUNNING proof passed: source=${WEB_APPLY_SHA} digest=${expected_digest} generation=${generation} revision=${revision} replicas=2/2"
+
+# External SERVED source proof. Gated mode first proves anonymous Cloudflare
+# Access interception and then uses one operator-held cookie jar. Public mode
+# forbids all cookies. This endpoint proves the source SHA only: it deliberately
+# does not claim the selected image digest is served. The later mutation lane
+# must close that cross-command boundary with one atomic deploy/readback receipt.
+web-release-served-proof: _web-release-candidate-inputs
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
+    set +x
+    set -euo pipefail
+    command -v curl >/dev/null 2>&1 || { echo "curl is required (nix develop provides it)" >&2; exit 1; }
+    origin="https://greatfallstoolbus.org"
+    access_state="${WEB_ACCESS_STATE:?Set WEB_ACCESS_STATE to gated or public after edge readback}"
+    for name in GODEBUG CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR SSLKEYLOGFILE; do
+      if [[ -n "${!name:-}" ]]; then
+        echo "Refusing ambient ${name}; served proof uses one clean TLS process environment" >&2
+        exit 2
+      fi
+    done
+    umask 077
+    temp_root="$(python3 -I - "${TMPDIR:-/tmp}" "$(git rev-parse --show-toplevel)" <<'PY'
+    import os
+    import stat
+    import sys
+    from pathlib import Path
+
+    path = Path(sys.argv[1]).resolve(strict=True)
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("TMPDIR must remain outside the public repository")
+    metadata = path.stat()
+    mode = stat.S_IMODE(metadata.st_mode)
+    private = metadata.st_uid == os.getuid() and (mode & 0o022) == 0
+    shared_sticky = metadata.st_uid == 0 and bool(mode & stat.S_ISVTX)
+    if not path.is_dir() or not (private or shared_sticky):
+        raise SystemExit("TMPDIR must be operator-private or a root-owned sticky directory")
+    print(path)
+    PY
+    )"
+    proof_dir="$(mktemp -d "${temp_root}/gftb-web-served.XXXXXX")"
+    trap 'rm -rf "${proof_dir}"' EXIT
+    mkdir -m 700 "${proof_dir}/home"
+    curl_auth=()
+    copy_private_file() {
+      python3 -I - "$1" "$2" "$(git rev-parse --show-toplevel)" <<'PY'
+    import os
+    import shutil
+    import stat
+    import sys
+    from pathlib import Path
+
+    raw = Path(sys.argv[1])
+    destination = Path(sys.argv[2])
+    repo = Path(sys.argv[3]).resolve(strict=True)
+    destination_parent = destination.parent.stat()
+    if not stat.S_ISDIR(destination_parent.st_mode) or destination_parent.st_uid != os.getuid() or stat.S_IMODE(destination_parent.st_mode) != 0o700:
+        raise SystemExit("private cookie staging directory failed custody validation")
+    if not raw.is_absolute() or raw.is_symlink():
+        raise SystemExit("cookie jar must be an absolute non-symlink path")
+    path = raw.resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("cookie jar must remain outside the public repository")
+    expected = path.stat()
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    source_fd = os.open(raw, flags)
+    metadata = os.fstat(source_fd)
+    if (metadata.st_dev, metadata.st_ino) != (expected.st_dev, expected.st_ino):
+        os.close(source_fd)
+        raise SystemExit("cookie jar changed during custody validation")
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid() or metadata.st_nlink != 1 or stat.S_IMODE(metadata.st_mode) != 0o600:
+        os.close(source_fd)
+        raise SystemExit("cookie jar must be an operator-owned regular mode-0600 file")
+    destination_fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(source_fd, "rb") as source, os.fdopen(destination_fd, "wb") as target:
+        shutil.copyfileobj(source, target)
+        target.flush()
+        os.fsync(target.fileno())
+    PY
+    }
+    fetch() {
+      local path="$1" body="$2" headers="$3"
+      shift 3
+      env -i PATH="${PATH}" HOME="${proof_dir}/home" curl --disable --silent --show-error --connect-timeout 10 --max-time 20 --max-filesize 1048576 --max-redirs 0 --output "${body}" --dump-header "${headers}" --write-out '%{http_code}' "$@" "${origin}${path}"
+    }
+    case "${access_state}" in
+      gated)
+        : "${CF_ACCESS_COOKIE_JAR:?Set CF_ACCESS_COOKIE_JAR to the operator-held Access cookie jar}"
+        release_cookie_jar="${proof_dir}/access.cookies"
+        copy_private_file "${CF_ACCESS_COOKIE_JAR}" "${release_cookie_jar}"
+        for path in / /health /health.sha /qr/greatfallstoolbus-apex.svg; do
+          key="$(printf '%s' "${path}" | tr '/.' '__')"
+          body="${proof_dir}/${key}.anonymous.body"
+          headers="${proof_dir}/${key}.anonymous.headers"
+          status="$(fetch "${path}" "${body}" "${headers}")"
+          [[ "${status}" == "302" ]] || { echo "Access anonymous status mismatch for ${path}" >&2; exit 1; }
+          mapfile -t locations < <(awk 'tolower($1) == "location:" { print $2 }' "${headers}" | tr -d '\r')
+          [[ "${#locations[@]}" -eq 1 ]] || { echo "Access response must contain exactly one Location header for ${path}" >&2; exit 1; }
+          location="${locations[0]}"
+          python3 -I - "${location}" "${path}" <<'PY'
+    import sys
+    from urllib.parse import parse_qs, urlsplit
+
+    value = urlsplit(sys.argv[1])
+    params = parse_qs(value.query, keep_blank_values=True)
+    expected_redirect = sys.argv[2]
+    if value.scheme != "https" or value.hostname != "sulliwood.cloudflareaccess.com" or value.username is not None or value.password is not None or value.port is not None or value.path != "/cdn-cgi/access/login/greatfallstoolbus.org" or value.fragment or params.get("redirect_url") != [expected_redirect]:
+        raise SystemExit("unexpected Cloudflare Access redirect")
+    PY
+        done
+        curl_auth=(--cookie "${release_cookie_jar}")
+        ;;
+      public)
+        [[ -z "${CF_ACCESS_COOKIE_JAR:-}" ]] || { echo "public served proof must not use an Access cookie jar" >&2; exit 2; }
+        ;;
+      *) echo "WEB_ACCESS_STATE must be gated or public" >&2; exit 2 ;;
+    esac
+    home_body="${proof_dir}/home.body"; home_headers="${proof_dir}/home.headers"
+    health_body="${proof_dir}/health.body"; health_headers="${proof_dir}/health.headers"
+    sha_body="${proof_dir}/sha.body"; sha_headers="${proof_dir}/sha.headers"
+    qr_body="${proof_dir}/qr.body"; qr_headers="${proof_dir}/qr.headers"
+    [[ "$(fetch / "${home_body}" "${home_headers}" "${curl_auth[@]}")" == "200" ]] || { echo "SERVED homepage status mismatch" >&2; exit 1; }
+    [[ "$(fetch /health "${health_body}" "${health_headers}" "${curl_auth[@]}")" == "200" ]] || { echo "SERVED health status mismatch" >&2; exit 1; }
+    [[ "$(fetch /health.sha "${sha_body}" "${sha_headers}" "${curl_auth[@]}")" == "200" ]] || { echo "SERVED source status mismatch" >&2; exit 1; }
+    [[ "$(fetch /qr/greatfallstoolbus-apex.svg "${qr_body}" "${qr_headers}" "${curl_auth[@]}")" == "200" ]] || { echo "SERVED QR status mismatch" >&2; exit 1; }
+    grep -qi 'Great Falls Tool Bus' "${home_body}" || { echo "SERVED homepage marker missing" >&2; exit 1; }
+    python3 -I - "${health_body}" "ok" <<'PY'
+    import sys
+    from pathlib import Path
+
+    if Path(sys.argv[1]).read_bytes() != sys.argv[2].encode("ascii"):
+        raise SystemExit("SERVED health body mismatch")
+    PY
+    python3 -I - "${sha_body}" "${WEB_APPLY_SHA}" <<'PY'
+    import sys
+    from pathlib import Path
+
+    if Path(sys.argv[1]).read_bytes() != sys.argv[2].encode("ascii"):
+        raise SystemExit("SERVED source SHA mismatch")
+    PY
+    grep -Eq '<svg([[:space:]>])' "${qr_body}" || { echo "SERVED QR is not SVG" >&2; exit 1; }
+    qr_type="$(awk 'tolower($1) == "content-type:" { print tolower($2) }' "${qr_headers}" | tr -d '\r' | tail -n 1)"
+    [[ "${qr_type}" == image/svg+xml* ]] || { echo "SERVED QR content type mismatch" >&2; exit 1; }
+    echo "SERVED source proof passed: source=${WEB_APPLY_SHA} access=${access_state}"
+
 # Env (delivered by web-stack.yml on the CD path; never baked):
 #   CI_GREEN_SHA   the commit SHA to gate on (client_payload.sha)
 #   CI_GREEN_REPO  owner/name of the site repo (default the GFTB site repo)
