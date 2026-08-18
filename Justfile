@@ -1535,21 +1535,24 @@ archive-stack-apply: archive-stack-server-dry-run
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ archive_stack_dir }}
 
 # --- GFTB on-cluster web serving (TIN-2541 skeleton; TIN-2543 cutover) -------
-# DECLARE-ONLY IN GIT. SvelteKit adapter-node -> ClusterIP 80->3000 ->
-# honey-ingress cloudflared tunnel, mirroring the proven MassageIthaca
-# full-on-cluster pattern. The checked-in overlay applies to NOTHING as-is: the
-# Deployment ships replicas:0 with a non-resolvable placeholder image, the
-# namespace is not created here, and the tunnel route is dashboard/token-managed
-# (never in git; TIN-991). scripts/validate-web-stack.sh guards that posture.
+# DISPATCH-GATED DECLARE-ONLY IN GIT. SvelteKit adapter-node -> ClusterIP
+# 80->3000 -> honey-ingress cloudflared tunnel, mirroring the proven MassageIthaca
+# full-on-cluster pattern. The checked-in overlay is DECLARED AND VALIDATED, not
+# parked: the Deployment carries replicas: 2 and a digest-pinned
+# ghcr.io/great-falls-tool-bus/greatfallstoolbus.org image, this stack creates no
+# Namespace, and the tunnel route is dashboard/token-managed (never in git;
+# TIN-991). scripts/validate-web-stack.sh enforces exactly that posture.
 #
 # The cutover recipes below are the operator-gated APPLY plane (TIN-2543, ADR
 # 0008), run ONLY through .github/workflows/web-stack.yml (workflow_dispatch +
-# confirm=apply, protected web-apply environment). They do NOT un-park the tree:
-# the real image is supplied at dispatch (WEB_APPLY_IMAGE) and replicas are
-# flipped imperatively post-apply, so the k8s/web overlay stays replicas:0 +
-# placeholder. The namespace-scoped web-apply SA cannot create namespaces; the
-# operator mints the greatfallstoolbus-org-production namespace + SA/RBAC out of
-# band first. See k8s/web/README.md and docs/runbooks/oncluster-web-cutover.md.
+# confirm=apply + the protected web-apply environment, or the site repo's
+# repository_dispatch: web-image-published). MERGING APPLIES NOTHING; the safety
+# is that gate. The image actually served is supplied at dispatch
+# (WEB_APPLY_IMAGE) and re-pinned imperatively post-apply, so the live pin may
+# diverge from the declarative record in the tree. The namespace-scoped web-apply
+# SA cannot create namespaces; the operator mints the
+# greatfallstoolbus-org-production namespace + SA/RBAC out of band first. See
+# k8s/web/README.md and docs/runbooks/oncluster-web-cutover.md.
 
 web_stack_dir := "k8s/web/greatfallstoolbus-org-production"
 web_stack_ns := "greatfallstoolbus-org-production"

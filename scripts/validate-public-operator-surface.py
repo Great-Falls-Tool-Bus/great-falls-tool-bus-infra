@@ -452,6 +452,14 @@ WEB_RELEASE_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     "web-release-apply": _receipt(
         "027bfae6f72ee45f", "6bd86a57e1b5d921", "d5df538b3905589c", "f111051c06f3da5e"
     ),
+    # The legacy adapter-node carrier's promotion interlock. It is not part of
+    # the web-release dependency graph -- it hangs off web-stack-apply, which the
+    # hosted web-stack.yml workflow is allowed to run -- so it is receipted here
+    # but deliberately NOT an operator-local root. Its body is enforced by
+    # scan_web_stack_promotion_interlock_text.
+    "_web-stack-promotion-interlock": _receipt(
+        "f6fbb3dc72de15bb", "38d350899029f9fb", "afb1a885f3b59950", "a5f7c8a92999df1f"
+    ),
 }
 
 WEB_RELEASE_OPERATOR_LOCAL_ROOTS = set(WEB_RELEASE_RECIPE_DEPENDENCIES)
@@ -479,7 +487,9 @@ WEB_RELEASE_STACK_GLOBAL_ASSIGNMENTS = {
 # continuations into one logical line before matching, so splitting the verb onto
 # the next line is not an evasion. Same-intent rewrites of the live pod template
 # are covered too: `rollout undo`, `replace -f`, `delete ... deployment`,
-# `scale` in any form, and a JSON patch of the container image path.
+# `delete -f`/`--filename`, `edit deployment`, `scale` in any form, and BOTH
+# spellings of a container-image patch -- the JSON-patch path and the merge patch
+# (`--type merge -p '{"spec":{"template":{"spec":{"containers":[{"image":...`).
 #
 # KNOWN RESIDUAL, deliberately not chased: shell *variable indirection*
 # (`KC=kubectl; "${KC}" ... set image`, or building the patch body into a
@@ -500,7 +510,11 @@ IMPERATIVE_PIN = re.compile(
     rf"|{_IMPERATIVE_PIN_KUBECTL}[^\n]*\breplace\b[^\n]*(?:\s-f\b|\s--filename\b)"
     rf"|{_IMPERATIVE_PIN_KUBECTL}[^\n]*\bdelete\b[^\n]*"
     rf"\b(?:deployment|deployments|deploy)\b"
+    rf"|{_IMPERATIVE_PIN_KUBECTL}[^\n]*\bdelete\b[^\n]*(?:\s-f\b|\s--filename\b)"
+    rf"|{_IMPERATIVE_PIN_KUBECTL}[^\n]*\bedit\b[^\n]*"
+    rf"\b(?:deployment|deployments|deploy)\b"
     rf"|{_IMPERATIVE_PIN_KUBECTL}[^\n]*[\"']replicas[\"']\s*:"
+    rf"|{_IMPERATIVE_PIN_KUBECTL}[^\n]*[\"']containers[\"']\s*:[^\n]*[\"']image[\"']\s*:"
     rf"|/spec/template/spec/containers/[0-9*]+/image\b"
 )
 IMPERATIVE_PIN_ALLOWED_RECIPES = frozenset({"web-stack-apply"})
@@ -1135,6 +1149,12 @@ def scan_web_release_operator_contract_text(
             )
     dependency_names = set(WEB_RELEASE_RECIPE_DEPENDENCIES)
     digest_names = set(WEB_RELEASE_CRITICAL_RECIPE_DIGESTS)
+    # The promotion interlock is receipted in the same table but is deliberately
+    # NOT part of the release dependency graph: that graph doubles as the
+    # operator-local ROOT set, and the interlock hangs off the legacy
+    # web-stack-apply carrier that hosted web-stack.yml is allowed to run.
+    # scan_web_stack_promotion_interlock_text enforces its body receipt.
+    dependency_names |= {WEB_STACK_PROMOTION_INTERLOCK}
     if dependency_names != digest_names:
         findings.append(
             Finding(
@@ -1410,6 +1430,31 @@ def scan_web_stack_promotion_interlock_text(
     else:
         line, _, body = declarations[0]
         executable = executable_recipe_text(body)
+        expected_digest = WEB_RELEASE_CRITICAL_RECIPE_DIGESTS.get(
+            WEB_STACK_PROMOTION_INTERLOCK
+        )
+        observed_digest = hashlib.sha256(executable.encode("utf-8")).hexdigest()
+        if expected_digest is None:
+            findings.append(
+                Finding(
+                    "web-stack-promotion-interlock-receipt-missing",
+                    Path(SELF),
+                    1,
+                    f"{WEB_STACK_PROMOTION_INTERLOCK} must carry an executable "
+                    "receipt in WEB_RELEASE_CRITICAL_RECIPE_DIGESTS like the "
+                    "rest of the reviewed chain.",
+                )
+            )
+        elif observed_digest != expected_digest:
+            findings.append(
+                Finding(
+                    "web-stack-promotion-interlock-receipt-mismatch",
+                    path,
+                    line,
+                    f"{WEB_STACK_PROMOTION_INTERLOCK} executable SHA256 must be "
+                    f"{expected_digest}; observed {observed_digest}.",
+                )
+            )
         for required in WEB_STACK_PROMOTION_INTERLOCK_REQUIRED_TEXT:
             if required not in executable:
                 findings.append(
@@ -1445,8 +1490,7 @@ def scan_web_stack_promotion_interlock_text(
                     1,
                     f"{dependent} must take {WEB_STACK_PROMOTION_INTERLOCK} as "
                     f"its FIRST dependency; it declares {list(declared)!r}. The "
-                    "interlock has to run before the dry-run and before any "
-                    "mutation.",
+                    "interlock has to precede every mutation of this workload.",
                 )
             )
     return findings
@@ -2751,7 +2795,9 @@ def install_web_release_fixture_mocks(
         resolved = shutil.which(command)
         if resolved is None:
             raise SystemExit(
-                f"self-test FAILED: web release fixture requires {command}"
+                f"self-test FAILED: web release fixture requires {command}; "
+                "run inside `nix develop` (the repo devshell provides yq, jq, "
+                "kubectl, crane and the rest of the release toolchain)"
             )
         (mock_bin / command).symlink_to(Path(resolved).resolve())
     fixture_bash = Path("/bin/bash")
@@ -5744,6 +5790,31 @@ def self_test() -> None:
             + "    kubectl --namespace {{ web_stack_ns }} patch deployment/greatfallstoolbus-org --type json"
             + ' -p \'[{"op":"replace","path":"/spec/template/spec/containers/0/image","value":"x"}]\'\n',
         ),
+        (
+            "merge patch of the container image",
+            justfile
+            + "\nweb-release-mergepatch:\n"
+            + "    kubectl --namespace {{ web_stack_ns }} patch deployment/greatfallstoolbus-org --type merge"
+            + ' -p \'{"spec":{"template":{"spec":{"containers":[{"name":"greatfallstoolbus-org","image":"x"}]}}}}\'\n',
+        ),
+        (
+            "delete -f",
+            justfile
+            + "\nweb-release-unapply:\n"
+            + "    kubectl --namespace {{ web_stack_ns }} delete -f /tmp/rendered.yaml\n",
+        ),
+        (
+            "delete --filename",
+            justfile
+            + "\nweb-release-unapply-long:\n"
+            + "    kubectl --namespace {{ web_stack_ns }} delete --filename /tmp/rendered.yaml\n",
+        ),
+        (
+            "edit deployment",
+            justfile
+            + "\nweb-release-edit:\n"
+            + "    kubectl --namespace {{ web_stack_ns }} edit deployment/greatfallstoolbus-org\n",
+        ),
     )
     for label, fixture in imperative_pin_cases:
         if not any(
@@ -5806,6 +5877,15 @@ def self_test() -> None:
                 1,
             ),
             "web-stack-promotion-interlock-detached",
+        ),
+        (
+            "interlock body edited without a receipt update",
+            justfile.replace(
+                'echo "promotion interlock: live image',
+                'echo "promotion interlock (edited): live image',
+                1,
+            ),
+            "web-stack-promotion-interlock-receipt-mismatch",
         ),
         (
             "interlock demoted behind the dry-run",

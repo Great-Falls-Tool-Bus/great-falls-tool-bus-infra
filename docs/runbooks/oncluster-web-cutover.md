@@ -453,11 +453,13 @@ NetworkPolicy; the public-hostname route (P5) is dashboard/token-managed
   TIN-2537 — it lets the public repo **retire** its CF Pages-Edit token. No
   kubeconfig, image digest, tunnel route, DNS record, or Cloudflare token ever
   lands in `Great-Falls-Tool-Bus/greatfallstoolbus.org`.
-- **The parked overlay stays parked in git.** The pin/replicas/namespace/route
-  changes live in an operator private-overlay cutover branch, reviewed; the
-  `k8s/web/` skeleton on the default branch keeps `replicas: 0` + placeholder
-  image + no namespace + no route. `scripts/validate-web-stack.sh` guards the
-  declare-only posture.
+- **The overlay is declared and validated, and applying it stays gated.** ADR
+  0010 moved `k8s/web/` from a parked skeleton to the executing cutover shape:
+  the default branch carries `replicas: 2` and a digest-pinned
+  `ghcr.io/great-falls-tool-bus/greatfallstoolbus.org` image, and
+  `scripts/validate-web-stack.sh` *requires* both. What stays closed is the apply
+  gate plus the namespace and route axes — no `Namespace` object, no Secret, no
+  route in git — so merging still applies nothing and routes no public traffic.
 - **Names-only, always.** Credentials are referenced by name and resolve from
   the tenant SOPS lane / protected GitHub environments / live cluster Secrets —
   never from this file, never committed.
@@ -679,10 +681,16 @@ Where each line comes from in this chain:
      `_web-stack-promotion-interlock` as its FIRST dependency. The interlock
      reads the LIVE Deployment's container image and exits non-zero if it already
      carries a `ghcr.io/great-falls-tool-bus/gftb-site` reference — i.e. exactly
-     when the promotion is in place. It runs before the server-dry-run and before
-     any mutation, so the dispatched CD job fails loudly instead of reverting.
-     `scripts/validate-public-operator-surface.py` fails `just public-surface` if
-     the interlock is removed, weakened, or demoted out of first position.
+     when the promotion is in place. **It precedes every mutation**: it is the
+     first dependency of the only recipe that mutates this workload, so the
+     dispatched CD job fails loudly instead of reverting. It does NOT gate the
+     workflow's *separate, earlier* `just web-stack-server-dry-run` step — that
+     step is `apply --dry-run=server` and changes nothing, so a green dry-run
+     step followed by an interlock refusal in the apply step is the expected
+     shape, not a bypass. `scripts/validate-public-operator-surface.py` fails
+     `just public-surface` if the interlock is removed, weakened, demoted out of
+     first position, or edited: its body is pinned by SHA-256 in
+     `WEB_RELEASE_CRITICAL_RECIPE_DIGESTS` like the rest of the chain.
   2. **Operator (the other repo).** *Do not push to `greatfallstoolbus.org`
      `main` during or after this promotion until the legacy CD dispatch is
      retired.* Quiesce it before S3 and keep it quiesced. The interlock turns a
@@ -697,7 +705,10 @@ Where each line comes from in this chain:
 
 - **The pin is rendered, never patched.** Writing `kubectl set image`, a
   `scale`, a replicas patch, a `rollout undo`, a `replace -f`, a `delete …
-  deployment`, or a JSON patch of the container image path — literally, on one
+  deployment`, a `delete -f`/`delete --filename`, a `kubectl edit deployment`, a
+  JSON patch of the container image path, or a **merge** patch that carries the
+  image through `spec.template.spec.containers[]` (`--type merge -p
+  '{"spec":{"template":{"spec":{"containers":[{"image":…`) — literally, on one
   logical line, including through a `kubectl…` wrapper such as `kubectl_clean`
   and across backslash line continuations — anywhere in the Justfile outside the
   allowlisted legacy `web-stack-apply` fails `just public-surface`. That scan is

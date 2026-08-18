@@ -1,20 +1,28 @@
-# GFTB on-cluster web serving — DECLARE-ONLY skeleton (TIN-2541)
+# GFTB on-cluster web serving — DISPATCH-GATED declare-only (TIN-2541, ADR 0010)
 
-> **NOTHING IN THIS DIRECTORY IS APPLIED.** This is a plan-only skeleton that
-> `kubectl kustomize` renders cleanly (the `just check` guard enforces that) but
-> that serves nothing and mutates no cluster, DNS, or route. Every enablement
-> axis is fail-closed. Bringing any of it live is an explicit, operator-gated
-> action authorized by a *superseding* hosting ADR — not by this stack.
+> **MERGING THIS DIRECTORY APPLIES NOTHING — but it is declared and validated,
+> not parked.** `greatfallstoolbus-org-production` carries `replicas: 2` and a
+> digest-pinned production image, and `scripts/validate-web-stack.sh` (run by
+> `just web-stack-validate`) *requires* exactly that: replicas `2`, a full
+> `@sha256:<64 lowercase hex>` pin on this stack's own admitted repository, and a
+> hard failure on any `PLACEHOLDER` marker. The safety is the **apply gate**, not
+> an inert manifest: the only apply path is
+> [`.github/workflows/web-stack.yml`](../../.github/workflows/web-stack.yml),
+> which runs the audited `just web-stack-apply` recipe rather than raw `kubectl`,
+> and which refuses once the gftb-site promotion is live. This stack creates
+> **no** Namespace, ships **no** Secret, and changes **no** Cloudflare route or
+> DNS record.
 
 ## What this is
 
-A copyable skeleton for serving the GFTB web app **fully on-cluster**, mirroring
-the proven MassageIthaca pattern: SvelteKit `adapter-node` → OCI image on GHCR →
+The stack that serves the GFTB web app **fully on-cluster**, mirroring the proven
+MassageIthaca pattern: SvelteKit `adapter-node` → OCI image on GHCR →
 K8s `Deployment` behind a `ClusterIP` `Service` → in-cluster `cloudflared` tunnel
-edge (no Cloudflare Pages, no Vercel on the serving path). It materializes the
+edge (no Cloudflare Pages, no Vercel on the serving path). It began as the
 "DECLARE-ONLY skeleton note" of
-[`docs/decisions/0001-pr-gated-ephemeral-preview-deploys.md`](../../docs/decisions/0001-pr-gated-ephemeral-preview-deploys.md)
-and is grounded in the TIN-2537 research brief
+[`docs/decisions/0001-pr-gated-ephemeral-preview-deploys.md`](../../docs/decisions/0001-pr-gated-ephemeral-preview-deploys.md),
+was promoted to the executing cutover shape by ADR 0010, and is grounded in the
+TIN-2537 research brief
 (`docs/research/full-oncluster-web-serving-2026-07.md`, branch
 `docs/oncluster-web-research`).
 
@@ -29,26 +37,39 @@ visitor -> greatfallstoolbus.org (Cloudflare edge, TLS terminates here)
 
 | File | Role | Fail-closed posture |
 |---|---|---|
-| `greatfallstoolbus-org-production/deployment.yaml` | adapter-node web Deployment | `replicas: 0`; **placeholder** image (no digest, not on any registry); non-root 1001; read-only rootfs; `/health` probes on :3000 |
+| `greatfallstoolbus-org-production/deployment.yaml` | adapter-node web Deployment | `replicas: 2`; **digest-pinned** `ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:31cace27…` (a tag, a truncated or uppercase digest, a foreign repository, or a `PLACEHOLDER` marker fails `just web-stack-validate`); non-root 1001; read-only rootfs; `/health` probes on :3000 |
 | `greatfallstoolbus-org-production/service.yaml` | ClusterIP 80→3000 | internal DNS only; never internet-exposed directly |
-| `greatfallstoolbus-org-production/networkpolicy.yaml` | default-deny + explicit allows | ingress only from the `cloudflared` namespace (:3000) and prometheus; egress DNS only |
+| `greatfallstoolbus-org-production/networkpolicy.yaml` | default-deny + explicit allows | ingress only from the `cloudflared` namespace (:3000) and prometheus; egress limited to DNS and the in-cluster discuss-archive reader (both pruned by `just web-release-apply` at the gftb-site promotion) |
 | `greatfallstoolbus-org-production/kustomization.yaml` | kustomize entrypoint | renders cleanly; creates **no** Namespace |
 | `secrets.contract.yaml` | names-only three-plane secrets contract | no values, ever |
 | `pr-env-lane.md` | reaper / PR-env lane note | parked (see below) |
 | `../../tofu/intent/great-falls-tool-bus/web-oncluster-route.json` | cloudflared route intent | `applied:false`, `dns_enabled:false`, `route_enabled:false` |
 | `../../tofu/intent/great-falls-tool-bus/pr-env-lanes.schema.json` | reaper lane contract | `enabled:false`; names-only |
 
-## The three fail-closed axes (why an accidental apply is inert)
+## What actually holds this closed (the apply gate, not an inert manifest)
 
-1. **`replicas: 0`** — no pod is scheduled from these manifests as-is.
-2. **Placeholder image** — `…/greatfallstoolbus.org:PLACEHOLDER-DECLARE-ONLY-NOT-APPLIED`
-   is deliberately non-resolvable and carries no digest. The real pin is an
-   operator-gated **private-overlay** bump at cutover; the public app repo owns
-   the image *build* (ambient `GITHUB_TOKEN`, same-org GHCR) but never the pin.
-   `scripts/validate-web-stack.sh` **fails** if this becomes an `@sha256:` digest
-   in-tree — the guard keeps the skeleton declare-only.
-3. **No namespace** — `greatfallstoolbus-org-production` is not created by this
-   stack. Nothing lands until an operator materializes it out of band.
+1. **Nothing applies on merge.** `web-crs.yml` is validation-only. The single
+   apply plane is `.github/workflows/web-stack.yml`, reachable two ways:
+   `workflow_dispatch` (`confirm=apply`, the protected `web-apply` environment,
+   an operator-supplied `image`) and `repository_dispatch: web-image-published`,
+   which the public site repo fires on every push to `main`. Both run
+   `just web-stack-apply`; the workflow never runs raw `kubectl`.
+2. **The declared shape is validated, not placeholder-parked.**
+   `scripts/validate-web-stack.sh` asserts `replicas: 2`, derives the admitted
+   container repository from the Deployment's **own** target namespace, and
+   requires `ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:<64
+   lowercase hex>`. A `PLACEHOLDER` marker, a tag, a truncated or uppercase
+   digest, or any other repository — including the
+   `ghcr.io/great-falls-tool-bus/gftb-site` static-origin candidate — fails.
+3. **No namespace, no Secret.** `greatfallstoolbus-org-production` is not created
+   here (a `kind: Namespace` object fails validation) and the namespace-scoped
+   `web-apply` SA cannot create one; the namespace, the SA/RBAC, and the GHCR
+   pull Secret are operator-provisioned out of band.
+4. **The legacy CD carrier is interlocked.** `just web-stack-apply` takes
+   `_web-stack-promotion-interlock` as its FIRST dependency. The interlock reads
+   the LIVE Deployment image and refuses when it is already a
+   `ghcr.io/great-falls-tool-bus/gftb-site` reference, so the unattended
+   `repository_dispatch` path cannot revert the in-place promotion.
 
 ## The tunnel route is dashboard-managed (not in git)
 
@@ -108,25 +129,29 @@ and "TIN-991 / sting SPOF" premises are retired above — routes are
 dashboard-managed *process* (not infeasibility; MI proves it) and the sting SPOF
 is CI-runner, not serving.
 
-## Deploy path (apply plane wired via web-stack.yml; tree stays parked)
+## Apply path (wired, dispatch-gated)
 
-At cutover the intended path reuses MI's proven machinery unchanged. Two
-supported routes:
+The apply plane is wired, not hypothetical. Two supported routes:
 
-1. **tofu CI/CD gitops (house pattern).** The GFTB overlay
-   (`great-falls-tool-bus-infra`) is applied via `tinyland-inc/ci-templates`
-   reusable workflows, following the MassageIthaca
-   `repository_dispatch` → **blahaj `tofu-apply`** → **reaper** flow. GFTB
-   on-cluster inherits MI's apply / promotion / reaper path verbatim — the app
-   repo builds+pushes the image (ambient `GITHUB_TOKEN`, same-org GHCR) and
-   dispatches; blahaj applies the overlay; the backstop reaper (above) governs
-   any ephemeral lanes. Nothing here is wired: this is the reference shape only.
+1. **`.github/workflows/web-stack.yml` (the wired route).** The public app repo
+   builds and pushes the image (ambient `GITHUB_TOKEN`, same-org GHCR) and fires
+   `repository_dispatch: web-image-published`; the workflow runs
+   `just web-stack-server-dry-run` (read-only), then `just web-stack-apply`
+   (promotion interlock → `web-stack-validate` → server dry-run → kustomization
+   apply → pin the dispatch-supplied image → patch replicas → wait for the
+   rollout), then `just web-stack-health`. The same workflow is reachable by
+   `workflow_dispatch` with `confirm=apply`, the protected `web-apply`
+   environment, and an operator-supplied `image`.
 2. **Direct operator `kubectl`/`tofu`.** An authorized operator applies the
-   overlay out of band.
+   overlay out of band with the same namespace-scoped credential.
 
-Either route is **operator-gated and authorized by a superseding hosting ADR**.
-A cutover still replaces the placeholder pin, creates the namespace, flips
-`replicas`, and adds the tunnel route — none of which is in this change.
+Both routes are **operator-gated**, and neither creates the namespace, ships a
+Secret, or touches Cloudflare: the honey-ingress tunnel route stays
+dashboard-managed and the apex/www DNS flip belongs to the edge stack (runbook
+P6, executed 2026-07-06). The gftb-site static origin is promoted **in place**
+onto this same namespace and `Deployment/greatfallstoolbus-org` by the attended
+`web-release-*` chain — no second namespace, no Cloudflare change — and
+`web-stack-apply` refuses once that promotion is live.
 
 ## Validate (parse-only; never applies)
 
