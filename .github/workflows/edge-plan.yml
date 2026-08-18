@@ -1,12 +1,13 @@
 name: Edge Zone Stack
 
-# TIN-2378 prep + TIN-2385 implementation: plan-on-PR/push for
-# tofu/stacks/edge (console-created zones, zone-scoped token), apply only
-# via manual workflow_dispatch action=apply. The job binds to the protected `edge`
+# TIN-2378 prep + TIN-2385 implementation: hosted Validate Overlay covers pull
+# requests; this private-runner job plans trusted pushes and manual dispatches
+# for tofu/stacks/edge (console-created zones, zone-scoped token), with apply
+# only via manual workflow_dispatch action=apply. The job binds to the protected `edge`
 # environment, which holds the zone-scoped Cloudflare token plus the
 # operator-custody Access allowlist JSON (names only here; mint + rotation:
 # docs/runbooks/edge-token-and-zones.md). FAIL-SOFT: until those secrets
-# exist, PR/push runs skip green with a notice — the house skip-green idiom;
+# exist, trusted push runs skip green with a notice — the house skip-green idiom;
 # manual action=apply fails closed instead. Google SSO is the live-lane
 # exception: whenever ENABLE_GOOGLE_SSO=true, missing OAuth credentials fail
 # every event red before planning so defaults can never request IdP deletion.
@@ -62,6 +63,7 @@ env:
 jobs:
   plan-apply:
     name: Plan or apply GFTB edge zones
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: tinyland-nix
     timeout-minutes: 30
     # The zone-scoped token secret lives ONLY in this `edge` environment,

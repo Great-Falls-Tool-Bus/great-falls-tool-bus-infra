@@ -16,6 +16,8 @@ name: Flywheel org-tenancy cache proof
 # Endpoint authority is fleet-runtime env, never in this YAML: nix-setup exports
 # BAZEL_REMOTE_CACHE from cluster DNS, and GF_REAPI_TOKEN_EXCHANGE_ENDPOINT comes
 # from the fleet profile.
+# Hosted Validate Overlay covers pull requests; this private-runner proof runs
+# only on trusted pushes or manual dispatches.
 
 on:
   pull_request:
@@ -44,6 +46,7 @@ concurrency:
 jobs:
   cache-proof:
     name: flywheel-cache-proof (org-great-falls-tool-bus)
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: tinyland-nix
     timeout-minutes: 15
     env:

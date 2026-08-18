@@ -1,8 +1,9 @@
 name: Mail CRs
 
-# TIN-2379: tenant-owned MailDomain/MailAccount CRs for latoolb.us. PR/push
-# runs are offline validation only. Live server dry-run/apply is manual and
-# protected by the `mail` environment kubeconfig.
+# TIN-2379: tenant-owned MailDomain/MailAccount CRs for latoolb.us. Hosted
+# Validate Overlay covers pull requests; this private-runner validation runs on
+# trusted pushes and manual dispatches. Live server dry-run/apply is protected by the
+# `mail` environment kubeconfig.
 
 on:
   pull_request:
@@ -43,6 +44,7 @@ env:
 jobs:
   validate:
     name: Validate mail CRs
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: tinyland-nix
     steps:
       - name: Checkout overlay

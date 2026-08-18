@@ -1,13 +1,14 @@
 name: Form Stack
 
 # TIN-2420 Path B: GFTB Anubis-gated contact intake (Anubis PoW gate ->
-# stdlib form-handler -> LMTP inject to keyholders@latoolb.us). PR/push runs are
-# offline validation only. Live server dry-run/apply is manual and protected by
-# the `mail` environment kubeconfig.
+# stdlib form-handler -> LMTP inject to keyholders@latoolb.us). Hosted Validate
+# Overlay covers pull requests; this private-runner validation runs on trusted
+# pushes and manual dispatches. Live server dry-run/apply is protected by the `mail`
+# environment kubeconfig.
 #
 # RBAC NOTE (see docs/runbooks/form-intake.md): workflow_dispatch apply must
-# run with the protected namespace-scoped workload kubeconfig. PR/push remains
-# offline validation only.
+# run with the protected namespace-scoped workload kubeconfig. Trusted pushes
+# and non-apply manual dispatches remain offline validation only.
 
 on:
   pull_request:
@@ -50,6 +51,7 @@ env:
 jobs:
   validate:
     name: Validate form stack
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: tinyland-nix
     steps:
       - name: Checkout overlay
