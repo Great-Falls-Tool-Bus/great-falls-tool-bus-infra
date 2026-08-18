@@ -425,7 +425,7 @@ WEB_RELEASE_VALIDATION_CALLEE_DIGEST = _receipt(
 )
 WEB_RELEASE_VALIDATION_SCRIPT = Path("scripts/validate-web-stack.sh")
 WEB_RELEASE_VALIDATION_SCRIPT_SHA256 = _receipt(
-    "06e0ddf20524d175", "a44bd2589017a702", "577f40c38b2b643d", "f03b909722da8e9d"
+    "4afdba07c0fc08c9", "8b4b496fee8fa10d", "4526860ff22a4c62", "d1a4c7adab0f35ff"
 )
 
 FLAKE_RELEASE_PACKAGES = ("crane", "curl")

@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016
+# SC2016 is intentional throughout: the `$app` inside every single-quoted yq
+# program is a jq variable bound by `--arg app`, not a shell expansion. Binding
+# it through --arg (rather than interpolating the shell value into the filter)
+# is what keeps a stack name from being able to inject jq syntax.
 set -euo pipefail
 
 # DISPATCH-GATED declare-only guard for the GFTB on-cluster web workload
@@ -12,6 +17,20 @@ set -euo pipefail
 # Secret, and a fail-closed tunnel route + reaper intent — so merging applies
 # nothing and routes no public traffic (the only apply is the dispatch-gated
 # web-stack.yml).
+#
+# IMAGE ADMISSION IS BOUND TO THE STACK UNDER VALIDATION. The admitted container
+# repository is looked up from the Deployment's OWN target namespace, never from
+# a flat list that every stack shares. greatfallstoolbus-org-production admits
+# exactly ghcr.io/great-falls-tool-bus/greatfallstoolbus.org and nothing else, so
+# substituting any other repository -- including the gftb-site static-origin
+# candidate -- into this stack FAILS here rather than silently widening the
+# guard. A namespace with no entry in the table fails closed.
+#
+# The gftb-site candidate is admitted on a different axis entirely: it is never
+# committed to a manifest, it arrives as WEB_APPLY_IMAGE, and Justfile's
+# _web-release-candidate-inputs holds it to the exact
+# ghcr.io/great-falls-tool-bus/gftb-site@sha256:<64 hex> shape before
+# web-release-render ever emits it.
 
 dir="${1:?usage: validate-web-stack.sh <manifest-dir>}"
 web_root="$(cd "${dir}/.." && pwd)"
@@ -39,6 +58,24 @@ for f in "${deploy}" "${svc}" "${netpol}" "${kustomization}" \
   require_file "${f}"
 done
 
+# --- stack identity: namespace -> admitted workload + admitted image repo -----
+# Every per-container assertion below binds to "${app}", and the image admission
+# binds to "${admitted_image_repo}", so a stack can neither rename its container
+# out from under the probe/hardening checks nor borrow another stack's registry
+# admission.
+stack_ns="$(yq -r 'select(.kind == "Deployment") | .metadata.namespace' "${deploy}")"
+case "${stack_ns}" in
+greatfallstoolbus-org-production)
+  app="greatfallstoolbus-org"
+  admitted_image_repo="ghcr.io/great-falls-tool-bus/greatfallstoolbus.org"
+  ;;
+*)
+  fail "unknown web stack namespace '${stack_ns}'; the only admitted GFTB web stack is greatfallstoolbus-org-production"
+  ;;
+esac
+deploy_name="$(yq -r 'select(.kind == "Deployment") | .metadata.name' "${deploy}")"
+assert_eq "${deploy_name}" "${app}" "Deployment name admitted in namespace ${stack_ns}"
+
 # --- axis 1: replicas MUST be the ADR 0010 cutover shape (2) ------------------
 # ADR 0010 §5 step 3 flips 0 -> 2. Merging still applies nothing (web-crs.yml is
 # validate-only; the only apply is the dispatch-gated web-stack.yml).
@@ -48,16 +85,17 @@ assert_eq "${replicas}" "2" "Deployment replicas (ADR 0010 cutover shape)"
 # --- axis 2: web image is a digest-pinned production reference ----------------
 # ADR 0010 makes on-prem the host; the manifest carries the real digest-pinned
 # image as the declarative record (web-stack.yml overrides it with the operator-
-# resolved digest at dispatch). Require the org GHCR repo pinned by @sha256: and
-# forbid the retired declare-only PLACEHOLDER marker.
-web_image="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "greatfallstoolbus-org") | .image' "${deploy}")"
+# resolved digest at dispatch). Require THIS STACK's admitted GHCR repository
+# pinned by a full 64-hex @sha256: digest, and forbid the retired declare-only
+# PLACEHOLDER marker. Nothing else passes: no tag, no truncated or uppercase
+# digest, no other registry/owner/repository, and no sibling stack's repository.
+web_image="$(yq -r --arg app "${app}" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .image' "${deploy}")"
 case "${web_image}" in
 *PLACEHOLDER*) fail "web image must be a real digest-pinned reference, not the retired PLACEHOLDER: '${web_image}'" ;;
 esac
-case "${web_image}" in
-ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:*) : ;;
-*) fail "web image must be ghcr.io/great-falls-tool-bus/greatfallstoolbus.org pinned by @sha256:<digest>; got '${web_image}'" ;;
-esac
+if [[ ! "${web_image}" =~ ^"${admitted_image_repo}"@sha256:[0-9a-f]{64}$ ]]; then
+  fail "web image in ${stack_ns} must be ${admitted_image_repo} pinned by @sha256:<64 lowercase hex>; got '${web_image}'"
+fi
 
 # --- FAIL-CLOSED axis 3: this stack creates NO Namespace ---------------------
 if grep -REn "^kind:\s*Namespace" "${dir}" >/dev/null 2>&1; then
@@ -65,17 +103,17 @@ if grep -REn "^kind:\s*Namespace" "${dir}" >/dev/null 2>&1; then
 fi
 
 # --- adapter-node serving shape: containerPort 3000 + /health probes ---------
-port="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "greatfallstoolbus-org") | .ports[] | select(.name == "http") | .containerPort' "${deploy}")"
+port="$(yq -r --arg app "${app}" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .ports[] | select(.name == "http") | .containerPort' "${deploy}")"
 assert_eq "${port}" "3000" "web containerPort (adapter-node)"
-live_path="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "greatfallstoolbus-org") | .livenessProbe.httpGet.path' "${deploy}")"
-ready_path="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "greatfallstoolbus-org") | .readinessProbe.httpGet.path' "${deploy}")"
+live_path="$(yq -r --arg app "${app}" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .livenessProbe.httpGet.path' "${deploy}")"
+ready_path="$(yq -r --arg app "${app}" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .readinessProbe.httpGet.path' "${deploy}")"
 assert_eq "${live_path}" "/health" "liveness probe path"
 assert_eq "${ready_path}" "/health" "readiness probe path"
 
 # --- runAsNonRoot + hardening ------------------------------------------------
 nonroot="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.securityContext.runAsNonRoot' "${deploy}")"
 assert_eq "${nonroot}" "true" "web runAsNonRoot"
-rorootfs="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "greatfallstoolbus-org") | .securityContext.readOnlyRootFilesystem' "${deploy}")"
+rorootfs="$(yq -r --arg app "${app}" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .securityContext.readOnlyRootFilesystem' "${deploy}")"
 assert_eq "${rorootfs}" "true" "web readOnlyRootFilesystem"
 
 # --- Service: ClusterIP 80 -> 3000 -------------------------------------------
@@ -123,4 +161,4 @@ fi
 # --- Full render must succeed (parse-only; never applies) --------------------
 kubectl kustomize "${dir}" >/dev/null
 
-echo "web stack validation passed: DISPATCH-GATED declare-only (replicas 2, digest-pinned image, no namespace, apply is dispatch-only), adapter-node ClusterIP 80->3000 with /health probes, default-deny + cloudflared-only public ingress, route+reaper fail-closed, no committed secrets"
+echo "web stack validation passed for ${app} in ${stack_ns}: DISPATCH-GATED declare-only (replicas 2, image pinned to ${admitted_image_repo}@sha256:<64 hex>, no namespace, apply is dispatch-only), adapter-node ClusterIP 80->3000 with /health probes, default-deny + cloudflared-only public ingress, route+reaper fail-closed, no committed secrets"
