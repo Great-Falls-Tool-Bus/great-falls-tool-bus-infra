@@ -19,6 +19,7 @@ import hashlib
 import json
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -74,6 +75,18 @@ JUST_OPTIONS_WITH_VALUES = {
     "--shell": 1,
     "--shell-arg": 1,
     "--working-directory": 1,
+}
+JUST_NON_EXECUTING_OPTIONS = {
+    "--choose",
+    "--dump",
+    "--evaluate",
+    "--help",
+    "--list",
+    "--summary",
+    "--version",
+    "-V",
+    "-h",
+    "-l",
 }
 RETIRED_ARC_KUBECONFIG_SECRET = re.compile(
     r"\b(?:ARC_RUNNERS_KUBECONFIG(?:_B64)?|"
@@ -248,7 +261,7 @@ def _receipt(*chunks: str) -> str:
     """Build review receipts without secret-shaped contiguous source literals."""
     value = "".join(chunks)
     if re.fullmatch(r"[0-9a-f]{64}", value) is None:
-        raise ValueError("invalid ARC executable receipt")
+        raise ValueError("invalid executable receipt")
     return value
 
 
@@ -326,6 +339,99 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "9c8565974cf6f3b0", "f2aca232a5ff6978", "8d566d4ae8c96152", "900813ed27e88e7a"
     ),
 }
+
+# Purpose-bounded non-ARC mutations are operator-local for the same reason as
+# ARC applies: they consume operator-custody credentials and may change live
+# state. Dependencies are ordered, and executable bodies are receipt-bound so a
+# comment cannot stand in for a guard or move a check after the mutation.
+ATTENDED_RECIPE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
+    "_mail-kubeconfig-inputs": (),
+    "_list-member-add-inputs": (),
+    "list-member-add": (
+        "_list-member-add-inputs",
+        "_reviewed-clean-main",
+        "_operator-apply-confirm",
+    ),
+    "form-altcha-secret-apply": (
+        "_mail-kubeconfig-inputs",
+        "_reviewed-clean-main",
+        "_operator-apply-confirm",
+    ),
+}
+
+ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
+    "_mail-kubeconfig-inputs": _receipt(
+        "b36a412965f54de1", "e8fcf75164a74a91", "dee1debc1edd79dc", "dacb634cb85cfc5b"
+    ),
+    "_list-member-add-inputs": _receipt(
+        "8609c78a7ae5fb64", "8eb23bcb5e7352fc", "c21405b9c5c96605", "6df235e504c66699"
+    ),
+    "list-member-add": _receipt(
+        "86c91e13b7181939", "cc9fbdbf60931341", "6a9cb4d544265d41", "fbc321f6d1a32c86"
+    ),
+    "form-altcha-secret-apply": _receipt(
+        "d394883ac79138f4", "b78253e99505ee18", "f0931c8607f62fa9", "f5c1b30b25c115ce"
+    ),
+}
+
+ATTENDED_OPERATOR_LOCAL_ROOTS = {
+    "_list-member-add-inputs",
+    "list-member-add",
+    "form-altcha-secret-apply",
+}
+
+# The gftb-site cutover proofs are intentionally operator-local even though they
+# are read-only: they inspect an operator-custody kubeconfig or Access cookie,
+# and their receipts are release evidence rather than hosted-CI entrypoints.
+WEB_RELEASE_RECIPE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
+    "_web-release-candidate-inputs": (),
+    "web-release-candidate-proof": ("_web-release-candidate-inputs",),
+    "web-release-render": ("_web-release-candidate-inputs",),
+    "_web-release-kubeconfig-inputs": (),
+    "web-release-pinned-running-proof": ("_web-release-candidate-inputs",),
+    "web-release-served-proof": ("_web-release-candidate-inputs",),
+}
+
+WEB_RELEASE_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
+    "_web-release-candidate-inputs": _receipt(
+        "5bf45b521f65b560", "d833eda99bfbe2e6", "98727dbe6a1c782b", "4695cc4e8a8184f6"
+    ),
+    "web-release-candidate-proof": _receipt(
+        "6347e0f7e92498e9", "c6fdfd7c5d80b0ef", "06e4818e333f3cac", "c5ace4f7652a2273"
+    ),
+    "web-release-render": _receipt(
+        "513bc0ad22178c9d", "b30a8177165af253", "68571a990e279382", "f5929829bd04e386"
+    ),
+    "_web-release-kubeconfig-inputs": _receipt(
+        "a2601a6824409840", "45f4b6df270eb1db", "fe2386345de59807", "2e9d451a53f33f47"
+    ),
+    "web-release-pinned-running-proof": _receipt(
+        "bb9f757c5e1a3dcf", "c48e67ad1aa40b11", "0f25466fc6db04e7", "159d31d0968b28ab"
+    ),
+    "web-release-served-proof": _receipt(
+        "6ded71468ff6b068", "2af42983faec1ed2", "fa3f69fb10d46f86", "e169c0219ff4c7c3"
+    ),
+}
+
+WEB_RELEASE_OPERATOR_LOCAL_ROOTS = set(WEB_RELEASE_RECIPE_DEPENDENCIES)
+WEB_RELEASE_JUST_GLOBAL_ASSIGNMENTS = {
+    "dotenv-load": "set dotenv-load := false",
+    "shell": 'set shell := ["bash", "-eu", "-o", "pipefail", "-c"]',
+}
+WEB_RELEASE_VALIDATION_CALLEE = "web-stack-validate"
+WEB_RELEASE_VALIDATION_CALLEE_DEPENDENCIES: tuple[str, ...] = ()
+WEB_RELEASE_VALIDATION_CALLEE_DIGEST = _receipt(
+    "482232ea1b2f080a", "aa86db3e695197c5", "61eb9b3fd8ca4210", "8643ac9e3e3ce0d2"
+)
+WEB_RELEASE_VALIDATION_SCRIPT = Path("scripts/validate-web-stack.sh")
+WEB_RELEASE_VALIDATION_SCRIPT_SHA256 = _receipt(
+    "06e0ddf20524d175", "a44bd2589017a702", "577f40c38b2b643d", "f03b909722da8e9d"
+)
+
+FLAKE_RELEASE_PACKAGES = ("crane", "curl")
+FLAKE_LOCK_SHA256 = _receipt(
+    "33150ce2f846aef0", "1539145f74a8eb1a", "04d45df5d960494c", "e188111a80e170e3"
+)
 
 NEGATIVE_OR_DESCRIPTIVE_CONTEXT = re.compile(
     r"\b(no|not|cannot|can't|never|without|avoid|accidental|deliberately|"
@@ -529,7 +635,10 @@ def parse_just_calls(
         if not command or command.startswith("#"):
             continue
         if ignore_help_echo and re.match(r"^(?:echo|printf)\b", command):
-            continue
+            # Ignore literal operator guidance, but never let an echo prefix
+            # hide a second command or command substitution that invokes Just.
+            if not re.search(r"[;&|`]|\$\(", command):
+                continue
         for match in JUST_COMMAND_START.finditer(command):
             argv_text = re.sub(
                 r"\{\{.*?\}\}", "JUST_TEMPLATE_VALUE", command[match.start() :]
@@ -589,6 +698,10 @@ def parse_just_calls(
                 index += 1
             if command_recipe_count > 1:
                 multiple = True
+            if command_recipe_count == 0 and not any(
+                token in JUST_NON_EXECUTING_OPTIONS for token in tokens[1:]
+            ):
+                unresolved = True
     return calls, unresolved, multiple
 
 
@@ -599,8 +712,10 @@ def executable_just_calls(
     return calls, unresolved
 
 
-def arc_operator_recipe_closure(text: str) -> tuple[set[str], dict[str, set[str]]]:
-    """Return recipes that directly or transitively reach operator-local ARC."""
+def operator_recipe_closure(
+    text: str, roots: set[str], *, taint_unresolved: bool = True
+) -> tuple[set[str], dict[str, set[str]]]:
+    """Return recipes that directly or transitively reach operator-local roots."""
     definitions = all_just_recipe_blocks(text)
     aliases = all_just_aliases(text)
     recipe_names = set(definitions) | set(aliases)
@@ -623,7 +738,9 @@ def arc_operator_recipe_closure(text: str) -> tuple[set[str], dict[str, set[str]
     for name, declarations in aliases.items():
         edges.setdefault(name, set()).update(target for _, target in declarations)
 
-    tainted = set(ARC_OPERATOR_LOCAL_ROOTS) | unresolved_recipes
+    tainted = set(roots)
+    if taint_unresolved:
+        tainted.update(unresolved_recipes)
     changed = True
     while changed:
         changed = False
@@ -632,6 +749,41 @@ def arc_operator_recipe_closure(text: str) -> tuple[set[str], dict[str, set[str]
                 tainted.add(name)
                 changed = True
     return tainted, edges
+
+
+def arc_operator_recipe_closure(text: str) -> tuple[set[str], dict[str, set[str]]]:
+    """Return recipes that directly or transitively reach operator-local ARC."""
+    return operator_recipe_closure(text, ARC_OPERATOR_LOCAL_ROOTS)
+
+
+def attended_operator_recipe_closure(
+    text: str,
+) -> tuple[set[str], dict[str, set[str]]]:
+    """Return recipes reaching consented member or Secret mutation surfaces."""
+    # The ARC closure already fail-closes every unresolved Just invocation. This
+    # second closure only needs literal reverse reachability from its own roots.
+    return operator_recipe_closure(
+        text, ATTENDED_OPERATOR_LOCAL_ROOTS, taint_unresolved=False
+    )
+
+
+def web_release_operator_recipe_closure(
+    text: str,
+) -> tuple[set[str], dict[str, set[str]]]:
+    """Return recipes reaching operator-local gftb-site release proofs."""
+    # Fail closed independently of ARC: a dynamic or bare Just invocation may
+    # resolve to a release proof even when no literal recipe name is visible.
+    return operator_recipe_closure(text, WEB_RELEASE_OPERATOR_LOCAL_ROOTS)
+
+
+def all_operator_local_recipe_closure(
+    text: str,
+) -> tuple[set[str], dict[str, set[str]]]:
+    """Return the union of every operator-local recipe surface."""
+    arc, edges = arc_operator_recipe_closure(text)
+    attended, _ = attended_operator_recipe_closure(text)
+    web_release, _ = web_release_operator_recipe_closure(text)
+    return arc | attended | web_release, edges
 
 
 def scan_arc_operator_contract_text(text: str, path: Path) -> list[Finding]:
@@ -712,7 +864,15 @@ def scan_arc_operator_contract_text(text: str, path: Path) -> list[Finding]:
             )
 
     tainted, edges = arc_operator_recipe_closure(text)
-    receipted = set(ARC_RECIPE_DEPENDENCIES) | ARC_EXPLICIT_OPERATOR_LOCAL_WRAPPERS
+    # ARC intentionally fail-closes shell-obfuscated/dynamic Just dispatches.
+    # The release proofs are independently exact-body/dependency receipted, so
+    # an unresolved tokenization edge inside one of those exact bodies is not
+    # an unreceipted ARC wrapper. No other unresolved recipe is exempted.
+    receipted = (
+        set(ARC_RECIPE_DEPENDENCIES)
+        | ARC_EXPLICIT_OPERATOR_LOCAL_WRAPPERS
+        | set(WEB_RELEASE_RECIPE_DEPENDENCIES)
+    )
     for name in sorted((tainted & set(edges)) - receipted):
         targets = sorted(edges[name] & tainted)
         if name in definitions:
@@ -752,6 +912,360 @@ def scan_arc_operator_contract_text(text: str, path: Path) -> list[Finding]:
                 path,
                 1,
                 "ARC delete actions must fail closed without an environment bypass.",
+            )
+        )
+    return findings
+
+
+def scan_attended_operator_contract_text(text: str, path: Path) -> list[Finding]:
+    """Bind each purpose-bounded non-ARC mutation to one reviewed implementation."""
+    findings: list[Finding] = []
+    dependency_names = set(ATTENDED_RECIPE_DEPENDENCIES)
+    digest_names = set(ATTENDED_CRITICAL_RECIPE_DIGESTS)
+    if dependency_names != digest_names:
+        findings.append(
+            Finding(
+                "attended-validator-receipt-set-mismatch",
+                Path(SELF),
+                1,
+                "Attended dependency and executable-receipt recipe sets differ: "
+                f"dependencies-only={sorted(dependency_names - digest_names)!r}, "
+                f"digests-only={sorted(digest_names - dependency_names)!r}.",
+            )
+        )
+
+    definitions = all_just_recipe_blocks(text)
+    aliases = all_just_aliases(text)
+    for name, expected_dependencies in ATTENDED_RECIPE_DEPENDENCIES.items():
+        recipes = definitions.get(name, [])
+        alias_count = len(aliases.get(name, []))
+        if len(recipes) != 1 or alias_count:
+            findings.append(
+                Finding(
+                    "attended-operator-recipe-missing",
+                    path,
+                    1,
+                    f"Required attended recipe {name!r} must have exactly one recipe "
+                    f"definition and no alias; observed {len(recipes)} recipe(s) and "
+                    f"{alias_count} alias(es).",
+                )
+            )
+            continue
+        line, dependencies, body = recipes[0]
+        observed_dependencies = tuple(dependencies.split())
+        if observed_dependencies != expected_dependencies:
+            findings.append(
+                Finding(
+                    "attended-recipe-dependencies-mismatch",
+                    path,
+                    line,
+                    f"{name} dependencies must be exactly "
+                    f"{expected_dependencies!r}; observed {observed_dependencies!r}.",
+                )
+            )
+
+        executable = executable_recipe_text(body)
+        observed_digest = hashlib.sha256(executable.encode("utf-8")).hexdigest()
+        expected_digest = ATTENDED_CRITICAL_RECIPE_DIGESTS.get(name)
+        if expected_digest is not None and observed_digest != expected_digest:
+            findings.append(
+                Finding(
+                    "attended-recipe-executable-receipt-mismatch",
+                    path,
+                    line,
+                    f"{name} executable SHA256 must be {expected_digest}; "
+                    f"observed {observed_digest}.",
+                )
+            )
+
+    tainted, edges = attended_operator_recipe_closure(text)
+    receipted = set(ATTENDED_RECIPE_DEPENDENCIES)
+    for name in sorted((tainted & set(edges)) - receipted):
+        targets = sorted(edges[name] & tainted)
+        if name in definitions:
+            line = definitions[name][0][0]
+        else:
+            line = aliases[name][0][0]
+        findings.append(
+            Finding(
+                "attended-unreceipted-operator-wrapper",
+                path,
+                line,
+                f"{name} reaches purpose-bound attended recipe(s) {targets!r} but "
+                "has no exact dependency/body receipt.",
+            )
+        )
+    return findings
+
+
+def scan_web_release_operator_contract_text(
+    text: str, path: Path
+) -> list[Finding]:
+    """Bind each release proof to one exact dependency graph and body."""
+    findings: list[Finding] = []
+    for setting, expected in WEB_RELEASE_JUST_GLOBAL_ASSIGNMENTS.items():
+        observed = re.findall(
+            rf"^set\s+{re.escape(setting)}\s*:=.*$", text, flags=re.MULTILINE
+        )
+        if observed != [expected]:
+            findings.append(
+                Finding(
+                    "web-release-just-global-contract-mismatch",
+                    path,
+                    1,
+                    f"Release proofs require exactly {expected!r}; "
+                    f"observed {observed!r}.",
+                )
+            )
+    dependency_names = set(WEB_RELEASE_RECIPE_DEPENDENCIES)
+    digest_names = set(WEB_RELEASE_CRITICAL_RECIPE_DIGESTS)
+    if dependency_names != digest_names:
+        findings.append(
+            Finding(
+                "web-release-validator-receipt-set-mismatch",
+                Path(SELF),
+                1,
+                "Web release dependency and executable-receipt recipe sets differ: "
+                f"dependencies-only={sorted(dependency_names - digest_names)!r}, "
+                f"digests-only={sorted(digest_names - dependency_names)!r}.",
+            )
+        )
+
+    definitions = all_just_recipe_blocks(text)
+    aliases = all_just_aliases(text)
+    lines = text.splitlines()
+    for name, expected_dependencies in WEB_RELEASE_RECIPE_DEPENDENCIES.items():
+        recipes = definitions.get(name, [])
+        alias_count = len(aliases.get(name, []))
+        expected_header = f"{name}:" + (
+            " " + " ".join(expected_dependencies) if expected_dependencies else ""
+        )
+        observed_headers = re.findall(
+            rf"^{re.escape(name)}[^\n]*$", text, flags=re.MULTILINE
+        )
+        if observed_headers != [expected_header]:
+            findings.append(
+                Finding(
+                    "web-release-recipe-header-mismatch",
+                    path,
+                    1,
+                    f"{name} must have the exact zero-argument header "
+                    f"{expected_header!r}; observed {observed_headers!r}.",
+                )
+            )
+        if len(recipes) != 1 or alias_count:
+            findings.append(
+                Finding(
+                    "web-release-operator-recipe-missing",
+                    path,
+                    1,
+                    f"Required web release recipe {name!r} must have exactly one "
+                    f"recipe definition and no alias; observed {len(recipes)} "
+                    f"recipe(s) and {alias_count} alias(es).",
+                )
+            )
+            continue
+        line, dependencies, body = recipes[0]
+        if line > 1 and lines[line - 2].lstrip().startswith("["):
+            findings.append(
+                Finding(
+                    "web-release-recipe-attribute-mismatch",
+                    path,
+                    line - 1,
+                    f"{name} must not carry a Just recipe attribute outside its "
+                    "body receipt.",
+                )
+            )
+        observed_dependencies = tuple(dependencies.split())
+        if observed_dependencies != expected_dependencies:
+            findings.append(
+                Finding(
+                    "web-release-recipe-dependencies-mismatch",
+                    path,
+                    line,
+                    f"{name} dependencies must be exactly "
+                    f"{expected_dependencies!r}; observed "
+                    f"{observed_dependencies!r}.",
+                )
+            )
+
+        executable = executable_recipe_text(body)
+        observed_digest = hashlib.sha256(executable.encode("utf-8")).hexdigest()
+        expected_digest = WEB_RELEASE_CRITICAL_RECIPE_DIGESTS.get(name)
+        if expected_digest is not None and observed_digest != expected_digest:
+            findings.append(
+                Finding(
+                    "web-release-recipe-executable-receipt-mismatch",
+                    path,
+                    line,
+                    f"{name} executable SHA256 must be {expected_digest}; "
+                    f"observed {observed_digest}.",
+                )
+            )
+
+    callee = WEB_RELEASE_VALIDATION_CALLEE
+    callee_recipes = definitions.get(callee, [])
+    callee_alias_count = len(aliases.get(callee, []))
+    expected_callee_header = f"{callee}:"
+    observed_callee_headers = re.findall(
+        rf"^{re.escape(callee)}[^\n]*$", text, flags=re.MULTILINE
+    )
+    if observed_callee_headers != [expected_callee_header]:
+        findings.append(
+            Finding(
+                "web-release-validation-callee-header-mismatch",
+                path,
+                1,
+                f"{callee} must have the exact zero-argument header "
+                f"{expected_callee_header!r}; observed {observed_callee_headers!r}.",
+            )
+        )
+    if len(callee_recipes) != 1 or callee_alias_count:
+        findings.append(
+            Finding(
+                "web-release-validation-callee-missing",
+                path,
+                1,
+                f"{callee} must have exactly one recipe definition and no alias; "
+                f"observed {len(callee_recipes)} recipe(s) and "
+                f"{callee_alias_count} alias(es).",
+            )
+        )
+    else:
+        line, dependencies, body = callee_recipes[0]
+        if line > 1 and lines[line - 2].lstrip().startswith("["):
+            findings.append(
+                Finding(
+                    "web-release-validation-callee-attribute-mismatch",
+                    path,
+                    line - 1,
+                    f"{callee} must not carry a Just recipe attribute outside "
+                    "its body receipt.",
+                )
+            )
+        observed_dependencies = tuple(dependencies.split())
+        if observed_dependencies != WEB_RELEASE_VALIDATION_CALLEE_DEPENDENCIES:
+            findings.append(
+                Finding(
+                    "web-release-validation-callee-dependencies-mismatch",
+                    path,
+                    line,
+                    f"{callee} dependencies must be exactly "
+                    f"{WEB_RELEASE_VALIDATION_CALLEE_DEPENDENCIES!r}; observed "
+                    f"{observed_dependencies!r}.",
+                )
+            )
+        observed_digest = hashlib.sha256(
+            executable_recipe_text(body).encode("utf-8")
+        ).hexdigest()
+        if observed_digest != WEB_RELEASE_VALIDATION_CALLEE_DIGEST:
+            findings.append(
+                Finding(
+                    "web-release-validation-callee-receipt-mismatch",
+                    path,
+                    line,
+                    f"{callee} executable SHA256 must be "
+                    f"{WEB_RELEASE_VALIDATION_CALLEE_DIGEST}; observed "
+                    f"{observed_digest}.",
+                )
+            )
+
+    tainted, edges = web_release_operator_recipe_closure(text)
+    # A recipe already protected by another exact operator receipt may contain
+    # dynamic Just dispatch as part of that separately reviewed contract. New
+    # or otherwise unreceipted dynamic dispatch still fails closed here.
+    receipted = (
+        set(WEB_RELEASE_RECIPE_DEPENDENCIES)
+        | set(ARC_CRITICAL_RECIPE_DIGESTS)
+        | set(ATTENDED_CRITICAL_RECIPE_DIGESTS)
+    )
+    for name in sorted((tainted & set(edges)) - receipted):
+        targets = sorted(edges[name] & tainted)
+        if name in definitions:
+            line = definitions[name][0][0]
+        else:
+            line = aliases[name][0][0]
+        findings.append(
+            Finding(
+                "web-release-unreceipted-operator-wrapper",
+                path,
+                line,
+                f"{name} reaches or can dynamically resolve to operator-local "
+                f"web release recipe(s) {targets!r} but has no exact "
+                "dependency/body receipt.",
+            )
+        )
+    return findings
+
+
+def scan_web_release_validation_script_bytes(
+    content: bytes,
+    path: Path = WEB_RELEASE_VALIDATION_SCRIPT,
+) -> list[Finding]:
+    observed_digest = hashlib.sha256(content).hexdigest()
+    if observed_digest == WEB_RELEASE_VALIDATION_SCRIPT_SHA256:
+        return []
+    return [
+        Finding(
+            "web-release-validation-script-receipt-mismatch",
+            path,
+            1,
+            f"{path} SHA256 must be {WEB_RELEASE_VALIDATION_SCRIPT_SHA256}; "
+            f"observed {observed_digest}.",
+        )
+    ]
+
+
+def scan_web_release_toolchain_text(
+    flake_text: str,
+    flake_lock: bytes,
+    flake_path: Path = Path("flake.nix"),
+    lock_path: Path = Path("flake.lock"),
+) -> list[Finding]:
+    """Pin the two release-proof tools without accepting lockfile churn."""
+    findings: list[Finding] = []
+    package_blocks = re.findall(
+        r"(?ms)^\s*packages\s*=\s*\[(.*?)^\s*\];", flake_text
+    )
+    if len(package_blocks) != 1:
+        findings.append(
+            Finding(
+                "web-release-flake-package-block-mismatch",
+                flake_path,
+                1,
+                "flake.nix must contain exactly one structurally reviewable "
+                f"devShell packages list; observed {len(package_blocks)}.",
+            )
+        )
+    for package in FLAKE_RELEASE_PACKAGES:
+        token = f"pkgs.{package}"
+        global_count = len(re.findall(rf"\b{re.escape(token)}\b", flake_text))
+        block_count = (
+            len(re.findall(rf"(?m)^\s*{re.escape(token)}\s*$", package_blocks[0]))
+            if len(package_blocks) == 1
+            else 0
+        )
+        if global_count != 1 or block_count != 1:
+            findings.append(
+                Finding(
+                    "web-release-flake-package-mismatch",
+                    flake_path,
+                    1,
+                    f"{token} must occur exactly once as a standalone package-list "
+                    f"entry; observed global={global_count}, package-list={block_count}.",
+                )
+            )
+
+    observed_lock_digest = hashlib.sha256(flake_lock).hexdigest()
+    if observed_lock_digest != FLAKE_LOCK_SHA256:
+        findings.append(
+            Finding(
+                "web-release-flake-lock-drift",
+                lock_path,
+                1,
+                "Release-proof tool additions must not change flake.lock; "
+                f"expected SHA256 {FLAKE_LOCK_SHA256}, observed "
+                f"{observed_lock_digest}.",
             )
         )
     return findings
@@ -840,7 +1354,9 @@ def scan_workflow_text(
                 path,
                 1,
                 "Hosted workflows must not invoke ARC plan/init/apply, enrollment, "
-                "readback, GitHub App Secret, or transitive operator recipes; "
+                "readback, GitHub App Secret, consented list membership, ALTCHA "
+                "Secret rotation, operator-held release proofs, or transitive "
+                "operator recipes; "
                 f"observed {arc_calls!r}.",
             )
         )
@@ -880,7 +1396,7 @@ def scan_workflows() -> list[Finding]:
     findings: list[Finding] = []
     observed_calls: set[str] = set()
     justfile = (REPO / "Justfile").read_text(encoding="utf-8")
-    forbidden_recipes, _ = arc_operator_recipe_closure(justfile)
+    forbidden_recipes, _ = all_operator_local_recipe_closure(justfile)
     known_recipes = set(all_just_recipe_blocks(justfile)) | set(
         all_just_aliases(justfile)
     )
@@ -1060,7 +1576,8 @@ def scan_operator_carrier_text(
                 path,
                 1,
                 "Scripts and composite actions must not invoke operator-local ARC "
-                f"recipes or wrappers; observed {arc_calls!r}.",
+                "or purpose-bound attended/release recipes or wrappers; "
+                f"observed {arc_calls!r}.",
             )
         )
     if unresolved and fail_on_unresolved:
@@ -1078,7 +1595,7 @@ def scan_operator_carrier_text(
 def scan_scripts() -> list[Finding]:
     findings: list[Finding] = []
     justfile = (REPO / "Justfile").read_text(encoding="utf-8")
-    forbidden_recipes, _ = arc_operator_recipe_closure(justfile)
+    forbidden_recipes, _ = all_operator_local_recipe_closure(justfile)
     known_recipes = set(all_just_recipe_blocks(justfile)) | set(
         all_just_aliases(justfile)
     )
@@ -1128,7 +1645,7 @@ def scan_scripts() -> list[Finding]:
 def scan_composite_actions() -> list[Finding]:
     findings: list[Finding] = []
     justfile = (REPO / "Justfile").read_text(encoding="utf-8")
-    forbidden_recipes, _ = arc_operator_recipe_closure(justfile)
+    forbidden_recipes, _ = all_operator_local_recipe_closure(justfile)
     known_recipes = set(all_just_recipe_blocks(justfile)) | set(
         all_just_aliases(justfile)
     )
@@ -1317,9 +1834,37 @@ def expect_arc_contract_rejection(
         )
 
 
+def expect_attended_contract_rejection(
+    text: str, label: str, expected_rule: str
+) -> None:
+    findings = scan_attended_operator_contract_text(text, Path("Justfile"))
+    if not any(finding.rule == expected_rule for finding in findings):
+        observed = sorted({finding.rule for finding in findings})
+        raise SystemExit(
+            f"self-test FAILED: attended contract accepted {label}; "
+            f"findings={observed!r}"
+        )
+
+
+def expect_web_release_contract_rejection(
+    text: str, label: str, expected_rule: str
+) -> None:
+    findings = scan_web_release_operator_contract_text(text, Path("Justfile"))
+    if not any(finding.rule == expected_rule for finding in findings):
+        observed = sorted({finding.rule for finding in findings})
+        raise SystemExit(
+            f"self-test FAILED: web release contract accepted {label}; "
+            f"findings={observed!r}"
+        )
+
+
 def check_critical_recipe_shell_syntax() -> None:
     """Ask Just to expand dependency chains, then parse the exact shell output."""
-    for name in ARC_RECIPE_DEPENDENCIES:
+    for name in (
+        *ARC_RECIPE_DEPENDENCIES,
+        *ATTENDED_RECIPE_DEPENDENCIES,
+        *WEB_RELEASE_RECIPE_DEPENDENCIES,
+    ):
         dry_run = subprocess.run(
             ["just", "--dry-run", name],
             cwd=REPO,
@@ -1347,6 +1892,2755 @@ def check_critical_recipe_shell_syntax() -> None:
             )
 
 
+WEB_RELEASE_FIXTURE_SHA = "b" * 40
+WEB_RELEASE_FIXTURE_DIGEST = "sha256:" + "a" * 64
+WEB_RELEASE_FIXTURE_IMAGE = (
+    "ghcr.io/great-falls-tool-bus/gftb-site@" + WEB_RELEASE_FIXTURE_DIGEST
+)
+
+WEB_RELEASE_RENDER_FIXTURE = """\
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: greatfallstoolbus-org
+  namespace: greatfallstoolbus-org-production
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: greatfallstoolbus-org
+      app.kubernetes.io/component: web
+  template:
+    metadata:
+      annotations: {}
+      labels:
+        app.kubernetes.io/name: greatfallstoolbus-org
+        app.kubernetes.io/component: web
+        app.kubernetes.io/part-of: great-falls-tool-bus
+    spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: greatfallstoolbus-org
+          image: PLACEHOLDER
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          command: ["node"]
+          args: ["build/index.js"]
+          env:
+            - name: PORT
+              value: "3000"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: greatfallstoolbus-org
+  namespace: greatfallstoolbus-org-production
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: greatfallstoolbus-org
+    app.kubernetes.io/component: web
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+"""
+
+
+def write_fixture_executable(path: Path, source: str) -> None:
+    path.write_text(textwrap.dedent(source).lstrip(), encoding="utf-8")
+    path.chmod(0o700)
+
+
+def web_release_runtime_objects() -> tuple[dict[str, object], ...]:
+    deployment_uid = "11111111-1111-4111-8111-111111111111"
+    active_uid = "22222222-2222-4222-8222-222222222222"
+    old_uid = "33333333-3333-4333-8333-333333333333"
+    labels = {
+        "app.kubernetes.io/name": "greatfallstoolbus-org",
+        "app.kubernetes.io/component": "web",
+        "app.kubernetes.io/part-of": "great-falls-tool-bus",
+    }
+    container = {
+        "name": "greatfallstoolbus-org",
+        "image": WEB_RELEASE_FIXTURE_IMAGE,
+        "ports": [{"name": "http", "containerPort": 3000, "protocol": "TCP"}],
+        "securityContext": {
+            "allowPrivilegeEscalation": False,
+            "readOnlyRootFilesystem": True,
+            "capabilities": {"drop": ["ALL"]},
+        },
+    }
+    pod_spec = {
+        "automountServiceAccountToken": False,
+        "enableServiceLinks": False,
+        "securityContext": {
+            "runAsNonRoot": True,
+            "runAsUser": 65532,
+            "runAsGroup": 65532,
+            "fsGroup": 65532,
+            "seccompProfile": {"type": "RuntimeDefault"},
+        },
+        "containers": [container],
+    }
+    deployment = {
+        "metadata": {
+            "name": "greatfallstoolbus-org",
+            "namespace": "greatfallstoolbus-org-production",
+            "uid": deployment_uid,
+            "generation": 7,
+            "annotations": {"deployment.kubernetes.io/revision": "3"},
+        },
+        "spec": {
+            "replicas": 2,
+            "selector": {
+                "matchLabels": {
+                    "app.kubernetes.io/name": "greatfallstoolbus-org",
+                    "app.kubernetes.io/component": "web",
+                }
+            },
+            "template": {
+                "metadata": {
+                    "annotations": {
+                        "app.tinyland.dev/source-sha": WEB_RELEASE_FIXTURE_SHA
+                    },
+                    "labels": labels,
+                },
+                "spec": pod_spec,
+            },
+        },
+        "status": {
+            "observedGeneration": 7,
+            "replicas": 2,
+            "updatedReplicas": 2,
+            "readyReplicas": 2,
+            "availableReplicas": 2,
+            "conditions": [
+                {"type": "Available", "status": "True"},
+                {"type": "Progressing", "status": "True"},
+            ],
+        },
+    }
+    active_labels = {**labels, "pod-template-hash": "abc123"}
+    active_rs = {
+        "metadata": {
+            "name": "greatfallstoolbus-org-abc123",
+            "namespace": "greatfallstoolbus-org-production",
+            "uid": active_uid,
+            "labels": active_labels,
+            "annotations": {"deployment.kubernetes.io/revision": "3"},
+            "ownerReferences": [{"uid": deployment_uid, "controller": True}],
+        },
+        "spec": {
+            "replicas": 2,
+            "selector": {"matchLabels": active_labels},
+            "template": {
+                "metadata": {
+                    "annotations": {
+                        "app.tinyland.dev/source-sha": WEB_RELEASE_FIXTURE_SHA
+                    },
+                    "labels": active_labels,
+                },
+                "spec": pod_spec,
+            },
+        },
+        "status": {
+            "replicas": 2,
+            "readyReplicas": 2,
+            "availableReplicas": 2,
+            "fullyLabeledReplicas": 2,
+        },
+    }
+    old_rs = {
+        "metadata": {
+            "name": "greatfallstoolbus-org-old",
+            "namespace": "greatfallstoolbus-org-production",
+            "uid": old_uid,
+            "labels": {**labels, "pod-template-hash": "old123"},
+            "annotations": {"deployment.kubernetes.io/revision": "2"},
+            "ownerReferences": [{"uid": deployment_uid, "controller": True}],
+        },
+        "spec": {"replicas": 0},
+        "status": {"replicas": 0},
+    }
+
+    def pod(index: int) -> dict[str, object]:
+        pod_ip = f"10.0.0.{index}"
+        return {
+            "metadata": {
+                "name": f"greatfallstoolbus-org-abc123-{index}",
+                "namespace": "greatfallstoolbus-org-production",
+                "uid": f"44444444-4444-4444-8444-44444444444{index}",
+                "labels": active_labels,
+                "annotations": {
+                    "app.tinyland.dev/source-sha": WEB_RELEASE_FIXTURE_SHA
+                },
+                "ownerReferences": [{"uid": active_uid, "controller": True}],
+            },
+            "spec": pod_spec,
+            "status": {
+                "phase": "Running",
+                "podIP": pod_ip,
+                "podIPs": [{"ip": pod_ip}],
+                "conditions": [
+                    {"type": "Ready", "status": "True"},
+                    {"type": "ContainersReady", "status": "True"},
+                ],
+                "containerStatuses": [
+                    {
+                        "name": "greatfallstoolbus-org",
+                        "ready": True,
+                        "started": True,
+                        "restartCount": 0,
+                        "state": {
+                            "running": {"startedAt": "2026-08-17T20:00:00Z"}
+                        },
+                        "imageID": WEB_RELEASE_FIXTURE_IMAGE,
+                    }
+                ],
+            },
+        }
+
+    replicasets = {"items": [active_rs, old_rs]}
+    pods = {"items": [pod(1), pod(2)]}
+    service_uid = "77777777-7777-4777-8777-777777777777"
+    service = {
+        "metadata": {
+            "name": "greatfallstoolbus-org",
+            "namespace": "greatfallstoolbus-org-production",
+            "uid": service_uid,
+        },
+        "spec": {
+            "type": "ClusterIP",
+            "clusterIP": "10.96.0.80",
+            "selector": {
+                "app.kubernetes.io/name": "greatfallstoolbus-org",
+                "app.kubernetes.io/component": "web",
+            },
+            "ports": [
+                {
+                    "name": "http",
+                    "port": 80,
+                    "targetPort": "http",
+                    "protocol": "TCP",
+                }
+            ],
+        },
+    }
+    endpoint_slices = {
+        "items": [
+            {
+                "metadata": {
+                    "name": "greatfallstoolbus-org-abc123",
+                    "namespace": "greatfallstoolbus-org-production",
+                    "uid": "88888888-8888-4888-8888-888888888888",
+                    "labels": {
+                        "kubernetes.io/service-name": "greatfallstoolbus-org"
+                    },
+                    "ownerReferences": [
+                        {
+                            "apiVersion": "v1",
+                            "kind": "Service",
+                            "name": "greatfallstoolbus-org",
+                            "uid": service_uid,
+                            "controller": True,
+                        }
+                    ],
+                },
+                "addressType": "IPv4",
+                "ports": [{"name": "http", "port": 3000, "protocol": "TCP"}],
+                "endpoints": [
+                    {
+                        "addresses": [f"10.0.0.{index}"],
+                        "conditions": {
+                            "ready": True,
+                            "serving": True,
+                            "terminating": False,
+                        },
+                        "targetRef": {
+                            "kind": "Pod",
+                            "namespace": "greatfallstoolbus-org-production",
+                            "uid": f"44444444-4444-4444-8444-44444444444{index}",
+                        },
+                    }
+                    for index in (1, 2)
+                ],
+            }
+        ]
+    }
+    policy_labels = {
+        "app.kubernetes.io/managed-by": "great-falls-tool-bus-infra",
+        "app.kubernetes.io/name": "greatfallstoolbus-org",
+        "app.kubernetes.io/part-of": "great-falls-tool-bus",
+        "app.tinyland.dev/lifecycle": "declare-only",
+        "app.tinyland.dev/tenant": "great-falls-tool-bus",
+    }
+    policy_selector = {
+        "matchLabels": {
+            "app.kubernetes.io/component": "web",
+            "app.kubernetes.io/name": "greatfallstoolbus-org",
+        }
+    }
+
+    def network_policy(
+        index: int, name: str, spec: dict[str, object], *, app_label: bool = True
+    ) -> dict[str, object]:
+        metadata_labels = dict(policy_labels)
+        if not app_label:
+            metadata_labels.pop("app.kubernetes.io/name")
+        return {
+            "apiVersion": "networking.k8s.io/v1",
+            "kind": "NetworkPolicy",
+            "metadata": {
+                "name": name,
+                "namespace": "greatfallstoolbus-org-production",
+                "uid": f"99999999-9999-4999-8999-99999999999{index}",
+                "labels": metadata_labels,
+            },
+            "spec": spec,
+        }
+
+    render_base_network_policies = {
+        "items": [
+            network_policy(
+                1,
+                "allow-cloudflared-tunnel-ingress",
+                {
+                    "podSelector": policy_selector,
+                    "policyTypes": ["Ingress"],
+                    "ingress": [
+                        {
+                            "from": [
+                                {
+                                    "namespaceSelector": {
+                                        "matchLabels": {
+                                            "kubernetes.io/metadata.name": "cloudflared"
+                                        }
+                                    }
+                                }
+                            ],
+                            "ports": [{"port": 3000, "protocol": "TCP"}],
+                        }
+                    ],
+                },
+            ),
+            network_policy(
+                2,
+                "allow-egress-discuss-archive",
+                {
+                    "podSelector": policy_selector,
+                    "policyTypes": ["Egress"],
+                    "egress": [
+                        {
+                            "to": [
+                                {
+                                    "namespaceSelector": {
+                                        "matchLabels": {
+                                            "kubernetes.io/metadata.name": (
+                                                "latoolb-us-production"
+                                            )
+                                        }
+                                    },
+                                    "podSelector": {
+                                        "matchLabels": {
+                                            "app.kubernetes.io/name": "mailman-core"
+                                        }
+                                    },
+                                }
+                            ],
+                            "ports": [{"port": 8000, "protocol": "TCP"}],
+                        }
+                    ],
+                },
+            ),
+            network_policy(
+                3,
+                "allow-egress-dns",
+                {
+                    "podSelector": policy_selector,
+                    "policyTypes": ["Egress"],
+                    "egress": [
+                        {
+                            "ports": [
+                                {"port": 53, "protocol": "TCP"},
+                                {"port": 53, "protocol": "UDP"},
+                            ]
+                        }
+                    ],
+                },
+            ),
+            network_policy(
+                4,
+                "allow-prometheus-scrape",
+                {
+                    "podSelector": policy_selector,
+                    "policyTypes": ["Ingress"],
+                    "ingress": [
+                        {
+                            "from": [
+                                {
+                                    "namespaceSelector": {
+                                        "matchLabels": {
+                                            "kubernetes.io/metadata.name": (
+                                                "tinyland-dev-production"
+                                            )
+                                        }
+                                    },
+                                    "podSelector": {
+                                        "matchLabels": {
+                                            "app.kubernetes.io/name": "prometheus"
+                                        }
+                                    },
+                                }
+                            ],
+                            "ports": [{"port": 3000, "protocol": "TCP"}],
+                        }
+                    ],
+                },
+            ),
+            network_policy(
+                5,
+                "default-deny-ingress",
+                {"podSelector": {}, "policyTypes": ["Ingress"]},
+                app_label=False,
+            ),
+        ]
+    }
+    network_policies = {
+        "items": [
+            copy.deepcopy(policy)
+            for policy in render_base_network_policies["items"]
+            if policy["metadata"]["name"]
+            not in {"allow-egress-dns", "allow-egress-discuss-archive"}
+        ]
+    }
+    network_policies["items"].append(
+        network_policy(
+            6,
+            "default-deny-egress",
+            {
+                "podSelector": policy_selector,
+                "policyTypes": ["Egress"],
+                "egress": [],
+            },
+            app_label=False,
+        )
+    )
+    return (
+        deployment,
+        replicasets,
+        pods,
+        service,
+        endpoint_slices,
+        network_policies,
+        render_base_network_policies,
+    )
+
+
+def web_release_ssrr_fixture() -> dict[str, object]:
+    return {
+        "apiVersion": "authorization.k8s.io/v1",
+        "kind": "SelfSubjectRulesReview",
+        "status": {
+            "incomplete": False,
+            "evaluationError": "",
+            "resourceRules": [
+                {"apiGroups": [""], "resources": ["namespaces"], "verbs": ["get"]},
+                {"apiGroups": [""], "resources": ["pods"], "verbs": ["list"]},
+                {"apiGroups": [""], "resources": ["services"], "verbs": ["get"]},
+                {
+                    "apiGroups": ["apps"],
+                    "resources": ["deployments"],
+                    "verbs": ["get"],
+                },
+                {
+                    "apiGroups": ["apps"],
+                    "resources": ["replicasets"],
+                    "verbs": ["list"],
+                },
+                {
+                    "apiGroups": ["authentication.k8s.io"],
+                    "resources": ["selfsubjectreviews"],
+                    "verbs": ["create"],
+                },
+                {
+                    "apiGroups": ["authorization.k8s.io"],
+                    "resources": ["selfsubjectaccessreviews"],
+                    "verbs": ["create"],
+                },
+                {
+                    "apiGroups": ["authorization.k8s.io"],
+                    "resources": ["selfsubjectrulesreviews"],
+                    "verbs": ["create"],
+                },
+                {
+                    "apiGroups": ["discovery.k8s.io"],
+                    "resources": ["endpointslices"],
+                    "verbs": ["list"],
+                },
+                {
+                    "apiGroups": ["networking.k8s.io"],
+                    "resources": ["networkpolicies"],
+                    "verbs": ["list"],
+                },
+            ],
+            "nonResourceRules": [
+                {
+                    "nonResourceURLs": [
+                        "/.well-known/openid-configuration",
+                        "/.well-known/openid-configuration/",
+                        "/openid/v1/jwks",
+                        "/openid/v1/jwks/",
+                    ],
+                    "verbs": ["get"],
+                }
+            ],
+        },
+    }
+
+
+def normalized_ssrr_snapshot(response: dict[str, object]) -> str:
+    status = response["status"]
+    if not isinstance(status, dict):
+        raise TypeError("fixture SSRR status must be an object")
+    resource_rules = []
+    for raw_rule in status.get("resourceRules", []):
+        if not isinstance(raw_rule, dict):
+            raise TypeError("fixture SSRR resource rule must be an object")
+        resource_rules.append(
+            {
+                "apiGroups": sorted(set(raw_rule.get("apiGroups", []))),
+                "resources": sorted(set(raw_rule.get("resources", []))),
+                "resourceNames": sorted(set(raw_rule.get("resourceNames", []))),
+                "verbs": sorted(set(raw_rule.get("verbs", []))),
+            }
+        )
+    non_resource_rules = []
+    for raw_rule in status.get("nonResourceRules", []):
+        if not isinstance(raw_rule, dict):
+            raise TypeError("fixture SSRR non-resource rule must be an object")
+        non_resource_rules.append(
+            {
+                "nonResourceURLs": sorted(
+                    set(raw_rule.get("nonResourceURLs", []))
+                ),
+                "verbs": sorted(set(raw_rule.get("verbs", []))),
+            }
+        )
+    snapshot = {
+        "incomplete": status.get("incomplete"),
+        "evaluationError": status.get("evaluationError", ""),
+        "resourceRules": sorted(
+            {json.dumps(rule, sort_keys=True, separators=(",", ":")) for rule in resource_rules}
+        ),
+        "nonResourceRules": sorted(
+            {
+                json.dumps(rule, sort_keys=True, separators=(",", ":"))
+                for rule in non_resource_rules
+            }
+        ),
+    }
+    snapshot["resourceRules"] = [
+        json.loads(rule) for rule in snapshot["resourceRules"]
+    ]
+    snapshot["nonResourceRules"] = [
+        json.loads(rule) for rule in snapshot["nonResourceRules"]
+    ]
+    return json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+
+
+def install_web_release_fixture_mocks(root: Path) -> tuple[Path, Path, Path]:
+    mock_bin = root / "bin"
+    fixture_dir = root / "fixtures"
+    mock_bin.mkdir(mode=0o700)
+    fixture_dir.mkdir(mode=0o700)
+    safe_commands = (
+        "awk",
+        "bash",
+        "cat",
+        "chmod",
+        "env",
+        "grep",
+        "jq",
+        "mkdir",
+        "mktemp",
+        "python3",
+        "rm",
+        "sort",
+        "tail",
+        "tr",
+        "yq",
+    )
+    for command in safe_commands:
+        resolved = shutil.which(command)
+        if resolved is None:
+            raise SystemExit(
+                f"self-test FAILED: web release fixture requires {command}"
+            )
+        (mock_bin / command).symlink_to(Path(resolved).resolve())
+    fixture_bash = Path("/bin/bash")
+    if not fixture_bash.is_file():
+        resolved_bash = shutil.which("bash")
+        if resolved_bash is None:
+            raise SystemExit("self-test FAILED: web release fixture requires bash")
+        fixture_bash = Path(resolved_bash).resolve()
+    state_path = fixture_dir / "state"
+    log_path = fixture_dir / "calls.log"
+    state_path.write_text("ok\n", encoding="utf-8")
+    log_path.write_text("", encoding="utf-8")
+
+    (
+        deployment,
+        replicasets,
+        pods,
+        service,
+        endpoint_slices,
+        network_policies,
+        render_base_network_policies,
+    ) = web_release_runtime_objects()
+    (fixture_dir / "deployment.json").write_text(
+        json.dumps(deployment), encoding="utf-8"
+    )
+    (fixture_dir / "replicasets.json").write_text(
+        json.dumps(replicasets), encoding="utf-8"
+    )
+    (fixture_dir / "pods.json").write_text(json.dumps(pods), encoding="utf-8")
+    (fixture_dir / "service.json").write_text(
+        json.dumps(service), encoding="utf-8"
+    )
+    (fixture_dir / "endpointslices.json").write_text(
+        json.dumps(endpoint_slices), encoding="utf-8"
+    )
+    (fixture_dir / "networkpolicies.json").write_text(
+        json.dumps(network_policies), encoding="utf-8"
+    )
+    (fixture_dir / "render-base-networkpolicies.json").write_text(
+        json.dumps(render_base_network_policies), encoding="utf-8"
+    )
+    ssrr = web_release_ssrr_fixture()
+    (fixture_dir / "ssrr.json").write_text(json.dumps(ssrr), encoding="utf-8")
+    authority_digest = hashlib.sha256(
+        normalized_ssrr_snapshot(ssrr).encode("utf-8")
+    ).hexdigest()
+    rendered_policies = copy.deepcopy(render_base_network_policies["items"])
+    if not isinstance(rendered_policies, list):
+        raise TypeError("fixture NetworkPolicy items must be a list")
+    for policy in rendered_policies:
+        if not isinstance(policy, dict) or not isinstance(
+            policy.get("metadata"), dict
+        ):
+            raise TypeError("fixture NetworkPolicy must have metadata")
+        policy["metadata"].pop("uid", None)
+    render_fixture = WEB_RELEASE_RENDER_FIXTURE + "".join(
+        "---\n" + json.dumps(policy, sort_keys=True) + "\n"
+        for policy in rendered_policies
+    )
+    (fixture_dir / "render.yaml").write_text(render_fixture, encoding="utf-8")
+    manifest = {
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "config": {"digest": "sha256:" + "c" * 64, "size": 123},
+        "layers": [{"digest": "sha256:" + "d" * 64, "size": 456}],
+    }
+    config = {
+        "os": "linux",
+        "architecture": "amd64",
+        "config": {
+            "User": "65532:65532",
+            "Entrypoint": ["/bin/dumb-init", "--"],
+            "Cmd": [
+                "/bin/caddy",
+                "run",
+                "--config",
+                "/etc/caddy/Caddyfile",
+                "--adapter",
+                "caddyfile",
+            ],
+            "WorkingDir": "/srv",
+            "Env": [
+                "HOME=/tmp",
+                "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt",
+                "XDG_CONFIG_HOME=/tmp",
+                "XDG_DATA_HOME=/tmp",
+            ],
+            "ExposedPorts": {"3000/tcp": {}},
+            "Labels": {
+                "org.opencontainers.image.source": (
+                    "https://github.com/Great-Falls-Tool-Bus/gftb-site"
+                ),
+                "org.opencontainers.image.revision": WEB_RELEASE_FIXTURE_SHA,
+            },
+        },
+    }
+    (fixture_dir / "manifest.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+    (fixture_dir / "config.json").write_text(
+        json.dumps(config), encoding="utf-8"
+    )
+
+    replacements = {
+        "__FIXTURES__": repr(str(fixture_dir)),
+        "__STATE__": repr(str(state_path)),
+        "__LOG__": repr(str(log_path)),
+        "__DIGEST__": repr(WEB_RELEASE_FIXTURE_DIGEST),
+        "__SHA__": repr(WEB_RELEASE_FIXTURE_SHA),
+        "__IMAGE__": repr(WEB_RELEASE_FIXTURE_IMAGE),
+        "__REPO__": repr(str(REPO)),
+        "__REAL_JUST__": repr(shutil.which("just") or ""),
+        "__AUTHORITY_DIGEST__": repr(authority_digest),
+        "__KUBECTL_BACKEND__": shlex.quote(str(mock_bin / "kubectl-python")),
+        "__FIXTURE_BASH__": str(fixture_bash),
+        "__FIXTURE_PYTHON__": str(Path(sys.executable).resolve()),
+    }
+
+    def materialize(source: str) -> str:
+        for old, new in replacements.items():
+            source = source.replace(old, new)
+        return source
+
+    write_fixture_executable(
+        mock_bin / "crane",
+        materialize(
+            """
+            #!__FIXTURE_PYTHON__
+            import json
+            import os
+            import pathlib
+            import sys
+
+            fixtures = pathlib.Path(__FIXTURES__)
+            state = pathlib.Path(__STATE__).read_text(encoding="utf-8").strip()
+            log = pathlib.Path(__LOG__)
+            with log.open("a", encoding="utf-8") as stream:
+                stream.write("crane " + " ".join(sys.argv[1:]) + "\\n")
+            forbidden = {
+                "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+                "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+            }
+            if forbidden & os.environ.keys():
+                raise SystemExit("mock crane received proxy environment")
+            if any(
+                marker in name.upper()
+                for name in os.environ
+                for marker in ("TOKEN", "PASSWORD", "AUTH", "CREDENTIAL")
+            ):
+                raise SystemExit("mock crane received credential-shaped environment")
+            for name in ("HOME", "XDG_CONFIG_HOME", "DOCKER_CONFIG"):
+                path = pathlib.Path(os.environ[name])
+                if not path.is_dir() or (path.stat().st_mode & 0o777) != 0o700:
+                    raise SystemExit("mock crane received a non-private " + name)
+            docker = pathlib.Path(os.environ["DOCKER_CONFIG"]) / "config.json"
+            if (
+                docker.read_text(encoding="utf-8").strip() != "{}"
+                or (docker.stat().st_mode & 0o777) != 0o600
+            ):
+                raise SystemExit("mock crane did not receive an empty credential root")
+            operation = sys.argv[1] if len(sys.argv) > 1 else ""
+            if operation in {"digest", "manifest", "config"}:
+                if sys.argv[1:] != [operation, __IMAGE__]:
+                    raise SystemExit("unexpected crane argv")
+            elif operation == "pull":
+                if len(sys.argv) != 4 or sys.argv[2] != __IMAGE__:
+                    raise SystemExit("unexpected crane pull argv")
+            else:
+                raise SystemExit("unexpected crane operation: " + operation)
+            if operation == "digest":
+                print("sha256:" + "e" * 64 if state == "candidate-wrong-digest" else __DIGEST__)
+            elif operation == "manifest":
+                print((fixtures / "manifest.json").read_text(encoding="utf-8"))
+            elif operation == "config":
+                config = json.loads((fixtures / "config.json").read_text(encoding="utf-8"))
+                if state == "candidate-wrong-revision":
+                    config["config"]["Labels"]["org.opencontainers.image.revision"] = "0" * 40
+                print(json.dumps(config))
+            elif operation == "pull":
+                pathlib.Path(sys.argv[-1]).write_bytes(b"fixture image archive")
+            """
+        ),
+    )
+
+    write_fixture_executable(
+        mock_bin / "kubectl-python",
+        materialize(
+            """
+            #!__FIXTURE_PYTHON__
+            import copy
+            import json
+            import os
+            import pathlib
+            import sys
+
+            fixtures = pathlib.Path(__FIXTURES__)
+            state = pathlib.Path(__STATE__).read_text(encoding="utf-8").strip()
+            with pathlib.Path(__LOG__).open("a", encoding="utf-8") as stream:
+                stream.write("kubectl " + " ".join(sys.argv[1:]) + "\\n")
+            args = sys.argv[1:]
+            if args == ["kustomize", "k8s/web/greatfallstoolbus-org-production"]:
+                rendered = (fixtures / "render.yaml").read_text(encoding="utf-8")
+                kustomize_calls = sum(
+                    line == "kubectl kustomize k8s/web/greatfallstoolbus-org-production"
+                    for line in pathlib.Path(__LOG__).read_text(encoding="utf-8").splitlines()
+                )
+                if state == "render-missing-default-ingress" and kustomize_calls == 2:
+                    rendered = "---\\n".join(
+                        document
+                        for document in rendered.split("---\\n")
+                        if '"name": "default-deny-ingress"' not in document
+                    )
+                if state == "render-retained-legacy-egress" and kustomize_calls == 2:
+                    rendered = rendered.replace(
+                        '"name": "allow-egress-dns"',
+                        '"name": "allow-egress-dns-retained"',
+                        1,
+                    )
+                if state == "render-secret":
+                    rendered += "---\\napiVersion: v1\\nkind: Secret\\nmetadata:\\n  name: injected\\n  namespace: greatfallstoolbus-org-production\\n"
+                if state == "render-env-from":
+                    rendered = rendered.replace(
+                        "          securityContext:\\n",
+                        "          envFrom:\\n            - secretRef:\\n                name: injected\\n          securityContext:\\n",
+                        1,
+                    )
+                if state == "render-init-container":
+                    rendered = rendered.replace(
+                        "      containers:\\n",
+                        "      initContainers:\\n        - name: injected\\n          image: busybox\\n      containers:\\n",
+                        1,
+                    )
+                if state == "render-ephemeral-container":
+                    rendered = rendered.replace(
+                        "      containers:\\n",
+                        "      ephemeralContainers:\\n        - name: injected\\n          image: busybox\\n      containers:\\n",
+                        1,
+                    )
+                if state == "render-image-pull-secret":
+                    rendered = rendered.replace(
+                        "      containers:\\n",
+                        "      imagePullSecrets:\\n        - name: injected\\n      containers:\\n",
+                        1,
+                    )
+                if kustomize_calls == 2:
+                    service_selector = (
+                        "  selector:\\n"
+                        "    app.kubernetes.io/name: greatfallstoolbus-org\\n"
+                        "    app.kubernetes.io/component: web\\n"
+                    )
+                    if state == "render-service-selector":
+                        service_prefix, service_suffix = rendered.rsplit(
+                            service_selector, 1
+                        )
+                        rendered = (
+                            service_prefix
+                            + service_selector.replace(
+                                "component: web", "component: rogue"
+                            )
+                            + service_suffix
+                        )
+                    if state == "render-service-protocol":
+                        rendered = rendered.rsplit("      protocol: TCP", 1)[0] + (
+                            "      protocol: UDP"
+                            + rendered.rsplit("      protocol: TCP", 1)[1]
+                        )
+                    if state == "render-service-external":
+                        rendered = rendered.replace(
+                            "  type: ClusterIP\\n",
+                            "  type: NodePort\\n",
+                            1,
+                        )
+                    if state == "render-service-extra-key":
+                        rendered = rendered.replace(
+                            "  type: ClusterIP\\n",
+                            "  type: ClusterIP\\n  sessionAffinity: None\\n",
+                            1,
+                        )
+                sys.stdout.write(rendered)
+                raise SystemExit(0)
+            if len(args) < 2 or args[0] != "--kubeconfig":
+                raise SystemExit("mock kubectl requires an explicit kubeconfig")
+            kubeconfig = args[1]
+            if not pathlib.Path(kubeconfig).is_file():
+                raise SystemExit("mock kubectl received a missing kubeconfig")
+            prefix = ["--kubeconfig", kubeconfig]
+            namespace_prefix = prefix + [
+                "--namespace", "greatfallstoolbus-org-production"
+            ]
+            ssrr_prefix = prefix + [
+                "create",
+                "--raw",
+                "/apis/authorization.k8s.io/v1/selfsubjectrulesreviews",
+                "-f",
+            ]
+            ssar_prefix = prefix + [
+                "create",
+                "--raw",
+                "/apis/authorization.k8s.io/v1/selfsubjectaccessreviews",
+                "-f",
+            ]
+            if args[: len(ssrr_prefix)] == ssrr_prefix and len(args) == len(ssrr_prefix) + 1:
+                request = pathlib.Path(args[-1])
+                expected_request = {
+                    "apiVersion": "authorization.k8s.io/v1",
+                    "kind": "SelfSubjectRulesReview",
+                    "spec": {"namespace": "greatfallstoolbus-org-production"},
+                }
+                if (
+                    json.loads(request.read_text(encoding="utf-8")) != expected_request
+                    or (request.stat().st_mode & 0o777) != 0o600
+                ):
+                    raise SystemExit("mock kubectl rejected the SSRR request")
+                value = json.loads((fixtures / "ssrr.json").read_text(encoding="utf-8"))
+                if state == "kube-effective-extra-resource":
+                    value["status"]["resourceRules"].append(
+                        {
+                            "apiGroups": ["batch"],
+                            "resources": ["jobs"],
+                            "verbs": ["get"],
+                        }
+                    )
+                if state == "kube-ssrr-incomplete":
+                    value["status"]["incomplete"] = True
+                if state == "kube-ssrr-unrelated-url":
+                    value["status"]["nonResourceRules"][0][
+                        "nonResourceURLs"
+                    ].append("/metrics")
+                if state == "pinned-final-authority-drift":
+                    value["status"]["nonResourceRules"][0]["verbs"].append("head")
+                sys.stdout.write(json.dumps(value))
+                raise SystemExit(0)
+            if args[: len(ssar_prefix)] == ssar_prefix and len(args) == len(ssar_prefix) + 1:
+                request = pathlib.Path(args[-1])
+                value = json.loads(request.read_text(encoding="utf-8"))
+                attributes = value.get("spec", {}).get("resourceAttributes", {})
+                if (
+                    value.get("apiVersion") != "authorization.k8s.io/v1"
+                    or value.get("kind") != "SelfSubjectAccessReview"
+                    or set(value) != {"apiVersion", "kind", "spec"}
+                    or set(value.get("spec", {})) != {"resourceAttributes"}
+                    or set(attributes) != {"verb", "group", "resource"}
+                    or attributes.get("verb") not in {"approve", "attest", "sign"}
+                    or attributes.get("group") != "certificates.k8s.io"
+                    or attributes.get("resource") != "signers"
+                    or (request.stat().st_mode & 0o777) != 0o600
+                ):
+                    raise SystemExit("mock kubectl rejected the raw SSAR request")
+                verb = attributes["verb"]
+                with pathlib.Path(__LOG__).open("a", encoding="utf-8") as stream:
+                    stream.write(
+                        "raw-ssar "
+                        + verb
+                        + " certificates.k8s.io signers\\n"
+                    )
+                if state == "kube-raw-ssar-transport-error" and verb == "approve":
+                    sys.stderr.write("mock raw SSAR transport failure\\n")
+                    raise SystemExit(2)
+                allowed = state == "kube-allows-signer" and verb == "approve"
+                response = {
+                    "apiVersion": "authorization.k8s.io/v1",
+                    "kind": "SelfSubjectAccessReview",
+                    "status": {
+                        "allowed": allowed,
+                        "denied": not allowed,
+                        "evaluationError": "",
+                    },
+                }
+                if state == "kube-raw-ssar-malformed" and verb == "approve":
+                    response["status"]["evaluationError"] = "fixture error"
+                sys.stdout.write(json.dumps(response))
+                raise SystemExit(0)
+            discovery_prefix = prefix + ["api-resources", "--cached=false"]
+            if args[: len(discovery_prefix)] == discovery_prefix:
+                if len(args) != len(discovery_prefix) + 4:
+                    raise SystemExit("mock kubectl rejected malformed discovery argv")
+                scope_arg, verb_arg, output_flag, output_value = args[len(discovery_prefix) :]
+                if (
+                    scope_arg not in {"--namespaced=true", "--namespaced=false"}
+                    or not verb_arg.startswith("--verbs=")
+                    or verb_arg.removeprefix("--verbs=")
+                    not in {"create", "update", "patch", "delete", "deletecollection"}
+                    or [output_flag, output_value] != ["-o", "name"]
+                ):
+                    raise SystemExit("mock kubectl rejected malformed discovery argv")
+                verb = verb_arg.removeprefix("--verbs=")
+                if scope_arg == "--namespaced=true":
+                    resources = ["deployments.apps", "jobs.batch"]
+                    if verb == "update":
+                        resources.append("pods/exec")
+                    if verb == "create":
+                        resources.append("deployments/scale.apps")
+                else:
+                    resources = ["namespaces"]
+                    if verb == "create":
+                        resources.extend(
+                            [
+                                "selfsubjectaccessreviews.authorization.k8s.io",
+                                "selfsubjectrulesreviews.authorization.k8s.io",
+                                "selfsubjectreviews.authentication.k8s.io",
+                            ]
+                        )
+                sys.stdout.write("\\n".join(resources) + "\\n")
+                raise SystemExit(0)
+
+            auth_args = args[len(prefix) :]
+            if auth_args[:2] == ["auth", "can-i"]:
+                scoped_args = auth_args[2:]
+                scope = None
+                if scoped_args[-2:] == [
+                    "--namespace",
+                    "greatfallstoolbus-org-production",
+                ]:
+                    scoped_args = scoped_args[:-2]
+                    scope = "namespaced"
+                elif scoped_args[-1:] == [
+                    "--namespace=greatfallstoolbus-org-production"
+                ]:
+                    scoped_args = scoped_args[:-1]
+                    scope = "namespaced"
+                elif scoped_args[-1:] == ["--all-namespaces"]:
+                    scoped_args = scoped_args[:-1]
+                    scope = "cluster"
+                if scope is None or len(scoped_args) not in {2, 3}:
+                    raise SystemExit("mock kubectl rejected malformed auth can-i argv")
+                verb, resource = scoped_args[:2]
+                subresource = None
+                if len(scoped_args) == 3:
+                    if not scoped_args[2].startswith("--subresource="):
+                        raise SystemExit(
+                            "mock kubectl rejected malformed auth subresource argv"
+                        )
+                    subresource = scoped_args[2].removeprefix("--subresource=")
+                    if not subresource:
+                        raise SystemExit(
+                            "mock kubectl rejected malformed auth subresource target"
+                        )
+                resource_parts = resource.split("/", 1)
+                base_resource = resource_parts[0]
+                resource_name = (
+                    resource_parts[1] if len(resource_parts) == 2 else None
+                )
+                if resource_name == "":
+                    raise SystemExit("mock kubectl rejected an empty resource name")
+                allowed = (
+                    resource_name is None
+                    and subresource is None
+                    and (scope, verb, base_resource) in {
+                    ("namespaced", "get", "deployments"),
+                    ("namespaced", "list", "replicasets"),
+                    ("namespaced", "list", "pods"),
+                    ("namespaced", "get", "services"),
+                    ("namespaced", "list", "endpointslices.discovery.k8s.io"),
+                    (
+                        "namespaced",
+                        "list",
+                        "networkpolicies.networking.k8s.io",
+                    ),
+                    ("cluster", "get", "namespaces"),
+                    (
+                        "cluster",
+                        "create",
+                        "selfsubjectaccessreviews.authorization.k8s.io",
+                    ),
+                    (
+                        "cluster",
+                        "create",
+                        "selfsubjectrulesreviews.authorization.k8s.io",
+                    ),
+                    (
+                        "cluster",
+                        "create",
+                        "selfsubjectreviews.authentication.k8s.io",
+                    ),
+                    }
+                )
+                if state == "kube-allows-patch" and (
+                    verb,
+                    base_resource,
+                ) in {("patch", "deployments"), ("patch", "deployments.apps")}:
+                    allowed = True
+                if state == "kube-allows-job-create" and (
+                    verb,
+                    base_resource,
+                ) == ("create", "jobs.batch"):
+                    allowed = True
+                if state == "kube-allows-scale" and (
+                    verb,
+                    base_resource,
+                    subresource,
+                ) == (
+                    "patch",
+                    "deployments",
+                    "scale",
+                ) and resource_name is None:
+                    allowed = True
+                if state == "kube-allows-ephemeral" and (
+                    verb,
+                    base_resource,
+                    subresource,
+                ) == (
+                    "update",
+                    "pods",
+                    "ephemeralcontainers",
+                ) and resource_name is None:
+                    allowed = True
+                if state == "kube-allows-bind" and (verb, resource) == (
+                    "bind",
+                    "roles.rbac.authorization.k8s.io",
+                ) and resource_name is None:
+                    allowed = True
+                if state == "kube-allows-exec" and (
+                    verb,
+                    base_resource,
+                    subresource,
+                ) == (
+                    "create",
+                    "pods",
+                    "exec",
+                ) and resource_name is None:
+                    allowed = True
+                if state == "kube-subresource-transport-error" and (
+                    verb,
+                    base_resource,
+                    subresource,
+                ) == ("create", "pods", "exec") and resource_name is None:
+                    sys.stderr.write("mock authorization transport failure\\n")
+                    raise SystemExit(2)
+                if state == "kube-allows-named-deployment" and (
+                    scope,
+                    verb,
+                    base_resource,
+                    resource_name,
+                    subresource,
+                ) == (
+                    "namespaced",
+                    "patch",
+                    "deployments.apps",
+                    "greatfallstoolbus-org",
+                    None,
+                ):
+                    allowed = True
+                if state == "kube-allows-named-service-proxy" and (
+                    scope,
+                    verb,
+                    base_resource,
+                    resource_name,
+                    subresource,
+                ) == (
+                    "namespaced",
+                    "create",
+                    "services",
+                    "greatfallstoolbus-org",
+                    "proxy",
+                ):
+                    allowed = True
+                if state == "kube-named-auth-transport-error" and (
+                    scope,
+                    verb,
+                    base_resource,
+                    resource_name,
+                    subresource,
+                ) == (
+                    "namespaced",
+                    "update",
+                    "deployments.apps",
+                    "greatfallstoolbus-org",
+                    None,
+                ):
+                    sys.stderr.write("mock named authorization transport failure\\n")
+                    raise SystemExit(2)
+                if state == "pinned-allows-observed-pod-patch" and (
+                    scope,
+                    verb,
+                    base_resource,
+                    resource_name,
+                    subresource,
+                ) == (
+                    "namespaced",
+                    "patch",
+                    "pods",
+                    "greatfallstoolbus-org-abc123-1",
+                    None,
+                ):
+                    allowed = True
+                if state == "pinned-allows-observed-pod-exec" and (
+                    scope,
+                    verb,
+                    base_resource,
+                    resource_name,
+                    subresource,
+                ) == (
+                    "namespaced",
+                    "create",
+                    "pods",
+                    "greatfallstoolbus-org-abc123-1",
+                    "exec",
+                ):
+                    allowed = True
+                if state == "pinned-named-auth-transport-error" and (
+                    scope,
+                    verb,
+                    base_resource,
+                    resource_name,
+                    subresource,
+                ) == (
+                    "namespaced",
+                    "update",
+                    "pods",
+                    "greatfallstoolbus-org-abc123-1",
+                    None,
+                ):
+                    sys.stderr.write("mock named authorization transport failure\\n")
+                    raise SystemExit(2)
+                if state == "kube-allows-wildcard" and (verb, resource) == (
+                    "*",
+                    "*",
+                ):
+                    allowed = True
+                sys.stdout.write("yes\\n" if allowed else "no\\n")
+                raise SystemExit(0 if allowed else 1)
+            if args == prefix + [
+                "get", "namespace", "kube-system", "-o", "jsonpath={.metadata.uid}"
+            ]:
+                value = (
+                    "00000000-0000-4000-8000-000000000000"
+                    if state == "kube-wrong-cluster"
+                    else "cc121476-7a95-4b24-aa61-79d1f45713bd"
+                )
+                sys.stdout.write(value)
+                raise SystemExit(0)
+            if args == namespace_prefix + [
+                "get", "deployment/greatfallstoolbus-org", "-o", "json"
+            ]:
+                value = json.loads((fixtures / "deployment.json").read_text(encoding="utf-8"))
+                deployment_calls = sum(
+                    " get deployment/greatfallstoolbus-org -o json" in line
+                    for line in pathlib.Path(__LOG__).read_text(encoding="utf-8").splitlines()
+                )
+                if state == "pinned-final-degraded" and deployment_calls == 2:
+                    value["status"]["readyReplicas"] = 1
+                    value["status"]["availableReplicas"] = 1
+                    value["status"]["unavailableReplicas"] = 1
+                if state == "pinned-privileged":
+                    value["spec"]["template"]["spec"]["containers"][0]["securityContext"]["privileged"] = True
+                if state == "pinned-capabilities-add":
+                    value["spec"]["template"]["spec"]["containers"][0]["securityContext"]["capabilities"]["add"] = ["NET_ADMIN"]
+                if state == "pinned-host-network":
+                    value["spec"]["template"]["spec"]["hostNetwork"] = True
+                if state == "pinned-host-port":
+                    value["spec"]["template"]["spec"]["containers"][0]["ports"] = [{"name": "http", "containerPort": 3000, "hostPort": 3000}]
+                sys.stdout.write(json.dumps(value))
+                raise SystemExit(0)
+            if args == namespace_prefix + ["get", "replicasets", "-o", "json"]:
+                value = json.loads((fixtures / "replicasets.json").read_text(encoding="utf-8"))
+                replica_set_calls = sum(
+                    " get replicasets -o json" in line
+                    for line in pathlib.Path(__LOG__).read_text(encoding="utf-8").splitlines()
+                )
+                if state == "pinned-old-rs-live":
+                    value["items"][1]["spec"]["replicas"] = 1
+                    value["items"][1]["status"]["replicas"] = 1
+                if state == "pinned-duplicate-active-rs":
+                    duplicate = copy.deepcopy(value["items"][0])
+                    duplicate["metadata"]["name"] += "-duplicate"
+                    duplicate["metadata"]["uid"] = "66666666-6666-4666-8666-666666666666"
+                    value["items"].append(duplicate)
+                if state == "pinned-list-envelope-drift" and replica_set_calls == 2:
+                    value["metadata"] = {"resourceVersion": "fixture-rs-list-drift"}
+                sys.stdout.write(json.dumps(value))
+                raise SystemExit(0)
+            if args == namespace_prefix + [
+                "get", "service/greatfallstoolbus-org", "-o", "json"
+            ]:
+                value = json.loads((fixtures / "service.json").read_text(encoding="utf-8"))
+                service_calls = sum(
+                    " get service/greatfallstoolbus-org -o json" in line
+                    for line in pathlib.Path(__LOG__).read_text(encoding="utf-8").splitlines()
+                )
+                if state == "pinned-service-divergence":
+                    value["spec"]["ports"][0]["targetPort"] = "wrong"
+                if state == "pinned-final-service-drift" and service_calls == 2:
+                    value["spec"]["clusterIP"] = "10.96.0.81"
+                sys.stdout.write(json.dumps(value))
+                raise SystemExit(0)
+            if args == namespace_prefix + [
+                "get",
+                "endpointslices.discovery.k8s.io",
+                "--selector",
+                "kubernetes.io/service-name=greatfallstoolbus-org",
+                "-o",
+                "json",
+            ]:
+                value = json.loads((fixtures / "endpointslices.json").read_text(encoding="utf-8"))
+                endpoint_calls = sum(
+                    " get endpointslices.discovery.k8s.io " in line
+                    for line in pathlib.Path(__LOG__).read_text(encoding="utf-8").splitlines()
+                )
+                if state == "pinned-rogue-endpoint-ip":
+                    value["items"][0]["endpoints"][0]["addresses"] = ["10.0.0.99"]
+                if state == "pinned-deleting-endpoint-slice":
+                    value["items"][0]["metadata"]["deletionTimestamp"] = (
+                        "2026-08-17T21:00:00Z"
+                    )
+                    value["items"][0]["metadata"]["finalizers"] = [
+                        "discovery.kubernetes.io/endpoint-slice-cleanup"
+                    ]
+                if state == "pinned-final-endpoint-drift" and endpoint_calls == 2:
+                    value["items"][0]["endpoints"][0]["conditions"]["ready"] = False
+                if state == "pinned-list-envelope-drift" and endpoint_calls == 2:
+                    value["metadata"] = {"resourceVersion": "fixture-eps-list-drift"}
+                sys.stdout.write(json.dumps(value))
+                raise SystemExit(0)
+            if args == namespace_prefix + ["get", "pods", "-o", "json"]:
+                value = json.loads((fixtures / "pods.json").read_text(encoding="utf-8"))
+                pod_calls = sum(
+                    " get pods -o json" in line
+                    for line in pathlib.Path(__LOG__).read_text(encoding="utf-8").splitlines()
+                )
+                if state == "pinned-restart":
+                    value["items"][0]["status"]["containerStatuses"][0]["restartCount"] = 1
+                if state == "pinned-wrong-image-id":
+                    value["items"][0]["status"]["containerStatuses"][0]["imageID"] = "ghcr.io/great-falls-tool-bus/gftb-site@sha256:" + "f" * 64
+                if state == "pinned-extra-labeled-pod":
+                    extra = copy.deepcopy(value["items"][0])
+                    extra["metadata"]["name"] = "greatfallstoolbus-org-foreign"
+                    extra["metadata"]["uid"] = "55555555-5555-4555-8555-555555555555"
+                    extra["metadata"]["ownerReferences"][0]["uid"] = "33333333-3333-4333-8333-333333333333"
+                    value["items"].append(extra)
+                if state == "pinned-list-envelope-drift" and pod_calls == 2:
+                    value["metadata"] = {"resourceVersion": "fixture-pod-list-drift"}
+                if state == "pinned-final-pod-resource-version-drift" and pod_calls == 2:
+                    value["items"][0]["metadata"]["resourceVersion"] = "fixture-object-drift"
+                sys.stdout.write(json.dumps(value))
+                raise SystemExit(0)
+            if args == namespace_prefix + [
+                "get", "networkpolicies.networking.k8s.io", "-o", "json"
+            ]:
+                value = json.loads(
+                    (fixtures / "networkpolicies.json").read_text(encoding="utf-8")
+                )
+                policy_calls = sum(
+                    " get networkpolicies.networking.k8s.io -o json" in line
+                    for line in pathlib.Path(__LOG__).read_text(encoding="utf-8").splitlines()
+                )
+                if state == "pinned-network-policy-content":
+                    value["items"][0]["spec"]["ingress"][0]["ports"][0]["port"] = 3001
+                if state == "pinned-network-policy-missing-deny":
+                    value["items"] = [
+                        policy
+                        for policy in value["items"]
+                        if policy["metadata"]["name"] != "default-deny-egress"
+                    ]
+                if state == "pinned-network-policy-retained-legacy":
+                    legacy = json.loads(
+                        (fixtures / "render-base-networkpolicies.json").read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                    value["items"].append(
+                        next(
+                            policy
+                            for policy in legacy["items"]
+                            if policy["metadata"]["name"] == "allow-egress-dns"
+                        )
+                    )
+                if state == "pinned-network-policy-permissive-egress":
+                    next(
+                        policy
+                        for policy in value["items"]
+                        if policy["metadata"]["name"] == "default-deny-egress"
+                    )["spec"]["egress"] = [{}]
+                if state == "pinned-network-policy-wrong-selector":
+                    next(
+                        policy
+                        for policy in value["items"]
+                        if policy["metadata"]["name"] == "default-deny-egress"
+                    )["spec"]["podSelector"] = {}
+                if state == "pinned-final-network-policy-drift" and policy_calls == 2:
+                    value["items"][0]["spec"]["ingress"][0]["ports"][0]["port"] = 3001
+                if state == "pinned-list-envelope-drift" and policy_calls == 2:
+                    value["metadata"] = {"resourceVersion": "fixture-np-list-drift"}
+                sys.stdout.write(json.dumps(value))
+                raise SystemExit(0)
+            raise SystemExit("mock kubectl rejected unexpected argv: " + " ".join(args))
+            """
+        ),
+    )
+
+    # Authorization dominates this fixture's call volume. Keep those hundreds
+    # of exact yes/no checks in a fail-closed Bash front end so the self-test
+    # remains practical; all object/discovery/raw-review behavior stays in the
+    # stricter Python backend below it.
+    write_fixture_executable(
+        mock_bin / "kubectl",
+        materialize(
+            """
+            #!__FIXTURE_BASH__
+            set -euo pipefail
+            if [[ "$#" -ge 4 && "$1" == "--kubeconfig" && -f "$2" && "$3" == "auth" && "$4" == "can-i" ]]; then
+              {
+                printf 'kubectl'
+                printf ' %s' "$@"
+                printf '\\n'
+              } >> __LOG__
+              state="$(< __STATE__)"
+              shift 4
+              [[ "$#" -ge 3 ]] || { echo "mock kubectl rejected malformed auth can-i argv" >&2; exit 2; }
+              verb="$1"
+              resource="$2"
+              shift 2
+              subresource=""
+              if [[ "$1" == --subresource=* ]]; then
+                subresource="${1#--subresource=}"
+                [[ -n "${subresource}" ]] || { echo "mock kubectl rejected an empty auth subresource" >&2; exit 2; }
+                shift
+              fi
+              scope=""
+              if [[ "$#" -eq 2 && "$1" == "--namespace" && "$2" == "greatfallstoolbus-org-production" ]]; then
+                scope="namespaced"
+              elif [[ "$#" -eq 1 && "$1" == "--namespace=greatfallstoolbus-org-production" ]]; then
+                scope="namespaced"
+              elif [[ "$#" -eq 1 && "$1" == "--all-namespaces" ]]; then
+                scope="cluster"
+              else
+                echo "mock kubectl rejected malformed or non-tail auth scope argv" >&2
+                exit 2
+              fi
+              base_resource="${resource%%/*}"
+              resource_name=""
+              if [[ "${resource}" == */* ]]; then
+                resource_name="${resource#*/}"
+                [[ -n "${resource_name}" ]] || { echo "mock kubectl rejected an empty resource name" >&2; exit 2; }
+              fi
+              allowed=0
+              if [[ -z "${resource_name}" && -z "${subresource}" ]]; then
+                case "${scope}:${verb}:${base_resource}" in
+                  namespaced:get:deployments|namespaced:list:replicasets|namespaced:list:pods|namespaced:get:services|namespaced:list:endpointslices.discovery.k8s.io|namespaced:list:networkpolicies.networking.k8s.io|cluster:get:namespaces|cluster:create:selfsubjectaccessreviews.authorization.k8s.io|cluster:create:selfsubjectrulesreviews.authorization.k8s.io|cluster:create:selfsubjectreviews.authentication.k8s.io) allowed=1 ;;
+                esac
+              fi
+              if [[ "${state}" == "kube-allows-patch" && "${verb}" == "patch" && ( "${base_resource}" == "deployments" || "${base_resource}" == "deployments.apps" ) && -z "${resource_name}" && -z "${subresource}" ]]; then allowed=1; fi
+              if [[ "${state}" == "kube-allows-job-create" && "${verb}:${base_resource}" == "create:jobs.batch" && -z "${resource_name}" && -z "${subresource}" ]]; then allowed=1; fi
+              if [[ "${state}" == "kube-allows-scale" && "${verb}" == "patch" && ( "${base_resource}" == "deployments" || "${base_resource}" == "deployments.apps" ) && "${subresource}" == "scale" && -z "${resource_name}" ]]; then allowed=1; fi
+              if [[ "${state}" == "kube-allows-ephemeral" && "${verb}:${base_resource}:${subresource}" == "update:pods:ephemeralcontainers" && -z "${resource_name}" ]]; then allowed=1; fi
+              if [[ "${state}" == "kube-allows-bind" && "${verb}:${resource}" == "bind:roles.rbac.authorization.k8s.io" ]]; then allowed=1; fi
+              if [[ "${state}" == "kube-allows-exec" && "${verb}:${base_resource}:${subresource}" == "create:pods:exec" && -z "${resource_name}" ]]; then allowed=1; fi
+              if [[ "${state}" == "kube-subresource-transport-error" && "${verb}:${base_resource}:${subresource}" == "create:pods:exec" && -z "${resource_name}" ]]; then echo "mock authorization transport failure" >&2; exit 2; fi
+              if [[ "${state}" == "kube-allows-named-deployment" && "${scope}:${verb}:${base_resource}:${resource_name}:${subresource}" == "namespaced:patch:deployments.apps:greatfallstoolbus-org:" ]]; then allowed=1; fi
+              if [[ "${state}" == "kube-allows-named-service-proxy" && "${scope}:${verb}:${base_resource}:${resource_name}:${subresource}" == "namespaced:create:services:greatfallstoolbus-org:proxy" ]]; then allowed=1; fi
+              if [[ "${state}" == "kube-named-auth-transport-error" && "${scope}:${verb}:${base_resource}:${resource_name}:${subresource}" == "namespaced:update:deployments.apps:greatfallstoolbus-org:" ]]; then echo "mock named authorization transport failure" >&2; exit 2; fi
+              if [[ "${state}" == "pinned-allows-observed-pod-patch" && "${scope}:${verb}:${base_resource}:${resource_name}:${subresource}" == "namespaced:patch:pods:greatfallstoolbus-org-abc123-1:" ]]; then allowed=1; fi
+              if [[ "${state}" == "pinned-allows-observed-pod-exec" && "${scope}:${verb}:${base_resource}:${resource_name}:${subresource}" == "namespaced:create:pods:greatfallstoolbus-org-abc123-1:exec" ]]; then allowed=1; fi
+              if [[ "${state}" == "pinned-named-auth-transport-error" && "${scope}:${verb}:${base_resource}:${resource_name}:${subresource}" == "namespaced:update:pods:greatfallstoolbus-org-abc123-1:" ]]; then echo "mock named authorization transport failure" >&2; exit 2; fi
+              if [[ "${state}" == "kube-allows-wildcard" && "${verb}:${resource}" == "*:*" ]]; then allowed=1; fi
+              if [[ "${allowed}" -eq 1 ]]; then printf 'yes\\n'; exit 0; fi
+              printf 'no\\n'
+              exit 1
+            fi
+            exec __KUBECTL_BACKEND__ "$@"
+            """
+        ),
+    )
+
+    write_fixture_executable(
+        mock_bin / "curl",
+        materialize(
+            """
+            #!__FIXTURE_PYTHON__
+            import pathlib
+            import sys
+            from urllib.parse import quote, urlsplit
+
+            state = pathlib.Path(__STATE__).read_text(encoding="utf-8").strip()
+            with pathlib.Path(__LOG__).open("a", encoding="utf-8") as stream:
+                stream.write("curl " + " ".join(sys.argv[1:]) + "\\n")
+            args = sys.argv[1:]
+            expected_prefix = [
+                "--disable", "--silent", "--show-error",
+                "--connect-timeout", "10", "--max-time", "20",
+                "--max-filesize", "1048576", "--max-redirs", "0", "--output",
+            ]
+            if args[:12] != expected_prefix or len(args) not in {18, 20}:
+                raise SystemExit("mock curl rejected unsafe or unexpected argv")
+            body = pathlib.Path(args[12])
+            if args[13] != "--dump-header" or args[15:17] != ["--write-out", "%{http_code}"]:
+                raise SystemExit("mock curl rejected output argv")
+            headers = pathlib.Path(args[14])
+            if len(args) == 20:
+                cookie = pathlib.Path(args[18])
+                if (
+                    args[17] != "--cookie"
+                    or not cookie.is_file()
+                    or cookie.name != "access.cookies"
+                    or (cookie.stat().st_mode & 0o777) != 0o600
+                ):
+                    raise SystemExit("mock curl rejected cookie argv")
+                authenticated = True
+            else:
+                authenticated = False
+            url = args[-1]
+            parsed = urlsplit(url)
+            if parsed.scheme != "https" or parsed.netloc != "greatfallstoolbus.org":
+                raise SystemExit("mock curl rejected unexpected origin")
+            if not authenticated and state.startswith("served-gated"):
+                host = (
+                    "evil.example"
+                    if state == "served-gated-unsafe-redirect"
+                    else "sulliwood.cloudflareaccess.com"
+                )
+                login_path = (
+                    "/cdn-cgi/access/login/greatfallstoolbus.org.evil"
+                    if state == "served-gated-prefix-suffix"
+                    else "/cdn-cgi/access/login/greatfallstoolbus.org"
+                )
+                location = (
+                    "https://" + host + login_path + "?redirect_url="
+                    + quote(parsed.path, safe="")
+                )
+                body.write_bytes(b"")
+                header = "HTTP/1.1 302 Found\\r\\nLocation: " + location + "\\r\\n"
+                if state == "served-gated-duplicate-location":
+                    header += "Location: " + location + "\\r\\n"
+                headers.write_text(header + "\\r\\n", encoding="utf-8")
+                sys.stdout.write("302")
+                raise SystemExit(0)
+            payloads = {
+                "/": b"<!doctype html><title>Great Falls Tool Bus</title>",
+                "/health": b"ok",
+                "/health.sha": __SHA__.encode("ascii"),
+                "/qr/greatfallstoolbus-apex.svg": b"<svg xmlns='http://www.w3.org/2000/svg'></svg>",
+            }
+            payload = payloads.get(parsed.path)
+            if payload is None:
+                raise SystemExit("mock curl rejected unexpected path: " + parsed.path)
+            if state == "served-wrong-sha" and parsed.path == "/health.sha":
+                payload = b"0" * 40
+            if state == "served-health-newline" and parsed.path == "/health":
+                payload += b"\\n"
+            body.write_bytes(payload)
+            content_type = "image/svg+xml" if parsed.path.endswith(".svg") else "text/plain"
+            if state == "served-wrong-qr-type" and parsed.path.endswith(".svg"):
+                content_type = "text/html"
+            headers.write_text(
+                "HTTP/1.1 200 OK\\r\\nContent-Type: " + content_type + "\\r\\n\\r\\n",
+                encoding="utf-8",
+            )
+            sys.stdout.write("200")
+            """
+        ),
+    )
+
+    write_fixture_executable(
+        mock_bin / "just",
+        materialize(
+            """
+            #!__FIXTURE_PYTHON__
+            import os
+            import pathlib
+            import sys
+
+            with pathlib.Path(__LOG__).open("a", encoding="utf-8") as stream:
+                stream.write("nested-just " + " ".join(sys.argv[1:]) + "\\n")
+            state = pathlib.Path(__STATE__).read_text(encoding="utf-8").strip()
+            helper_argv = [
+                "--justfile",
+                str(pathlib.Path(__REPO__) / "Justfile"),
+                "--working-directory",
+                __REPO__,
+                "_web-release-kubeconfig-inputs",
+            ]
+            if sys.argv[1:] == helper_argv and state.startswith("pinned-"):
+                print(
+                    "reviewed stable web release-object mutation denial: "
+                    "Honey/greatfallstoolbus-org-production authority="
+                    + __AUTHORITY_DIGEST__
+                )
+                raise SystemExit(0)
+            if sys.argv[1:] == ["web-stack-validate"] or sys.argv[1:] == helper_argv:
+                os.execv(__REAL_JUST__, [__REAL_JUST__, *sys.argv[1:]])
+            raise SystemExit("mock nested just rejected unexpected argv")
+            """
+        ),
+    )
+    write_fixture_executable(
+        mock_bin / "git",
+        materialize(
+            """
+            #!__FIXTURE_PYTHON__
+            import pathlib
+            import sys
+
+            with pathlib.Path(__LOG__).open("a", encoding="utf-8") as stream:
+                stream.write("git " + " ".join(sys.argv[1:]) + "\\n")
+            if sys.argv[1:] != ["rev-parse", "--show-toplevel"]:
+                raise SystemExit("mock git rejected unexpected argv")
+            print(__REPO__)
+            """
+        ),
+    )
+    return mock_bin, state_path, log_path
+
+
+def expect_web_release_fixture_result(
+    just_binary: str,
+    recipe: str,
+    state_path: Path,
+    log_path: Path,
+    environment: dict[str, str],
+    state: str,
+    *,
+    success: bool,
+    diagnostic: str,
+) -> subprocess.CompletedProcess[str]:
+    state_path.write_text(state + "\n", encoding="utf-8")
+    log_path.write_text("", encoding="utf-8")
+    result = subprocess.run(
+        [just_binary, recipe],
+        cwd=REPO,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=240,
+    )
+    output = result.stdout + result.stderr
+    if success and result.returncode != 0:
+        raise SystemExit(
+            f"self-test FAILED: valid {recipe} fixture was rejected in state "
+            f"{state!r}: {output.strip()!r}"
+        )
+    if not success and result.returncode == 0:
+        raise SystemExit(
+            f"self-test FAILED: {recipe} accepted adversarial state {state!r}"
+        )
+    if diagnostic not in output:
+        raise SystemExit(
+            f"self-test FAILED: {recipe} state {state!r} did not emit "
+            f"{diagnostic!r}: {output.strip()!r}"
+        )
+    return result
+
+
+def run_web_release_semantic_fixtures() -> None:
+    just_binary = shutil.which("just")
+    if just_binary is None:
+        raise SystemExit("self-test FAILED: just is required for release fixtures")
+    with tempfile.TemporaryDirectory(
+        prefix="gftb-web-release-selftest."
+    ) as directory:
+        root = Path(directory)
+        mock_bin, state_path, log_path = install_web_release_fixture_mocks(root)
+        home = root / "home"
+        temporary = root / "tmp"
+        home.mkdir(mode=0o700)
+        temporary.mkdir(mode=0o700)
+        kubeconfig = root / "web-release.kubeconfig"
+        kubeconfig.write_text(
+            textwrap.dedent(
+                """\
+                apiVersion: v1
+                kind: Config
+                preferences: {}
+                clusters:
+                  - name: honey
+                    cluster:
+                      server: https://127.0.0.1:9
+                      certificate-authority-data: Y2VydGlmaWNhdGUtZGF0YQ==
+                contexts:
+                  - name: honey-web-readonly
+                    context:
+                      cluster: honey
+                      user: web-readonly
+                      namespace: greatfallstoolbus-org-production
+                current-context: honey-web-readonly
+                users:
+                  - name: web-readonly
+                    user:
+                      token: aaaaaaaaaa.bbbbbbbbbb.cccccccccc
+                """
+            ),
+            encoding="utf-8",
+        )
+        kubeconfig.chmod(0o600)
+        cookie = root / "access.cookies"
+        cookie.write_text("# fixture cookie; mock curl only\n", encoding="utf-8")
+        cookie.chmod(0o600)
+        function_marker = root / "imported-shell-function-ran"
+        startup_poison = root / "startup-poison.sh"
+        startup_poison.write_text(
+            "printf '%s' startup > " + shlex.quote(str(function_marker)) + "\n",
+            encoding="utf-8",
+        )
+        startup_poison.chmod(0o600)
+        poison_environment = {
+            "BASH_ENV": str(startup_poison),
+            "ENV": str(startup_poison),
+        }
+        for command in (
+            "env",
+            "kubectl",
+            "curl",
+            "crane",
+            "yq",
+            "jq",
+            "python3",
+            "git",
+            "just",
+            "mktemp",
+        ):
+            poison_environment[f"BASH_FUNC_{command}%%"] = (
+                "() { printf '%s' "
+                + shlex.quote(command)
+                + " > "
+                + shlex.quote(str(function_marker))
+                + f"; unset -f {command}; command {command} \"$@\"; }}"
+            )
+        base_environment = {
+            "PATH": str(mock_bin),
+            "HOME": str(home),
+            "TMPDIR": str(temporary),
+            "LANG": "C",
+            "LC_ALL": "C",
+            "WEB_APPLY_IMAGE": WEB_RELEASE_FIXTURE_IMAGE,
+            "WEB_APPLY_SHA": WEB_RELEASE_FIXTURE_SHA,
+            "WEB_APPLY_REPLICAS": "2",
+            "WEB_RELEASE_KUBECONFIG": str(kubeconfig),
+            **poison_environment,
+        }
+
+        def assert_no_imported_function(stage: str) -> None:
+            if function_marker.exists():
+                source = function_marker.read_text(encoding="utf-8")
+                raise SystemExit(
+                    "self-test FAILED: release proof imported a poisoned shell "
+                    f"startup hook/function {source!r} during {stage}"
+                )
+
+        expect_web_release_fixture_result(
+            just_binary,
+            "web-release-candidate-proof",
+            state_path,
+            log_path,
+            base_environment,
+            "ok",
+            success=True,
+            diagnostic="anonymous candidate proof passed",
+        )
+        assert_no_imported_function("candidate proof")
+        if [
+            line.split(" ", 2)[1]
+            for line in log_path.read_text(encoding="utf-8").splitlines()
+            if line.startswith("crane ")
+        ] != ["digest", "manifest", "config", "pull"]:
+            raise SystemExit(
+                "self-test FAILED: candidate fixture did not exercise "
+                "digest -> manifest -> config -> pull"
+            )
+        for state, diagnostic in (
+            ("candidate-wrong-digest", "anonymous digest mismatch"),
+            ("candidate-wrong-revision", "candidate OCI runtime/source contract mismatch"),
+        ):
+            expect_web_release_fixture_result(
+                just_binary,
+                "web-release-candidate-proof",
+                state_path,
+                log_path,
+                base_environment,
+                state,
+                success=False,
+                diagnostic=diagnostic,
+            )
+
+        render = expect_web_release_fixture_result(
+            just_binary,
+            "web-release-render",
+            state_path,
+            log_path,
+            base_environment,
+            "ok",
+            success=True,
+            diagnostic=WEB_RELEASE_FIXTURE_IMAGE,
+        )
+        assert_no_imported_function("render proof")
+        if "app.tinyland.dev/source-sha: " + WEB_RELEASE_FIXTURE_SHA not in render.stdout:
+            raise SystemExit(
+                "self-test FAILED: render fixture omitted the exact source annotation"
+            )
+        if (
+            "default-deny-egress" not in render.stdout
+            or "allow-egress-dns" in render.stdout
+            or "allow-egress-discuss-archive" in render.stdout
+        ):
+            raise SystemExit(
+                "self-test FAILED: render fixture did not replace legacy egress "
+                "allows with the exact default-deny policy"
+            )
+        render_log = log_path.read_text(encoding="utf-8").splitlines()
+        if render_log.count("nested-just web-stack-validate") != 1 or sum(
+            line == "kubectl kustomize k8s/web/greatfallstoolbus-org-production"
+            for line in render_log
+        ) != 2:
+            raise SystemExit(
+                "self-test FAILED: render fixture did not execute the reviewed "
+                "validator and exact local kustomize path"
+            )
+        render_env_from = expect_web_release_fixture_result(
+            just_binary,
+            "web-release-render",
+            state_path,
+            log_path,
+            base_environment,
+            "render-env-from",
+            success=True,
+            diagnostic=WEB_RELEASE_FIXTURE_IMAGE,
+        )
+        if "envFrom:" in render_env_from.stdout:
+            raise SystemExit(
+                "self-test FAILED: render fixture retained an injected envFrom"
+            )
+        for state, diagnostic in (
+            ("render-secret", "rendered object census mismatch"),
+            ("render-missing-default-ingress", "rendered object census mismatch"),
+            ("render-retained-legacy-egress", "rendered object census mismatch"),
+            (
+                "render-init-container",
+                "rendered static-Caddy workload contract mismatch",
+            ),
+            (
+                "render-ephemeral-container",
+                "rendered static-Caddy workload contract mismatch",
+            ),
+            (
+                "render-image-pull-secret",
+                "rendered static-Caddy workload contract mismatch",
+            ),
+            (
+                "render-service-selector",
+                "rendered static-Caddy workload contract mismatch",
+            ),
+            (
+                "render-service-protocol",
+                "rendered static-Caddy workload contract mismatch",
+            ),
+            (
+                "render-service-external",
+                "rendered static-Caddy workload contract mismatch",
+            ),
+            (
+                "render-service-extra-key",
+                "rendered static-Caddy workload contract mismatch",
+            ),
+        ):
+            expect_web_release_fixture_result(
+                just_binary,
+                "web-release-render",
+                state_path,
+                log_path,
+                base_environment,
+                state,
+                success=False,
+                diagnostic=diagnostic,
+            )
+
+        expect_web_release_fixture_result(
+            just_binary,
+            "_web-release-kubeconfig-inputs",
+            state_path,
+            log_path,
+            base_environment,
+            "ok",
+            success=True,
+            diagnostic="reviewed stable web release-object mutation denial",
+        )
+        assert_no_imported_function("kubeconfig proof")
+        kube_log = log_path.read_text(encoding="utf-8").splitlines()
+        kube_calls = [line for line in kube_log if line.startswith("kubectl ")]
+        namespace_scope = "--namespace greatfallstoolbus-org-production"
+        cluster_scope = "--all-namespaces"
+
+        def expected_auth_operation(
+            verb: str,
+            resource: str,
+            scope_flag: str,
+            subresource: str | None = None,
+        ) -> str:
+            operation = f"auth can-i {verb} {resource}"
+            if subresource is not None:
+                operation += f" --subresource={subresource}"
+            return operation + " " + scope_flag
+
+        expected_kube_operations = [
+            "get namespace kube-system -o jsonpath={.metadata.uid}",
+            *[
+                expected_auth_operation(verb, resource, namespace_scope)
+                for verb, resource in (
+                    ("get", "deployments"),
+                    ("list", "replicasets"),
+                    ("list", "pods"),
+                    ("get", "services"),
+                    ("list", "endpointslices.discovery.k8s.io"),
+                    ("list", "networkpolicies.networking.k8s.io"),
+                )
+            ],
+            expected_auth_operation("get", "namespaces", cluster_scope),
+            "create --raw /apis/authorization.k8s.io/v1/"
+            "selfsubjectrulesreviews -f <rules-request>",
+        ]
+        mutation_verbs = ("create", "update", "patch", "delete", "deletecollection")
+        for namespaced, scope_flag in (
+            (True, namespace_scope),
+            (False, cluster_scope),
+        ):
+            for verb in mutation_verbs:
+                expected_kube_operations.append(
+                    "api-resources --cached=false "
+                    f"--namespaced={'true' if namespaced else 'false'} "
+                    f"--verbs={verb} -o name"
+                )
+                discovered = (
+                    (
+                        "deployments.apps",
+                        "jobs.batch",
+                        *((("pods", "exec"),) if verb == "update" else ()),
+                        *(
+                            (("deployments.apps", "scale"),)
+                            if verb == "create"
+                            else ()
+                        ),
+                    )
+                    if namespaced
+                    else (
+                        (
+                            "namespaces",
+                            "selfsubjectaccessreviews.authorization.k8s.io",
+                            "selfsubjectrulesreviews.authorization.k8s.io",
+                            "selfsubjectreviews.authentication.k8s.io",
+                        )
+                        if verb == "create"
+                        else ("namespaces",)
+                    )
+                )
+                expected_kube_operations.extend(
+                    (
+                        expected_auth_operation(
+                            verb,
+                            resource[0],
+                            scope_flag,
+                            resource[1],
+                        )
+                        if isinstance(resource, tuple)
+                        else expected_auth_operation(verb, resource, scope_flag)
+                    )
+                    for resource in discovered
+                )
+        sensitive_verbs = (
+            "get",
+            "list",
+            "watch",
+            "create",
+            "update",
+            "patch",
+            "delete",
+            "deletecollection",
+        )
+        expected_kube_operations.extend(
+            expected_auth_operation(verb, resource, namespace_scope)
+            for resource in (
+                "secrets",
+                "configmaps",
+                "serviceaccounts",
+                "roles.rbac.authorization.k8s.io",
+                "rolebindings.rbac.authorization.k8s.io",
+            )
+            for verb in sensitive_verbs
+        )
+        expected_kube_operations.extend(
+            expected_auth_operation(verb, resource, cluster_scope)
+            for resource in (
+                "clusterroles.rbac.authorization.k8s.io",
+                "clusterrolebindings.rbac.authorization.k8s.io",
+            )
+            for verb in sensitive_verbs
+        )
+        expected_kube_operations.extend(
+            expected_auth_operation(
+                verb,
+                f"{resource}/{resource_name}",
+                scope_flag,
+            )
+            for resource, resource_name, scope_flag in (
+                (
+                    "namespaces",
+                    "greatfallstoolbus-org-production",
+                    cluster_scope,
+                ),
+                (
+                    "deployments.apps",
+                    "greatfallstoolbus-org",
+                    namespace_scope,
+                ),
+                ("services", "greatfallstoolbus-org", namespace_scope),
+                *(
+                    (
+                        "networkpolicies.networking.k8s.io",
+                        name,
+                        namespace_scope,
+                    )
+                    for name in (
+                        "allow-cloudflared-tunnel-ingress",
+                        "allow-prometheus-scrape",
+                        "default-deny-egress",
+                        "default-deny-ingress",
+                        "allow-egress-dns",
+                        "allow-egress-discuss-archive",
+                    )
+                ),
+            )
+            for verb in ("update", "patch", "delete")
+        )
+        expected_kube_operations.extend(
+            expected_auth_operation(
+                verb,
+                f"{resource}/{resource_name}",
+                scope_flag,
+                subresource,
+            )
+            for resource, resource_name, subresource, scope_flag, verbs in (
+                (
+                    "namespaces",
+                    "greatfallstoolbus-org-production",
+                    "status",
+                    cluster_scope,
+                    ("update", "patch"),
+                ),
+                (
+                    "namespaces",
+                    "greatfallstoolbus-org-production",
+                    "finalize",
+                    cluster_scope,
+                    ("update", "patch"),
+                ),
+                (
+                    "deployments.apps",
+                    "greatfallstoolbus-org",
+                    "status",
+                    namespace_scope,
+                    ("update", "patch"),
+                ),
+                (
+                    "deployments.apps",
+                    "greatfallstoolbus-org",
+                    "scale",
+                    namespace_scope,
+                    ("update", "patch"),
+                ),
+                (
+                    "services",
+                    "greatfallstoolbus-org",
+                    "status",
+                    namespace_scope,
+                    ("update", "patch"),
+                ),
+                (
+                    "services",
+                    "greatfallstoolbus-org",
+                    "proxy",
+                    namespace_scope,
+                    ("get", "create", "update", "patch", "delete"),
+                ),
+            )
+            for verb in verbs
+        )
+        expected_kube_operations.extend(
+            expected_auth_operation(
+                verb,
+                resource,
+                scope_flag,
+                subresource,
+            )
+            for resource, subresource, scope_flag in (
+                ("deployments", "scale", namespace_scope),
+                ("deployments", "status", namespace_scope),
+                ("replicasets", "scale", namespace_scope),
+                ("replicasets", "status", namespace_scope),
+                ("pods", "exec", namespace_scope),
+                ("pods", "attach", namespace_scope),
+                ("pods", "portforward", namespace_scope),
+                ("pods", "ephemeralcontainers", namespace_scope),
+                ("pods", "eviction", namespace_scope),
+                ("pods", "binding", namespace_scope),
+                ("pods", "log", namespace_scope),
+                ("pods", "proxy", namespace_scope),
+                ("pods", "resize", namespace_scope),
+                ("pods", "status", namespace_scope),
+                ("services", "proxy", namespace_scope),
+                ("services", "status", namespace_scope),
+                ("namespaces", "finalize", cluster_scope),
+                ("namespaces", "status", cluster_scope),
+                ("nodes", "log", cluster_scope),
+                ("nodes", "metrics", cluster_scope),
+                ("nodes", "proxy", cluster_scope),
+                ("nodes", "stats", cluster_scope),
+                (
+                    "endpointslices.discovery.k8s.io",
+                    "status",
+                    namespace_scope,
+                ),
+                (
+                    "networkpolicies.networking.k8s.io",
+                    "status",
+                    namespace_scope,
+                ),
+                ("serviceaccounts", "token", namespace_scope),
+            )
+            for verb in sensitive_verbs
+        )
+        expected_kube_operations.extend(
+            expected_auth_operation(verb, resource, scope_flag)
+            for verb, resource, scope_flag in (
+                ("bind", "roles.rbac.authorization.k8s.io", namespace_scope),
+                ("bind", "clusterroles.rbac.authorization.k8s.io", cluster_scope),
+                ("escalate", "roles.rbac.authorization.k8s.io", namespace_scope),
+                (
+                    "escalate",
+                    "clusterroles.rbac.authorization.k8s.io",
+                    cluster_scope,
+                ),
+                ("impersonate", "users", cluster_scope),
+                ("impersonate", "groups", cluster_scope),
+                ("impersonate", "serviceaccounts", cluster_scope),
+            )
+        )
+        expected_kube_operations.extend(
+            "create --raw /apis/authorization.k8s.io/v1/"
+            "selfsubjectaccessreviews -f <raw-ssar-request>"
+            for _ in ("approve", "attest", "sign")
+        )
+        expected_kube_operations.extend(
+            (
+                "auth can-i * * --namespace=greatfallstoolbus-org-production",
+                expected_auth_operation("*", "*", cluster_scope),
+            )
+        )
+        observed_kube_operations = []
+        for line in kube_calls:
+            fields = line.split(" ", 3)
+            if len(fields) != 4 or fields[1] != "--kubeconfig":
+                raise SystemExit(
+                    "self-test FAILED: kubeconfig fixture logged malformed kubectl argv"
+                )
+            operation = re.sub(
+                r" -f \S*/rules-request\.json$",
+                " -f <rules-request>",
+                fields[3],
+            )
+            operation = re.sub(
+                r" -f \S*/raw-ssar-request\.json$",
+                " -f <raw-ssar-request>",
+                operation,
+            )
+            observed_kube_operations.append(operation)
+        if (
+            observed_kube_operations != expected_kube_operations
+            or not all("--kubeconfig " in line for line in kube_calls)
+        ):
+            mismatch = next(
+                (
+                    index
+                    for index in range(
+                        max(
+                            len(observed_kube_operations),
+                            len(expected_kube_operations),
+                        )
+                    )
+                    if index >= len(observed_kube_operations)
+                    or index >= len(expected_kube_operations)
+                    or observed_kube_operations[index]
+                    != expected_kube_operations[index]
+                ),
+                None,
+            )
+            expected = (
+                expected_kube_operations[mismatch]
+                if mismatch is not None and mismatch < len(expected_kube_operations)
+                else "<end>"
+            )
+            observed = (
+                observed_kube_operations[mismatch]
+                if mismatch is not None and mismatch < len(observed_kube_operations)
+                else "<end>"
+            )
+            raise SystemExit(
+                "self-test FAILED: kubeconfig fixture did not execute the exact "
+                "Honey/read-only RBAC census; first mismatch at "
+                f"{mismatch}: expected {expected!r}, observed {observed!r}"
+            )
+        if [line for line in kube_log if line.startswith("raw-ssar ")] != [
+            "raw-ssar approve certificates.k8s.io signers",
+            "raw-ssar attest certificates.k8s.io signers",
+            "raw-ssar sign certificates.k8s.io signers",
+        ]:
+            raise SystemExit(
+                "self-test FAILED: kubeconfig fixture did not issue the exact "
+                "raw signer SelfSubjectAccessReviews"
+            )
+        for state, diagnostic in (
+            (
+                "kube-allows-patch",
+                "can mutate namespaced resource deployments.apps (patch)",
+            ),
+            (
+                "kube-allows-job-create",
+                "can mutate namespaced resource jobs.batch (create)",
+            ),
+            (
+                "kube-allows-scale",
+                "must not access privileged subresource deployments/scale",
+            ),
+            (
+                "kube-allows-exec",
+                "must not access privileged subresource pods/exec",
+            ),
+            (
+                "kube-allows-ephemeral",
+                "must not access privileged subresource pods/ephemeralcontainers",
+            ),
+            (
+                "kube-subresource-transport-error",
+                "Kubernetes authorization decision was not an exact yes/no result",
+            ),
+            (
+                "kube-allows-bind",
+                "must not bind roles.rbac.authorization.k8s.io",
+            ),
+            (
+                "kube-allows-named-deployment",
+                "must not mutate named release object "
+                "deployments.apps/greatfallstoolbus-org (patch)",
+            ),
+            (
+                "kube-allows-named-service-proxy",
+                "must not access named release subresource "
+                "services/greatfallstoolbus-org/proxy (create)",
+            ),
+            (
+                "kube-named-auth-transport-error",
+                "Kubernetes authorization decision was not an exact yes/no result",
+            ),
+            (
+                "kube-allows-signer",
+                "must not approve certificates.k8s.io signers",
+            ),
+            (
+                "kube-raw-ssar-malformed",
+                "Kubernetes raw authorization review was malformed",
+            ),
+            (
+                "kube-raw-ssar-transport-error",
+                "Kubernetes authorization/discovery request failed",
+            ),
+            ("kube-allows-wildcard", "must not hold wildcard authority"),
+            (
+                "kube-effective-extra-resource",
+                "unexpected reported resource authority: batch/jobs:get",
+            ),
+            (
+                "kube-ssrr-incomplete",
+                "SelfSubjectRulesReview is incomplete or reported an evaluation error",
+            ),
+            (
+                "kube-ssrr-unrelated-url",
+                "unexpected reported non-resource URL authority",
+            ),
+            ("kube-wrong-cluster", "does not target the reviewed Honey cluster"),
+        ):
+            expect_web_release_fixture_result(
+                just_binary,
+                "_web-release-kubeconfig-inputs",
+                state_path,
+                log_path,
+                base_environment,
+                state,
+                success=False,
+                diagnostic=diagnostic,
+            )
+
+        repo_temp_patterns = (
+            "gftb-web-kubeconfig.*",
+            "gftb-web-running.*",
+            "gftb-web-served.*",
+        )
+        repo_temp_before = {
+            path
+            for pattern in repo_temp_patterns
+            for path in REPO.glob(pattern)
+        }
+        repo_tmp_environment = {**base_environment, "TMPDIR": str(REPO)}
+        for recipe, environment in (
+            ("_web-release-kubeconfig-inputs", repo_tmp_environment),
+            ("web-release-pinned-running-proof", repo_tmp_environment),
+            (
+                "web-release-served-proof",
+                {**repo_tmp_environment, "WEB_ACCESS_STATE": "public"},
+            ),
+        ):
+            expect_web_release_fixture_result(
+                just_binary,
+                recipe,
+                state_path,
+                log_path,
+                environment,
+                "ok",
+                success=False,
+                diagnostic="TMPDIR must remain outside the public repository",
+            )
+        repo_temp_after = {
+            path
+            for pattern in repo_temp_patterns
+            for path in REPO.glob(pattern)
+        }
+        if repo_temp_after != repo_temp_before:
+            raise SystemExit(
+                "self-test FAILED: repo-local TMPDIR rejection wrote release "
+                "proof material before failing"
+            )
+
+        expect_web_release_fixture_result(
+            just_binary,
+            "web-release-pinned-running-proof",
+            state_path,
+            log_path,
+            base_environment,
+            "ok",
+            success=True,
+            diagnostic="PINNED/RUNNING proof passed",
+        )
+        assert_no_imported_function("PINNED/RUNNING proof")
+        running_log = log_path.read_text(encoding="utf-8").splitlines()
+        read_markers = (
+            ("deployment", " get deployment/greatfallstoolbus-org -o json"),
+            ("replicasets", " get replicasets -o json"),
+            ("pods", " get pods -o json"),
+            ("service", " get service/greatfallstoolbus-org -o json"),
+            (
+                "endpointslices",
+                " get endpointslices.discovery.k8s.io --selector "
+                "kubernetes.io/service-name=greatfallstoolbus-org -o json",
+            ),
+            (
+                "networkpolicies",
+                " get networkpolicies.networking.k8s.io -o json",
+            ),
+        )
+        running_read_sequence = [
+            name
+            for line in running_log
+            for name, marker in read_markers
+            if marker in line
+        ]
+        if (
+            running_read_sequence
+            != [name for name, _ in read_markers] * 2
+            or sum(
+                " create --raw /apis/authorization.k8s.io/v1/"
+                "selfsubjectrulesreviews " in line
+                for line in running_log
+            )
+            != 2
+            or running_log.count(
+                "nested-just --justfile "
+                + str(REPO / "Justfile")
+                + " --working-directory "
+                + str(REPO)
+                + " _web-release-kubeconfig-inputs"
+            )
+            != 1
+        ):
+            raise SystemExit(
+                "self-test FAILED: PINNED/RUNNING fixture did not execute the "
+                "staged kubeconfig and complete final-reread census"
+            )
+        running_kube_operations = []
+        for line in running_log:
+            if not line.startswith("kubectl "):
+                continue
+            fields = line.split(" ", 3)
+            if len(fields) != 4 or fields[1] != "--kubeconfig":
+                raise SystemExit(
+                    "self-test FAILED: PINNED/RUNNING fixture logged malformed "
+                    "kubectl argv"
+                )
+            running_kube_operations.append(
+                re.sub(
+                    r" -f \S*/rules-request\.json$",
+                    " -f <rules-request>",
+                    fields[3],
+                )
+            )
+        pinned_reads = [
+            f"{namespace_scope} get deployment/greatfallstoolbus-org -o json",
+            f"{namespace_scope} get replicasets -o json",
+            f"{namespace_scope} get pods -o json",
+            f"{namespace_scope} get service/greatfallstoolbus-org -o json",
+            f"{namespace_scope} get endpointslices.discovery.k8s.io --selector "
+            "kubernetes.io/service-name=greatfallstoolbus-org -o json",
+            f"{namespace_scope} get networkpolicies.networking.k8s.io -o json",
+        ]
+        expected_pinned_operations = list(pinned_reads)
+        for resource_name in (
+            "greatfallstoolbus-org-abc123",
+            "greatfallstoolbus-org-old",
+        ):
+            expected_pinned_operations.extend(
+                expected_auth_operation(
+                    verb,
+                    f"replicasets.apps/{resource_name}",
+                    namespace_scope,
+                )
+                for verb in ("update", "patch", "delete")
+            )
+            for subresource in ("status", "scale"):
+                expected_pinned_operations.extend(
+                    expected_auth_operation(
+                        verb,
+                        f"replicasets.apps/{resource_name}",
+                        namespace_scope,
+                        subresource,
+                    )
+                    for verb in ("update", "patch")
+                )
+        for resource_name in (
+            "greatfallstoolbus-org-abc123-1",
+            "greatfallstoolbus-org-abc123-2",
+        ):
+            expected_pinned_operations.extend(
+                expected_auth_operation(
+                    verb,
+                    f"pods/{resource_name}",
+                    namespace_scope,
+                )
+                for verb in ("update", "patch", "delete")
+            )
+            for subresource, verbs in (
+                ("status", ("update", "patch")),
+                ("ephemeralcontainers", ("update", "patch")),
+                ("eviction", ("create",)),
+                ("binding", ("create",)),
+                ("exec", ("get", "create")),
+                ("attach", ("get", "create")),
+                ("portforward", ("get", "create")),
+                ("log", ("get",)),
+                ("proxy", ("get", "create", "update", "patch", "delete")),
+                ("resize", ("update", "patch")),
+            ):
+                expected_pinned_operations.extend(
+                    expected_auth_operation(
+                        verb,
+                        f"pods/{resource_name}",
+                        namespace_scope,
+                        subresource,
+                    )
+                    for verb in verbs
+                )
+        expected_pinned_operations.extend(
+            expected_auth_operation(
+                verb,
+                "endpointslices.discovery.k8s.io/"
+                "greatfallstoolbus-org-abc123",
+                namespace_scope,
+            )
+            for verb in ("update", "patch", "delete")
+        )
+        expected_pinned_operations.extend(
+            expected_auth_operation(
+                verb,
+                "endpointslices.discovery.k8s.io/"
+                "greatfallstoolbus-org-abc123",
+                namespace_scope,
+                "status",
+            )
+            for verb in ("update", "patch")
+        )
+        expected_pinned_operations.extend(pinned_reads)
+        expected_pinned_operations.append(
+            "create --raw /apis/authorization.k8s.io/v1/"
+            "selfsubjectrulesreviews -f <rules-request>"
+        )
+        try:
+            first_pinned_call = running_kube_operations.index(pinned_reads[0])
+        except ValueError as error:
+            raise SystemExit(
+                "self-test FAILED: PINNED/RUNNING fixture omitted its first "
+                "Deployment read"
+            ) from error
+        observed_pinned_operations = running_kube_operations[first_pinned_call:]
+        if observed_pinned_operations != expected_pinned_operations:
+            mismatch = next(
+                index
+                for index in range(
+                    max(
+                        len(observed_pinned_operations),
+                        len(expected_pinned_operations),
+                    )
+                )
+                if index >= len(observed_pinned_operations)
+                or index >= len(expected_pinned_operations)
+                or observed_pinned_operations[index]
+                != expected_pinned_operations[index]
+            )
+            expected = (
+                expected_pinned_operations[mismatch]
+                if mismatch < len(expected_pinned_operations)
+                else "<end>"
+            )
+            observed = (
+                observed_pinned_operations[mismatch]
+                if mismatch < len(observed_pinned_operations)
+                else "<end>"
+            )
+            raise SystemExit(
+                "self-test FAILED: PINNED/RUNNING fixture did not execute the "
+                "exact observed-object mutation-denial census; first mismatch "
+                f"at {mismatch}: expected {expected!r}, observed {observed!r}"
+            )
+        expect_web_release_fixture_result(
+            just_binary,
+            "web-release-pinned-running-proof",
+            state_path,
+            log_path,
+            base_environment,
+            "pinned-list-envelope-drift",
+            success=True,
+            diagnostic="PINNED/RUNNING proof passed",
+        )
+        for state, diagnostic in (
+            ("pinned-old-rs-live", "old ReplicaSet is not fully scaled down"),
+            ("pinned-duplicate-active-rs", "expected exactly one active ReplicaSet"),
+            ("pinned-restart", "pod ownership/readiness/image contract mismatch"),
+            (
+                "pinned-wrong-image-id",
+                "pod ownership/readiness/image contract mismatch",
+            ),
+            (
+                "pinned-extra-labeled-pod",
+                "pod ownership/readiness/image contract mismatch",
+            ),
+            (
+                "pinned-final-degraded",
+                "RUNNING Deployment changed or degraded during readback",
+            ),
+            (
+                "pinned-rogue-endpoint-ip",
+                "RUNNING Service EndpointSlice does not bind the two reviewed pods",
+            ),
+            (
+                "pinned-deleting-endpoint-slice",
+                "RUNNING Service EndpointSlice does not bind the two reviewed pods",
+            ),
+            (
+                "pinned-network-policy-content",
+                "RUNNING NetworkPolicy semantic content mismatch",
+            ),
+            (
+                "pinned-network-policy-missing-deny",
+                "RUNNING NetworkPolicy object census/identity mismatch",
+            ),
+            (
+                "pinned-network-policy-retained-legacy",
+                "RUNNING NetworkPolicy object census/identity mismatch",
+            ),
+            (
+                "pinned-network-policy-permissive-egress",
+                "RUNNING NetworkPolicy semantic content mismatch",
+            ),
+            (
+                "pinned-network-policy-wrong-selector",
+                "RUNNING NetworkPolicy semantic content mismatch",
+            ),
+            (
+                "pinned-final-network-policy-drift",
+                "RUNNING NetworkPolicy state changed during readback",
+            ),
+            (
+                "pinned-final-pod-resource-version-drift",
+                "RUNNING pod state changed during readback",
+            ),
+            (
+                "pinned-final-authority-drift",
+                "WEB_RELEASE_KUBECONFIG authority changed during readback",
+            ),
+            ("pinned-privileged", "PINNED Deployment contract mismatch"),
+            (
+                "pinned-capabilities-add",
+                "PINNED Deployment contract mismatch",
+            ),
+            ("pinned-host-network", "PINNED Deployment contract mismatch"),
+            ("pinned-host-port", "PINNED Deployment contract mismatch"),
+            (
+                "pinned-allows-observed-pod-patch",
+                "can mutate observed release object "
+                "pods/greatfallstoolbus-org-abc123-1 (patch)",
+            ),
+            (
+                "pinned-allows-observed-pod-exec",
+                "can access observed release subresource "
+                "pods/greatfallstoolbus-org-abc123-1/exec (create)",
+            ),
+            (
+                "pinned-named-auth-transport-error",
+                "Kubernetes named-object authorization review returned diagnostics",
+            ),
+        ):
+            expect_web_release_fixture_result(
+                just_binary,
+                "web-release-pinned-running-proof",
+                state_path,
+                log_path,
+                base_environment,
+                state,
+                success=False,
+                diagnostic=diagnostic,
+            )
+
+        public_environment = {**base_environment, "WEB_ACCESS_STATE": "public"}
+        expect_web_release_fixture_result(
+            just_binary,
+            "web-release-served-proof",
+            state_path,
+            log_path,
+            public_environment,
+            "ok",
+            success=True,
+            diagnostic="SERVED source proof passed",
+        )
+        assert_no_imported_function("public SERVED proof")
+        public_curl = [
+            line
+            for line in log_path.read_text(encoding="utf-8").splitlines()
+            if line.startswith("curl ")
+        ]
+        expected_urls = [
+            "https://greatfallstoolbus.org/",
+            "https://greatfallstoolbus.org/health",
+            "https://greatfallstoolbus.org/health.sha",
+            "https://greatfallstoolbus.org/qr/greatfallstoolbus-apex.svg",
+        ]
+        if (
+            [line.rsplit(" ", 1)[-1] for line in public_curl] != expected_urls
+            or any(" --cookie " in line for line in public_curl)
+        ):
+            raise SystemExit(
+                "self-test FAILED: public SERVED fixture did not make exactly "
+                "four anonymous requests"
+            )
+        for state, diagnostic in (
+            ("served-wrong-sha", "SERVED source SHA mismatch"),
+            ("served-health-newline", "SERVED health body mismatch"),
+            ("served-wrong-qr-type", "SERVED QR content type mismatch"),
+        ):
+            expect_web_release_fixture_result(
+                just_binary,
+                "web-release-served-proof",
+                state_path,
+                log_path,
+                public_environment,
+                state,
+                success=False,
+                diagnostic=diagnostic,
+            )
+        public_with_cookie = {
+            **public_environment,
+            "CF_ACCESS_COOKIE_JAR": str(cookie),
+        }
+        expect_web_release_fixture_result(
+            just_binary,
+            "web-release-served-proof",
+            state_path,
+            log_path,
+            public_with_cookie,
+            "ok",
+            success=False,
+            diagnostic="public served proof must not use an Access cookie jar",
+        )
+
+        gated_environment = {
+            **base_environment,
+            "WEB_ACCESS_STATE": "gated",
+            "CF_ACCESS_COOKIE_JAR": str(cookie),
+        }
+        expect_web_release_fixture_result(
+            just_binary,
+            "web-release-served-proof",
+            state_path,
+            log_path,
+            gated_environment,
+            "served-gated",
+            success=True,
+            diagnostic="SERVED source proof passed",
+        )
+        assert_no_imported_function("gated SERVED proof")
+        gated_curl = [
+            line
+            for line in log_path.read_text(encoding="utf-8").splitlines()
+            if line.startswith("curl ")
+        ]
+        if (
+            [line.rsplit(" ", 1)[-1] for line in gated_curl]
+            != expected_urls * 2
+            or any(" --cookie " in line for line in gated_curl[:4])
+            or not all(" --cookie " in line for line in gated_curl[4:])
+        ):
+            raise SystemExit(
+                "self-test FAILED: gated SERVED fixture did not make four "
+                "anonymous redirects followed by four cookie-authenticated requests"
+            )
+        for state, diagnostic in (
+            (
+                "served-gated-unsafe-redirect",
+                "unexpected Cloudflare Access redirect",
+            ),
+            (
+                "served-gated-prefix-suffix",
+                "unexpected Cloudflare Access redirect",
+            ),
+            (
+                "served-gated-duplicate-location",
+                "Access response must contain exactly one Location header",
+            ),
+        ):
+            expect_web_release_fixture_result(
+                just_binary,
+                "web-release-served-proof",
+                state_path,
+                log_path,
+                gated_environment,
+                state,
+                success=False,
+                diagnostic=diagnostic,
+            )
+        for name, value in (
+            ("GODEBUG", "http2debug=1"),
+            ("SSLKEYLOGFILE", str(root / "tls.keys")),
+        ):
+            expect_web_release_fixture_result(
+                just_binary,
+                "web-release-served-proof",
+                state_path,
+                log_path,
+                {**public_environment, name: value},
+                "ok",
+                success=False,
+                diagnostic=f"Refusing ambient {name}",
+            )
+
+
 def self_test() -> None:
     if not RETIRED_EDGE_RECIPE.search("just edge-plan"):
         raise SystemExit("self-test FAILED: retired edge recipe was not detected")
@@ -1368,6 +4662,401 @@ def self_test() -> None:
     if baseline:
         rules = ", ".join(sorted({finding.rule for finding in baseline}))
         raise SystemExit(f"self-test FAILED: ARC baseline is invalid ({rules})")
+
+    attended_baseline = scan_attended_operator_contract_text(
+        justfile, Path("Justfile")
+    )
+    if attended_baseline:
+        rules = ", ".join(
+            sorted({finding.rule for finding in attended_baseline})
+        )
+        raise SystemExit(
+            f"self-test FAILED: attended baseline is invalid ({rules})"
+        )
+
+    web_release_baseline = scan_web_release_operator_contract_text(
+        justfile, Path("Justfile")
+    )
+    if web_release_baseline:
+        rules = ", ".join(
+            sorted({finding.rule for finding in web_release_baseline})
+        )
+        raise SystemExit(
+            f"self-test FAILED: web release baseline is invalid ({rules})"
+        )
+    validation_script = (REPO / WEB_RELEASE_VALIDATION_SCRIPT).read_bytes()
+    validation_script_baseline = scan_web_release_validation_script_bytes(
+        validation_script
+    )
+    if validation_script_baseline:
+        raise SystemExit(
+            "self-test FAILED: web release validation-script baseline is invalid"
+        )
+    weakened_validation_script = validation_script.replace(
+        b"set -euo pipefail", b"set -eu", 1
+    )
+    if weakened_validation_script == validation_script or not any(
+        finding.rule == "web-release-validation-script-receipt-mismatch"
+        for finding in scan_web_release_validation_script_bytes(
+            weakened_validation_script
+        )
+    ):
+        raise SystemExit(
+            "self-test FAILED: release validator accepted validation-script drift"
+        )
+
+    flake_text = (REPO / "flake.nix").read_text(encoding="utf-8")
+    flake_lock = (REPO / "flake.lock").read_bytes()
+    toolchain_baseline = scan_web_release_toolchain_text(flake_text, flake_lock)
+    if toolchain_baseline:
+        rules = ", ".join(
+            sorted({finding.rule for finding in toolchain_baseline})
+        )
+        raise SystemExit(
+            f"self-test FAILED: web release toolchain baseline is invalid ({rules})"
+        )
+    for label, mutated_flake in (
+        ("missing crane", flake_text.replace("              pkgs.crane\n", "", 1)),
+        (
+            "duplicate curl",
+            flake_text.replace(
+                "              pkgs.curl\n",
+                "              pkgs.curl\n              pkgs.curl\n",
+                1,
+            ),
+        ),
+    ):
+        if not any(
+            finding.rule == "web-release-flake-package-mismatch"
+            for finding in scan_web_release_toolchain_text(
+                mutated_flake, flake_lock
+            )
+        ):
+            raise SystemExit(
+                f"self-test FAILED: release toolchain accepted {label}"
+            )
+    if not any(
+        finding.rule == "web-release-flake-lock-drift"
+        for finding in scan_web_release_toolchain_text(
+            flake_text, flake_lock + b"\n"
+        )
+    ):
+        raise SystemExit("self-test FAILED: release toolchain accepted flake.lock drift")
+
+    release_dependency_drift = mutate_recipe_dependencies(
+        justfile,
+        "web-release-render",
+        (),
+        "release render input-guard removal",
+    )
+    expect_web_release_contract_rejection(
+        release_dependency_drift,
+        "release render input-guard removal",
+        "web-release-recipe-dependencies-mismatch",
+    )
+    callee_dependency_drift = mutate_recipe_dependencies(
+        justfile,
+        WEB_RELEASE_VALIDATION_CALLEE,
+        ("_web-release-candidate-inputs",),
+        "release validation-callee dependency drift",
+    )
+    expect_web_release_contract_rejection(
+        callee_dependency_drift,
+        "release validation-callee dependency drift",
+        "web-release-validation-callee-dependencies-mismatch",
+    )
+    callee_body_drift = mutate_recipe_body(
+        justfile,
+        WEB_RELEASE_VALIDATION_CALLEE,
+        "    bash scripts/validate-web-stack.sh {{ web_stack_dir }}\n",
+        "    true # validation bypassed\n",
+        "release validation-callee body drift",
+    )
+    expect_web_release_contract_rejection(
+        callee_body_drift,
+        "release validation-callee body drift",
+        "web-release-validation-callee-receipt-mismatch",
+    )
+    release_body_mutations = (
+        (
+            "_web-release-candidate-inputs",
+            '    [[ "${WEB_APPLY_REPLICAS:-2}" == "2" ]] ||',
+            '    [[ "${WEB_APPLY_REPLICAS:-2}" -ge "1" ]] ||',
+            "release replica cardinality weakening",
+        ),
+        (
+            "web-release-candidate-proof",
+            "    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p\n",
+            "    #!/bin/sh\n",
+            "release shebang drift",
+        ),
+        (
+            "_web-release-kubeconfig-inputs",
+            "    raw = Path(sys.argv[1])\n",
+            "      raw = Path(sys.argv[1])\n",
+            "release embedded-Python indentation drift",
+        ),
+    )
+    for name, old, new, label in release_body_mutations:
+        mutated = mutate_recipe_body(justfile, name, old, new, label)
+        expect_web_release_contract_rejection(
+            mutated,
+            label,
+            "web-release-recipe-executable-receipt-mismatch",
+        )
+
+    release_duplicate = (
+        justfile
+        + "\nweb-release-render: _web-release-candidate-inputs\n    true\n"
+    )
+    expect_web_release_contract_rejection(
+        release_duplicate,
+        "duplicate web release recipe",
+        "web-release-operator-recipe-missing",
+    )
+    release_alias = (
+        justfile
+        + "\nalias web-release-render := web-release-candidate-proof\n"
+    )
+    expect_web_release_contract_rejection(
+        release_alias,
+        "web release alias collision",
+        "web-release-operator-recipe-missing",
+    )
+    release_parameter = justfile.replace(
+        "web-release-render: _web-release-candidate-inputs",
+        "web-release-render target: _web-release-candidate-inputs",
+        1,
+    )
+    expect_web_release_contract_rejection(
+        release_parameter,
+        "web release recipe parameter",
+        "web-release-recipe-header-mismatch",
+    )
+    release_attribute = justfile.replace(
+        "web-release-render: _web-release-candidate-inputs",
+        "[no-cd]\nweb-release-render: _web-release-candidate-inputs",
+        1,
+    )
+    expect_web_release_contract_rejection(
+        release_attribute,
+        "web release recipe attribute",
+        "web-release-recipe-attribute-mismatch",
+    )
+    release_shell_drift = justfile.replace(
+        'set shell := ["bash", "-eu", "-o", "pipefail", "-c"]',
+        'set shell := ["bash", "-c"]',
+        1,
+    )
+    expect_web_release_contract_rejection(
+        release_shell_drift,
+        "release Just shell weakening",
+        "web-release-just-global-contract-mismatch",
+    )
+
+    release_wrapper_cases = (
+        "web-release-ci: web-release-candidate-proof\n    true\n",
+        "web-release-ci:\n    just web-release-candidate-proof\n",
+        "web-release-ci:\n    echo ok; just web-release-candidate-proof\n",
+        "web-release-ci:\n    printf ok && env just web-release-candidate-proof\n",
+        "web-release-ci:\n    echo \"$(just web-release-candidate-proof)\"\n",
+        "web-release-ci:\n    echo \"$(env just web-release-candidate-proof)\"\n",
+        "web-release-ci:\n    echo \"`just web-release-candidate-proof`\"\n",
+        "web-release-ci:\n    echo ok; VAR=x just web-release-candidate-proof\n",
+        "web-release-ci:\n    echo ok; (just web-release-candidate-proof)\n",
+        "web-release-ci:\n    runner=just\n    \"$runner\" web-release-candidate-proof\n",
+        "web-release-ci:\n    just\n",
+    )
+    for index, wrapper in enumerate(release_wrapper_cases, start=1):
+        fixture = justfile + "\n" + wrapper
+        all_forbidden, _ = all_operator_local_recipe_closure(fixture)
+        if "web-release-ci" not in all_forbidden:
+            raise SystemExit(
+                "self-test FAILED: operator closure accepted web release "
+                f"wrapper case {index}"
+            )
+        expect_web_release_contract_rejection(
+            fixture,
+            f"unreceipted web release wrapper case {index}",
+            "web-release-unreceipted-operator-wrapper",
+        )
+
+    release_forbidden, _ = all_operator_local_recipe_closure(justfile)
+    release_known = set(all_just_recipe_blocks(justfile)) | set(
+        all_just_aliases(justfile)
+    )
+    release_arities = just_recipe_arities(justfile)
+    for recipe in WEB_RELEASE_RECIPE_DEPENDENCIES:
+        if not any(
+            finding.rule == "workflow-arc-operator-recipe"
+            for finding in scan_workflow_text(
+                f"steps:\n  - run: just {recipe}\n",
+                Path(".github/workflows/fixture.yml"),
+                release_forbidden,
+                release_known,
+                release_arities,
+            )
+        ):
+            raise SystemExit(
+                f"self-test FAILED: workflow accepted release recipe {recipe}"
+            )
+    for label, carrier, carrier_path in (
+        (
+            "script",
+            "#!/usr/bin/env bash\njust web-release-pinned-running-proof\n",
+            Path("scripts/release-proof.sh"),
+        ),
+        (
+            "composite",
+            "runs:\n  using: composite\n  steps:\n    - shell: bash\n"
+            "      run: just web-release-served-proof\n",
+            Path(".github/actions/release-proof/action.yml"),
+        ),
+    ):
+        if not any(
+            finding.rule == "carrier-arc-operator-recipe"
+            for finding in scan_operator_carrier_text(
+                carrier,
+                carrier_path,
+                release_forbidden,
+                release_known,
+                release_arities,
+                fail_on_unresolved=True,
+            )
+        ):
+            raise SystemExit(
+                f"self-test FAILED: {label} accepted web release proof"
+            )
+
+    unguarded_member = mutate_recipe_dependencies(
+        justfile,
+        "list-member-add",
+        ("_list-member-add-inputs", "_operator-apply-confirm"),
+        "reviewed-main removal from member add",
+    )
+    expect_attended_contract_rejection(
+        unguarded_member,
+        "reviewed-main removal from member add",
+        "attended-recipe-dependencies-mismatch",
+    )
+
+    unconfirmed_altcha = mutate_recipe_dependencies(
+        justfile,
+        "form-altcha-secret-apply",
+        ("_mail-kubeconfig-inputs", "_reviewed-clean-main"),
+        "apply confirmation removal from ALTCHA rotation",
+    )
+    expect_attended_contract_rejection(
+        unconfirmed_altcha,
+        "apply confirmation removal from ALTCHA rotation",
+        "attended-recipe-dependencies-mismatch",
+    )
+
+    attended_body_mutations = (
+        (
+            "_mail-kubeconfig-inputs",
+            "    if stat.S_IMODE(metadata.st_mode) != 0o600:",
+            "    if stat.S_IMODE(metadata.st_mode) != 0o644:",
+            "mail kubeconfig mode weakening",
+        ),
+        (
+            "_list-member-add-inputs",
+            '    test "${GFTB_LIST_MEMBER_CONSENT:-}" = "confirmed" ||',
+            '    test -n "${GFTB_LIST_MEMBER_CONSENT:-}" ||',
+            "member consent weakening",
+        ),
+        (
+            "list-member-add",
+            "        | if (.total_size == 0 and ($entries | length) == 0) then \"absent\"",
+            "        | if (.total_size >= 0 and ($entries | length) == 0) then \"absent\"",
+            "Mailman absence ambiguity",
+        ),
+        (
+            "list-member-add",
+            '    test "${status}" = "201" ||',
+            '    test "${status}" != "500" ||',
+            "Mailman POST status weakening",
+        ),
+        (
+            "list-member-add",
+            '    core_pod="$(jq -er \'[.items[] | select(.metadata.deletionTimestamp == null)] as $active | if (($active | length) == 1 and',
+            '    core_pod="$(jq -er \'[.items[] | select(.metadata.deletionTimestamp == null)] as $active | if (($active | length) >= 1 and',
+            "Mailman pod cardinality weakening",
+        ),
+        (
+            "form-altcha-secret-apply",
+            '      kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace "${namespace}" delete pod "${old_name}" --wait=true --timeout=120s',
+            '      kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace "${namespace}" rollout restart deployment/form-handler',
+            "ALTCHA purpose-bounded replacement weakening",
+        ),
+        (
+            "form-altcha-secret-apply",
+            '    jq -e --arg old_uid "${old_uid}" \'[.items[] | select(.metadata.deletionTimestamp == null)] as $active | ($active | length) == 1 and',
+            '    jq -e --arg old_uid "${old_uid}" \'[.items[] | select(.metadata.deletionTimestamp == null)] as $active | ($active | length) >= 1 and',
+            "ALTCHA replacement cardinality weakening",
+        ),
+        (
+            "form-altcha-secret-apply",
+            '    trap \'rm -f "${manifest}"\' EXIT',
+            "    true",
+            "ALTCHA temporary Secret cleanup removal",
+        ),
+    )
+    for name, old, new, label in attended_body_mutations:
+        mutated = mutate_recipe_body(justfile, name, old, new, label)
+        expect_attended_contract_rejection(
+            mutated, label, "attended-recipe-executable-receipt-mismatch"
+        )
+
+    attended_short_circuit = mutate_recipe_body(
+        justfile,
+        "list-member-add",
+        "    #!/usr/bin/env bash\n",
+        "    #!/usr/bin/env bash\n    exit 0\n",
+        "member-add short circuit",
+    )
+    expect_attended_contract_rejection(
+        attended_short_circuit,
+        "member-add short circuit",
+        "attended-recipe-executable-receipt-mismatch",
+    )
+
+    attended_wrapper = justfile + "\nattended-ci: list-member-add\n    true\n"
+    expect_attended_contract_rejection(
+        attended_wrapper,
+        "unreceipted attended wrapper",
+        "attended-unreceipted-operator-wrapper",
+    )
+    attended_forbidden, _ = all_operator_local_recipe_closure(attended_wrapper)
+    attended_known = set(all_just_recipe_blocks(attended_wrapper)) | set(
+        all_just_aliases(attended_wrapper)
+    )
+    attended_arities = just_recipe_arities(attended_wrapper)
+    if not any(
+        finding.rule == "workflow-arc-operator-recipe"
+        for finding in scan_workflow_text(
+            "steps:\n  - run: just attended-ci\n",
+            Path(".github/workflows/fixture.yml"),
+            attended_forbidden,
+            attended_known,
+            attended_arities,
+        )
+    ):
+        raise SystemExit(
+            "self-test FAILED: workflow attended wrapper was accepted"
+        )
+    if not any(
+        finding.rule == "carrier-arc-operator-recipe"
+        for finding in scan_operator_carrier_text(
+            "#!/usr/bin/env bash\njust list-member-add\n",
+            Path("scripts/attended-ci.sh"),
+            attended_forbidden,
+            attended_known,
+            attended_arities,
+            fail_on_unresolved=True,
+        )
+    ):
+        raise SystemExit("self-test FAILED: script attended carrier was accepted")
 
     comment_only = mutate_recipe_body(
         justfile,
@@ -2010,6 +5699,7 @@ def self_test() -> None:
         plan["resource_changes"][0]["change"]["after"]["values"] = [after_yaml]  # type: ignore[index]
         expect_scope_rejection(scope_source, label, plan, diagnostic)
 
+    run_web_release_semantic_fixtures()
     check_critical_recipe_shell_syntax()
     print("public-operator-surface self-test passed")
 
@@ -2027,6 +5717,19 @@ def main() -> int:
         + scan_composite_actions()
         + scan_arc_operator_contract_text(
             (REPO / "Justfile").read_text(encoding="utf-8"), Path("Justfile")
+        )
+        + scan_attended_operator_contract_text(
+            (REPO / "Justfile").read_text(encoding="utf-8"), Path("Justfile")
+        )
+        + scan_web_release_operator_contract_text(
+            (REPO / "Justfile").read_text(encoding="utf-8"), Path("Justfile")
+        )
+        + scan_web_release_validation_script_bytes(
+            (REPO / WEB_RELEASE_VALIDATION_SCRIPT).read_bytes()
+        )
+        + scan_web_release_toolchain_text(
+            (REPO / "flake.nix").read_text(encoding="utf-8"),
+            (REPO / "flake.lock").read_bytes(),
         )
     )
     if findings:
