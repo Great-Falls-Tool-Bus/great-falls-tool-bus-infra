@@ -24,7 +24,18 @@ name: Web Stack Apply
 #     ghcr.io/great-falls-tool-bus/greatfallstoolbus.org:sha-<commit> reference
 #     (ideally @sha256:<digest>) as the `image` input at dispatch (runbook P2),
 #     so the public tree stays declare-only. scripts/validate-web-stack.sh keeps
-#     the k8s/web overlay at replicas:0 + placeholder image + no namespace.
+#     the k8s/web overlay DISPATCH-GATED declare-only: replicas 2, a digest-pinned
+#     ghcr.io/great-falls-tool-bus/greatfallstoolbus.org image, and no Namespace
+#     object.
+#
+# PROMOTION INTERLOCK (TIN-3816): `just web-stack-apply` now runs
+# `_web-stack-promotion-interlock` FIRST. Once the gftb-site static origin has
+# been promoted onto Deployment/greatfallstoolbus-org by the reviewed
+# web-release chain, this workflow -- including the unattended
+# `repository_dispatch: web-image-published` path -- refuses instead of re-pinning
+# the adapter-node image and recreating the legacy egress NetworkPolicies over
+# it. Retiring this workflow is Phase-5 work; see
+# docs/runbooks/oncluster-web-cutover.md section S.
 #
 # WHAT IT APPLIES (runbook P3): kubectl-apply the workload kustomization
 # (Deployment + Service + NetworkPolicy) into the ALREADY-PROVISIONED
@@ -44,7 +55,10 @@ name: Web Stack Apply
 # workflow's own apply-gate never touched any of those three; it only pins the
 # image and flips replicas on the already-live on-cluster origin. Rollback to a
 # prior image is re-dispatching THIS workflow with an earlier digest -- there
-# is no CF Pages fallback anymore.
+# is no CF Pages fallback anymore. That holds ONLY while the live image is not
+# a ghcr.io/great-falls-tool-bus/gftb-site reference: after the section-S
+# promotion, `just web-stack-apply`'s _web-stack-promotion-interlock refuses
+# this carrier (TIN-3816) and rollback follows the runbook's section S.
 
 on:
   workflow_dispatch:
@@ -76,7 +90,8 @@ on:
   # Before applying, the CD path GATES ON CI GREEN: it verifies the SITE repo's
   # ci.yml run for `sha` concluded success (web-cd-ci-green-gate). The manual
   # workflow_dispatch path above is preserved intact for rollback/override to an
-  # arbitrary prior digest.
+  # arbitrary prior digest -- while the live image is not a gftb-site reference;
+  # once it is, _web-stack-promotion-interlock refuses this carrier (TIN-3816).
   repository_dispatch:
     types: [web-image-published]
 

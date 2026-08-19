@@ -351,7 +351,11 @@ repo's `web-stack.yml` workflow (`workflow_dispatch`, `confirm=apply`,
 ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:<digest>>`) to roll
 the Deployment back to a previously-served image — "the manual
 `workflow_dispatch` path... preserved intact for rollback/override to an
-arbitrary prior digest" per that workflow's own header comment. Re-standing-up
+arbitrary prior digest" per that workflow's own header comment. **Qualifier
+(TIN-3816):** that re-dispatch holds only while the live image is *not* a
+`ghcr.io/great-falls-tool-bus/gftb-site` reference — once section S's
+promotion has landed, `_web-stack-promotion-interlock` refuses the carrier
+and rollback follows section S's "Rollback" instead. Re-standing-up
 a Pages project from scratch is *not* the rollback story anymore; that option
 was deliberately foreclosed by this phase.
 
@@ -390,10 +394,12 @@ fail-closed on the protected `web-apply` environment holding
 from this public repo without a separately governed source grant, so it is not
 the current release authority. It takes the operator-resolved
 image as a dispatch `image` input (never a committed pin), and runs `just web-stack-apply`
-(workload apply, image pin, `replicas` flip 0 to N) followed by an in-cluster
-`/health` readiness gate. It does **not** un-park the overlay: the `k8s/web/`
-tree stays declare-only and `scripts/validate-web-stack.sh` still guards
-`replicas: 0` + placeholder image + no namespace. The
+(promotion interlock, workload apply, imperative image pin, `replicas` patch)
+followed by an in-cluster `/health` readiness gate. It does **not** un-park the overlay: the `k8s/web/`
+tree stays DISPATCH-GATED declare-only and `scripts/validate-web-stack.sh` guards
+that shape — `replicas: 2`, a digest-pinned
+`ghcr.io/great-falls-tool-bus/greatfallstoolbus.org` image, no `Namespace`
+object, and no in-tree apply path. The
 `greatfallstoolbus-org-production` namespace and the `web-apply` SA/RBAC are
 minted by the operator out of band first (the SA is namespace-scoped and cannot
 create namespaces).
@@ -451,11 +457,13 @@ NetworkPolicy; the public-hostname route (P5) is dashboard/token-managed
   TIN-2537 — it lets the public repo **retire** its CF Pages-Edit token. No
   kubeconfig, image digest, tunnel route, DNS record, or Cloudflare token ever
   lands in `Great-Falls-Tool-Bus/greatfallstoolbus.org`.
-- **The parked overlay stays parked in git.** The pin/replicas/namespace/route
-  changes live in an operator private-overlay cutover branch, reviewed; the
-  `k8s/web/` skeleton on the default branch keeps `replicas: 0` + placeholder
-  image + no namespace + no route. `scripts/validate-web-stack.sh` guards the
-  declare-only posture.
+- **The overlay is declared and validated, and applying it stays gated.** ADR
+  0010 moved `k8s/web/` from a parked skeleton to the executing cutover shape:
+  the default branch carries `replicas: 2` and a digest-pinned
+  `ghcr.io/great-falls-tool-bus/greatfallstoolbus.org` image, and
+  `scripts/validate-web-stack.sh` *requires* both. What stays closed is the apply
+  gate plus the namespace and route axes — no `Namespace` object, no Secret, no
+  route in git — so merging still applies nothing and routes no public traffic.
 - **Names-only, always.** Credentials are referenced by name and resolve from
   the tenant SOPS lane / protected GitHub environments / live cluster Secrets —
   never from this file, never committed.
@@ -472,4 +480,293 @@ the token is retired as of 2026-07-06/07 (P7), not held pending a later
 decommission decision. The standing safety net is no longer "single-DNS-flip
 rollback to CF Pages" (that target no longer exists) — it is the on-cluster
 re-pin-previous-digest primitive via `web-stack.yml` (see P7's corrected
-rollback).
+rollback), which holds only while the live image is not a gftb-site reference
+(section S "Rollback" governs after the promotion).
+
+---
+
+# S — gftb-site static origin promotion (NOT executed)
+
+Everything above is the **executed** adapter-node cutover, retained as
+apply-wiring reference. This section is the separate, not-yet-run promotion of
+the static `gftb-site` origin. Tracking: **TIN-3816** (prove interim apex
+served), under the **TIN-2543** web stack.
+
+## Topology: the cutover is IN PLACE, not into a second namespace
+
+The static origin replaces the adapter-node workload **inside the existing
+`greatfallstoolbus-org-production` namespace**, on the existing
+`Deployment/greatfallstoolbus-org` and behind the existing
+`Service/greatfallstoolbus-org`. Nothing about the public path changes: the apex
+and www already resolve to the honey-ingress tunnel, and the tunnel already
+routes to that Service. There is **no** Cloudflare change in this promotion and
+**no** second namespace, which is precisely why the landed proofs
+(`web-release-pinned-running-proof`, `web-release-served-proof`) can observe the
+result at all — they read that namespace and that external URL.
+
+## One renderer, one set of bytes
+
+`just web-release-render` (landed in PR #109) is the **only** renderer in this
+repository. It reads the committed adapter-node manifests, transforms them into
+the reviewed static-Caddy shape for `${WEB_APPLY_IMAGE}`, asserts the rendered
+object census and the NetworkPolicy semantic digest, and writes YAML to stdout.
+The mutation chain added here never renders anything of its own:
+
+- `just web-release-plan` runs that renderer once and records the exact bytes,
+  their SHA-256, the selected image and source SHA, and the infra carrier commit
+  under the operator-private `.k8s-plans/` root (0700; artifacts 0600, gitignored).
+- `just web-release-apply` re-runs the renderer and **refuses** unless the
+  re-render is byte-identical to the recorded plan and the carrier commit and
+  inputs are unchanged — then applies *the recorded bytes*.
+
+No step in the chain resolves an image, runs `kubectl set image`, or patches
+replicas. `web-release-render` bakes `${WEB_APPLY_IMAGE}` and `replicas: 2` into
+the bytes, so the live pod template can only ever be a render of reviewed inputs.
+`scripts/validate-public-operator-surface.py` scans the **whole** Justfile for
+imperative pinning and allows it in exactly one legacy recipe
+(`web-stack-apply`, the adapter-node carrier).
+
+## Inputs (the contract is PR #109's, unchanged)
+
+`_web-release-candidate-inputs` is the single input guard for both the proofs
+and the mutation chain:
+
+| Variable | Contract |
+|---|---|
+| `WEB_APPLY_IMAGE` | exactly `ghcr.io/great-falls-tool-bus/gftb-site@sha256:<64 lowercase hex>` |
+| `WEB_APPLY_SHA` | exactly 40 lowercase hex (the `gftb-site` source commit built into that image) |
+| `WEB_APPLY_REPLICAS` | must be exactly `2` if set at all |
+| `HTTP(S)_PROXY`/`ALL_PROXY`/`NO_PROXY` | must be empty — release work does not transit an ambient proxy |
+| `WEB_APPLY_KUBECONFIG` | operator-custody regular file, mode `0600`, outside every repository tree; ambient `KUBECONFIG` is refused |
+
+The committed manifests are **not** where the gftb-site digest lives.
+`scripts/validate-web-stack.sh` binds image admission to the stack under
+validation: `greatfallstoolbus-org-production` admits
+`ghcr.io/great-falls-tool-bus/greatfallstoolbus.org` and nothing else, so
+substituting the gftb-site candidate into `deployment.yaml` **fails `just
+check`** rather than widening the guard.
+
+## S1 — Prove the candidate (read-only, no cluster)
+
+```bash
+export WEB_APPLY_IMAGE=ghcr.io/great-falls-tool-bus/gftb-site@sha256:<64 hex>
+export WEB_APPLY_SHA=<40 hex gftb-site commit>
+
+just web-release-candidate-proof
+```
+
+Anonymous, credential-free `crane` readback: the digest resolves to itself, the
+manifest is a single OCI/Docker image, the config carries the reviewed
+static-Caddy runtime identity, and `org.opencontainers.image.revision` equals
+`WEB_APPLY_SHA`. Produces **receipt line 8** (package name, tag, digest).
+
+## S2 — Plan (offline, no cluster, no registry)
+
+```bash
+just web-release-plan
+```
+
+Records the rendered bytes and their receipt. Review them before applying:
+
+```bash
+just web-release-render | less
+```
+
+## S3 — Dry-run and apply (attended)
+
+```bash
+export WEB_APPLY_KUBECONFIG=/operator/path/web-apply.kubeconfig
+
+just web-release-server-dry-run
+GFTB_APPLY_CONFIRM=apply just web-release-apply
+```
+
+Before S3, **quiesce the `greatfallstoolbus.org` repository**: no pushes to its
+`main` while this promotion is in flight (see the legacy-CD invariant below).
+
+`web-release-apply` refuses unless the worktree is a clean, signed checkout equal
+to canonical `main` (`_reviewed-clean-main`), `GFTB_APPLY_CONFIRM=apply` is set,
+the kubeconfig satisfies its custody contract **and passes an authorization
+preflight**, and the plan still reproduces byte-for-byte. It server-dry-runs,
+applies the recorded bytes, deletes the two legacy adapter-node egress policies
+the render deliberately omits (`allow-egress-dns`,
+`allow-egress-discuss-archive` — `kubectl apply` does not prune omissions), and
+waits for the rollout.
+
+The authorization preflight lives in `_web-release-apply-kubeconfig-contract` and
+runs `kubectl auth can-i` for every verb the chain needs in
+`greatfallstoolbus-org-production` — `get`/`list`/`watch`/`create`/`update`/`patch`
+on `deployments.apps`, `get`/`create`/`update`/`patch` on `services` and
+`networkpolicies.networking.k8s.io`, and **`delete networkpolicies`** — refusing
+before anything is touched if any answer is not `yes` or if the review emits any
+diagnostic. `apply --dry-run=server` authorizes only the objects it applies; it
+does not authorize the delete. Without the preflight the realistic failure is a
+green dry-run, a successful apply, a denied delete, and a half-done promotion
+running the new image with `allow-egress-dns` still additively permitting egress.
+
+**Rollback** has two shapes, and only one of them runs through the chain:
+
+- **gftb-site → gftb-site** (every promotion after the first): the same chain
+  with the previous `WEB_APPLY_IMAGE` / `WEB_APPLY_SHA` — re-plan, re-apply.
+  The previous digest is receipt line 12 and must be recorded *before* S3 so
+  the rehearsal is possible.
+- **First promotion, back to the adapter-node origin**: **not executable
+  through the chain.** `_web-release-candidate-inputs` accepts only
+  `ghcr.io/great-falls-tool-bus/gftb-site@sha256:…`, so the receipt-line-12
+  `greatfallstoolbus.org@sha256:…` digest is refused as a candidate, and the
+  standing P7 primitive (re-dispatch `web-stack.yml` with a prior
+  `greatfallstoolbus.org` digest) is refused by `_web-stack-promotion-interlock`
+  the moment the live image is a gftb-site reference — i.e. from the end of S3,
+  *before* S4 SERVED is proven. Between S3 and a passing S4 there is therefore
+  **no repo-carried path back to the adapter-node origin.** The rollback is
+  out-of-band, attended, with the web-apply kubeconfig:
+  `kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace
+  greatfallstoolbus-org-production set image deployment/greatfallstoolbus-org
+  greatfallstoolbus-org=<receipt-line-12 greatfallstoolbus.org@sha256:…>`.
+  Once the live image is no longer gftb-site the interlock reopens, and a
+  `web-stack.yml` `workflow_dispatch` (`confirm=apply`, `image=<that digest>`)
+  restores the two egress NetworkPolicies (`allow-egress-dns`,
+  `allow-egress-discuss-archive`) that the promotion deleted. Record the
+  imperative `set image` in the release notes as an out-of-band mutation; the
+  receipt-line-12 "rollback rehearsal" **cannot** be rehearsed through the chain
+  for the first promotion, and the receipt must say so rather than claim a
+  rehearsal that did not happen.
+
+## S4 — PINNED → RUNNING → SERVED
+
+Each stage is a landed proof recipe, not a prose assertion:
+
+| Stage | Recipe | What it establishes |
+|---|---|---|
+| **PINNED** | `just web-release-pinned-running-proof` | the live Deployment's pod template is the reviewed static-Caddy shape carrying `${WEB_APPLY_IMAGE}` and the `${WEB_APPLY_SHA}` source annotation; yields the deployment generation for **receipt line 9** |
+| **RUNNING** | `just web-release-pinned-running-proof` (same run) | exactly one active ReplicaSet at `2/2`, old ReplicaSets fully scaled down, both pods `Ready` with an `imageID` ending in the selected digest, the Service EndpointSlice binding exactly those two pods, and the NetworkPolicy census + semantic digest intact; yields the pod `imageID` for **receipt line 9** |
+| **SERVED** | `just web-release-served-proof` | the external URL returns `200` for `/`, `/health`, `/health.sha`, and the QR asset, the homepage marker is present, and `/health.sha` equals `${WEB_APPLY_SHA}`; yields **receipt line 10** |
+
+`web-release-pinned-running-proof` requires `WEB_RELEASE_KUBECONFIG` — the
+**proof-only** identity, which `_web-release-kubeconfig-inputs` proves cannot
+mutate any release object. It is deliberately not the apply identity.
+
+Receipt line 11 (real-device / QR / member-flow) stays a human observation: a
+clean desktop and mobile browser, and a physical phone camera against the
+rendered QR. No curl replaces it.
+
+## S5 — Record the receipt
+
+The release note records **exactly** the thirteen lines below. This list is
+reproduced from the **private launch spec §9** (operator-held, operator plane);
+that spec, not this runbook, is the authority for their wording and order, and
+no public reader needs to resolve it to run this procedure. Every value is
+non-secret by construction — never add cookies, tokens, kubeconfig
+data, addresses, or any other private-plane material.
+
+```text
+1  issue and milestone
+2  source repository and exact head SHA
+3  tree hash and diff hash
+4  reviewer identity, verdict, and reviewed SHA
+5  required check names, run IDs, conclusions, and completion time
+6  human ship authorization and author
+7  merge SHA and time
+8  package name, tag, and digest
+9  infra pin commit, deployment generation, pod imageID
+10 external URL, served SHA/marker, observation time
+11 real-device/QR or member-flow result
+12 previous digest and rollback rehearsal/result
+13 Linear receipt link
+```
+
+Where each line comes from in this chain:
+
+| Line | Source |
+|---|---|
+| 1, 4, 6, 13 | Linear + the reviewing human; not machine-derived |
+| 2, 3 | the `gftb-site` source repository at `${WEB_APPLY_SHA}` |
+| 5 | the `gftb-site` required checks (`gh run list`). `web-cd-ci-green-gate` is **not** part of this release: it gates the LEGACY adapter-node CD path (`web-stack.yml`), which this promotion must be protected from — see the invariants below |
+| 7 | the `gftb-site` merge commit |
+| 8 | `just web-release-candidate-proof` |
+| 9 | the infra carrier commit recorded by `just web-release-plan`, plus `just web-release-pinned-running-proof` |
+| 10 | `just web-release-served-proof` |
+| 11 | operator observation (S4) |
+| 12 | the previous `WEB_APPLY_IMAGE` digest and the S3 rollback rehearsal result |
+
+## Invariants this promotion must not break
+
+- **The legacy CD path must not be allowed to revert this.** THIS IS THE ONE
+  THAT BITES. `.github/workflows/web-stack.yml` still carries
+  `repository_dispatch: types: [web-image-published]`, which the PUBLIC site repo
+  `greatfallstoolbus.org` fires from its own `container-ghcr.yml` on **every push
+  to `main`**. That dispatch runs `just web-stack-apply` against
+  `Deployment/greatfallstoolbus-org` in `greatfallstoolbus-org-production` — the
+  same object this promotion cuts over. Unchecked it would (a) imperatively
+  re-pin the adapter-node digest back over the gftb-site static origin and (b)
+  re-apply the committed kustomization, which **recreates** `allow-egress-dns`
+  and `allow-egress-discuss-archive` that `web-release-apply` just deleted --
+  omissions are not pruned -- undoing the empty-egress invariant. The next green
+  push to the site repo would silently falsify the SERVED proof.
+
+  Two things hold it:
+
+  1. **Mechanical (this repo).** `just web-stack-apply` now takes
+     `_web-stack-promotion-interlock` as its FIRST dependency. The interlock
+     reads the LIVE Deployment's container image and exits non-zero if it already
+     carries a `ghcr.io/great-falls-tool-bus/gftb-site` reference — i.e. exactly
+     when the promotion is in place. **It precedes every mutation**: it is the
+     first dependency of the only recipe that mutates this workload, so the
+     dispatched CD job fails loudly instead of reverting. It does NOT gate the
+     workflow's *separate, earlier* `just web-stack-server-dry-run` step — that
+     step is `apply --dry-run=server` and changes nothing, so a green dry-run
+     step followed by an interlock refusal in the apply step is the expected
+     shape, not a bypass. `scripts/validate-public-operator-surface.py` fails
+     `just public-surface` if the interlock is removed, weakened, demoted out of
+     first position, or edited: its body is pinned by SHA-256 in
+     `WEB_RELEASE_CRITICAL_RECIPE_DIGESTS` like the rest of the chain.
+  2. **Operator (the other repo).** *Do not push to `greatfallstoolbus.org`
+     `main` during or after this promotion until the legacy CD dispatch is
+     retired.* Quiesce it before S3 and keep it quiesced. The interlock turns a
+     silent revert into a red workflow run, but a red run on every site push is
+     still noise the operator has to own.
+
+  Retiring the `web-image-published` dispatch (and with it `web-stack-apply`,
+  `web-cd-ci-green-gate`, and the adapter-node image entirely) is **Phase-5**
+  work and is deliberately NOT in this change: the adapter-node workload is still
+  the live origin until S3 succeeds, and removing its only apply path before the
+  static origin is proven SERVED would leave no way to roll forward.
+
+- **The pin is rendered, never patched.** Writing `kubectl set image`, a
+  `scale`, a replicas patch, a `rollout undo`, a `replace -f`, a `delete …
+  deployment`, a `delete -f`/`delete --filename`, a `kubectl edit deployment`, a
+  JSON patch of the container image path, or a **merge** patch that carries the
+  image through `spec.template.spec.containers[]` (`--type merge -p
+  '{"spec":{"template":{"spec":{"containers":[{"image":…`) — literally, on one
+  logical line, including through a `kubectl…` wrapper such as `kubectl_clean`
+  and across backslash line continuations — anywhere in the Justfile outside the
+  allowlisted legacy `web-stack-apply` fails `just public-surface`. The same
+  scan refuses a `kubectl` tree-apply (`-k`, `-f`, `--kustomize`, `--filename`)
+  aimed at `{{ web_stack_dir }}` (or its literal path) from any recipe other than
+  `web-stack-apply` and `web-stack-server-dry-run`, because a fresh
+  tree-apply would recreate `allow-egress-dns`/`allow-egress-discuss-archive`
+  and re-pin the tree's adapter-node digest without ever passing through
+  `_web-stack-promotion-interlock` (only `web-stack-apply` is bound to it).
+  Both scans are textual and do **not** see shell *variable indirection*
+  (`KC=kubectl; "${KC}" … set image`, a patch body assembled into a variable
+  on a previous line, or the tree directory bound to a variable first and the
+  variable passed to the tree-apply on the next line).
+  What makes an edit to a reviewed release recipe fail closed is the recipe-body
+  SHA-256 in `WEB_RELEASE_CRITICAL_RECIPE_DIGESTS`, not this scan.
+- **One renderer.** A second renderer in the plan or apply path changes the
+  recipe body digest and fails `just public-surface`.
+- **The chain is proved behaviorally, not only by digest.** `just
+  public-surface-selftest` runs `web-release-plan` → `_web-release-plan-preflight`
+  → `web-release-server-dry-run` → `web-release-apply` and
+  `_web-stack-promotion-interlock` as real child processes against mocked
+  `kubectl`/`just`/`git`, and asserts the exact `kubectl` argument order, that the
+  authorization preflight is the first thing that touches the cluster, that the
+  egress prune carries `--ignore-not-found` and runs AFTER the apply and BEFORE
+  the rollout wait, that a denied verb refuses with nothing applied, and that the
+  interlock refuses on a promoted live image and proceeds otherwise.
+- **The committed manifests never carry the gftb-site digest.** Image admission
+  is bound to the stack under validation.
+- **No namespace, no Secret, no Cloudflare.** The package is anonymously
+  pullable, so the namespace needs no registry credential, and the tunnel route
+  is untouched.
+- **Names-only, always.** Same rule as the executed cutover above.

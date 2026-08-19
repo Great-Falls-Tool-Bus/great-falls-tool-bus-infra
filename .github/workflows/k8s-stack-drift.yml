@@ -12,11 +12,12 @@ name: K8s Stack Drift (zero-diff where applicable)
 # FAILS the gate (hard error), same as edge-drift.yml's "assert zero-diff".
 #
 # web is DIFFERENT, by design, and is deliberately NOT held to the same bar:
-# k8s/web/greatfallstoolbus-org-production stays parked in git (replicas:0,
-# placeholder image -- scripts/validate-web-stack.sh guards this) while the
-# live on-cluster cutover state carries the operator-resolved image digest and
-# replicas:2, patched in IMPERATIVELY by `just web-stack-apply`
-# (docs/runbooks/oncluster-web-cutover.md P3), not by `apply -k`. A diff there
+# k8s/web/greatfallstoolbus-org-production is DISPATCH-GATED declare-only, not
+# parked (replicas 2 + a digest-pinned adapter-node image + no Namespace object
+# -- scripts/validate-web-stack.sh guards exactly that), while the live
+# on-cluster state carries whatever `just web-stack-apply` pinned IMPERATIVELY
+# after `apply -k` (docs/runbooks/oncluster-web-cutover.md P3), and after the
+# gftb-site promotion carries the static origin instead. A diff there
 # is EXPECTED, not drift, so the web job reports its diff (step summary +
 # artifact) but never fails the workflow on it. See Justfile
 # `_k8s-drift-check` for the full rationale.

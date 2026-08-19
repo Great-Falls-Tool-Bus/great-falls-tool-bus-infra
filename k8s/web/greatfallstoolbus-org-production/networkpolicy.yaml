@@ -9,14 +9,17 @@
 #
 # The web pod's ONLY public path is: cloudflared (tunnel) --3000--> this pod.
 # Prometheus scrape is admitted from the tinyland-dev-production monitoring
-# namespace on 3000. Egress is least-privilege: DNS only (the adapter-node app
-# serves static+prerendered content and needs no outbound data plane in this
-# skeleton; a cutover adds explicit allows for any real backend).
+# namespace on 3000. Egress is least-privilege: DNS, plus the one explicit
+# in-cluster allow the adapter-node origin actually needs — the request-time
+# discuss-archive read from the HyperKitty web tier (see the last policy in this
+# file). No 0.0.0.0/0, and no other backend.
 #
-# FAIL-CLOSED note: these policies select on the web pod labels. Because the
-# Deployment ships replicas:0 and the namespace is not created by this stack,
-# NOTHING is admitted or served until an operator materializes the namespace,
-# pins a real image, and flips replicas — none of which this file does.
+# FAIL-CLOSED note: these policies select on the web pod labels. The Deployment
+# ships replicas: 2 and a digest-pinned image, so these rules are NOT inert —
+# they take effect whenever the dispatch-gated web-stack.yml runs
+# `just web-stack-apply`. What merging this file cannot do is apply anything:
+# this stack creates no Namespace (the namespace-scoped web-apply SA cannot
+# either), and the public tunnel route stays fail-closed and dashboard-managed.
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -113,9 +116,13 @@ spec:
 # Service on 8080, but NetworkPolicy egress evaluates the POST-DNAT destination
 # — the mailman-core pod's real container port 8000 — so this rule targets the
 # mailman-core podSelector on 8000, NOT the Service's 8080. Scoped to that one
-# pod in that one namespace; no 0.0.0.0/0, no broad egress. Until cutover this
-# is inert (the Deployment ships replicas:0). Build-time prerender fetches do
-# NOT use this rule (they run in arc-runners, not this pod).
+# pod in that one namespace; no 0.0.0.0/0, no broad egress. This rule belongs to
+# the adapter-node origin and is live wherever that origin is applied (the
+# Deployment ships replicas: 2 and a digest pin; merging still applies nothing —
+# the only apply is the dispatch-gated web-stack.yml). The gftb-site static-origin
+# promotion REMOVES it: the reviewed render omits it and `just web-release-apply`
+# prunes it together with allow-egress-dns. Build-time prerender fetches do NOT
+# use this rule (they run in arc-runners, not this pod).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

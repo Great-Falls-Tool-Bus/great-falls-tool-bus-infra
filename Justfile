@@ -1548,21 +1548,24 @@ archive-stack-apply: archive-stack-server-dry-run
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ archive_stack_dir }}
 
 # --- GFTB on-cluster web serving (TIN-2541 skeleton; TIN-2543 cutover) -------
-# DECLARE-ONLY IN GIT. SvelteKit adapter-node -> ClusterIP 80->3000 ->
-# honey-ingress cloudflared tunnel, mirroring the proven MassageIthaca
-# full-on-cluster pattern. The checked-in overlay applies to NOTHING as-is: the
-# Deployment ships replicas:0 with a non-resolvable placeholder image, the
-# namespace is not created here, and the tunnel route is dashboard/token-managed
-# (never in git; TIN-991). scripts/validate-web-stack.sh guards that posture.
+# DISPATCH-GATED DECLARE-ONLY IN GIT. SvelteKit adapter-node -> ClusterIP
+# 80->3000 -> honey-ingress cloudflared tunnel, mirroring the proven MassageIthaca
+# full-on-cluster pattern. The checked-in overlay is DECLARED AND VALIDATED, not
+# parked: the Deployment carries replicas: 2 and a digest-pinned
+# ghcr.io/great-falls-tool-bus/greatfallstoolbus.org image, this stack creates no
+# Namespace, and the tunnel route is dashboard/token-managed (never in git;
+# TIN-991). scripts/validate-web-stack.sh enforces exactly that posture.
 #
 # The cutover recipes below are the operator-gated APPLY plane (TIN-2543, ADR
 # 0008), run ONLY through .github/workflows/web-stack.yml (workflow_dispatch +
-# confirm=apply, protected web-apply environment). They do NOT un-park the tree:
-# the real image is supplied at dispatch (WEB_APPLY_IMAGE) and replicas are
-# flipped imperatively post-apply, so the k8s/web overlay stays replicas:0 +
-# placeholder. The namespace-scoped web-apply SA cannot create namespaces; the
-# operator mints the greatfallstoolbus-org-production namespace + SA/RBAC out of
-# band first. See k8s/web/README.md and docs/runbooks/oncluster-web-cutover.md.
+# confirm=apply + the protected web-apply environment, or the site repo's
+# repository_dispatch: web-image-published). MERGING APPLIES NOTHING; the safety
+# is that gate. The image actually served is supplied at dispatch
+# (WEB_APPLY_IMAGE) and re-pinned imperatively post-apply, so the live pin may
+# diverge from the declarative record in the tree. The namespace-scoped web-apply
+# SA cannot create namespaces; the operator mints the
+# greatfallstoolbus-org-production namespace + SA/RBAC out of band first. See
+# k8s/web/README.md and docs/runbooks/oncluster-web-cutover.md.
 
 web_stack_dir := "k8s/web/greatfallstoolbus-org-production"
 web_stack_ns := "greatfallstoolbus-org-production"
@@ -1590,11 +1593,37 @@ _web-apply-kubeconfig-only:
 web-stack-server-dry-run: web-stack-validate _web-apply-inputs
     kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply --dry-run=server -k {{ web_stack_dir }}
 
+# PROMOTION INTERLOCK (TIN-3816). This legacy adapter-node carrier and the
+# reviewed web-release chain both mutate Deployment/greatfallstoolbus-org in
+# {{ web_stack_ns }}. Once the gftb-site static origin is promoted in place,
+# re-running this carrier would re-pin the adapter-node image over it and
+# `apply -k` would recreate allow-egress-dns / allow-egress-discuss-archive --
+# silently reverting the promotion and falsifying the SERVED proof. The carrier
+# is fired unattended by web-stack.yml's `repository_dispatch: web-image-published`
+# (sent by greatfallstoolbus.org's container-ghcr.yml on every push to main), so
+# a human gate is not enough: refuse mechanically, from live state.
+#
+# Retiring this carrier is Phase-5 work. Until then, the quiesce instruction in
+# docs/runbooks/oncluster-web-cutover.md section S is the operator half of this
+# interlock and this recipe is the mechanical half.
+_web-stack-promotion-interlock: _web-apply-kubeconfig-only
+    #!/usr/bin/env bash
+    set -euo pipefail
+    live_image="$(kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} get deployment/greatfallstoolbus-org --ignore-not-found -o jsonpath='{.spec.template.spec.containers[?(@.name=="greatfallstoolbus-org")].image}')"
+    case "${live_image}" in
+      ghcr.io/great-falls-tool-bus/gftb-site@*|ghcr.io/great-falls-tool-bus/gftb-site:*)
+        echo "::error::promotion interlock: Deployment/greatfallstoolbus-org in {{ web_stack_ns }} already carries the promoted gftb-site origin (${live_image}). The legacy adapter-node carrier would revert it. Refusing." >&2
+        echo "Quiesce greatfallstoolbus.org main (the repository_dispatch source) until this carrier is retired; see docs/runbooks/oncluster-web-cutover.md section S." >&2
+        exit 1
+        ;;
+    esac
+    echo "promotion interlock: live image '${live_image:-<absent>}' is not a promoted gftb-site origin; the legacy carrier may proceed"
+
 # Operator-gated cutover apply: workload -> pin image -> flip replicas 0 -> N.
 # The namespace must already exist (the SA is namespace-scoped and cannot create
 # it); replicas are patched on the Deployment resource, not via the scale
 # subresource, so the least-privilege patch-Deployment grant is sufficient.
-web-stack-apply: web-stack-server-dry-run
+web-stack-apply: _web-stack-promotion-interlock web-stack-server-dry-run
     kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply -k {{ web_stack_dir }}
     kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} set image deployment/greatfallstoolbus-org greatfallstoolbus-org="${WEB_APPLY_IMAGE}"
     kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} patch deployment/greatfallstoolbus-org --type merge --patch '{"spec":{"replicas":'"${WEB_APPLY_REPLICAS:-2}"'}}'
@@ -3001,6 +3030,198 @@ web-release-served-proof: _web-release-candidate-inputs
     [[ "${qr_type}" == image/svg+xml* ]] || { echo "SERVED QR content type mismatch" >&2; exit 1; }
     echo "SERVED source proof passed: source=${WEB_APPLY_SHA} access=${access_state}"
 
+# --- Reviewed gftb-site release MUTATION chain -------------------------------
+# The mutating complement to the proof-only recipes above. It reuses their input
+# contract verbatim (_web-release-candidate-inputs: exact gftb-site digest, exact
+# 40-hex source SHA, replicas exactly 2, no ambient proxy) and it reuses their
+# renderer verbatim (web-release-render) -- there is exactly ONE renderer in this
+# repository and the apply plane may not carry a second one.
+#
+# The load-bearing property is that NO step here resolves an image, sets an
+# image, or patches replicas. `web-release-render` already bakes ${WEB_APPLY_IMAGE}
+# and replicas: 2 into the rendered bytes; `web-release-plan` records those exact
+# bytes under an operator-private plan root; `web-release-apply` re-renders,
+# refuses unless the re-render is byte-identical to the recorded plan, and then
+# applies THOSE bytes. So the reviewed bytes and the applied bytes cannot diverge,
+# and `kubectl rollout history` can always be reconciled against a render of the
+# reviewed inputs. This is deliberately unlike the legacy `web-stack-apply`
+# carrier, which imperatively `set image`s the adapter-node origin.
+#
+# Nothing here creates the namespace (the apply identity is namespace-scoped and
+# cannot), ships a Secret, or touches Cloudflare. The public path does not change:
+# the apex already resolves to the honey-ingress tunnel and the tunnel already
+# routes to Service/greatfallstoolbus-org -- which is exactly why the cutover is
+# in place in {{ web_stack_ns }} rather than in a parallel namespace.
+
+# Plan artifacts are release evidence, never Git content: operator-owned private
+# root, 0700, artifacts 0600. Mirrors the .tofu-plans/ contract.
+_web-release-plan-root-contract:
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
+    set +x
+    set -euo pipefail
+    umask 077
+    python3 -I - "$(git rev-parse --show-toplevel)/.k8s-plans" <<'PY'
+    import os
+    import stat
+    import sys
+    from pathlib import Path
+
+    root = Path(sys.argv[1])
+    if not root.exists() and not root.is_symlink():
+        root.mkdir(mode=0o700)
+    metadata = root.lstat()
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise SystemExit(".k8s-plans must be a real directory, not a symlink")
+    if metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) != 0o700:
+        raise SystemExit(".k8s-plans must be operator-owned and mode 0700")
+    for path in sorted(root.glob("web-release.*")):
+        item = path.lstat()
+        if stat.S_ISLNK(item.st_mode) or not stat.S_ISREG(item.st_mode):
+            raise SystemExit(f"web release plan artifact must be a regular file: {path.name}")
+        if item.st_uid != os.getuid() or stat.S_IMODE(item.st_mode) != 0o600:
+            raise SystemExit(f"web release plan artifact {path.name} must be operator-owned and mode 0600")
+    PY
+
+# The apply identity. Same NAME as the existing cutover credential
+# (WEB_APPLY_KUBECONFIG) so no new secret is introduced, but held to the ARC
+# custody bar: operator-owned regular file, mode 0600, outside every repository
+# tree, and no ambient KUBECONFIG allowed to shadow it.
+#
+# It also runs the AUTHORIZATION PREFLIGHT for the whole mutating chain, before
+# any mutation is attempted. `apply --dry-run=server` authorizes only the objects
+# it applies; it does NOT authorize the NetworkPolicy delete web-release-apply
+# performs afterwards, and the render introduces a NetworkPolicy object that does
+# not exist yet (default-deny-egress), so `create networkpolicies` is a new verb
+# too. Without this preflight the realistic failure is: dry-run green -> apply
+# succeeds (the Deployment now runs the gftb-site image) -> delete denied ->
+# `set -e` aborts before the rollout wait, leaving the promotion half-done with
+# allow-egress-dns still additively permitting egress and the stated "no egress
+# at all" invariant silently false. Mirrors the auth can-i preflights the ARC and
+# proof recipes already use.
+_web-release-apply-kubeconfig-contract:
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
+    set +x
+    set -euo pipefail
+    : "${WEB_APPLY_KUBECONFIG:?Set WEB_APPLY_KUBECONFIG to the namespace-scoped web-apply kubeconfig}"
+    [[ -z "${KUBECONFIG:-}" ]] || { echo "Refusing ambient KUBECONFIG; WEB_APPLY_KUBECONFIG is authoritative" >&2; exit 2; }
+    python3 -I - "${WEB_APPLY_KUBECONFIG}" "$(git rev-parse --show-toplevel)" <<'PY'
+    import os
+    import stat
+    import sys
+    from pathlib import Path
+
+    path = Path(sys.argv[1]).expanduser().resolve(strict=True)
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("WEB_APPLY_KUBECONFIG must remain outside the repository")
+    metadata = path.stat()
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid():
+        raise SystemExit("WEB_APPLY_KUBECONFIG must be a regular file owned by the operator")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise SystemExit("WEB_APPLY_KUBECONFIG must have mode 0600")
+    PY
+    umask 077
+    authz_dir="$(mktemp -d "${TMPDIR:-/tmp}/gftb-web-release-authz.XXXXXX")"
+    trap 'rm -rf "${authz_dir}"' EXIT
+    authz_stderr="${authz_dir}/authz.stderr"
+    # Every verb the chain needs, in {{ web_stack_ns }}: `apply -f` on the three
+    # rendered kinds (get/create/update/patch), `rollout status` (get/list/watch
+    # deployments), and the NetworkPolicy prune (delete). Fail closed on a "no"
+    # AND on any diagnostic output, so an authorization transport error is a
+    # refusal rather than a pass.
+    for authz_contract in \
+      "get deployments.apps" "list deployments.apps" "watch deployments.apps" \
+      "create deployments.apps" "update deployments.apps" "patch deployments.apps" \
+      "get services" "create services" "update services" "patch services" \
+      "get networkpolicies.networking.k8s.io" \
+      "create networkpolicies.networking.k8s.io" \
+      "update networkpolicies.networking.k8s.io" \
+      "patch networkpolicies.networking.k8s.io" \
+      "delete networkpolicies.networking.k8s.io"; do
+      read -r authz_verb authz_resource <<<"${authz_contract}"
+      : > "${authz_stderr}"
+      authz_decision="$(kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" auth can-i "${authz_verb}" "${authz_resource}" --namespace {{ web_stack_ns }} 2>"${authz_stderr}" || true)"
+      [[ ! -s "${authz_stderr}" ]] || { echo "Kubernetes authorization review for ${authz_verb} ${authz_resource} emitted diagnostics; refusing before any mutation" >&2; exit 2; }
+      [[ "${authz_decision}" == "yes" ]] || { echo "WEB_APPLY_KUBECONFIG cannot ${authz_verb} ${authz_resource} in {{ web_stack_ns }}; refusing before any mutation" >&2; exit 2; }
+    done
+    echo "web release apply authorization preflight passed in {{ web_stack_ns }}"
+
+# PLAN. Offline: renders the reviewed inputs ONCE through web-release-render and
+# records the bytes, their digest, the selected image/source SHA, and the infra
+# carrier commit. Contacts no cluster and no registry.
+web-release-plan: _web-release-candidate-inputs _web-release-plan-root-contract
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
+    set +x
+    set -euo pipefail
+    umask 077
+    repo_root="$(git rev-parse --show-toplevel)"
+    plan_root="${repo_root}/.k8s-plans"
+    just --justfile "${repo_root}/Justfile" --working-directory "${repo_root}" web-release-render > "${plan_root}/web-release.rendered.yaml"
+    test -s "${plan_root}/web-release.rendered.yaml" || { echo "web-release-render produced no manifest" >&2; exit 1; }
+    python3 -I -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${plan_root}/web-release.rendered.yaml" > "${plan_root}/web-release.render-sha256"
+    printf '%s\n' "${WEB_APPLY_IMAGE}" > "${plan_root}/web-release.image"
+    printf '%s\n' "${WEB_APPLY_SHA}" > "${plan_root}/web-release.source-sha"
+    git -C "${repo_root}" rev-parse HEAD > "${plan_root}/web-release.carrier-sha"
+    chmod 600 "${plan_root}/web-release.rendered.yaml" "${plan_root}/web-release.render-sha256" "${plan_root}/web-release.image" "${plan_root}/web-release.source-sha" "${plan_root}/web-release.carrier-sha"
+    echo "web release plan recorded"
+    echo "  image:   ${WEB_APPLY_IMAGE}"
+    echo "  source:  ${WEB_APPLY_SHA}"
+    echo "  carrier: $(tr -d '\n' < "${plan_root}/web-release.carrier-sha")"
+    echo "  render:  sha256:$(tr -d '\n' < "${plan_root}/web-release.render-sha256")"
+
+# Refuse a stale or foreign plan: the inputs, the carrier, and a fresh render
+# must all still equal what the plan recorded.
+_web-release-plan-preflight: _web-release-candidate-inputs _web-release-plan-root-contract
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
+    set +x
+    set -euo pipefail
+    umask 077
+    repo_root="$(git rev-parse --show-toplevel)"
+    plan_root="${repo_root}/.k8s-plans"
+    for artifact in rendered.yaml render-sha256 image source-sha carrier-sha; do
+      test -f "${plan_root}/web-release.${artifact}" || { echo "No web release plan recorded; run just web-release-plan first" >&2; exit 2; }
+    done
+    [[ "$(tr -d '\n' < "${plan_root}/web-release.image")" == "${WEB_APPLY_IMAGE}" ]] || { echo "Planned image differs from WEB_APPLY_IMAGE; re-plan" >&2; exit 2; }
+    [[ "$(tr -d '\n' < "${plan_root}/web-release.source-sha")" == "${WEB_APPLY_SHA}" ]] || { echo "Planned source SHA differs from WEB_APPLY_SHA; re-plan" >&2; exit 2; }
+    [[ "$(git -C "${repo_root}" rev-parse HEAD)" == "$(tr -d '\n' < "${plan_root}/web-release.carrier-sha")" ]] || { echo "Infra carrier changed after the web release plan; re-plan" >&2; exit 2; }
+    recorded_digest="$(tr -d '\n' < "${plan_root}/web-release.render-sha256")"
+    [[ "$(python3 -I -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${plan_root}/web-release.rendered.yaml")" == "${recorded_digest}" ]] || { echo "Recorded web release plan bytes do not match their receipt; re-plan" >&2; exit 2; }
+    recheck="$(mktemp "${plan_root}/web-release.recheck.XXXXXX")"
+    chmod 600 "${recheck}"
+    trap 'rm -f "${recheck}"' EXIT
+    just --justfile "${repo_root}/Justfile" --working-directory "${repo_root}" web-release-render > "${recheck}"
+    [[ "$(python3 -I -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${recheck}")" == "${recorded_digest}" ]] || { echo "Reviewed manifests re-render differently than the recorded plan; re-plan" >&2; exit 2; }
+    echo "web release plan preflight passed: render sha256:${recorded_digest}"
+
+# Server-side dry-run of the EXACT recorded plan bytes. No mutation.
+web-release-server-dry-run: _web-release-apply-kubeconfig-contract _web-release-plan-preflight
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
+    set +x
+    set -euo pipefail
+    repo_root="$(git rev-parse --show-toplevel)"
+    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply --dry-run=server -f "${repo_root}/.k8s-plans/web-release.rendered.yaml"
+
+# ATTENDED APPLY. Gated exactly like arc-apply: a clean, signed checkout equal to
+# canonical main, GFTB_APPLY_CONFIRM=apply, an operator-custody kubeconfig, and a
+# plan that still reproduces byte-for-byte. It dry-runs, applies the recorded
+# bytes, prunes the two legacy adapter-node egress policies the render omits
+# (`kubectl apply` does not prune omissions), and waits for the rollout.
+web-release-apply: _reviewed-clean-main _operator-apply-confirm _web-release-apply-kubeconfig-contract _web-release-plan-preflight
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
+    set +x
+    set -euo pipefail
+    repo_root="$(git rev-parse --show-toplevel)"
+    plan="${repo_root}/.k8s-plans/web-release.rendered.yaml"
+    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply --dry-run=server -f "${plan}"
+    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply -f "${plan}"
+    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} delete networkpolicy allow-egress-dns allow-egress-discuss-archive --ignore-not-found
+    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} rollout status deployment/greatfallstoolbus-org --timeout=300s
+    echo "web release applied; now run the PINNED/RUNNING and SERVED proofs"
+
 # Env (delivered by web-stack.yml on the CD path; never baked):
 #   CI_GREEN_SHA   the commit SHA to gate on (client_payload.sha)
 #   CI_GREEN_REPO  owner/name of the site repo (default the GFTB site repo)
@@ -3060,14 +3281,17 @@ web-cd-ci-green-gate:
 # the check fails (fail_on_drift=true), mirroring edge-drift.yml's "assert
 # zero-diff" gate.
 #
-# web is NOT held to the same bar, by design: k8s/web/greatfallstoolbus-org-production
-# stays parked in git (replicas:0, placeholder image -- scripts/validate-web-stack.sh
-# guards this), while the live on-cluster cutover state carries the
-# operator-resolved image digest and replicas:2, patched in IMPERATIVELY by
-# web-stack-apply's `set image` / `patch` steps above (not by `apply -k`;
-# docs/runbooks/oncluster-web-cutover.md P3). A diff there is EXPECTED, not
-# drift, so web-stack-drift-check reports it (fail_on_drift=false) and never
-# fails the gate on it.
+# web is NOT held to the same bar, by design. k8s/web/greatfallstoolbus-org-production
+# is DISPATCH-GATED declare-only, not parked: it carries replicas:2 and a
+# digest-pinned adapter-node image, and creates no namespace
+# (scripts/validate-web-stack.sh guards exactly that). The live state still
+# diverges, because web-stack-apply re-pins the dispatch-supplied image
+# IMPERATIVELY after `apply -k` (docs/runbooks/oncluster-web-cutover.md P3), and
+# because after the gftb-site promotion the live Deployment runs the static
+# origin, which this tree never carries. A diff there is EXPECTED, not drift, so
+# web-stack-drift-check reports it (fail_on_drift=false) and never fails the gate
+# on it. This check is read-only and therefore not interlocked; the mutating
+# carrier is (see _web-stack-promotion-interlock).
 _k8s-drift-check kubeconfig namespace dir label fail_on_drift:
     #!/usr/bin/env bash
     set -uo pipefail
