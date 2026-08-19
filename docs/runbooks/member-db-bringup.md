@@ -18,11 +18,17 @@ the RPO ≤ 1h / RTO ≤ 4h acceptance row with a real restore. Every step is
 
 Two independent blockers, and they gate different halves of the runbook.
 
-1. **The app half of slice S1 has not landed.** The migration Job's image is
-   `ghcr.io/great-falls-tool-bus/gftb-platform`, whose `/bin/migrator`
-   entrypoint, advisory lock, and migration-hash ledger are S1's app-side
-   deliverable. **Steps M1–M3 cannot run before that image exists.** Steps
-   N through B5 (the database itself) do not depend on it.
+1. **The app half of slice S1 is open but unlanded.**
+   `Great-Falls-Tool-Bus/greatfallstoolbus.org` **PR #172** (draft, stacked on
+   S0 PR #171) carries the `/bin/migrator` entrypoint, the advisory lock, and
+   the migration-hash ledger. Until it lands and publishes an image,
+   **steps M1-M3 cannot run.** Steps N through B4 (the database itself) do not
+   depend on it.
+
+   The role names here are aligned to that PR's checked-in SQL —
+   `gftb_migrator` (owner/DDL) and `gftb_app` (DML-only). If PR #172 renames
+   either before landing, `cluster.yaml` and
+   `scripts/validate-member-db-stack.sh` move with it.
 2. **The object-store ruling in step B1 is open.** WAL archiving starts the
    moment the `Cluster` is applied, so B1 is a hard pre-apply gate for step S,
    not a follow-up. Applying with an unreachable object store gives a database
@@ -101,12 +107,12 @@ cluster.
 ## Step C — credentials
 
 **C1 — the owner credential is not yours to make.** CNPG generates
-`gftb-member-db-app` at bootstrap with the `gftb_member_migrator` password. No
+`gftb-member-db-app` at bootstrap with the `gftb_migrator` password. No
 operator action creates or reads it.
 
 **C2 — mint the runtime credential.** Create `gftb-member-db-runtime` in the
 database namespace, type `kubernetes.io/basic-auth`, `username:
-gftb_member_runtime`. `managed.roles` binds the role to it. This is the DML-only
+gftb_app`. `managed.roles` binds the role to it. This is the DML-only
 credential the platform's web and worker Deployments will consume.
 
 ## Step S — apply the database stack
@@ -139,10 +145,14 @@ Check all four, and record them as release evidence:
    acceptance row silently and is filling its WAL volume.
 4. Both PVCs are `Bound` on `openebs-bumble-postgresql-retain` at 20Gi / 10Gi.
 
-**S3 — prove the role separation.** Connect as `gftb_member_runtime` and confirm
+**S3 — prove the role separation.** Connect as `gftb_app` and confirm
 `CREATE TABLE` is rejected and `INSERT` on a migrator-created table is accepted.
-This is the infra-side half of S1's acceptance row; the app half proves the same
-thing in `just test-integration` against a testcontainer.
+This is the infra-side half of S1's acceptance row; PR #172 proves the same
+thing in `just test-integration` against a real PostgreSQL. Note that its
+fixture asserts `gftb_app` has **no** login, which is true in a bare
+testcontainer and deliberately not true here — this cluster is what issues the
+login credential, and `0002` tolerates it (it fails only on `SUPERUSER` or
+`BYPASSRLS`).
 
 ## Step B4 — backup verification (the RPO/RTO evidence)
 
@@ -171,14 +181,17 @@ re-deriving this Secret.
 **M2 — render and dry-run.**
 
 ```bash
-export MEMBER_DB_MIGRATOR_IMAGE=ghcr.io/great-falls-tool-bus/gftb-platform@sha256:<64 hex>
+# TIN-3815's repository rename has not happened yet, so today this is the
+# greatfallstoolbus.org slug; the guard admits the gftb-platform slug too.
+export MEMBER_DB_MIGRATOR_IMAGE=ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:<64 hex>
 just member-db-migrate-render            # inspect the exact bytes
 just member-db-migrate-server-dry-run
 ```
 
-The input guard refuses a tag, refuses the declare-only `PLACEHOLDER`, and
-requires the exact `gftb-platform` repository. The render is the single source
-of the bytes: the dry-run and the apply both go through it.
+The input guard refuses a tag and refuses the declare-only `PLACEHOLDER`. It
+admits exactly two repositories — `greatfallstoolbus.org` (today) and
+`gftb-platform` (after TIN-3815) — and nothing else. The render is the single
+source of the bytes: the dry-run and the apply both go through it.
 
 **M3 — run it.**
 

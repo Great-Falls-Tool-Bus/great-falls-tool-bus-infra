@@ -119,7 +119,7 @@ spec:
       # CNPG generates this role's password into Secret `gftb-member-db-app`
       # and it is the ONLY credential the pre-rollout migration Job receives.
       # No web or worker pod ever gets it.
-      owner: gftb_member_migrator
+      owner: gftb_migrator
       encoding: UTF8
       # C collation, deliberately. It is deterministic, it does not depend on a
       # locale being generated inside the container image, and it keeps index
@@ -135,7 +135,7 @@ spec:
         # postInitApplicationSQL. Created NOLOGIN/NOINHERIT first; the
         # `managed.roles` block below is what grants LOGIN and binds the
         # operator-minted password Secret, so no password ever appears in git.
-        - CREATE ROLE gftb_member_runtime NOLOGIN NOINHERIT;
+        - CREATE ROLE gftb_app NOLOGIN NOINHERIT;
       postInitApplicationSQL:
         # DML-ONLY RUNTIME ROLE (TIN-3817 acceptance row 2; S1 acceptance
         # "the runtime role is rejected on CREATE TABLE and accepted on
@@ -143,26 +143,35 @@ spec:
         # PUBLIC; the explicit REVOKE makes the posture legible and survives a
         # restore into a cluster whose template1 was modified.
         - REVOKE ALL ON SCHEMA public FROM PUBLIC;
-        - GRANT CONNECT ON DATABASE gftb_member TO gftb_member_runtime;
-        - GRANT USAGE ON SCHEMA public TO gftb_member_runtime;
+        - GRANT CONNECT ON DATABASE gftb_member TO gftb_app;
+        - GRANT USAGE ON SCHEMA public TO gftb_app;
         # Default privileges are attached to the MIGRATOR role, so every table
         # and sequence a future migration creates is automatically reachable by
         # the runtime role with DML only — never DDL. Without the FOR ROLE
         # clause these defaults would attach to the bootstrap superuser and
         # would not apply to migrator-created objects at all.
-        - ALTER DEFAULT PRIVILEGES FOR ROLE gftb_member_migrator IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO gftb_member_runtime;
-        - ALTER DEFAULT PRIVILEGES FOR ROLE gftb_member_migrator IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO gftb_member_runtime;
-        # HAND-OFF TO THE APP HALF (S2, spec S1.3 note M11): the six vendored
-        # `auth.*` tables land in their own schema. This overlay does not create
-        # that schema, so S2's vendored migration must itself issue the matching
-        # GRANT USAGE ON SCHEMA auth + ALTER DEFAULT PRIVILEGES pair, or the
-        # runtime role will be able to reach public but not auth.
+        - ALTER DEFAULT PRIVILEGES FOR ROLE gftb_migrator IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO gftb_app;
+        - ALTER DEFAULT PRIVILEGES FOR ROLE gftb_migrator IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO gftb_app;
+        # SCHEMA `auth` AND `migration` ARE THE APP HALF'S, AND IT HANDLES THEM.
+        # Verified against greatfallstoolbus.org PR #172 (S1 app half): its
+        # migration 0002 creates schema `auth`, issues the matching
+        # GRANT USAGE + ALTER DEFAULT PRIVILEGES pair for gftb_app there, and
+        # REVOKEs the runtime role from schema `migration` entirely so the
+        # hash ledger is unreadable to it. Nothing is owed here for those two
+        # schemas; the statements above cover `public` and, more importantly,
+        # cover the window BEFORE 0002 has ever run.
+        #
+        # COMPOSITION NOTE. 0002 creates gftb_app only `IF NOT EXISTS` and fails
+        # only on SUPERUSER or BYPASSRLS — never on LOGIN. So this cluster
+        # pre-provisioning the role WITH login and a password (see managed.roles
+        # below) is the intended split: 0002 finds it, skips creation, and needs
+        # no CREATEROLE on the migration credential.
 
   managed:
     roles:
       # Declarative role management. `ensure: present` makes CNPG reconcile the
       # role created in postInitSQL above rather than fight it.
-      - name: gftb_member_runtime
+      - name: gftb_app
         ensure: present
         comment: >-
           GFTB Member v0 DML-only runtime role (TIN-3817 acceptance row 2).
@@ -182,7 +191,7 @@ spec:
         connectionLimit: 40
         # NAME ONLY. The operator mints this Secret in-cluster before first
         # apply (docs/runbooks/member-db-bringup.md step C2). It is
-        # kubernetes.io/basic-auth with username gftb_member_runtime; the value
+        # kubernetes.io/basic-auth with username gftb_app; the value
         # never enters git, CI, or a workflow log.
         passwordSecret:
           name: gftb-member-db-runtime

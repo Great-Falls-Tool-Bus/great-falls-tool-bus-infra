@@ -8,11 +8,14 @@
 #
 # WHY THIS IS A TEMPLATE AND NOT A STACK MEMBER
 #
-#   1. It carries no image. S1's app half has not landed, so
-#      ghcr.io/great-falls-tool-bus/gftb-platform has no digest yet. The image
-#      arrives at dispatch as MEMBER_DB_MIGRATOR_IMAGE, exactly the way
-#      WEB_APPLY_IMAGE arrives for the web carrier, and
-#      `just member-db-migrate-render` substitutes the PLACEHOLDER below.
+#   1. It carries no image. S1's app half is open but unlanded
+#      (greatfallstoolbus.org PR #172, stacked on S0 PR #171), so no platform
+#      image carrying /bin/migrator has been published yet. The image arrives at
+#      dispatch as MEMBER_DB_MIGRATOR_IMAGE, exactly the way WEB_APPLY_IMAGE
+#      arrives for the web carrier, and the member-db-migrate-render recipe
+#      substitutes the PLACEHOLDER below. Its input guard admits both
+#      ghcr.io/great-falls-tool-bus/greatfallstoolbus.org (today) and
+#      .../gftb-platform (after the TIN-3815 rename), digest-pinned either way.
 #      scripts/validate-member-db-stack.sh asserts the committed bytes still
 #      carry the placeholder, so a real digest can never be smuggled into the
 #      tree and applied without passing the operator input guard.
@@ -96,7 +99,7 @@ spec:
             # THE NARROW CREDENTIAL, BY NAME ONLY. Operator-provisioned in the
             # platform namespace from the CNPG-generated `gftb-member-db-app`
             # Secret in the database namespace (runbook step M1). It is the
-            # gftb_member_migrator owner role — DDL authority — and it is scoped
+            # gftb_migrator owner role — DDL authority — and it is scoped
             # to this Job alone.
             - name: DATABASE_URL
               valueFrom:
