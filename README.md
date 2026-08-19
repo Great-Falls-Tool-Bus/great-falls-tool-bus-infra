@@ -29,6 +29,21 @@ Grounded mermaid diagrams (mail flow, network/ports, planes, Bazel/GF) live in
   secret-free `validate` job runs on GitHub-hosted infrastructure instead.
 - Scale set: `great-falls-tool-bus-nix` (ARC registration identity only;
   workflows use `runs-on: tinyland-nix`)
+- Runner group: `great-falls-tool-bus-infra` (TIN-3902). GitHub-side admission
+  boundary, `visibility: selected`, `allows_public_repositories: true`. The
+  roster is `gftb-site` and `greatfallstoolbus.org`, declared in
+  `config/organization.yaml` `runner_contract.runner_group`; the scale set
+  binds to it through `runner_group` /
+  `runner_group_policy = "organization-restricted"` in the ARC tfvars. This is
+  not a runner label and not an ARC registration anchor. Public repository
+  admission is accepted by operator ruling 2026-08-18 (TIN-3902) so the
+  `greatfallstoolbus.org` roster entry is effective rather than inert;
+  TIN-3209's cross-tenant concern is acknowledged and tracked there. This
+  repository itself remains excluded — and with public admission on, the roster
+  is the ONLY control keeping it out; the public-repository flag is no longer a
+  second lock. Adding id `1286829099` is a one-line edit and must stay an
+  explicit operator decision. `just runner-group-contract` fails on that id
+  unless an `infra_repo_admission_ruling:` field records the decision.
 - Shared Nix cache: `http://attic.nix-cache.svc.cluster.local`
 - Shared Bazel cache: `grpc://bazel-cache.nix-cache.svc.cluster.local:9092`
 - Shared Bazel executor: `grpc://gf-reapi-cell.gf-rbe.svc.cluster.local:8980`
@@ -44,10 +59,42 @@ Grounded mermaid diagrams (mail flow, network/ports, planes, Bazel/GF) live in
   (extra-runner-set executor wiring, consumer registry, token-exchange front
   door) and (b) the template carried four divergent pins across its own files,
   a drift wart. `config/organization.yaml`, `MODULE.bazel`, `Justfile`, and the
-  non-ARC workflow consumers share this implementation pin. The ARC runner and
-  OIDC profile surfaces retain their existing
-  `df510574d17b85e7f15470caf3574fcabc4768f1` role pin; pin convergence is a
-  separate adoption change, not part of the source-checkout repair.
+  non-ARC workflow consumers share this implementation pin.
+- ARC/OIDC role pin: `11ace397282ff89aeb1dfeb4a32fcbed3200c2ff`. It was the
+  head of GloriousFlywheel `origin/main` when selected on 2026-08-18;
+  `origin/main` has advanced since, so the accurate statement is that this pin
+  is a reviewed **ancestor** of `origin/main`, not `origin/main` itself. What
+  binds the `arc-runners` stack to it is the Justfile — `arc_core_default` /
+  `arc_core_ci_default` select the checkout and `#ci` devshell that
+  `tofu -chdir=<core>/tofu/stacks/arc-runners` runs from, and
+  `_reviewed-arc-core` refuses unless that checkout is clean, signed,
+  canonical, and exactly `arc_core_sha`. `validate-core-checkout.py`
+  `ARC_CORE_PIN` and `validate-public-operator-surface.py` `ARC_CORE_SHA` pin
+  those Justfile strings against drift; neither names the `arc-runners` path
+  nor executes anything. Advanced by TIN-3902 from
+  `df510574d17b85e7f15470caf3574fcabc4768f1` (2026-07-09) because the
+  `runner_group` / `runner_group_policy` inputs did not exist in the
+  `arc-runners` stack before GloriousFlywheel `f13f8ad9` (TIN-3209, PR #1303).
+  Reviewed surface between the two pins: no `arc-runners` stack variable was
+  removed and **no pre-existing default changed**; the only new REQUIRED input
+  is `runner_group`; every other new input is **inert for this overlay** —
+  proven by the plan below, not by inspection. (Inert is the accurate claim,
+  not "defaults off": `helm_storage_driver` defaults to `secret`,
+  `tofu_plan_token_secret_enabled` and `tofu_plan_create_namespace` default to
+  `true`, and `dind_work_volume_size` / `dind_docker_volume_size` default to
+  `40Gi` / `80Gi`. Each is gated behind another input this overlay leaves off,
+  or reproduces the behaviour already in state, so none of them reaches the
+  plan.) `runner_namespace` stays `arc-runners`, the `arc-runner` module's
+  resource shape is unchanged, and the `nixpkgs-opentofu` flake input is
+  byte-identical, so the pinned OpenTofu 1.11.6 plan schema still holds. The
+  value-level deltas that do reach this overlay's Helm release are: the
+  `runnerGroup` value, the `ghcr.io/tinyland-inc/actions-runner-nix` digest
+  (advanced past GitHub's rolling runner-deprecation minimum by `f1b8f362`,
+  TIN-3601), a new `GF_FLYWHEEL_PROFILE_STATE` env var mirroring
+  `GF_BAZEL_SUBSTRATE_MODE`, and `priorityClassName: arc-runner` (the
+  cluster-scoped class already exists on `honey`; this overlay does not create
+  it). The implementation pin is deliberately NOT advanced with it; pin
+  convergence remains a separate adoption change.
 - Capacity posture (TIN-2165/TIN-2234 pod-cap crunch): nix only, `min 0 / max
   4`, no warm pool, docker/dind off, sting placement + the dedicated
   `compute-expansion` toleration.
@@ -107,17 +154,33 @@ first ARC plan and apply run from the operator machine (kubectl context
 [docs/implementation-overlay.md](docs/implementation-overlay.md) for the
 ordered runbook.
 
+Self-hosted admission has two independent gates, and satisfying only one is the
+failure mode TIN-3902 exists to close:
+
+1. **ARC registration** — org-scoped, provisioned by this overlay's
+   `arc-runners` state. It makes the scale set exist and connect.
+2. **GitHub runner-group admission** — a GitHub organization setting, not a
+   tofu resource in the module this overlay consumes. It decides which
+   repositories may be assigned that scale set's jobs.
+
+A registered scale set with no admitting group is a healthy, connected,
+permanently idle listener while its org's jobs sit queued. Create or confirm
+the `great-falls-tool-bus-infra` group in GitHub org settings **before** the
+cutover plan; the ordered steps are in
+[docs/implementation-overlay.md](docs/implementation-overlay.md) under
+"Runner group cutover".
+
 ## Operator Flow
 
 ARC plan/apply is an attended, operator-local operation. It must start from a
 clean, signed checkout of the current canonical `main` and the clean, signed
 role-specific GloriousFlywheel checkout at
-`df510574d17b85e7f15470caf3574fcabc4768f1`:
+`11ace397282ff89aeb1dfeb4a32fcbed3200c2ff`:
 
 ```bash
 export GF_CORE_PATH=/operator/path/GloriousFlywheel-implementation-2281
-export GF_ARC_CORE_PATH=/operator/path/GloriousFlywheel-arc-df510
-export GF_ARC_CORE_CI_PATH=path:/operator/path/GloriousFlywheel-arc-df510#ci
+export GF_ARC_CORE_PATH=/operator/path/GloriousFlywheel-arc-11ace
+export GF_ARC_CORE_CI_PATH=path:/operator/path/GloriousFlywheel-arc-11ace#ci
 export GFTB_ARC_KUBECONFIG=/operator/path/gftb-arc.kubeconfig
 # Export the RustFS access-key pair from operator custody.
 just enrollment-preflight
@@ -153,6 +216,19 @@ actions. The current carrier accepts only one in-place `gh_nix` Helm update;
 other updates, creates, deletes, and replacements refuse until a separate
 reviewed contract changes the allowlist.
 
+That allowlist has NOT been advanced for the TIN-3902 runner-group cutover, and
+that is deliberate. The committed guard admits exactly one in-place
+`module.gh_nix.helm_release.arc_runner` update whose only Helm-values delta is
+the runner container's `ephemeral-storage` `4Gi -> 8Gi` request and
+`8Gi -> 16Gi` limit; the TIN-3902 carrier's plan additionally changes
+`runnerGroup`, adds `priorityClassName`, adds one cache env var, moves the
+runner image digest, and creates the state-only
+`terraform_data.runner_group_policy`. `just arc-plan-scope-check` therefore
+refuses it by design. Advancing the guard to the shape enumerated in
+[docs/implementation-overlay.md](docs/implementation-overlay.md) "Runner group
+cutover" is a separate reviewed change and is a hard prerequisite for
+`just arc-apply` on this carrier.
+
 The ARC S3 backend has no remote state lock. Hold an exclusive quiet window
 from before `arc-plan` through post-apply readback: no concurrent operator and
 no workflow may plan or mutate the same ARC state. Supply
@@ -175,6 +251,13 @@ This overlay targets the same Honey backend and cache substrate as the other
 overlays. That is an owner/auth boundary. It is not a new runner product and
 it does not justify labels such as `gftb-nix` or `great-falls-*` workflow
 labels.
+
+The `great-falls-tool-bus-infra` runner group is the same kind of boundary
+expressed on the GitHub side: an owner/tenancy admission list, deliberately
+named after this overlay rather than after a capability, and deliberately not
+a label. Naming it does not weaken the label rule above — no workflow may
+request `great-falls-tool-bus-infra` as a label, and `runs-on:` keeps naming
+shared `tinyland-*` capability labels.
 
 Because all overlays attach to the same physical `arc-runners` namespace, this
 overlay uses owner-distinct internal Helm release and ARC `runnerScaleSetName`

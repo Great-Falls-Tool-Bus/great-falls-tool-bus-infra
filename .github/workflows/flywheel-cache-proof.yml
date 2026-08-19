@@ -83,7 +83,7 @@ jobs:
       - name: Install fleet OIDC front door (pinned)
         shell: bash
         env:
-          GF_OIDC_PROFILE_REF: df510574d17b85e7f15470caf3574fcabc4768f1
+          GF_OIDC_PROFILE_REF: 11ace397282ff89aeb1dfeb4a32fcbed3200c2ff
           GF_OIDC_PROFILE_SHA256: 0aa1bb2b1814c28d6162fc91d5cb3201ecaa13775e94ab3571db776d5dcc3ba8
         run: |
           set -euo pipefail
