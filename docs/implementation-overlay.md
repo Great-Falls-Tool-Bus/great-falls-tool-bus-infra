@@ -129,8 +129,11 @@ self-hosted check must receive a real runner, the runner container's combined wr
 (`rootfs.usedBytes + logs.usedBytes`) must stay below 75% of its limit, and no
 pod eviction, restart, or node `DiskPressure` may occur. A warm cache rerun must
 also pass. Failure drains the scale set and requires a separate signed,
-reviewed rollback carrier whose scope guard permits only the exact 8/16 GiB to
-4/8 GiB reversal; the current promotion-only guard cannot perform that rollback.
+reviewed rollback carrier. The scope guard admits the runner-group cutover's
+exact reversal (which carries the limit `16Gi -> 8Gi` and request
+`8Gi -> 4Gi` storage step with it); a
+capacity-only 8/16 GiB to 4/8 GiB reversal is not one of the three enumerated
+shapes and still needs its own reviewed scope-contract update.
 It is not permission to raise the limit again without new evidence. Per-runner bounded volumes for `/nix`,
 `_work`, and `.cache` remain the durable follow-up once the primary core stack
 exposes storage-class inputs compatible with `sting`.
@@ -219,18 +222,37 @@ only after a successful apply. Pending plans are sensitive local artifacts;
 the binary plan and all source/backend/kubeconfig/target receipts are mode 0600.
 Never upload, commit, or copy them into a shared location.
 
-Apply remains guarded by OpenTofu JSON plan actions. For the 8/16 GiB runner
-envelope, the only acceptable plan is one in-place
-`module.gh_nix.helm_release.arc_runner` update with zero creates, deletes,
-replacements, or unrelated drift. A broader or destructive plan is a stop
-condition requiring a separate reviewed decision; this operator surface has no
-delete bypass.
+Apply remains guarded by OpenTofu JSON plan actions. `just arc-plan-scope-check`
+admits exactly three enumerated plans and refuses everything else:
 
-The TIN-3902 runner-group carrier is exactly such a broader plan: it also
-creates the state-only `terraform_data.runner_group_policy` and changes
-Helm values beyond `ephemeral-storage`. `just arc-plan-scope-check` refuses it
-until a separate reviewed change advances the allowlist. See
-"Runner group cutover" below for the enumerated expected shape.
+1. **capacity** — one in-place `module.gh_nix.helm_release.arc_runner` update
+   whose only Helm-values delta is the runner container's `ephemeral-storage`
+   `4Gi -> 8Gi` request and `8Gi -> 16Gi` limit. In this shape the Helm `set`
+   block is compared whole, so a capacity plan cannot smuggle a `runnerGroup`
+   move: it fails with `changes fields outside values: set`.
+2. **cutover** — the TIN-3902 runner-group move: that same capacity delta plus
+   the `runnerGroup` Helm `set` entry `default -> great-falls-tool-bus-infra`,
+   the pinned runner image digest carried by the advanced ARC role pin, the new
+   `GF_FLYWHEEL_PROFILE_STATE=shared-cache-backed` runner env var, and
+   `template.spec.priorityClassName: arc-runner`; plus one create of the
+   state-only `terraform_data.runner_group_policy` receipt and the nine new
+   source-derived root outputs the advanced pin adds.
+3. **rollback** — the byte-exact reverse of the cutover: the same Helm update
+   inverted plus one destroy of the policy receipt and its nine outputs.
+
+Every address, action, output name, Helm `set` entry, and Helm-values byte in
+those three shapes is enumerated; there are no wildcards. Anything else — an
+extra create, any delete or replacement of the Helm release, any values or
+`set` change outside the enumerated set, any drift — is a stop condition
+requiring a separate reviewed decision. This operator surface has no delete
+bypass.
+
+The contract is pinned to today's reviewed capacity and roster. A **future
+capacity change** (for example `nix_max_runners` 4 -> 8, a memory or CPU
+envelope move, or a further `ephemeral-storage` step) is refused until its own
+scope-contract update lands; so is any roster, image-digest, or module-pin
+move. Advancing the contract is the reviewed decision point, never a
+workaround.
 
 ### Exclusive state window
 
@@ -251,10 +273,13 @@ unchanged, and do not blindly reapply the saved plan. The apply-attempt marker
 makes that saved plan non-retryable. After restoring backend connectivity, run
 `GFTB_ARC_READBACK_MODE=reconcile GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just
 arc-capacity-readback`. That mode accepts only matching state/live 4/8 GiB plus
-the exact pending promotion plan, or matching state/live 8/16 GiB plus an empty
-plan; it then invalidates the entire attempted bundle. A pre-change receipt
-permits a fresh plan. A promoted receipt does not permit retry. Any other result
-is a stop condition requiring a separate reviewed state/live reconciliation.
+a pending plan the scope guard admits (the capacity promotion, or the
+runner-group cutover that carries it), or matching state/live 8/16 GiB plus an
+empty plan; either way canonical state and the live scale set must also agree
+on `.spec.runnerGroup`. It then invalidates the entire attempted bundle. A
+pre-change receipt permits a fresh plan. A promoted receipt does not permit
+retry. Any other result is a stop condition requiring a separate reviewed
+state/live reconciliation.
 
 ## Runner group cutover
 
@@ -320,17 +345,37 @@ just arc-validate
 module surface, so it must run against the advanced ARC role pin
 (`11ace397282ff89aeb1dfeb4a32fcbed3200c2ff`).
 
-### Step 2 — plan-scope contract (hard prerequisite, not yet landed)
+### Step 2 — plan-scope contract (landed)
 
-`just arc-plan-scope-check` currently admits exactly one plan: an in-place
-`module.gh_nix.helm_release.arc_runner` update whose only Helm-values
-difference is the runner container's `ephemeral-storage`
-`4Gi -> 8Gi` request and `8Gi -> 16Gi` limit. The TIN-3902 carrier's plan is a
-strict superset of that, so the guard refuses it by design and
-`just arc-apply` cannot run until a separate reviewed change advances the
-allowlist to the shape in Step 4.
+`just arc-plan-scope-check` admits this cutover and its rollback, alongside the
+pre-existing `ephemeral-storage` capacity plan. The allowlist is keyed on
+resource address plus action plus the enumerated attribute paths that may
+change, and it fails closed on everything else. The three admitted shapes are
+listed under "Operator ARC apply" above; the cutover's exact expected shape is
+Step 4 below.
 
-Do not work around the guard. Advancing it is the reviewed decision point.
+Do not work around the guard. Any change beyond the enumerated set — including
+a later capacity move such as `nix_max_runners` 4 -> 8 — needs its own reviewed
+scope-contract update first.
+
+**Precondition: live and canonical state must still be at 4Gi/8Gi.** The
+`cutover` shape bundles the still-unapplied TIN-2299 capacity promotion, so it
+requires `ephemeral-storage` `4Gi -> 8Gi` request and `8Gi -> 16Gi` limit. If
+that promotion has already been applied on its own, the cutover plan carries
+`before == after == 8Gi/16Gi` and the guard refuses it with
+`expected runner resources.requests.ephemeral-storage 4Gi->8Gi`. A
+cutover-from-already-promoted shape does not exist in the contract and would
+need its own reviewed scope-contract update. Confirm the posture **before**
+opening the quiet window:
+
+```bash
+kubectl --context honey -n arc-runners \
+  get autoscalingrunnerset great-falls-tool-bus-nix \
+  -o jsonpath='{.spec.template.spec.containers[?(@.name=="runner")].resources.requests.ephemeral-storage}'
+```
+
+Must print `4Gi`. If it prints `8Gi`, stop: the capacity promotion landed
+separately and this carrier is inadmissible as written.
 
 ### Step 3 — quiet window and plan
 
@@ -357,9 +402,14 @@ condition.
 **One in-place update, one state-only create, zero deletes, zero replacements,
 zero drift:**
 
-- `module.gh_nix.helm_release.arc_runner` — **update in place**. Helm-values
-  deltas only:
-  - `runnerGroup`: `default` -> `great-falls-tool-bus-infra`
+- `module.gh_nix.helm_release.arc_runner` — **update in place**. The only
+  deltas are the `runnerGroup` Helm `set` entry and four Helm-values changes
+  (six lines: two `ephemeral-storage` and one `image` rewritten, three added —
+  `priorityClassName` plus the env name/value pair):
+  - `runnerGroup`: `default` -> `great-falls-tool-bus-infra`. This rides the
+    release's `set` block, not the rendered `values` document; the scope guard
+    reviews it as a one-entry `set` delta and requires every other `set` entry
+    (`githubConfigUrl`, `maxRunners`, `scaleSetLabels[*]`, …) byte-identical.
   - runner container `resources.requests.ephemeral-storage` `4Gi` -> `8Gi` and
     `resources.limits.ephemeral-storage` `8Gi` -> `16Gi` (the still-unapplied
     2026-08-17 eviction response already committed in the tfvars)
@@ -374,6 +424,19 @@ zero drift:**
   `runner_group_policy = "organization-restricted"`. It exists in the module
   from GloriousFlywheel `f13f8ad9` onward and is new to this overlay only
   because the ARC role pin advanced.
+- nine new **root outputs** appear as `create` output changes
+  (`nix_runner_group`, `docker_runner_group`, `dind_runner_group`,
+  `extra_runner_groups`, `overlay_tenant_legacy_shared_grant_owners`,
+  `tofu_plan_service_account`, `tofu_plan_token_secret`,
+  `tofu_plan_cluster_role`, `tofu_plan_secret_read_namespaces`). They are
+  source-derived receipts the advanced pin adds; creating them mutates nothing
+  outside tofu state. Every other output stays `no-op`.
+
+Rolling back is the same transaction read backwards: revert the ARC role pin
+and the tfvars, and the plan becomes one inverted `helm_release` update plus
+one `delete` of `terraform_data.runner_group_policy` and its nine outputs. The
+scope guard admits that shape too, so a rollback does not need a fresh contract
+change under time pressure.
 
 Everything else that appeared in the module between the old and new ARC role
 pins is gated off by inputs this overlay does not set
@@ -395,9 +458,13 @@ must not create it.
 GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-capacity-readback
 ```
 
-`arc-capacity-readback` proves capacity convergence and listener health; it
-does NOT look at the runner group. Add the group and admission readbacks
-explicitly:
+`arc-capacity-readback` proves capacity convergence, runner-group convergence,
+and listener health. In the default `promoted` mode it now requires canonical
+state and the live AutoscalingRunnerSet to agree on **both** `8Gi`/`16Gi` and
+`.spec.runnerGroup: great-falls-tool-bus-infra`, so the receipt can no longer
+go green while the scale set is still idle in GitHub's `Default` group. It
+still does not — and cannot — prove GitHub-side *admission*, which is an org
+setting. Add the independent group and admission readbacks:
 
 ```bash
 kubectl --context honey -n arc-runners \
@@ -426,27 +493,61 @@ this stack again.
 
 ### Rollback
 
-The cutover is source-reversible. There is no destroy path and none is needed.
+The cutover is source-reversible. Nothing running is destroyed: the only
+`destroy` in the reverse plan is the state-only
+`terraform_data.runner_group_policy` receipt, which materializes no GitHub or
+Kubernetes object.
 
-1. Revert the tfvars change (`runner_group`, `runner_group_policy`) and the
-   ARC role pin advance (`Justfile` `arc_core_default` / `arc_core_sha` /
+1. Revert the tfvars change **in full** — `runner_group`,
+   `runner_group_policy`, **and** `nix_ephemeral_storage_request` /
+   `nix_ephemeral_storage_limit` back to `4Gi` / `8Gi` — and the ARC role pin
+   advance (`Justfile` `arc_core_default` / `arc_core_sha` /
    `arc_core_ci_default`, `scripts/validate-core-checkout.py` `ARC_CORE_PIN`,
    `scripts/validate-public-operator-surface.py` `ARC_CORE_SHA` and the
    `arc_core_default` fixture, `.github/workflows/flywheel-cache-proof.yml`
    `GF_OIDC_PROFILE_REF`, and the pin prose in `README.md`,
-   `docs/implementation-overlay.md`, `docs/ci-credentials.md`). Reverting the
-   tfvars WITHOUT reverting the pin is not a valid state: `runner_group` is a
-   required input at the new pin and has no default.
+   `docs/implementation-overlay.md`, `docs/ci-credentials.md`).
+
+   Two ways to get this wrong, both of which cost a quiet window:
+
+   - Reverting the tfvars WITHOUT reverting the pin is not a valid state:
+     `runner_group` is a required input at the new pin and has no default.
+   - Leaving the storage tfvars at `8Gi` / `16Gi` while reverting the group and
+     the pin produces a plan the scope guard **refuses**. The cutover bundles
+     the capacity promotion, so its reversal must demote capacity as well; the
+     `rollback` shape requires `8Gi -> 4Gi` request and `16Gi -> 8Gi` limit. A
+     partial revert fails at `just arc-plan-scope-check` with
+     `expected runner resources.requests.ephemeral-storage 8Gi->4Gi`, after you
+     have already landed the revert on `main` and opened the window.
 2. Land the revert on canonical `main` (every guarded ARC recipe requires a
    clean, signed, current `main`).
 3. Restore the reverted-pin ARC core checkout and re-plan:
    `GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-plan`, then
-   `just arc-plan-show`. The reverse plan is again one in-place
-   `module.gh_nix.helm_release.arc_runner` update plus the **destroy** of the
-   state-only `terraform_data.runner_group_policy`; the committed scope guard
-   does not admit that shape either, so a rollback needs its own reviewed
-   scope contract exactly as the forward change does.
-4. Leaving the GitHub-side group in place after a rollback is harmless — an
+   `just arc-plan-show` and `just arc-plan-scope-check`. The reverse plan is
+   again one in-place `module.gh_nix.helm_release.arc_runner` update plus the
+   **destroy** of the state-only `terraform_data.runner_group_policy` and its
+   nine source-derived outputs. The committed scope guard admits exactly that
+   shape — it was landed together with the forward cutover precisely so a
+   rollback never needs a new reviewed contract while the fleet is degraded.
+   The guard still requires the reversal to be byte-exact. The rollback
+   **must** carry the enumerated reversal — capacity `8/16Gi -> 4/8Gi` and the
+   runner image digest `1ccce66d… -> 086a6c55…` — and the guard refuses a
+   rollback that goes beyond it: a different capacity step, a roster or group
+   change, another image, or any other Helm value.
+4. Prove the reversal landed:
+
+   ```bash
+   GFTB_ARC_READBACK_MODE=rolled-back GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive \
+     just arc-capacity-readback
+   ```
+
+   `rolled-back` is the converged-pre-change receipt: it requires state and
+   live both at `4Gi`/`8Gi`, both reporting `.spec.runnerGroup: default`, a
+   refreshed no-change plan, and one Ready zero-restart listener. (Before
+   TIN-3902 no readback mode could certify a completed rollback — the
+   pre-change branch demanded a *pending* plan, so a converged rollback failed
+   both branches.)
+5. Leaving the GitHub-side group in place after a rollback is harmless — an
    unused runner group admits nobody and starves nothing.
 
 ## ARC GitHub App Secret

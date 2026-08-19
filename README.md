@@ -212,22 +212,36 @@ guarded Just recipes, an external operator-owned mode-0600 kubeconfig, and
 runtime RustFS credentials are the only ARC state-mutation path.
 
 `just arc-apply` runs an exact plan-scope guard backed by OpenTofu's JSON plan
-actions. The current carrier accepts only one in-place `gh_nix` Helm update;
-other updates, creates, deletes, and replacements refuse until a separate
-reviewed contract changes the allowlist.
+actions. The allowlist is keyed on resource address plus action plus the
+enumerated attribute paths that may change, and it fails closed: it admits
+exactly three plans and refuses every other update, create, delete, and
+replacement.
 
-That allowlist has NOT been advanced for the TIN-3902 runner-group cutover, and
-that is deliberate. The committed guard admits exactly one in-place
-`module.gh_nix.helm_release.arc_runner` update whose only Helm-values delta is
-the runner container's `ephemeral-storage` `4Gi -> 8Gi` request and
-`8Gi -> 16Gi` limit; the TIN-3902 carrier's plan additionally changes
-`runnerGroup`, adds `priorityClassName`, adds one cache env var, moves the
-runner image digest, and creates the state-only
-`terraform_data.runner_group_policy`. `just arc-plan-scope-check` therefore
-refuses it by design. Advancing the guard to the shape enumerated in
+1. **capacity** — one in-place `module.gh_nix.helm_release.arc_runner` update
+   whose only Helm-values delta is the runner container's `ephemeral-storage`
+   `4Gi -> 8Gi` request and `8Gi -> 16Gi` limit; the Helm `set` block is
+   compared whole here, so this shape cannot smuggle a `runnerGroup` move.
+   It requires live/state still at `4Gi`/`8Gi`, as does the cutover below.
+2. **cutover** — the TIN-3902 runner-group move: that capacity delta plus the
+   `runnerGroup` Helm `set` entry `default -> great-falls-tool-bus-infra`, the
+   pinned runner image digest, the new `GF_FLYWHEEL_PROFILE_STATE` runner env
+   var, and `template.spec.priorityClassName: arc-runner`; plus one create of
+   the state-only `terraform_data.runner_group_policy` and the nine new
+   source-derived root outputs the advanced ARC role pin adds.
+3. **rollback** — the byte-exact reverse of the cutover, including the
+   capacity demotion back to `4Gi`/`8Gi`, the image digest reversal, and the
+   `terraform_data.runner_group_policy` destroy. A partial revert that leaves
+   the storage tfvars at `8Gi`/`16Gi` is refused; see
+   [docs/implementation-overlay.md](docs/implementation-overlay.md) "Rollback".
+
+The guard therefore no longer blocks the TIN-3902 carrier, and a rollback does
+not need an emergency contract change. It stays pinned to today's reviewed
+capacity and roster: a **future capacity change** — `nix_max_runners` 4 -> 8, a
+memory or CPU envelope move, a further `ephemeral-storage` step — or any
+roster, image-digest, or module-pin move needs its own reviewed scope-contract
+update before `just arc-apply` will run. The enumerated shapes are in
 [docs/implementation-overlay.md](docs/implementation-overlay.md) "Runner group
-cutover" is a separate reviewed change and is a hard prerequisite for
-`just arc-apply` on this carrier.
+cutover".
 
 The ARC S3 backend has no remote state lock. Hold an exclusive quiet window
 from before `arc-plan` through post-apply readback: no concurrent operator and
@@ -241,9 +255,13 @@ before state is written, stop; the apply-attempt marker prevents blind reuse.
 Restore connectivity and reconcile the ambiguous attempt directly with
 `GFTB_ARC_READBACK_MODE=reconcile GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just
 arc-capacity-readback`. Reconciliation succeeds only for matching state/live
-4/8 GiB plus the exact pending 8/16 GiB plan, or matching promoted 8/16 GiB plus
-an empty refreshed plan. It consumes the attempted plan bundle; only the
-pre-change outcome permits creating and reviewing a fresh plan.
+4/8 GiB plus a pending plan the scope guard admits (the 8/16 GiB promotion, or
+the runner-group cutover that carries it), or matching promoted 8/16 GiB plus
+an empty refreshed plan. Every mode also requires canonical state and the live
+scale set to agree on `.spec.runnerGroup`, and `promoted` / `rolled-back`
+require it to be `great-falls-tool-bus-infra` / `default` respectively. It
+consumes the attempted plan bundle; only the pre-change outcome permits
+creating and reviewing a fresh plan.
 
 ## Boundary
 

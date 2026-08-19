@@ -291,13 +291,13 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "c37fb8c36e826dc6", "3676b9eafb3336d0", "87893f2ae0d1c1ec", "c957b577fd505498"
     ),
     "arc-plan-scope-check": _receipt(
-        "e68966736986a4ee", "8df1bb890018175a", "13c48e6c55ab5c31", "e395368aca18a8d3"
+        "e6b881c364d592f3", "42bf73a298da3fa6", "401d1d090bf8c0a8", "c5e86c774a0a71c9"
     ),
     "arc-apply": _receipt(
         "fe8c324732148b38", "c967bad1c1ccab8e", "fd3840cedf78db82", "9b5a73294ec96ef6"
     ),
     "arc-capacity-readback": _receipt(
-        "af3ff1d577a41125", "6a843d789b1ff281", "83b9766729c0e9c1", "d07696a89e52ed38"
+        "41a8bb974559c6a9", "9b582383e0694579", "4a54d26ef774fd43", "50b306320b2c4a52"
     ),
     "arc-enrollment-plan": _receipt(
         "49a0e25c1cc8c8ff", "b15096271b4271a4", "fe1d38e06e5abf79", "905f0b0d50110b7a"
@@ -2057,76 +2057,531 @@ def extract_arc_scope_checker(justfile: str) -> str:
     return textwrap.dedent("\n".join(body_lines[start + 1 : end])) + "\n"
 
 
+# ARC scope fixtures. Every literal below was lifted verbatim from real
+# OpenTofu 1.11.6 `tofu plan` + `tofu show -json` runs made against a
+# `git archive` of the pinned GloriousFlywheel ARC roles (df510574 for the
+# pre-cutover rendering, 11ace397 for the advanced pin) driven by this
+# repository's tofu/stacks/arc-runners/great-falls-tool-bus.tfvars, a local
+# backend, -refresh=false, and a throwaway 127.0.0.1:1 kubeconfig. No
+# cluster, remote state, or credential was contacted. Only the Helm
+# attributes the guard reads are retained; `fixture_output` is the one
+# synthetic addition, a no-op scaffolding output the negative cases mutate
+# without disturbing the reviewed runner-group output table.
+
 ARC_BEFORE_VALUES = """\
-template:
-  spec:
-    containers:
-      - command: []
-        name: runner
-        resources:
-          limits:
-            ephemeral-storage: 8Gi
-          requests:
-            ephemeral-storage: 4Gi
+"listenerTemplate":
+  "spec":
+    "containers":
+    - "name": "listener"
+    "nodeSelector":
+      "kubernetes.io/hostname": "bumble"
+    "tolerations":
+    - "effect": "NoSchedule"
+      "key": "dedicated.tinyland.dev/compute-expansion"
+      "operator": "Equal"
+      "value": "true"
+"template":
+  "spec":
+    "containers":
+    - "command":
+      - "/home/runner/run.sh"
+      "env":
+      - "name": "NIX_CONFIG"
+        "value": |-
+          experimental-features = nix-command flakes
+          extra-substituters = http://attic.nix-cache.svc.cluster.local/main
+          extra-trusted-public-keys = main:eaUydxuDu7xBoy5cCo3MdknYAkVyTIASQ7DGuwxa+XA=
+      - "name": "ATTIC_SERVER"
+        "value": "http://attic.nix-cache.svc.cluster.local"
+      - "name": "ATTIC_CACHE"
+        "value": "main"
+      - "name": "ATTIC_PUBLIC_KEY"
+        "value": "main:eaUydxuDu7xBoy5cCo3MdknYAkVyTIASQ7DGuwxa+XA="
+      - "name": "BAZEL_REMOTE_CACHE"
+        "value": "grpc://bazel-cache.nix-cache.svc.cluster.local:9092"
+      - "name": "GF_BAZEL_SUBSTRATE_MODE"
+        "value": "shared-cache-backed"
+      - "name": "RUNNER_ALLOW_RUNASROOT"
+        "value": "1"
+      - "name": "GF_REAPI_TOKEN_EXCHANGE_ENDPOINT"
+        "value": "http://gf-reapi-token-exchange.gf-rbe.svc.cluster.local:8081/v1/token/exchange"
+      - "name": "GF_REAPI_CACHE_FRONTDOOR_ENDPOINT"
+        "value": "grpc://gf-reapi-cell.gf-rbe.svc.cluster.local:8980"
+      "image": "ghcr.io/tinyland-inc/actions-runner-nix@sha256:086a6c5553f21a5ef59256ebe8fbf2d7b6bbf486def1d0f5ed1c05dcbdab084e"
+      "name": "runner"
+      "resources":
+        "limits":
+          "cpu": "4"
+          "ephemeral-storage": "8Gi"
+          "memory": "8Gi"
+        "requests":
+          "cpu": "500m"
+          "ephemeral-storage": "4Gi"
+          "memory": "1Gi"
+      "securityContext":
+        "allowPrivilegeEscalation": false
+        "runAsGroup": 0
+        "runAsUser": 0
+    "imagePullSecrets":
+    - "name": "ghcr-pull"
+    "nodeSelector":
+      "kubernetes.io/hostname": "sting"
+    "tolerations":
+    - "effect": "NoSchedule"
+      "key": "dedicated.tinyland.dev/compute-expansion"
+      "operator": "Equal"
+      "value": "true"
 """
 
 ARC_AFTER_VALUES = """\
-template:
-  spec:
-    containers:
-      - command: []
-        name: runner
-        resources:
-          limits:
-            ephemeral-storage: 16Gi
-          requests:
-            ephemeral-storage: 8Gi
+"listenerTemplate":
+  "spec":
+    "containers":
+    - "name": "listener"
+    "nodeSelector":
+      "kubernetes.io/hostname": "bumble"
+    "tolerations":
+    - "effect": "NoSchedule"
+      "key": "dedicated.tinyland.dev/compute-expansion"
+      "operator": "Equal"
+      "value": "true"
+"template":
+  "spec":
+    "containers":
+    - "command":
+      - "/home/runner/run.sh"
+      "env":
+      - "name": "NIX_CONFIG"
+        "value": |-
+          experimental-features = nix-command flakes
+          extra-substituters = http://attic.nix-cache.svc.cluster.local/main
+          extra-trusted-public-keys = main:eaUydxuDu7xBoy5cCo3MdknYAkVyTIASQ7DGuwxa+XA=
+      - "name": "ATTIC_SERVER"
+        "value": "http://attic.nix-cache.svc.cluster.local"
+      - "name": "ATTIC_CACHE"
+        "value": "main"
+      - "name": "ATTIC_PUBLIC_KEY"
+        "value": "main:eaUydxuDu7xBoy5cCo3MdknYAkVyTIASQ7DGuwxa+XA="
+      - "name": "BAZEL_REMOTE_CACHE"
+        "value": "grpc://bazel-cache.nix-cache.svc.cluster.local:9092"
+      - "name": "GF_BAZEL_SUBSTRATE_MODE"
+        "value": "shared-cache-backed"
+      - "name": "RUNNER_ALLOW_RUNASROOT"
+        "value": "1"
+      - "name": "GF_REAPI_TOKEN_EXCHANGE_ENDPOINT"
+        "value": "http://gf-reapi-token-exchange.gf-rbe.svc.cluster.local:8081/v1/token/exchange"
+      - "name": "GF_REAPI_CACHE_FRONTDOOR_ENDPOINT"
+        "value": "grpc://gf-reapi-cell.gf-rbe.svc.cluster.local:8980"
+      "image": "ghcr.io/tinyland-inc/actions-runner-nix@sha256:086a6c5553f21a5ef59256ebe8fbf2d7b6bbf486def1d0f5ed1c05dcbdab084e"
+      "name": "runner"
+      "resources":
+        "limits":
+          "cpu": "4"
+          "ephemeral-storage": "16Gi"
+          "memory": "8Gi"
+        "requests":
+          "cpu": "500m"
+          "ephemeral-storage": "8Gi"
+          "memory": "1Gi"
+      "securityContext":
+        "allowPrivilegeEscalation": false
+        "runAsGroup": 0
+        "runAsUser": 0
+    "imagePullSecrets":
+    - "name": "ghcr-pull"
+    "nodeSelector":
+      "kubernetes.io/hostname": "sting"
+    "tolerations":
+    - "effect": "NoSchedule"
+      "key": "dedicated.tinyland.dev/compute-expansion"
+      "operator": "Equal"
+      "value": "true"
 """
 
+ARC_CUTOVER_VALUES = """\
+"listenerTemplate":
+  "spec":
+    "containers":
+    - "name": "listener"
+    "nodeSelector":
+      "kubernetes.io/hostname": "bumble"
+    "tolerations":
+    - "effect": "NoSchedule"
+      "key": "dedicated.tinyland.dev/compute-expansion"
+      "operator": "Equal"
+      "value": "true"
+"template":
+  "spec":
+    "containers":
+    - "command":
+      - "/home/runner/run.sh"
+      "env":
+      - "name": "NIX_CONFIG"
+        "value": |-
+          experimental-features = nix-command flakes
+          extra-substituters = http://attic.nix-cache.svc.cluster.local/main
+          extra-trusted-public-keys = main:eaUydxuDu7xBoy5cCo3MdknYAkVyTIASQ7DGuwxa+XA=
+      - "name": "ATTIC_SERVER"
+        "value": "http://attic.nix-cache.svc.cluster.local"
+      - "name": "ATTIC_CACHE"
+        "value": "main"
+      - "name": "ATTIC_PUBLIC_KEY"
+        "value": "main:eaUydxuDu7xBoy5cCo3MdknYAkVyTIASQ7DGuwxa+XA="
+      - "name": "BAZEL_REMOTE_CACHE"
+        "value": "grpc://bazel-cache.nix-cache.svc.cluster.local:9092"
+      - "name": "GF_BAZEL_SUBSTRATE_MODE"
+        "value": "shared-cache-backed"
+      - "name": "GF_FLYWHEEL_PROFILE_STATE"
+        "value": "shared-cache-backed"
+      - "name": "RUNNER_ALLOW_RUNASROOT"
+        "value": "1"
+      - "name": "GF_REAPI_TOKEN_EXCHANGE_ENDPOINT"
+        "value": "http://gf-reapi-token-exchange.gf-rbe.svc.cluster.local:8081/v1/token/exchange"
+      - "name": "GF_REAPI_CACHE_FRONTDOOR_ENDPOINT"
+        "value": "grpc://gf-reapi-cell.gf-rbe.svc.cluster.local:8980"
+      "image": "ghcr.io/tinyland-inc/actions-runner-nix@sha256:1ccce66d92dadecb648ea5c509a4806bf319b73e9730828e234c19670325397b"
+      "name": "runner"
+      "resources":
+        "limits":
+          "cpu": "4"
+          "ephemeral-storage": "16Gi"
+          "memory": "8Gi"
+        "requests":
+          "cpu": "500m"
+          "ephemeral-storage": "8Gi"
+          "memory": "1Gi"
+      "securityContext":
+        "allowPrivilegeEscalation": false
+        "runAsGroup": 0
+        "runAsUser": 0
+    "imagePullSecrets":
+    - "name": "ghcr-pull"
+    "nodeSelector":
+      "kubernetes.io/hostname": "sting"
+    "priorityClassName": "arc-runner"
+    "tolerations":
+    - "effect": "NoSchedule"
+      "key": "dedicated.tinyland.dev/compute-expansion"
+      "operator": "Equal"
+      "value": "true"
+"""
 
-def valid_arc_scope_plan() -> dict[str, object]:
+ARC_HELM_SET_DEFAULT = [{'name': 'controllerServiceAccount.name',
+  'type': '',
+  'value': 'arc-controller-gha-rs-controller'},
+ {'name': 'controllerServiceAccount.namespace', 'type': '', 'value': 'arc-systems'},
+ {'name': 'githubConfigSecret',
+  'type': '',
+  'value': 'github-app-secret-great-falls-tool-bus'},
+ {'name': 'githubConfigUrl',
+  'type': '',
+  'value': 'https://github.com/Great-Falls-Tool-Bus'},
+ {'name': 'maxRunners', 'type': '', 'value': '4'},
+ {'name': 'minRunners', 'type': '', 'value': '0'},
+ {'name': 'runnerGroup', 'type': '', 'value': 'default'},
+ {'name': 'runnerScaleSetName', 'type': '', 'value': 'great-falls-tool-bus-nix'},
+ {'name': 'scaleSetLabels[0]', 'type': '', 'value': 'tinyland-nix'},
+ {'name': 'scaleSetLabels[1]', 'type': '', 'value': 'self-hosted'},
+ {'name': 'scaleSetLabels[2]', 'type': '', 'value': 'nix'},
+ {'name': 'scaleSetLabels[3]', 'type': '', 'value': 'linux'}]
+
+ARC_HELM_SET_DEDICATED = [{'name': 'controllerServiceAccount.name',
+  'type': '',
+  'value': 'arc-controller-gha-rs-controller'},
+ {'name': 'controllerServiceAccount.namespace', 'type': '', 'value': 'arc-systems'},
+ {'name': 'githubConfigSecret',
+  'type': '',
+  'value': 'github-app-secret-great-falls-tool-bus'},
+ {'name': 'githubConfigUrl',
+  'type': '',
+  'value': 'https://github.com/Great-Falls-Tool-Bus'},
+ {'name': 'maxRunners', 'type': '', 'value': '4'},
+ {'name': 'minRunners', 'type': '', 'value': '0'},
+ {'name': 'runnerGroup', 'type': '', 'value': 'great-falls-tool-bus-infra'},
+ {'name': 'runnerScaleSetName', 'type': '', 'value': 'great-falls-tool-bus-nix'},
+ {'name': 'scaleSetLabels[0]', 'type': '', 'value': 'tinyland-nix'},
+ {'name': 'scaleSetLabels[1]', 'type': '', 'value': 'self-hosted'},
+ {'name': 'scaleSetLabels[2]', 'type': '', 'value': 'nix'},
+ {'name': 'scaleSetLabels[3]', 'type': '', 'value': 'linux'}]
+
+ARC_HELM_AFTER_UNKNOWN = {'metadata': True,
+ 'postrender': [],
+ 'set': [{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}],
+ 'set_list': [],
+ 'set_sensitive': [],
+ 'values': [False]}
+
+ARC_HELM_BEFORE_SENSITIVE = {'metadata': [{}],
+ 'postrender': [],
+ 'repository_password': True,
+ 'set': [{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}],
+ 'set_list': [],
+ 'set_sensitive': [],
+ 'values': [False]}
+
+ARC_HELM_AFTER_SENSITIVE = {'metadata': [],
+ 'postrender': [],
+ 'repository_password': True,
+ 'set': [{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}],
+ 'set_list': [],
+ 'set_sensitive': [],
+ 'values': [False]}
+
+ARC_CAPACITY_HELM_CHANGE = {
+    "address": "module.gh_nix.helm_release.arc_runner",
+    "module_address": "module.gh_nix",
+    "mode": "managed",
+    "type": "helm_release",
+    "name": "arc_runner",
+    "provider_name": "registry.opentofu.org/hashicorp/helm",
+    "change": {
+        "actions": ["update"],
+        "before": {"set": copy.deepcopy(ARC_HELM_SET_DEFAULT), "values": [ARC_BEFORE_VALUES]},
+        "after": {"set": copy.deepcopy(ARC_HELM_SET_DEFAULT), "values": [ARC_AFTER_VALUES]},
+        "after_unknown": ARC_HELM_AFTER_UNKNOWN,
+        "before_sensitive": ARC_HELM_BEFORE_SENSITIVE,
+        "after_sensitive": ARC_HELM_AFTER_SENSITIVE,
+    },
+}
+
+ARC_CUTOVER_HELM_CHANGE = {
+    "address": "module.gh_nix.helm_release.arc_runner",
+    "module_address": "module.gh_nix",
+    "mode": "managed",
+    "type": "helm_release",
+    "name": "arc_runner",
+    "provider_name": "registry.opentofu.org/hashicorp/helm",
+    "change": {
+        "actions": ["update"],
+        "before": {"set": copy.deepcopy(ARC_HELM_SET_DEFAULT), "values": [ARC_BEFORE_VALUES]},
+        "after": {"set": copy.deepcopy(ARC_HELM_SET_DEDICATED), "values": [ARC_CUTOVER_VALUES]},
+        "after_unknown": ARC_HELM_AFTER_UNKNOWN,
+        "before_sensitive": ARC_HELM_BEFORE_SENSITIVE,
+        "after_sensitive": ARC_HELM_AFTER_SENSITIVE,
+    },
+}
+
+ARC_ROLLBACK_HELM_CHANGE = {
+    "address": "module.gh_nix.helm_release.arc_runner",
+    "module_address": "module.gh_nix",
+    "mode": "managed",
+    "type": "helm_release",
+    "name": "arc_runner",
+    "provider_name": "registry.opentofu.org/hashicorp/helm",
+    "change": {
+        "actions": ["update"],
+        "before": {"set": copy.deepcopy(ARC_HELM_SET_DEDICATED), "values": [ARC_CUTOVER_VALUES]},
+        "after": {"set": copy.deepcopy(ARC_HELM_SET_DEFAULT), "values": [ARC_BEFORE_VALUES]},
+        "after_unknown": ARC_HELM_AFTER_UNKNOWN,
+        "before_sensitive": ARC_HELM_BEFORE_SENSITIVE,
+        "after_sensitive": ARC_HELM_AFTER_SENSITIVE,
+    },
+}
+
+ARC_POLICY_CREATE = {'address': 'terraform_data.runner_group_policy',
+ 'mode': 'managed',
+ 'type': 'terraform_data',
+ 'name': 'runner_group_policy',
+ 'provider_name': 'terraform.io/builtin/terraform',
+ 'change': {'actions': ['create'],
+            'before': None,
+            'after': {'input': {'legacy_expires': '',
+                                'legacy_reason': '',
+                                'legacy_receipt': {},
+                                'policy': 'organization-restricted',
+                                'scale_sets': [{'group': 'great-falls-tool-bus-infra',
+                                                'name': 'great-falls-tool-bus-nix'}]},
+                      'triggers_replace': None},
+            'after_unknown': {'id': True,
+                              'input': {'legacy_receipt': {}, 'scale_sets': [{}]},
+                              'output': True},
+            'before_sensitive': False,
+            'after_sensitive': {'input': {'legacy_receipt': {}, 'scale_sets': [{}]},
+                                'output': {}}}}
+
+ARC_POLICY_DELETE = {'address': 'terraform_data.runner_group_policy',
+ 'mode': 'managed',
+ 'type': 'terraform_data',
+ 'name': 'runner_group_policy',
+ 'provider_name': 'terraform.io/builtin/terraform',
+ 'change': {'actions': ['delete'],
+            'before': {'id': '0dbf1d02-9d3f-4b6f-9a1e-000000000001',
+                       'input': {'legacy_expires': '',
+                                 'legacy_reason': '',
+                                 'legacy_receipt': {},
+                                 'policy': 'organization-restricted',
+                                 'scale_sets': [{'group': 'great-falls-tool-bus-infra',
+                                                 'name': 'great-falls-tool-bus-nix'}]},
+                       'output': {'legacy_expires': '',
+                                  'legacy_reason': '',
+                                  'legacy_receipt': {},
+                                  'policy': 'organization-restricted',
+                                  'scale_sets': [{'group': 'great-falls-tool-bus-infra',
+                                                  'name': 'great-falls-tool-bus-nix'}]},
+                       'triggers_replace': None},
+            'after': None,
+            'after_unknown': {},
+            'before_sensitive': {'input': {'legacy_receipt': {}, 'scale_sets': [{}]},
+                                 'output': {'legacy_receipt': {},
+                                            'scale_sets': [{}]}},
+            'after_sensitive': False},
+ 'action_reason': 'delete_because_no_resource_config'}
+
+ARC_CUTOVER_OUTPUT_CHANGES = {'dind_runner_group': {'actions': ['create'],
+                       'before': None,
+                       'after': '',
+                       'after_unknown': False,
+                       'before_sensitive': False,
+                       'after_sensitive': False},
+ 'docker_runner_group': {'actions': ['create'],
+                         'before': None,
+                         'after': '',
+                         'after_unknown': False,
+                         'before_sensitive': False,
+                         'after_sensitive': False},
+ 'extra_runner_groups': {'actions': ['create'],
+                         'before': None,
+                         'after': {},
+                         'after_unknown': False,
+                         'before_sensitive': False,
+                         'after_sensitive': False},
+ 'nix_runner_group': {'actions': ['create'],
+                      'before': None,
+                      'after': 'great-falls-tool-bus-infra',
+                      'after_unknown': False,
+                      'before_sensitive': False,
+                      'after_sensitive': False},
+ 'overlay_tenant_legacy_shared_grant_owners': {'actions': ['create'],
+                                               'before': None,
+                                               'after': [],
+                                               'after_unknown': False,
+                                               'before_sensitive': False,
+                                               'after_sensitive': False},
+ 'tofu_plan_cluster_role': {'actions': ['create'],
+                            'before': None,
+                            'after': '',
+                            'after_unknown': False,
+                            'before_sensitive': False,
+                            'after_sensitive': False},
+ 'tofu_plan_secret_read_namespaces': {'actions': ['create'],
+                                      'before': None,
+                                      'after': [],
+                                      'after_unknown': False,
+                                      'before_sensitive': False,
+                                      'after_sensitive': False},
+ 'tofu_plan_service_account': {'actions': ['create'],
+                               'before': None,
+                               'after': '',
+                               'after_unknown': False,
+                               'before_sensitive': False,
+                               'after_sensitive': False},
+ 'tofu_plan_token_secret': {'actions': ['create'],
+                            'before': None,
+                            'after': '',
+                            'after_unknown': False,
+                            'before_sensitive': False,
+                            'after_sensitive': False}}
+
+ARC_ROLLBACK_OUTPUT_CHANGES = {'dind_runner_group': {'actions': ['delete'],
+                       'before': '',
+                       'after': None,
+                       'after_unknown': False,
+                       'before_sensitive': False,
+                       'after_sensitive': False},
+ 'docker_runner_group': {'actions': ['delete'],
+                         'before': '',
+                         'after': None,
+                         'after_unknown': False,
+                         'before_sensitive': False,
+                         'after_sensitive': False},
+ 'extra_runner_groups': {'actions': ['delete'],
+                         'before': {},
+                         'after': None,
+                         'after_unknown': False,
+                         'before_sensitive': False,
+                         'after_sensitive': False},
+ 'nix_runner_group': {'actions': ['delete'],
+                      'before': 'great-falls-tool-bus-infra',
+                      'after': None,
+                      'after_unknown': False,
+                      'before_sensitive': False,
+                      'after_sensitive': False},
+ 'overlay_tenant_legacy_shared_grant_owners': {'actions': ['delete'],
+                                               'before': [],
+                                               'after': None,
+                                               'after_unknown': False,
+                                               'before_sensitive': False,
+                                               'after_sensitive': False},
+ 'tofu_plan_cluster_role': {'actions': ['delete'],
+                            'before': '',
+                            'after': None,
+                            'after_unknown': False,
+                            'before_sensitive': False,
+                            'after_sensitive': False},
+ 'tofu_plan_secret_read_namespaces': {'actions': ['delete'],
+                                      'before': [],
+                                      'after': None,
+                                      'after_unknown': False,
+                                      'before_sensitive': False,
+                                      'after_sensitive': False},
+ 'tofu_plan_service_account': {'actions': ['delete'],
+                               'before': '',
+                               'after': None,
+                               'after_unknown': False,
+                               'before_sensitive': False,
+                               'after_sensitive': False},
+ 'tofu_plan_token_secret': {'actions': ['delete'],
+                            'before': '',
+                            'after': None,
+                            'after_unknown': False,
+                            'before_sensitive': False,
+                            'after_sensitive': False}}
+
+ARC_SCAFFOLDING_OUTPUT = {
+    "fixture_output": {
+        "actions": ["no-op"],
+        "before": "opaque-fixture-value",
+        "after": "opaque-fixture-value",
+        "after_unknown": False,
+        "before_sensitive": False,
+        "after_sensitive": False,
+    }
+}
+
+
+def arc_scope_plan(
+    resource_changes: list[dict[str, object]], outputs: dict[str, object]
+) -> dict[str, object]:
+    """Assemble the plan fields the ARC scope guard actually reads."""
+    output_changes: dict[str, object] = copy.deepcopy(ARC_SCAFFOLDING_OUTPUT)
+    output_changes.update(copy.deepcopy(outputs))
     return {
         "format_version": "1.2",
         "terraform_version": "1.11.6",
         "errored": False,
         "resource_drift": [],
-        "output_changes": {
-            "fixture_output": {
-                "actions": ["no-op"],
-                "before": "opaque-fixture-value",
-                "after": "opaque-fixture-value",
-                "after_unknown": False,
-                "before_sensitive": False,
-                "after_sensitive": False,
-            }
-        },
-        "resource_changes": [
-            {
-                "address": "module.gh_nix.helm_release.arc_runner",
-                "module_address": "module.gh_nix",
-                "mode": "managed",
-                "type": "helm_release",
-                "name": "arc_runner",
-                "change": {
-                    "actions": ["update"],
-                    "before": {"values": [ARC_BEFORE_VALUES]},
-                    "after": {"values": [ARC_AFTER_VALUES]},
-                    "after_unknown": {},
-                    "before_sensitive": {
-                        "metadata": [{}],
-                        "repository_password": True,
-                        "values": [False],
-                    },
-                    "after_sensitive": {
-                        "metadata": [],
-                        "repository_password": True,
-                        "values": [False],
-                    },
-                    "replace_paths": [],
-                },
-            }
-        ],
+        "output_changes": output_changes,
+        "resource_changes": copy.deepcopy(resource_changes),
     }
+
+
+def valid_arc_scope_plan() -> dict[str, object]:
+    """The reviewed 4/8Gi -> 8/16Gi capacity promotion, unchanged by TIN-3902."""
+    return arc_scope_plan([ARC_CAPACITY_HELM_CHANGE], {})
+
+
+def valid_arc_cutover_plan() -> dict[str, object]:
+    """The reviewed TIN-3902 runner-group cutover."""
+    return arc_scope_plan(
+        [ARC_POLICY_CREATE, ARC_CUTOVER_HELM_CHANGE], ARC_CUTOVER_OUTPUT_CHANGES
+    )
+
+
+def valid_arc_rollback_plan() -> dict[str, object]:
+    """The reviewed TIN-3902 runner-group rollback: the cutover, exactly reversed."""
+    return arc_scope_plan(
+        [ARC_POLICY_DELETE, ARC_ROLLBACK_HELM_CHANGE], ARC_ROLLBACK_OUTPUT_CHANGES
+    )
 
 
 def run_arc_scope_checker(source: str, plan: dict[str, object]) -> subprocess.CompletedProcess[str]:
@@ -6822,45 +7277,81 @@ def self_test() -> None:
     plan["resource_changes"][0]["change"]["after"]["timeout"] = 2  # type: ignore[index]
     expect_scope_rejection(scope_source, "known field drift", plan, "outside values")
 
+    def swap_storage(document: str, low: str, high: str) -> str:
+        """Reverse the runner request/limit storage pair inside one values doc."""
+        swapped = document.replace(
+            f'"limits":\n          "cpu": "4"\n          "ephemeral-storage": "{high}"',
+            f'"limits":\n          "cpu": "4"\n          "ephemeral-storage": "{low}"',
+            1,
+        )
+        return swapped.replace(
+            f'"requests":\n          "cpu": "500m"\n          "ephemeral-storage": "{low}"',
+            f'"requests":\n          "cpu": "500m"\n          "ephemeral-storage": "{high}"',
+            1,
+        )
+
+    def duplicate_resources(document: str, low: str, high: str) -> str:
+        """Add a second runner-container resources block with storage fields."""
+        anchor = f'          "ephemeral-storage": "{low}"\n          "memory": "1Gi"\n'
+        if document.count(anchor) != 1:
+            raise SystemExit(
+                "self-test FAILED: could not construct duplicate resources fixture"
+            )
+        return document.replace(
+            anchor,
+            anchor
+            + '      "resources":\n'
+            + f'        "limits":\n          "ephemeral-storage": "{high}"\n'
+            + f'        "requests":\n          "ephemeral-storage": "{low}"\n',
+            1,
+        )
+
+    trailing_container = (
+        '    - "command": []\n'
+        '      "name": "observer"\n'
+        '      "resources":\n'
+        '        "requests":\n'
+        '          "ephemeral-storage": "1Gi"\n'
+    )
     yaml_cases = (
         (
             "reversed request and limit",
-            ARC_BEFORE_VALUES.replace("limits:\n            ephemeral-storage: 8Gi\n          requests:\n            ephemeral-storage: 4Gi", "limits:\n            ephemeral-storage: 4Gi\n          requests:\n            ephemeral-storage: 8Gi"),
-            ARC_AFTER_VALUES.replace("limits:\n            ephemeral-storage: 16Gi\n          requests:\n            ephemeral-storage: 8Gi", "limits:\n            ephemeral-storage: 8Gi\n          requests:\n            ephemeral-storage: 16Gi"),
+            swap_storage(ARC_BEFORE_VALUES, "4Gi", "8Gi"),
+            swap_storage(ARC_AFTER_VALUES, "8Gi", "16Gi"),
             "expected runner resources.requests",
         ),
         (
             "wrong ancestry",
-            ARC_BEFORE_VALUES.replace("template:\n", "malicious:\n", 1),
-            ARC_AFTER_VALUES.replace("template:\n", "malicious:\n", 1),
+            ARC_BEFORE_VALUES.replace('"template":\n', '"malicious":\n', 1),
+            ARC_AFTER_VALUES.replace('"template":\n', '"malicious":\n', 1),
             "not under template.spec.containers",
         ),
         (
             "storage outside runner",
-            ARC_BEFORE_VALUES + "outside:\n  ephemeral-storage: 1Gi\n",
-            ARC_AFTER_VALUES + "outside:\n  ephemeral-storage: 1Gi\n",
+            ARC_BEFORE_VALUES + '"outside":\n  "ephemeral-storage": "1Gi"\n',
+            ARC_AFTER_VALUES + '"outside":\n  "ephemeral-storage": "1Gi"\n',
             "outside the runner container",
         ),
         (
             "storage after runner",
-            ARC_BEFORE_VALUES
-            + "      - command: []\n        name: observer\n        resources:\n          requests:\n            ephemeral-storage: 1Gi\n",
-            ARC_AFTER_VALUES
-            + "      - command: []\n        name: observer\n        resources:\n          requests:\n            ephemeral-storage: 1Gi\n",
+            ARC_BEFORE_VALUES + trailing_container,
+            ARC_AFTER_VALUES + trailing_container,
             "outside the runner container",
         ),
         (
             "nested resources",
-            ARC_BEFORE_VALUES.replace("        resources:\n", "        wrapper:\n          resources:\n", 1),
-            ARC_AFTER_VALUES.replace("        resources:\n", "        wrapper:\n          resources:\n", 1),
+            ARC_BEFORE_VALUES.replace(
+                '      "resources":\n', '      "wrapper":\n        "resources":\n', 1
+            ),
+            ARC_AFTER_VALUES.replace(
+                '      "resources":\n', '      "wrapper":\n        "resources":\n', 1
+            ),
             "outside resources requests/limits",
         ),
         (
             "duplicate resources",
-            ARC_BEFORE_VALUES
-            + "        resources:\n          limits:\n            ephemeral-storage: 8Gi\n          requests:\n            ephemeral-storage: 4Gi\n",
-            ARC_AFTER_VALUES
-            + "        resources:\n          limits:\n            ephemeral-storage: 16Gi\n          requests:\n            ephemeral-storage: 8Gi\n",
+            duplicate_resources(ARC_BEFORE_VALUES, "4Gi", "8Gi"),
+            duplicate_resources(ARC_AFTER_VALUES, "8Gi", "16Gi"),
             "duplicate runner ephemeral-storage field",
         ),
     )
@@ -6868,6 +7359,333 @@ def self_test() -> None:
         plan = copy.deepcopy(valid)
         plan["resource_changes"][0]["change"]["before"]["values"] = [before_yaml]  # type: ignore[index]
         plan["resource_changes"][0]["change"]["after"]["values"] = [after_yaml]  # type: ignore[index]
+        expect_scope_rejection(scope_source, label, plan, diagnostic)
+
+    # ---------------------------------------------------------------------
+    # TIN-3902 runner-group cutover and its rollback.
+    #
+    # The guard admits exactly three enumerated plans. The two below are the
+    # new ones; `valid` above proves the pre-existing capacity plan is still
+    # admitted unchanged. Everything after them is refused.
+    # ---------------------------------------------------------------------
+    cutover = valid_arc_cutover_plan()
+    rollback = valid_arc_rollback_plan()
+    for label, plan in (("runner-group cutover", cutover), ("runner-group rollback", rollback)):
+        result = run_arc_scope_checker(scope_source, plan)
+        if result.returncode != 0:
+            raise SystemExit(
+                f"self-test FAILED: reviewed {label} plan was rejected: "
+                + (result.stdout + result.stderr).strip()
+            )
+
+    if cutover["resource_changes"][1]["change"]["before"]["values"] != (  # type: ignore[index]
+        rollback["resource_changes"][1]["change"]["after"]["values"]  # type: ignore[index]
+    ) or cutover["resource_changes"][1]["change"]["after"]["values"] != (  # type: ignore[index]
+        rollback["resource_changes"][1]["change"]["before"]["values"]  # type: ignore[index]
+    ):
+        raise SystemExit(
+            "self-test FAILED: rollback fixture is not the byte-exact reverse of the cutover"
+        )
+
+    extra_resource = {
+        "address": "kubernetes_priority_class_v1.arc_runner[0]",
+        "mode": "managed",
+        "type": "kubernetes_priority_class_v1",
+        "name": "arc_runner",
+        "change": {"actions": ["create"], "before": None, "after": {"value": -50}},
+    }
+    for label, base in (("cutover", cutover), ("rollback", rollback), ("capacity", valid)):
+        plan = copy.deepcopy(base)
+        plan["resource_changes"].append(copy.deepcopy(extra_resource))  # type: ignore[union-attr]
+        expect_scope_rejection(
+            scope_source, f"{label} plus an extra resource create", plan, "observed"
+        )
+
+    for label, actions, replace_paths in (
+        ("helm delete", ["delete"], None),
+        ("helm replace", ["delete", "create"], [["name"]]),
+        ("helm create-then-delete replace", ["create", "delete"], [["name"]]),
+    ):
+        plan = copy.deepcopy(cutover)
+        helm_change = plan["resource_changes"][1]["change"]  # type: ignore[index]
+        helm_change["actions"] = actions
+        if replace_paths is not None:
+            helm_change["replace_paths"] = replace_paths
+        expect_scope_rejection(scope_source, f"cutover with a {label}", plan, "observed")
+
+    plan = copy.deepcopy(cutover)
+    plan["resource_changes"][1]["change"]["replace_paths"] = [["name"]]  # type: ignore[index]
+    expect_scope_rejection(
+        scope_source, "cutover with a helm replacement path", plan, "replacement paths"
+    )
+
+    # A resource claiming no-op is dropped from the reviewed set, so it must
+    # actually be unchanged. An honest no-op rides along; a lying one is refused.
+    honest_noop = {
+        "address": "module.gh_nix.helm_release.bystander",
+        "mode": "managed",
+        "type": "helm_release",
+        "name": "bystander",
+        "change": {
+            "actions": ["no-op"],
+            "before": {"values": ["unchanged"]},
+            "after": {"values": ["unchanged"]},
+        },
+    }
+    for label, base in (("cutover", cutover), ("rollback", rollback), ("capacity", valid)):
+        plan = copy.deepcopy(base)
+        plan["resource_changes"].append(copy.deepcopy(honest_noop))  # type: ignore[union-attr]
+        result = run_arc_scope_checker(scope_source, plan)
+        if result.returncode != 0:
+            raise SystemExit(
+                f"self-test FAILED: {label} plus an honest no-op was rejected: "
+                + (result.stdout + result.stderr).strip()
+            )
+        plan = copy.deepcopy(base)
+        lying_noop = copy.deepcopy(honest_noop)
+        lying_noop["change"]["after"] = {"values": ["smuggled"]}  # type: ignore[index]
+        plan["resource_changes"].append(lying_noop)  # type: ignore[union-attr]
+        expect_scope_rejection(
+            scope_source,
+            f"{label} plus a no-op resource that actually changes",
+            plan,
+            "no-op resource change that modifies",
+        )
+
+    for label, actions in (("update", ["update"]), ("replacement", ["delete", "create"])):
+        plan = copy.deepcopy(cutover)
+        plan["resource_changes"][0]["change"]["actions"] = actions  # type: ignore[index]
+        expect_scope_rejection(
+            scope_source, f"cutover with a policy {label}", plan, "observed"
+        )
+
+    for label, entry_name, replacement in (
+        ("maxRunners 4 -> 8", "maxRunners", "8"),
+        ("githubConfigUrl", "githubConfigUrl", "https://github.com/Great-Falls-Tool-Bus-Evil"),
+        ("scaleSetLabels[0]", "scaleSetLabels[0]", "great-falls-tool-bus-infra"),
+        ("runnerScaleSetName", "runnerScaleSetName", "great-falls-tool-bus-nix-v2"),
+    ):
+        for shape_label, base, side in (
+            ("cutover", cutover, "after"),
+            ("rollback", rollback, "after"),
+        ):
+            plan = copy.deepcopy(base)
+            entries = plan["resource_changes"][1]["change"][side]["set"]  # type: ignore[index]
+            matched = [entry for entry in entries if entry["name"] == entry_name]
+            if len(matched) != 1:
+                raise SystemExit(
+                    f"self-test FAILED: could not construct {entry_name} fixture"
+                )
+            matched[0]["value"] = replacement
+            expect_scope_rejection(
+                scope_source,
+                f"{shape_label} with a {label} set change",
+                plan,
+                "exactly runnerGroup",
+            )
+
+    plan = copy.deepcopy(valid)
+    [entry] = [  # type: ignore[misc]
+        entry
+        for entry in plan["resource_changes"][0]["change"]["after"]["set"]  # type: ignore[index]
+        if entry["name"] == "runnerGroup"
+    ]
+    entry["value"] = "great-falls-tool-bus-infra"
+    expect_scope_rejection(
+        scope_source,
+        "capacity plan smuggling a runnerGroup move",
+        plan,
+        "outside values",
+    )
+
+    for label, group in (
+        ("unreviewed group", "tinyland-shared"),
+        ("no move at all", "default"),
+    ):
+        plan = copy.deepcopy(cutover)
+        entries = plan["resource_changes"][1]["change"]["after"]["set"]  # type: ignore[index]
+        [entry] = [entry for entry in entries if entry["name"] == "runnerGroup"]
+        entry["value"] = group
+        expect_scope_rejection(
+            scope_source, f"cutover into an {label}", plan, "exactly runnerGroup"
+        )
+
+    values_cases = (
+        (
+            "unreviewed runner image digest",
+            lambda document: document.replace(
+                "1ccce66d92dadecb648ea5c509a4806bf319b73e9730828e234c19670325397b",
+                "0" * 64,
+                1,
+            ),
+            "advanced ARC role-pin digest",
+        ),
+        (
+            "missing arc-runner priorityClassName",
+            lambda document: document.replace(
+                '    "priorityClassName": "arc-runner"\n', "", 1
+            ),
+            "one arc-runner priorityClassName",
+        ),
+        (
+            "relocated priorityClassName",
+            lambda document: document.replace(
+                '    "priorityClassName": "arc-runner"\n', "", 1
+            ).replace(
+                '  "spec":\n    "containers":\n    - "name": "listener"\n',
+                '  "spec":\n    "priorityClassName": "arc-runner"\n'
+                '    "containers":\n    - "name": "listener"\n',
+                1,
+            ),
+            "not a direct template.spec field",
+        ),
+        (
+            "missing GF_FLYWHEEL_PROFILE_STATE",
+            lambda document: document.replace(
+                '      - "name": "GF_FLYWHEEL_PROFILE_STATE"\n'
+                '        "value": "shared-cache-backed"\n',
+                "",
+                1,
+            ),
+            "one GF_FLYWHEEL_PROFILE_STATE env entry",
+        ),
+        (
+            "retargeted GF_FLYWHEEL_PROFILE_STATE value",
+            lambda document: document.replace(
+                '      - "name": "GF_FLYWHEEL_PROFILE_STATE"\n'
+                '        "value": "shared-cache-backed"\n',
+                '      - "name": "GF_FLYWHEEL_PROFILE_STATE"\n'
+                '        "value": "executor-backed"\n',
+                1,
+            ),
+            "shared-cache-backed pair",
+        ),
+        (
+            "extra runner memory change",
+            lambda document: document.replace(
+                '          "memory": "8Gi"\n', '          "memory": "16Gi"\n', 1
+            ),
+            "beyond the reviewed runner-group",
+        ),
+        (
+            "extra runner env var",
+            lambda document: document.replace(
+                '      - "name": "RUNNER_ALLOW_RUNASROOT"\n',
+                '      - "name": "GF_UNREVIEWED"\n        "value": "1"\n'
+                '      - "name": "RUNNER_ALLOW_RUNASROOT"\n',
+                1,
+            ),
+            "beyond the reviewed runner-group",
+        ),
+        (
+            "listener node move",
+            lambda document: document.replace('"bumble"', '"sting"', 1),
+            "beyond the reviewed runner-group",
+        ),
+    )
+    for label, mutate, diagnostic in values_cases:
+        for shape_label, base, side_name in (
+            ("cutover", cutover, "after"),
+            ("rollback", rollback, "before"),
+        ):
+            plan = copy.deepcopy(base)
+            side = plan["resource_changes"][1]["change"][side_name]  # type: ignore[index]
+            mutated = mutate(side["values"][0])
+            if mutated == side["values"][0]:
+                raise SystemExit(f"self-test FAILED: could not construct {label} fixture")
+            side["values"] = [mutated]
+            expect_scope_rejection(
+                scope_source, f"{shape_label} with an {label}", plan, diagnostic
+            )
+
+    policy_cases = (
+        ("policy", "legacy-default"),
+        ("scale_sets", [{"group": "default", "name": "great-falls-tool-bus-nix"}]),
+        (
+            "scale_sets",
+            [
+                {"group": "great-falls-tool-bus-infra", "name": "great-falls-tool-bus-nix"},
+                {"group": "great-falls-tool-bus-infra", "name": "great-falls-tool-bus-docker"},
+            ],
+        ),
+        ("legacy_reason", "TIN-3209 core nine"),
+    )
+    for field, replacement in policy_cases:
+        plan = copy.deepcopy(cutover)
+        plan["resource_changes"][0]["change"]["after"]["input"][field] = replacement  # type: ignore[index]
+        expect_scope_rejection(
+            scope_source,
+            f"cutover policy receipt with an unreviewed {field}",
+            plan,
+            "reviewed",
+        )
+        plan = copy.deepcopy(rollback)
+        plan["resource_changes"][0]["change"]["before"]["input"][field] = replacement  # type: ignore[index]
+        expect_scope_rejection(
+            scope_source,
+            f"rollback policy receipt with an unreviewed {field}",
+            plan,
+            "reviewed",
+        )
+
+    plan = copy.deepcopy(cutover)
+    plan["resource_changes"][0]["change"]["after_unknown"]["input"]["policy"] = True  # type: ignore[index]
+    expect_scope_rejection(
+        scope_source, "cutover policy receipt with an unknown policy", plan, "unknown mask"
+    )
+
+    plan = copy.deepcopy(rollback)
+    plan["resource_changes"][0]["action_reason"] = "delete_because_count_index"  # type: ignore[index]
+    expect_scope_rejection(
+        scope_source,
+        "rollback policy destroy for an unreviewed reason",
+        plan,
+        "delete_because_no_resource_config",
+    )
+
+    plan = copy.deepcopy(rollback)
+    del plan["resource_changes"][0]["action_reason"]  # type: ignore[index]
+    expect_scope_rejection(
+        scope_source,
+        "rollback policy destroy with no reason",
+        plan,
+        "delete_because_no_resource_config",
+    )
+
+    output_cases: list[tuple[str, dict[str, object], str]] = []
+    plan = copy.deepcopy(cutover)
+    plan["output_changes"]["nix_runner_group"]["after"] = "default"  # type: ignore[index]
+    output_cases.append(("cutover output into the Default group", plan, "reviewed value"))
+    plan = copy.deepcopy(cutover)
+    del plan["output_changes"]["nix_runner_group"]  # type: ignore[union-attr]
+    output_cases.append(("cutover missing a reviewed output", plan, "missing="))
+    plan = copy.deepcopy(cutover)
+    plan["output_changes"]["unreviewed_output"] = {  # type: ignore[index]
+        "actions": ["create"],
+        "before": None,
+        "after": "surprise",
+        "after_unknown": False,
+        "before_sensitive": False,
+        "after_sensitive": False,
+    }
+    output_cases.append(("cutover with an unreviewed output create", plan, "no-op actions"))
+    plan = copy.deepcopy(cutover)
+    plan["output_changes"]["nix_runner_group"]["actions"] = ["delete"]  # type: ignore[index]
+    output_cases.append(("cutover with an inverted output action", plan, "no-op actions"))
+    plan = copy.deepcopy(rollback)
+    plan["output_changes"]["nix_runner_group"]["actions"] = ["create"]  # type: ignore[index]
+    output_cases.append(("rollback with an inverted output action", plan, "no-op actions"))
+    plan = copy.deepcopy(valid)
+    plan["output_changes"]["nix_runner_group"] = {  # type: ignore[index]
+        "actions": ["create"],
+        "before": None,
+        "after": "great-falls-tool-bus-infra",
+        "after_unknown": False,
+        "before_sensitive": False,
+        "after_sensitive": False,
+    }
+    output_cases.append(("capacity plan with a runner-group output", plan, "no-op actions"))
+    for label, plan, diagnostic in output_cases:
         expect_scope_rejection(scope_source, label, plan, diagnostic)
 
     run_web_release_semantic_fixtures()
