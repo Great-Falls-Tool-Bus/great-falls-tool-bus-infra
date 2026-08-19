@@ -1,0 +1,54 @@
+# DECLARE-ONLY — MERGING APPLIES NOTHING (TIN-3817 acceptance row 8).
+#
+# The RPO/RTO acceptance row is satisfied by TWO mechanisms, not one, and it is
+# worth being precise about which does what:
+#
+#   RPO (<= 1 hour)  is carried by CONTINUOUS WAL ARCHIVING, declared in
+#                    cluster.yaml (backup.barmanObjectStore + archive_timeout
+#                    300s). Worst case loss is one archive_timeout window: five
+#                    minutes. The ScheduledBackup below does NOT set the RPO.
+#   RTO (<= 4 hours) is carried by BASE BACKUPS: without a recent base backup,
+#                    recovery means replaying every WAL segment since the
+#                    beginning, which is what actually blows an RTO budget. A
+#                    six-hourly base backup bounds replay to at most six hours
+#                    of WAL, which restores well inside four hours on a
+#                    database of this size.
+#
+# So this object is the RTO control. Its cadence is deliberately tighter than
+# the house reference cluster's nightly schedule (GloriousFlywheel
+# docs/k8s-reference/base/backup-schedule.yaml) because that reference carries
+# no RTO acceptance row and this one does.
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: gftb-member-db-base
+  namespace: members-greatfallstoolbus-org-db-production
+  labels:
+    app.kubernetes.io/name: gftb-member-db
+    app.kubernetes.io/component: backup
+    app.kubernetes.io/part-of: great-falls-tool-bus
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  # CNPG cron is SIX fields (leading seconds), not five: "0 0 */6 * * *" is
+  # 00:00, 06:00, 12:00, 18:00 UTC. A five-field expression here would be
+  # misread by one position and silently change the cadence.
+  schedule: "0 0 */6 * * *"
+  cluster:
+    name: gftb-member-db
+  # `self`: the ScheduledBackup owns the Backup objects it creates, so pruning
+  # the schedule prunes its backups' Kubernetes records without touching the
+  # object-store data the retention policy governs.
+  backupOwnerReference: self
+  method: barmanObjectStore
+  # `immediate: false` on purpose. The first base backup is an ATTENDED runbook
+  # step (member-db-bringup step B4) taken after the object store is verified
+  # reachable, so the operator watches the first one succeed instead of
+  # discovering a misconfigured bucket from a failed Backup object hours later.
+  immediate: false
+  # NOT suspended. This is the real operating shape, exactly as the web
+  # Deployment carries replicas: 2 rather than a parked 0 — the safety here is
+  # the apply gate (no CI path applies this stack), not an inert manifest. A
+  # suspended schedule that someone forgets to unsuspend is an RTO breach that
+  # looks green.
+  suspend: false
+  online: true
