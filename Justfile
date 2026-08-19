@@ -31,6 +31,8 @@ check-hosted:
     just core-checkout
     just taxonomy
     just taxonomy-selftest
+    just runner-group-contract-selftest
+    just runner-group-contract
     just mail-cr-validate
     just list-stack-validate
     just form-stack-validate
@@ -79,6 +81,16 @@ core-checkout-selftest:
 
 core-checkout-bazel:
     bazelisk test --lockfile_mode=off //:core_checkout_contract_tests
+
+# TIN-3902 runner-group admission contract. config/organization.yaml declares
+# the GitHub-side roster and the ARC tfvars binds the scale sets to it; nothing
+# else holds the two together, because the GloriousFlywheel arc-runners module
+# never reads the roster and the taxonomy validator only parses runner labels.
+runner-group-contract:
+    python3 -B scripts/validate-runner-group-contract.py
+
+runner-group-contract-selftest:
+    python3 -B scripts/validate-runner-group-contract.py --self-test
 
 workflow-lint:
     actionlint -ignore 'label "tinyland-nix" is unknown' -ignore 'SC2155'

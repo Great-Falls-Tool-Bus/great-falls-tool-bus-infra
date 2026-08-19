@@ -19,10 +19,16 @@ core:
   # moving this one would import six unrelated stack surfaces for no
   # runner-group benefit.
   pinned_commit: 2281b576bce0e8dd776a047b84e7464f5b508a62
-  # ARC/OIDC role pin (authority: Justfile `arc_core_sha` /
-  # `arc_core_ci_default` and scripts/validate-core-checkout.py ARC_CORE_PIN,
-  # which is the enforced source of truth; this comment is a reader aid, not a
-  # second declaration). TIN-3902 advanced it from
+  # ARC/OIDC role pin. What actually binds the arc-runners STACK to a commit is
+  # the Justfile: `arc_core_default` / `arc_core_ci_default` select the checkout
+  # and #ci devshell that `tofu -chdir=<core>/tofu/stacks/arc-runners` runs
+  # from, and `_reviewed-arc-core` refuses to proceed unless that checkout is
+  # clean, signed, canonical, and exactly `arc_core_sha`.
+  # scripts/validate-core-checkout.py ARC_CORE_PIN and
+  # scripts/validate-public-operator-surface.py ARC_CORE_SHA pin those Justfile
+  # strings so they cannot drift; neither validator names the arc-runners path
+  # or executes anything. This comment is a reader aid, not a declaration.
+  # TIN-3902 advanced the pin from
   # df510574d17b85e7f15470caf3574fcabc4768f1 (2026-07-09) to
   # 11ace397282ff89aeb1dfeb4a32fcbed3200c2ff (2026-08-18) because
   # `runner_group` did not exist as an arc-runners stack input before
@@ -88,6 +94,13 @@ runner_contract:
     # (repository id 1286829099, public) remains EXCLUDED — its apply/drift
     # workflows are gated to `push`/`workflow_dispatch`/`repository_dispatch`
     # and its hosted `validate` job already runs on a GitHub-hosted runner.
+    #
+    # WARNING: with `allows_public_repositories: true` the roster below is the
+    # ONLY control keeping this repository out — the public-repository flag is
+    # no longer a second lock. Adding id 1286829099 is a one-line edit and must
+    # stay an explicit operator decision.
+    # scripts/validate-runner-group-contract.py fails on that id unless an
+    # `infra_repo_admission_ruling:` field records it.
     allows_public_repositories: true
     # Workflow-ref filtering is a different control and is not a substitute for
     # the selected-repository roster.

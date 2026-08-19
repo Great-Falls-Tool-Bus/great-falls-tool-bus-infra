@@ -39,7 +39,11 @@ Grounded mermaid diagrams (mail flow, network/ports, planes, Bazel/GF) live in
   admission is accepted by operator ruling 2026-08-18 (TIN-3902) so the
   `greatfallstoolbus.org` roster entry is effective rather than inert;
   TIN-3209's cross-tenant concern is acknowledged and tracked there. This
-  repository itself remains excluded.
+  repository itself remains excluded — and with public admission on, the roster
+  is the ONLY control keeping it out; the public-repository flag is no longer a
+  second lock. Adding id `1286829099` is a one-line edit and must stay an
+  explicit operator decision. `just runner-group-contract` fails on that id
+  unless an `infra_repo_admission_ruling:` field records the decision.
 - Shared Nix cache: `http://attic.nix-cache.svc.cluster.local`
 - Shared Bazel cache: `grpc://bazel-cache.nix-cache.svc.cluster.local:9092`
 - Shared Bazel executor: `grpc://gf-reapi-cell.gf-rbe.svc.cluster.local:8980`
@@ -56,19 +60,31 @@ Grounded mermaid diagrams (mail flow, network/ports, planes, Bazel/GF) live in
   door) and (b) the template carried four divergent pins across its own files,
   a drift wart. `config/organization.yaml`, `MODULE.bazel`, `Justfile`, and the
   non-ARC workflow consumers share this implementation pin.
-- ARC/OIDC role pin: `11ace397282ff89aeb1dfeb4a32fcbed3200c2ff`
-  (GloriousFlywheel `origin/main`, 2026-08-18). Advanced by TIN-3902 from
+- ARC/OIDC role pin: `11ace397282ff89aeb1dfeb4a32fcbed3200c2ff`. It was the
+  head of GloriousFlywheel `origin/main` when selected on 2026-08-18;
+  `origin/main` has advanced since, so the accurate statement is that this pin
+  is a reviewed **ancestor** of `origin/main`, not `origin/main` itself. What
+  binds the `arc-runners` stack to it is the Justfile — `arc_core_default` /
+  `arc_core_ci_default` select the checkout and `#ci` devshell that
+  `tofu -chdir=<core>/tofu/stacks/arc-runners` runs from, and
+  `_reviewed-arc-core` refuses unless that checkout is clean, signed,
+  canonical, and exactly `arc_core_sha`. `validate-core-checkout.py`
+  `ARC_CORE_PIN` and `validate-public-operator-surface.py` `ARC_CORE_SHA` pin
+  those Justfile strings against drift; neither names the `arc-runners` path
+  nor executes anything. Advanced by TIN-3902 from
   `df510574d17b85e7f15470caf3574fcabc4768f1` (2026-07-09) because the
   `runner_group` / `runner_group_policy` inputs did not exist in the
   `arc-runners` stack before GloriousFlywheel `f13f8ad9` (TIN-3209, PR #1303).
   Reviewed surface between the two pins: no `arc-runners` stack variable was
-  removed or had its default changed; the only new REQUIRED input is
-  `runner_group`; every other new input defaults off
-  (`create_runner_priority_classes`, `runner_sigkill_collector_*`,
-  `tofu_plan_identity_*`, `overlay_tenant_legacy_shared_grants`,
-  `nix_runner_secret_mounts`, `listener_resources`,
-  `listener_topology_spread_constraints`, `shared_nix_runner_*`, dind volume
-  classes). `runner_namespace` stays `arc-runners`, the `arc-runner` module's
+  removed and **no pre-existing default changed**; the only new REQUIRED input
+  is `runner_group`; every other new input is **inert for this overlay** —
+  proven by the plan below, not by inspection. (Inert is the accurate claim,
+  not "defaults off": `helm_storage_driver` defaults to `secret`,
+  `tofu_plan_token_secret_enabled` and `tofu_plan_create_namespace` default to
+  `true`, and `dind_work_volume_size` / `dind_docker_volume_size` default to
+  `40Gi` / `80Gi`. Each is gated behind another input this overlay leaves off,
+  or reproduces the behaviour already in state, so none of them reaches the
+  plan.) `runner_namespace` stays `arc-runners`, the `arc-runner` module's
   resource shape is unchanged, and the `nixpkgs-opentofu` flake input is
   byte-identical, so the pinned OpenTofu 1.11.6 plan schema still holds. The
   value-level deltas that do reach this overlay's Helm release are: the

@@ -297,7 +297,12 @@ the two ids above, and this repository (`great-falls-tool-bus-infra`, id
 `1286829099`) remains excluded.
 
 This repository (`great-falls-tool-bus-infra`, id `1286829099`) is public and
-is deliberately NOT selected. Its own self-hosted apply/drift jobs stop being
+is deliberately NOT selected. With "Allow public repositories" enabled, the
+roster is the ONLY control keeping it out — the public-repository checkbox is
+no longer a second lock — so do not add it to the selected set while carrying
+out this step. `just runner-group-contract` fails on that id unless an
+`infra_repo_admission_ruling:` field records an explicit operator decision. Its
+own self-hosted apply/drift jobs stop being
 admitted at cutover; that is the intended TIN-3209 posture, not a regression.
 
 Record the group as an operator receipt: source convergence proves nothing
@@ -483,8 +488,23 @@ replicate. The same commit appears in `config/organization.yaml`,
 
 The ARC runner and OIDC profile surfaces carry a separate role pin, advanced by
 TIN-3902 from `df510574d17b85e7f15470caf3574fcabc4768f1` (2026-07-09) to
-`11ace397282ff89aeb1dfeb4a32fcbed3200c2ff` (GloriousFlywheel `origin/main`,
-2026-08-18). The reason is narrow and mandatory: `runner_group` and
+`11ace397282ff89aeb1dfeb4a32fcbed3200c2ff`. That commit was the head of
+GloriousFlywheel `origin/main` when it was selected on 2026-08-18; `origin/main`
+has advanced since, so it is precisely a reviewed **ancestor** of `origin/main`,
+not `origin/main` itself.
+
+What binds the `arc-runners` stack to that commit is the **Justfile**, not the
+pin validators. `arc_core_default` and `arc_core_ci_default` select the checkout
+and `#ci` devshell that `tofu -chdir=<core>/tofu/stacks/arc-runners` actually
+runs from, and `_reviewed-arc-core` refuses to proceed unless that checkout is a
+clean, signed, canonical GloriousFlywheel at exactly `arc_core_sha` with no
+untracked Terraform inputs under `tofu/stacks/arc-runners` or `tofu/modules`.
+`scripts/validate-core-checkout.py` `ARC_CORE_PIN` and
+`scripts/validate-public-operator-surface.py` `ARC_CORE_SHA` only pin those
+Justfile strings so they cannot drift silently — neither validator names the
+`arc-runners` path, reads the stack, or executes anything.
+
+The reason for the advance is narrow and mandatory: `runner_group` and
 `runner_group_policy` do not exist as `arc-runners` stack inputs before
 GloriousFlywheel `f13f8ad9` (TIN-3209, PR #1303), so the runner-group binding
 is unexpressible at the old pin.
