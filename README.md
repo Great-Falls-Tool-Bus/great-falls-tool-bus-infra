@@ -219,7 +219,9 @@ replacement.
 
 1. **capacity** — one in-place `module.gh_nix.helm_release.arc_runner` update
    whose only Helm-values delta is the runner container's `ephemeral-storage`
-   `4Gi -> 8Gi` request and `8Gi -> 16Gi` limit.
+   `4Gi -> 8Gi` request and `8Gi -> 16Gi` limit; the Helm `set` block is
+   compared whole here, so this shape cannot smuggle a `runnerGroup` move.
+   It requires live/state still at `4Gi`/`8Gi`, as does the cutover below.
 2. **cutover** — the TIN-3902 runner-group move: that capacity delta plus the
    `runnerGroup` Helm `set` entry `default -> great-falls-tool-bus-infra`, the
    pinned runner image digest, the new `GF_FLYWHEEL_PROFILE_STATE` runner env
@@ -227,7 +229,10 @@ replacement.
    the state-only `terraform_data.runner_group_policy` and the nine new
    source-derived root outputs the advanced ARC role pin adds.
 3. **rollback** — the byte-exact reverse of the cutover, including the
-   `terraform_data.runner_group_policy` destroy.
+   capacity demotion back to `4Gi`/`8Gi`, the image digest reversal, and the
+   `terraform_data.runner_group_policy` destroy. A partial revert that leaves
+   the storage tfvars at `8Gi`/`16Gi` is refused; see
+   [docs/implementation-overlay.md](docs/implementation-overlay.md) "Rollback".
 
 The guard therefore no longer blocks the TIN-3902 carrier, and a rollback does
 not need an emergency contract change. It stays pinned to today's reviewed
@@ -252,8 +257,11 @@ Restore connectivity and reconcile the ambiguous attempt directly with
 arc-capacity-readback`. Reconciliation succeeds only for matching state/live
 4/8 GiB plus a pending plan the scope guard admits (the 8/16 GiB promotion, or
 the runner-group cutover that carries it), or matching promoted 8/16 GiB plus
-an empty refreshed plan. It consumes the attempted plan bundle; only the
-pre-change outcome permits creating and reviewing a fresh plan.
+an empty refreshed plan. Every mode also requires canonical state and the live
+scale set to agree on `.spec.runnerGroup`, and `promoted` / `rolled-back`
+require it to be `great-falls-tool-bus-infra` / `default` respectively. It
+consumes the attempted plan bundle; only the pre-change outcome permits
+creating and reviewing a fresh plan.
 
 ## Boundary
 

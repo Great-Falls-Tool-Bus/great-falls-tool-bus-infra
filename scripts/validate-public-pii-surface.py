@@ -32,7 +32,11 @@ EMAIL = re.compile(
 PHONE = re.compile(
     r"(?<!\d)(?:\+?1[ .-])?(?:\(\d{3}\)|\d{3})[ .-]\d{3}[ .-]\d{4}(?!\d)"
 )
-HOME_PATH = re.compile(r"/Users/[A-Za-z0-9._-]+|/home/[A-Za-z0-9._-]+")
+# Matches a home-rooted path and every trailing segment. Consuming the whole
+# path is what lets ALLOWLIST_HOME_PATHS below be a set of exact literals: a
+# two-segment token would make exact-equality behave as a subtree prefix test,
+# silently exempting anything under an allowlisted root.
+HOME_PATH = re.compile(r"/(?:Users|home)/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*")
 
 PUBLIC_ROLE_EMAILS = {
     "abuse@latoolb.us",
@@ -47,11 +51,13 @@ PUBLIC_ROLE_EMAILS = {
 
 EXAMPLE_DOMAINS = {"example.com", "example.org", "example.net"}
 ALLOWLIST_EMAILS = {"git@github.com"}
-# Container home directories that are never an operator's local path. These are
-# fixed, publicly documented paths inside images this repo consumes, so they may
-# appear verbatim in committed plan fixtures. Enumerated exactly; a personal
-# /home/<user> or /Users/<user> path still fails.
-ALLOWLIST_HOME_PATHS = {"/home/runner"}
+# Whole-path literals that are never an operator's local path: fixed, publicly
+# documented locations inside images this repo consumes, which therefore appear
+# verbatim in the committed ARC plan fixtures. Matched by exact equality against
+# the FULL path, not by root or prefix -- /home/runner/.ssh/id_rsa and
+# /home/runner-evil/run.sh are both still flagged, as is a bare /home/runner.
+# Add a literal here only for a path that is provably a container-image constant.
+ALLOWLIST_HOME_PATHS = {"/home/runner/run.sh"}
 BINARY_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf"}
 
 
@@ -83,6 +89,15 @@ def allowed_email(local: str, domain: str) -> bool:
     )
 
 
+def flagged_home_paths(line: str) -> list[str]:
+    """Home-rooted paths on one line that are not exact-literal allowlisted."""
+    return [
+        match.group(0)
+        for match in HOME_PATH.finditer(line)
+        if match.group(0) not in ALLOWLIST_HOME_PATHS
+    ]
+
+
 def scan() -> list[Finding]:
     findings: list[Finding] = []
     for rel in tracked_files():
@@ -107,10 +122,7 @@ def scan() -> list[Finding]:
                     )
             if PHONE.search(line):
                 findings.append(Finding("phone-number", rel, lineno, "phone-like literal"))
-            if any(
-                match.group(0) not in ALLOWLIST_HOME_PATHS
-                for match in HOME_PATH.finditer(line)
-            ):
+            if flagged_home_paths(line):
                 findings.append(Finding("home-path", rel, lineno, "local user path"))
     return findings
 
@@ -126,17 +138,34 @@ def self_test() -> None:
         raise SystemExit("self-test FAILED: phone literal not detected")
     if PHONE.search("run 28673911406"):
         raise SystemExit("self-test FAILED: GitHub run id was falsely detected as phone")
-    if not HOME_PATH.search("/Users/operator/project"):
-        raise SystemExit("self-test FAILED: local home path not detected")
-    if not HOME_PATH.search("/home/operator/project"):
-        raise SystemExit("self-test FAILED: local Linux home path not detected")
+    # Exercise the predicate scan() actually calls, not the bare regex, and prove
+    # the allowlist is exact rather than a subtree exemption.
     for allowed in ALLOWLIST_HOME_PATHS:
-        if HOME_PATH.match(allowed) is None or HOME_PATH.match(allowed).group(0) != allowed:
+        if flagged_home_paths(f'      - "{allowed}"'):
             raise SystemExit(
-                "self-test FAILED: allowlisted container home is not an exact HOME_PATH match"
+                f"self-test FAILED: allowlisted container path {allowed!r} was flagged"
             )
-    if "/home/operator" in ALLOWLIST_HOME_PATHS or "/Users/operator" in ALLOWLIST_HOME_PATHS:
-        raise SystemExit("self-test FAILED: a personal home path is allowlisted")
+    for personal in (
+        "/Users/operator/project",
+        "/home/operator/project",
+        "/home/runner/.ssh/id_rsa",
+        "/home/runner/secrets/id_ed25519",
+        "/home/runner/work/_temp/creds.env",
+        "/home/runner-evil/run.sh",
+        "/home/runnerx/run.sh",
+        "/home/runner",
+    ):
+        if flagged_home_paths(f'value: "{personal}"') != [personal]:
+            raise SystemExit(
+                f"self-test FAILED: {personal!r} was not flagged as a local user path"
+            )
+    if any(
+        entry.count("/") < 3 or entry.rstrip("/") != entry
+        for entry in ALLOWLIST_HOME_PATHS
+    ):
+        raise SystemExit(
+            "self-test FAILED: an allowlist entry is a bare home root, not a whole-path literal"
+        )
     print("public-pii-surface self-test passed")
 
 

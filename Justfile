@@ -513,6 +513,19 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
                 + ": "
                 + repr(sorted(set(forbidden_metadata)))
             )
+        # Mirror the output-Change rule. Entries claiming no-op are dropped from
+        # `changes` below and never inspected again, so without this a real diff
+        # could ride into the apply under a no-op label. OpenTofu derives actions
+        # from the diff and the plan is digest-pinned either side of this review,
+        # so this is defense in depth -- but the contract above says every action
+        # is enumerated, and this is the one place that would not have been.
+        if actions == ["no-op"] and canonical(resource_change.get("before")) != canonical(
+            resource_change.get("after")
+        ):
+            raise SystemExit(
+                "ERROR: ARC plan contains a no-op resource change that modifies "
+                + repr(resource.get("address"))
+            )
     changes = [
         change
         for change in all_changes
@@ -976,6 +989,17 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
         The result must equal the pre-cutover document exactly, which is what makes
         the cutover and its rollback the same reviewed transaction read in opposite
         directions.
+
+        This is not injective, and that is accepted. The pre-image is exactly
+        "the pre-cutover document plus the three reviewed lines inserted at any
+        anchor-valid position", because the anchors below fix each line's PARENT
+        but not its index among that parent's siblings: priorityClassName may sit
+        anywhere directly under the same template.spec that owns the runner
+        container, and the env pair anywhere directly under that container's env.
+        Every such variant renders the identical Kubernetes object -- YAML mapping
+        order is not semantic, and env-list order matters only for $(VAR)
+        expansion, which these rendered values do not use. Duplicate or extra env
+        names, a relocated parent, and any other line are all still refused.
         """
         if not document.endswith("\n") or "\n".join(document.splitlines()) + "\n" != document:
             raise SystemExit("ERROR: ARC Helm values must be newline-terminated LF text")
@@ -1182,9 +1206,12 @@ arc-apply: _reviewed-clean-main _reviewed-arc-core _operator-apply-confirm _arc-
     rm -f .tofu-plans/arc-runners.tfplan .tofu-plans/arc-runners.source-sha .tofu-plans/arc-runners.core-sha .tofu-plans/arc-runners.backend-blob .tofu-plans/arc-runners.kubeconfig-blob .tofu-plans/arc-runners.cluster-uid .tofu-plans/arc-runners.target-uid .tofu-plans/arc-runners.plan-sha256 .tofu-plans/arc-runners.scope-sha256 .tofu-plans/arc-runners.apply-attempted
     rm -rf -- "${data_dir}"
 
-# Read-only closure receipt for the capacity promotion. It proves canonical
-# remote state, refreshed plan, live ARC object, and listener all converge on
-# the reviewed 8Gi request / 16Gi limit without reusing the apply session.
+# Read-only closure receipt for the reviewed ARC transaction. It proves that
+# canonical remote state, a refreshed plan, the live ARC object, and the listener
+# all converge on the same reviewed capacity AND the same reviewed runner group,
+# without reusing the apply session. TIN-3902: `.spec.runnerGroup` is the one
+# thing the cutover changes, so a receipt that never reads it can go green while
+# the fleet is still idle in GitHub's Default group.
 arc-capacity-readback: _reviewed-clean-main _reviewed-arc-core _arc-exclusive-confirm _arc-backend-contract _arc-runtime-contract _arc-artifact-root-contract
     #!/usr/bin/env bash
     set -euo pipefail
@@ -1197,7 +1224,7 @@ arc-capacity-readback: _reviewed-clean-main _reviewed-arc-core _arc-exclusive-co
         backend="$(pwd)/${backend}"
     fi
     mode="${GFTB_ARC_READBACK_MODE:-promoted}"
-    [[ "${mode}" == "promoted" || "${mode}" == "reconcile" ]] || { echo "GFTB_ARC_READBACK_MODE must be promoted or reconcile" >&2; exit 2; }
+    [[ "${mode}" == "promoted" || "${mode}" == "rolled-back" || "${mode}" == "reconcile" ]] || { echo "GFTB_ARC_READBACK_MODE must be promoted, rolled-back, or reconcile" >&2; exit 2; }
     if [[ "${mode}" == "reconcile" ]]; then
         test -f .tofu-plans/arc-runners.apply-attempted || { echo "No ambiguous ARC apply attempt requires reconciliation" >&2; exit 2; }
     fi
@@ -1234,8 +1261,27 @@ arc-capacity-readback: _reviewed-clean-main _reviewed-arc-core _arc-exclusive-co
     live_limit="$(jq -er '[.spec.template.spec.containers[] | select(.name == "runner")] | if length == 1 then .[0].resources.limits["ephemeral-storage"] else error("expected one runner container") end' <<<"${live_json}")"
     [[ "${state_request}" == "${live_request}" && "${state_limit}" == "${live_limit}" ]] || { echo "Canonical ARC state and live runner capacity disagree" >&2; exit 2; }
     [[ ( "${state_request}" == "4Gi" && "${state_limit}" == "8Gi" ) || ( "${state_request}" == "8Gi" && "${state_limit}" == "16Gi" ) ]] || { echo "ARC capacity is outside the reviewed pre/post states" >&2; exit 2; }
+    state_group="$(jq -er '
+      [.. | objects | select(.address? == "module.gh_nix.helm_release.arc_runner")]
+      | if length == 1
+        then [.[0].values.set[] | select(.name == "runnerGroup")]
+        else error("expected exactly one gh_nix Helm state resource")
+        end
+      | if length == 1
+        then .[0].value
+        else error("expected exactly one gh_nix runnerGroup set entry")
+        end
+    ' "${state_json}")"
+    live_group="$(jq -er '.spec.runnerGroup' <<<"${live_json}")"
+    [[ "${state_group}" == "${live_group}" ]] || { echo "Canonical ARC state and live runner group disagree: ${state_group} vs ${live_group}" >&2; exit 2; }
+    [[ "${state_group}" == "default" || "${state_group}" == "great-falls-tool-bus-infra" ]] || { echo "ARC runner group is outside the reviewed pre/post admission identities: ${state_group}" >&2; exit 2; }
     if [[ "${mode}" == "promoted" ]]; then
         [[ "${state_request}" == "8Gi" && "${state_limit}" == "16Gi" ]] || { echo "ARC capacity promotion is not converged at 8Gi/16Gi" >&2; exit 2; }
+        [[ "${state_group}" == "great-falls-tool-bus-infra" ]] || { echo "ARC runner-group cutover is not converged at great-falls-tool-bus-infra" >&2; exit 2; }
+    fi
+    if [[ "${mode}" == "rolled-back" ]]; then
+        [[ "${state_request}" == "4Gi" && "${state_limit}" == "8Gi" ]] || { echo "ARC rollback is not converged at 4Gi/8Gi" >&2; exit 2; }
+        [[ "${state_group}" == "default" ]] || { echo "ARC runner-group rollback is not converged at default" >&2; exit 2; }
     fi
     listener_json="$(kubectl --kubeconfig "${kubeconfig}" --context honey -n arc-systems get pods -l actions.github.com/scale-set-name=great-falls-tool-bus-nix,actions.github.com/scale-set-namespace=arc-runners,app.kubernetes.io/component=runner-scale-set-listener -o json)"
     jq -e '
@@ -1252,11 +1298,14 @@ arc-capacity-readback: _reviewed-clean-main _reviewed-arc-core _arc-exclusive-co
     set -e
     if [[ "${state_request}" == "8Gi" && "${state_limit}" == "16Gi" ]]; then
         [[ "${plan_status}" == "0" ]] || { echo "Promoted ARC state/source/live refresh is not a no-change plan (status ${plan_status})" >&2; exit 2; }
-        receipt="promoted state/live 8Gi/16Gi with refreshed no-change plan"
+        receipt="promoted state/live 8Gi/16Gi in runner group ${state_group} with refreshed no-change plan"
+    elif [[ "${plan_status}" == "0" ]]; then
+        [[ "${mode}" == "rolled-back" ]] || { echo "ARC state/live is converged at 4Gi/8Gi with a no-change plan, which is a completed rollback; re-run with GFTB_ARC_READBACK_MODE=rolled-back" >&2; exit 2; }
+        receipt="rolled-back state/live 4Gi/8Gi in runner group ${state_group} with refreshed no-change plan"
     else
-        [[ "${mode}" == "reconcile" && "${plan_status}" == "2" ]] || { echo "Pre-change ARC reconciliation expected the exact pending promotion plan (status ${plan_status})" >&2; exit 2; }
+        [[ "${mode}" == "reconcile" && "${plan_status}" == "2" ]] || { echo "Pre-change ARC reconciliation expected an exact pending scope-reviewed plan (status ${plan_status})" >&2; exit 2; }
         GFTB_ARC_READBACK_MODE=reconcile GFTB_ARC_RECONCILE_PLAN_PATH="${nochange_plan}" GFTB_ARC_RECONCILE_DATA_DIR="${data_dir}" just arc-plan-scope-check
-        receipt="pre-change state/live 4Gi/8Gi with exact pending 8Gi/16Gi promotion; create and review a fresh plan"
+        receipt="pre-change state/live 4Gi/8Gi in runner group ${state_group} with an exact pending scope-reviewed plan; create and review a fresh plan"
     fi
     just _reviewed-clean-main
     just _reviewed-arc-core
@@ -1270,7 +1319,7 @@ arc-capacity-readback: _reviewed-clean-main _reviewed-arc-core _arc-exclusive-co
             rm -rf -- "${attempted_data_dir}"
         fi
     fi
-    echo "ARC capacity receipt passed: ${receipt}; listener Ready."
+    echo "ARC capacity/runner-group receipt passed: ${receipt}; listener Ready."
 
 arc-enrollment-plan: enrollment-preflight arc-plan
     @echo "Review with just arc-plan-show and just arc-plan-scope-check."

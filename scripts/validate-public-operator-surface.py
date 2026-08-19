@@ -291,13 +291,13 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "c37fb8c36e826dc6", "3676b9eafb3336d0", "87893f2ae0d1c1ec", "c957b577fd505498"
     ),
     "arc-plan-scope-check": _receipt(
-        "e682272db4617433", "23db0409d1fc2505", "7e2768b0b490490e", "b4d312b73ff71590"
+        "e6b881c364d592f3", "42bf73a298da3fa6", "401d1d090bf8c0a8", "c5e86c774a0a71c9"
     ),
     "arc-apply": _receipt(
         "fe8c324732148b38", "c967bad1c1ccab8e", "fd3840cedf78db82", "9b5a73294ec96ef6"
     ),
     "arc-capacity-readback": _receipt(
-        "af3ff1d577a41125", "6a843d789b1ff281", "83b9766729c0e9c1", "d07696a89e52ed38"
+        "41a8bb974559c6a9", "9b582383e0694579", "4a54d26ef774fd43", "50b306320b2c4a52"
     ),
     "arc-enrollment-plan": _receipt(
         "49a0e25c1cc8c8ff", "b15096271b4271a4", "fe1d38e06e5abf79", "905f0b0d50110b7a"
@@ -7418,6 +7418,39 @@ def self_test() -> None:
     expect_scope_rejection(
         scope_source, "cutover with a helm replacement path", plan, "replacement paths"
     )
+
+    # A resource claiming no-op is dropped from the reviewed set, so it must
+    # actually be unchanged. An honest no-op rides along; a lying one is refused.
+    honest_noop = {
+        "address": "module.gh_nix.helm_release.bystander",
+        "mode": "managed",
+        "type": "helm_release",
+        "name": "bystander",
+        "change": {
+            "actions": ["no-op"],
+            "before": {"values": ["unchanged"]},
+            "after": {"values": ["unchanged"]},
+        },
+    }
+    for label, base in (("cutover", cutover), ("rollback", rollback), ("capacity", valid)):
+        plan = copy.deepcopy(base)
+        plan["resource_changes"].append(copy.deepcopy(honest_noop))  # type: ignore[union-attr]
+        result = run_arc_scope_checker(scope_source, plan)
+        if result.returncode != 0:
+            raise SystemExit(
+                f"self-test FAILED: {label} plus an honest no-op was rejected: "
+                + (result.stdout + result.stderr).strip()
+            )
+        plan = copy.deepcopy(base)
+        lying_noop = copy.deepcopy(honest_noop)
+        lying_noop["change"]["after"] = {"values": ["smuggled"]}  # type: ignore[index]
+        plan["resource_changes"].append(lying_noop)  # type: ignore[union-attr]
+        expect_scope_rejection(
+            scope_source,
+            f"{label} plus a no-op resource that actually changes",
+            plan,
+            "no-op resource change that modifies",
+        )
 
     for label, actions in (("update", ["update"]), ("replacement", ["delete", "create"])):
         plan = copy.deepcopy(cutover)

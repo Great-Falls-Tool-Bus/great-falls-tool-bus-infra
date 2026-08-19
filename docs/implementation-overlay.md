@@ -227,7 +227,9 @@ admits exactly three enumerated plans and refuses everything else:
 
 1. **capacity** — one in-place `module.gh_nix.helm_release.arc_runner` update
    whose only Helm-values delta is the runner container's `ephemeral-storage`
-   `4Gi -> 8Gi` request and `8Gi -> 16Gi` limit.
+   `4Gi -> 8Gi` request and `8Gi -> 16Gi` limit. In this shape the Helm `set`
+   block is compared whole, so a capacity plan cannot smuggle a `runnerGroup`
+   move: it fails with `changes fields outside values: set`.
 2. **cutover** — the TIN-3902 runner-group move: that same capacity delta plus
    the `runnerGroup` Helm `set` entry `default -> great-falls-tool-bus-infra`,
    the pinned runner image digest carried by the advanced ARC role pin, the new
@@ -273,9 +275,11 @@ makes that saved plan non-retryable. After restoring backend connectivity, run
 arc-capacity-readback`. That mode accepts only matching state/live 4/8 GiB plus
 a pending plan the scope guard admits (the capacity promotion, or the
 runner-group cutover that carries it), or matching state/live 8/16 GiB plus an
-empty plan; it then invalidates the entire attempted bundle. A pre-change receipt
-permits a fresh plan. A promoted receipt does not permit retry. Any other result
-is a stop condition requiring a separate reviewed state/live reconciliation.
+empty plan; either way canonical state and the live scale set must also agree
+on `.spec.runnerGroup`. It then invalidates the entire attempted bundle. A
+pre-change receipt permits a fresh plan. A promoted receipt does not permit
+retry. Any other result is a stop condition requiring a separate reviewed
+state/live reconciliation.
 
 ## Runner group cutover
 
@@ -354,6 +358,25 @@ Do not work around the guard. Any change beyond the enumerated set — including
 a later capacity move such as `nix_max_runners` 4 -> 8 — needs its own reviewed
 scope-contract update first.
 
+**Precondition: live and canonical state must still be at 4Gi/8Gi.** The
+`cutover` shape bundles the still-unapplied TIN-2299 capacity promotion, so it
+requires `ephemeral-storage` `4Gi -> 8Gi` request and `8Gi -> 16Gi` limit. If
+that promotion has already been applied on its own, the cutover plan carries
+`before == after == 8Gi/16Gi` and the guard refuses it with
+`expected runner resources.requests.ephemeral-storage 4Gi->8Gi`. A
+cutover-from-already-promoted shape does not exist in the contract and would
+need its own reviewed scope-contract update. Confirm the posture **before**
+opening the quiet window:
+
+```bash
+kubectl --context honey -n arc-runners \
+  get autoscalingrunnerset great-falls-tool-bus-nix \
+  -o jsonpath='{.spec.template.spec.containers[?(@.name=="runner")].resources.requests.ephemeral-storage}'
+```
+
+Must print `4Gi`. If it prints `8Gi`, stop: the capacity promotion landed
+separately and this carrier is inadmissible as written.
+
 ### Step 3 — quiet window and plan
 
 The RustFS S3 backend has no remote state lock; hold the exclusive window
@@ -380,7 +403,9 @@ condition.
 zero drift:**
 
 - `module.gh_nix.helm_release.arc_runner` — **update in place**. The only
-  deltas are the `runnerGroup` Helm `set` entry and four Helm-values lines:
+  deltas are the `runnerGroup` Helm `set` entry and four Helm-values changes
+  (six lines: two `ephemeral-storage` and one `image` rewritten, three added —
+  `priorityClassName` plus the env name/value pair):
   - `runnerGroup`: `default` -> `great-falls-tool-bus-infra`. This rides the
     release's `set` block, not the rendered `values` document; the scope guard
     reviews it as a one-entry `set` delta and requires every other `set` entry
@@ -433,9 +458,13 @@ must not create it.
 GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-capacity-readback
 ```
 
-`arc-capacity-readback` proves capacity convergence and listener health; it
-does NOT look at the runner group. Add the group and admission readbacks
-explicitly:
+`arc-capacity-readback` proves capacity convergence, runner-group convergence,
+and listener health. In the default `promoted` mode it now requires canonical
+state and the live AutoscalingRunnerSet to agree on **both** `8Gi`/`16Gi` and
+`.spec.runnerGroup: great-falls-tool-bus-infra`, so the receipt can no longer
+go green while the scale set is still idle in GitHub's `Default` group. It
+still does not — and cannot — prove GitHub-side *admission*, which is an org
+setting. Add the independent group and admission readbacks:
 
 ```bash
 kubectl --context honey -n arc-runners \
@@ -469,15 +498,27 @@ The cutover is source-reversible. Nothing running is destroyed: the only
 `terraform_data.runner_group_policy` receipt, which materializes no GitHub or
 Kubernetes object.
 
-1. Revert the tfvars change (`runner_group`, `runner_group_policy`) and the
-   ARC role pin advance (`Justfile` `arc_core_default` / `arc_core_sha` /
+1. Revert the tfvars change **in full** — `runner_group`,
+   `runner_group_policy`, **and** `nix_ephemeral_storage_request` /
+   `nix_ephemeral_storage_limit` back to `4Gi` / `8Gi` — and the ARC role pin
+   advance (`Justfile` `arc_core_default` / `arc_core_sha` /
    `arc_core_ci_default`, `scripts/validate-core-checkout.py` `ARC_CORE_PIN`,
    `scripts/validate-public-operator-surface.py` `ARC_CORE_SHA` and the
    `arc_core_default` fixture, `.github/workflows/flywheel-cache-proof.yml`
    `GF_OIDC_PROFILE_REF`, and the pin prose in `README.md`,
-   `docs/implementation-overlay.md`, `docs/ci-credentials.md`). Reverting the
-   tfvars WITHOUT reverting the pin is not a valid state: `runner_group` is a
-   required input at the new pin and has no default.
+   `docs/implementation-overlay.md`, `docs/ci-credentials.md`).
+
+   Two ways to get this wrong, both of which cost a quiet window:
+
+   - Reverting the tfvars WITHOUT reverting the pin is not a valid state:
+     `runner_group` is a required input at the new pin and has no default.
+   - Leaving the storage tfvars at `8Gi` / `16Gi` while reverting the group and
+     the pin produces a plan the scope guard **refuses**. The cutover bundles
+     the capacity promotion, so its reversal must demote capacity as well; the
+     `rollback` shape requires `8Gi -> 4Gi` request and `16Gi -> 8Gi` limit. A
+     partial revert fails at `just arc-plan-scope-check` with
+     `expected runner resources.requests.ephemeral-storage 8Gi->4Gi`, after you
+     have already landed the revert on `main` and opened the window.
 2. Land the revert on canonical `main` (every guarded ARC recipe requires a
    clean, signed, current `main`).
 3. Restore the reverted-pin ARC core checkout and re-plan:
@@ -488,10 +529,25 @@ Kubernetes object.
    nine source-derived outputs. The committed scope guard admits exactly that
    shape — it was landed together with the forward cutover precisely so a
    rollback never needs a new reviewed contract while the fleet is degraded.
-   The guard still requires the reversal to be byte-exact: it refuses a
-   rollback that also changes capacity, roster, image digest, or any other
-   Helm value.
-4. Leaving the GitHub-side group in place after a rollback is harmless — an
+   The guard still requires the reversal to be byte-exact. The rollback
+   **must** carry the enumerated reversal — capacity `8/16Gi -> 4/8Gi` and the
+   runner image digest `1ccce66d… -> 086a6c55…` — and the guard refuses a
+   rollback that goes beyond it: a different capacity step, a roster or group
+   change, another image, or any other Helm value.
+4. Prove the reversal landed:
+
+   ```bash
+   GFTB_ARC_READBACK_MODE=rolled-back GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive \
+     just arc-capacity-readback
+   ```
+
+   `rolled-back` is the converged-pre-change receipt: it requires state and
+   live both at `4Gi`/`8Gi`, both reporting `.spec.runnerGroup: default`, a
+   refreshed no-change plan, and one Ready zero-restart listener. (Before
+   TIN-3902 no readback mode could certify a completed rollback — the
+   pre-change branch demanded a *pending* plan, so a converged rollback failed
+   both branches.)
+5. Leaving the GitHub-side group in place after a rollback is harmless — an
    unused runner group admits nobody and starves nothing.
 
 ## ARC GitHub App Secret
