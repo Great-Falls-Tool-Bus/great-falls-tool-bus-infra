@@ -1,7 +1,7 @@
 name: Form Stack
 
 # TIN-2420 Path B: GFTB Anubis-gated contact intake (Anubis PoW gate ->
-# stdlib form-handler -> LMTP inject to keyholders@latoolb.us). Hosted Validate
+# stdlib form-handler -> LMTP inject to keyholders@latoolb.us). The Validate
 # Overlay covers pull requests; this private-runner validation runs on trusted
 # pushes and manual dispatches. Live server dry-run/apply is protected by the `mail`
 # environment kubeconfig.

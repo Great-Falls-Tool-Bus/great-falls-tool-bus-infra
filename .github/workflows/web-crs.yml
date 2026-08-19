@@ -4,7 +4,7 @@ name: Web Stack
 # gftb-site static Caddy origin -> ClusterIP 80->3000 -> honey-ingress
 # cloudflared tunnel, mirroring the MassageIthaca full-on-cluster pattern).
 #
-# This workflow is VALIDATION-ONLY. Hosted Validate Overlay covers pull
+# This workflow is VALIDATION-ONLY. The Validate Overlay covers pull
 # requests; this private-runner job runs only on trusted push/manual events. It
 # runs the repo validator, including the render check, and enforces the
 # fail-closed invariants (replicas 2, digest-pinned image, no namespace, no

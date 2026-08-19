@@ -48,7 +48,10 @@ check-hosted:
     just substrate-boundary
 
 # Private GloriousFlywheel source-dependent ARC module validation remains an
-# operator-local extension. Public hosted CI runs only `check-hosted`.
+# operator-local extension. Public CI runs only `check-hosted`. The recipe name
+# is historical (TIN-3914 moved CI off GitHub-hosted runners); it is referenced
+# by scripts/validate-public-operator-surface.py's reviewed allowlist and is
+# deliberately not renamed here.
 check: check-hosted
     just arc-validate
 

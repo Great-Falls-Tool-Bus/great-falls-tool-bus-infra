@@ -1,8 +1,36 @@
 name: Validate Overlay
 
-# This public repository's validation is deliberately secret-free and runs on
-# a GitHub-hosted runner. The selected `tinyland-nix` group remains restricted
-# to admitted private repositories; validation must not weaken that boundary.
+# This public repository's validation is deliberately secret-free. TIN-3914:
+# it runs on the GF cache-fronted `tinyland-nix` ARC fleet, not a
+# GitHub-hosted runner -- GitHub-hosted runners are not an option in this
+# estate (operator ruling 2026-08-19, TIN-3914: "never ubuntu-* runners; only
+# GF cache-fronted ARC runners"). ADMISSION HOLD RESOLVED: this repository
+# (id 1286829099) joined the `great-falls-tool-bus-infra` runner group's
+# roster in PR #128 (`config/organization.yaml`, operator ruling 2026-08-22).
+# Before that merge this job had no runner and `validate` -- the sole
+# required status check on `main` -- was permanently pending; this PR is the
+# other half of closing that (the roster admission alone does not move this
+# job off `ubuntu-24.04`).
+#
+# OPEN QUESTION FOR THIS PR'S REVIEW, not something this header settles:
+# `config/organization.yaml`'s `runner_group` comment states a standing
+# invariant -- no `pull_request`-triggered job reaches `tinyland-nix` --
+# enforced by every OTHER self-hosted workflow in this repository via either
+# a trusted-event `if:` gate (PR #110, `ae7cb63a`,
+# `github.event_name == 'push' || github.event_name == 'workflow_dispatch'`)
+# or by declaring no `pull_request` trigger at all. This job cannot adopt
+# either: it runs UNFILTERED on every `pull_request` by design, because it
+# is both this repository's sole required status check and (see "ALSO
+# CARRIES" below) the always-executing, always-reporting home for the
+# rung-2 web-stack PR-side render -- both require running on every PR. Its
+# compensating control is staying secret-free (`permissions: contents:
+# read`, zero `environment:`/`secrets.*` references, matching every other
+# `tinyland-nix` job here) rather than event-gated. "Secret-free" and
+# "gated" are different properties, and whether secret-freedom alone is
+# sufficient compensation for a `pull_request`-unfiltered job on this runner
+# class -- making this job a deliberate, single exception to the invariant
+# rather than a violation of it -- is the thing this PR's review needs to
+# confirm, not something already decided by landing it.
 #
 # ALSO CARRIES: the rung-2 web-stack plan render for pull requests (round 3,
 # after adversarial review PR #127 comment 5377613179). `.github/workflows/
@@ -14,17 +42,14 @@ name: Validate Overlay
 # this job is that something: it already runs on every `pull_request`
 # unfiltered, is already this repository's declared PR validation authority
 # (PR #110's own commit message), is already secret-free for this purpose,
-# and is already slated to migrate wholesale onto the GF cache-fronted
-# runner class by DRAFT PR #120 ("ci: migrate off GitHub-hosted runners",
-# TIN-3914 Phase B) -- so the render migrates with it for free the day #120
-# lands, and this change creates ZERO new hosted dependence. The render step
-# below shares `web-plan.yml`'s `web-stack-render` recipe and residual-list
-# wording; see that file's header for the full rung-2 explanation and for
-# why the render never reaches the reviewed web-release-* candidate-
-# promotion family. `kubectl`/`yq`/`jq` are already available in this job's
-# `nix develop .` devshell -- `just check-hosted` below already exercises
-# `web-stack-validate` (and therefore the same tools) today, so the new step
-# adds no new dependency.
+# and, as of THIS PR, runs on the GF cache-fronted runner class directly
+# (DRAFT PR #120, "ci: migrate off GitHub-hosted runners"/TIN-3914 Phase B,
+# proposed the same move separately; per operator ruling L77 Q2 it is
+# superseded by this PR and is being stripped/closed, not landed alongside
+# it -- see #116's PR thread). `kubectl`/`yq`/`jq` are already available in
+# this job's `nix develop .` devshell -- `just check-hosted` below already
+# exercises `web-stack-validate` (and therefore the same tools) today, so
+# the new step adds no new dependency.
 
 on:
   pull_request:
@@ -36,9 +61,14 @@ on:
 permissions:
   contents: read
 
+env:
+  # The ARC runner image's Node runtime serves JavaScript actions under this
+  # shim, matching the other Great-Falls-Tool-Bus tinyland-nix workflows.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   validate:
-    runs-on: ubuntu-24.04
+    runs-on: tinyland-nix
     timeout-minutes: 45
     steps:
       - name: Checkout overlay
@@ -47,8 +77,9 @@ jobs:
           path: overlay
           persist-credentials: false
           fetch-depth: 0
-      - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      # No installer step: the tinyland-nix image ships the Nix daemon and the
+      # GloriousFlywheel cache configuration. The guards below now assert that
+      # the runner image is sane rather than that an installer succeeded.
       - name: Validate overlay contract
         env:
           GH_ACTION_TOKEN: ${{ github.token }}
@@ -67,7 +98,7 @@ jobs:
           fi
 
           if ! nix store ping >/dev/null 2>&1; then
-            echo "::error::Nix daemon is unavailable after the pinned installer."
+            echo "::error::Nix daemon is unavailable on the tinyland-nix runner."
             exit 1
           fi
 

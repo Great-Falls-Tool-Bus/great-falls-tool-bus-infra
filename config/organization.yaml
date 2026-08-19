@@ -96,43 +96,86 @@ runner_contract:
     # to tinyland-nix"; Linear TIN-3914) — see `infra_repo_admission_ruling`
     # below. This replaces the superseded rationale that used to live here
     # ("remains EXCLUDED ... its hosted `validate` job already runs on a
-    # GitHub-hosted runner"): `validate.yml` is still `ubuntu-24.04` as of
-    # this admission (DRAFT PR #116, HELD, moves it) and was never what kept
-    # PR-authored content off `tinyland-nix` — the roster was.
+    # GitHub-hosted runner"): that hosted job was never what kept
+    # PR-authored content off `tinyland-nix` — the roster was, and PR #116
+    # (landed alongside this text) is what actually moves `validate.yml` off
+    # `ubuntu-24.04`, onto `tinyland-nix` as the deliberate exception class
+    # (3) below.
     #
-    # What actually makes admission safe: no `pull_request_target` trigger
-    # exists anywhere in this repository, and no `pull_request`-triggered job
-    # reaches `tinyland-nix` by either of two mechanisms present across this
-    # repository's 15 `tinyland-nix` jobs (10 workflows). (1) An explicit
-    # event-gate `if:` on 12 of the 15 jobs: 8 first-jobs (archive-stack,
-    # edge-plan, flywheel-cache-proof, form-crs, list-crs, mail-crs, web-crs,
-    # web-plan) carry the PR #110 (`ae7cb63a`) `if: github.event_name ==
-    # 'push' || github.event_name == 'workflow_dispatch'`; the 4
-    # `environment: mail` credentialed `server` jobs (archive-stack, form-crs,
-    # list-crs, mail-crs) carry a narrower `if: github.event_name ==
-    # 'workflow_dispatch'` only. (2) Trigger absence on the remaining 3:
-    # `edge-drift.yml` and `k8s-stack-drift.yml`'s two jobs declare only
-    # `schedule` + `workflow_dispatch` triggers and never see `pull_request`
-    # at all. `web-plan.yml` is the one job that briefly shipped WITHOUT its
-    # #110 gate in PR #127 round 2 and had it restored in round 3 before
-    # merge (PR #127 comment 5377613179; see `.github/workflows/web-plan.yml`'s
-    # own header). STANDING INVARIANT, not a snapshot of `749b8f8d`: any
-    # workflow admitted to (or migrated within) this class must carry a
-    # trusted-event `if:` or declare no `pull_request` trigger, checked at
-    # merge time, not assumed from this comment. DRAFT PR #116 moves
-    # `validate.yml` onto `tinyland-nix`; `validate.yml` runs unfiltered on
-    # every `pull_request` with no event gate — by design, since a required
-    # status check must run on every PR — so it CANNOT adopt this gate. #116
-    # must resolve that (re-home the requirement, or accept `validate.yml` as
-    # a deliberate, reviewed exception with its own rationale) before it
-    # lands, or it falsifies this paragraph the day it merges.
+    # What makes admission safe in THIS repository: no `pull_request_target`
+    # trigger exists anywhere in it, and no `pull_request`-triggered job
+    # reaches `tinyland-nix` unaccountably — every one of this repository's
+    # 16 `tinyland-nix` jobs (11 workflows) falls into one of three
+    # enumerated, reviewed classes. (1) An explicit event-gate `if:` on 12
+    # jobs: 8 first-jobs (archive-stack, edge-plan, flywheel-cache-proof,
+    # form-crs, list-crs, mail-crs, web-crs, web-plan) carry the PR #110
+    # (`ae7cb63a`) `if: github.event_name == 'push' || github.event_name ==
+    # 'workflow_dispatch'`; the 4 `environment: mail` credentialed `server`
+    # jobs (archive-stack, form-crs, list-crs, mail-crs) carry a narrower
+    # `if: github.event_name == 'workflow_dispatch'` only. (2) Trigger
+    # absence on 3: `edge-drift.yml` and `k8s-stack-drift.yml`'s two jobs
+    # declare only `schedule` + `workflow_dispatch` triggers and never see
+    # `pull_request` at all. `web-plan.yml` is the one job that briefly
+    # shipped WITHOUT its #110 gate in PR #127 round 2 and had it restored in
+    # round 3 before merge (PR #127 comment 5377613179; see
+    # `.github/workflows/web-plan.yml`'s own header). (3) The single
+    # deliberate exception, `validate.yml`'s `validate` job (PR #116):
+    # UNFILTERED on every `pull_request`, no event gate, by design — it is
+    # this repository's sole required status check and the always-executing,
+    # always-reporting home for the rung-2 web-stack PR-side render, and
+    # BOTH of those functions require running on every PR, which a #110-style
+    # gate would defeat. Its compensating control is staying secret-free
+    # (`permissions: contents: read`, zero `environment:`/`secrets.*`
+    # references) rather than event-gated; adversarial review of #116
+    # (comment 5381265081) confirmed this and ruled the posture acceptable —
+    # see below for why. STANDING INVARIANT, not a snapshot of any one head:
+    # any workflow admitted to (or migrated within) this class must land in
+    # one of these three enumerated classes, checked at merge time, not
+    # assumed from this comment. A `pull_request`-unfiltered job with a
+    # protected `environment:` or a `secrets.*` reference is NOT covered by
+    # class (3) and needs its own review.
+    #
+    # This invariant is REPO-SCOPED, not class-scoped, and #116's review
+    # found the fact that closes that gap, previously nowhere in this repo:
+    # roster member `Great-Falls-Tool-Bus/greatfallstoolbus.org` (public,
+    # `allow_forking: true`, id 1287399122) already runs `pull_request`
+    # jobs on this exact `tinyland-nix` pool, admitted before this comment
+    # existed. Verified empirically (PR #116 comment 5381265081): `ci.yml`
+    # (a `tinyland-inc/ci-templates` reusable-workflow wrapper, `secrets:
+    # inherit`, `permissions: contents: read` PLUS `statuses: write`) runs 4
+    # jobs on `tinyland-nix` on every PR with NO event gate at all;
+    # `container-ghcr.yml`'s `verify-public-gf-core` job runs
+    # `if: github.event_name == 'pull_request'` — deliberately PR-ONLY;
+    # `production-health.yml`'s `gate-health` job runs on `tinyland-nix` on
+    # every PR, ungated. Per-job ephemeral pods were confirmed empirically
+    # (distinct runner name per job) — that bounds persistence, not network
+    # reach. So the class-level property "no `pull_request` job reaches
+    # `tinyland-nix` without justification" was already NOT true estate-wide
+    # before `validate.yml` joined it; #116 does not create that exposure, it
+    # joins a class another admitted public repository already occupies, with
+    # a smaller footprint (`contents: read` only, zero secrets, zero write
+    # scopes) than that repository's own accepted jobs.
+    #
+    # OPEN ITEM, not closed by this admission or by #116: there is no egress
+    # NetworkPolicy for the ARC runner namespace (PR #116 comment 5381265081
+    # searched for one and found none in `tofu/stacks/arc-runners/` or
+    # GloriousFlywheel's NetworkPolicy set). Runner pods share in-cluster
+    # reach to `attic.nix-cache.svc.cluster.local`,
+    # `bazel-cache.nix-cache.svc.cluster.local:9092`,
+    # `gf-reapi-cell.gf-rbe.svc.cluster.local:8980`, and
+    # `tofu-state-rustfs.nix-cache.svc:9000` (this file's `substrate` block)
+    # regardless of which repositories are on the roster or which mechanism
+    # class their jobs fall into. A default-deny-egress-plus-allowlist policy
+    # for that namespace is the class-wide fix (owned by
+    # `tinyland-inc/tinyland-infra`, the `arc_controller_owner`) and belongs
+    # in the convergence program alongside TIN-4004, not rediscovered
+    # per-repo by the next reviewer.
     #
     # Admission unblocks all ten of this repository's self-hosted
     # `tinyland-nix` workflows (archive-stack, edge-drift, edge-plan,
     # flywheel-cache-proof, form-crs, k8s-stack-drift, list-crs, mail-crs,
-    # web-crs, web-plan) — each has had zero eligible runners since this
-    # repository was excluded, and most show a `queued` run outstanding from
-    # PR #127's merge push (2026-08-22T12:41:11Z).
+    # web-crs, web-plan) — each had zero eligible runners while this
+    # repository was excluded. `validate.yml` (PR #116) is the eleventh.
     #
     # TIN-4004 (High, security): admission RE-ARMS a dormant credential
     # carrier; it does not merely leave shared substrate unchanged.
@@ -197,10 +240,12 @@ runner_contract:
       # carrier in `edge-plan.yml` (see above — RULED accept-documented, L77,
       # no environment gate added). Sequencing: this roster entry merges
       # first; the GitHub-side admission step (packet Step 3) is what makes
-      # the ruled-open TIN-4004 exposure live; DRAFT PR #116
-      # (moves `validate.yml` off `ubuntu-24.04` — cannot land as-is per the
-      # STANDING INVARIANT above) and DRAFT PR #120 (TIN-3914 Phase B)
-      # un-hold and land after, per the attended apply packet. GitHub-side
+      # the ruled-open TIN-4004 exposure live; PR #116 (moves `validate.yml`
+      # off `ubuntu-24.04` onto `tinyland-nix` as the deliberate exception
+      # class (3) above, adversarial-reviewed and LAND-WITH-EDITS per comment
+      # 5381265081) lands after, per the attended apply packet; DRAFT PR #120
+      # (TIN-3914 Phase B) is superseded by #116 and closes, not merges — see
+      # that packet's reconciliation notes. GitHub-side
       # admission (the runner group's selected-repository list in org
       # Settings) is itself a separate, attended action this file does not
       # perform; see docs/implementation-overlay.md "Runner group cutover"
