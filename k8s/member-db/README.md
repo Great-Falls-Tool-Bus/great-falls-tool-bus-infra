@@ -6,9 +6,18 @@ to hold DDL authority over it.
 
 This is the **infra half** of slice S1. The app half — the tenant schema, the
 Drizzle pins, the `/bin/migrator` entrypoint with its advisory lock and
-migration-hash ledger, and the RLS policies — lives in `gftb-platform` and has
-not landed yet. Nothing here can be applied before it does, which is why the PR
-that introduced this directory is held as a draft.
+migration-hash ledger, and the RLS policies — is
+`Great-Falls-Tool-Bus/greatfallstoolbus.org` **PR #172** (draft, stacked on S0
+PR #171). It is open but **unlanded**, so no platform image carrying
+`/bin/migrator` has been published yet and the migration half of this stack
+cannot run. That is why the PR that introduced this directory is held as a
+draft.
+
+The role and schema names below are **aligned against PR #172's checked-in
+SQL**, not guessed: `MIGRATION_ROLE = 'gftb_migrator'`,
+`RUNTIME_ROLE = 'gftb_app'`. Those names live in a hash-ledgered, forward-only
+migration on that side and in plain YAML on this side, so this side is the one
+that moves.
 
 Authority: `Great-Falls-Tool-Bus/meta` main,
 `spec/member-v0-executable-slices-2026-08-18.md` §1.3 (S1) and
@@ -78,22 +87,32 @@ substrate PR plus an operator apply, never something this repository applies.
 | **RPO no worse than one hour** | continuous WAL archiving + `archive_timeout: 300s` | validator asserts the parameter is present and `<= 3600s` |
 | **RTO no worse than four hours** | six-hourly base backups + 30d retention + a rehearsed restore | validator asserts the schedule cadence; the rehearsal is runbook step R |
 
-## Hand-offs the app half must honour
+## The seam with the app half
+
+Checked against PR #172's diff rather than assumed. Where the two halves meet:
+
+| Concern | This side declares | PR #172 expects | Composes? |
+| --- | --- | --- | --- |
+| Migration/owner role | `bootstrap.initdb.owner: gftb_migrator` | `MIGRATION_ROLE = 'gftb_migrator'`, owns every table | yes |
+| Runtime role | `gftb_app`, created `NOLOGIN` at bootstrap, then given LOGIN + a password by `managed.roles` | `0002` creates `gftb_app` only `IF NOT EXISTS`; fails on `SUPERUSER` or `BYPASSRLS`, **never** on `LOGIN` | yes — `0002` finds the role, skips creation, and needs no `CREATEROLE` |
+| `bypassrls` | `false`, asserted by this repo's validator | `0002` raises if it is true | yes, belt and braces |
+| Schema `public` grants | default privileges `FOR ROLE gftb_migrator` at bootstrap | `0002` grants explicitly | overlapping on purpose: this side covers the window before `0002` first runs |
+| Schemas `auth`, `migration` | nothing — not this side's | `0002` creates `auth`, grants `gftb_app` there, and revokes it from `migration` entirely | yes |
+| Database name | `gftb_member` | unpinned (`DATABASE_URL` is a name) | this side's choice |
+| Migrator image | guard admits `greatfallstoolbus.org` **or** `gftb-platform`, digest-pinned | S0 publishes `greatfallstoolbus.org` today; TIN-3815 renames it later | yes, and narrow the guard once the rename lands |
+
+Two things the app half still owes, which nothing here can check:
 
 1. **Pod labels.** The database admits `app.kubernetes.io/part-of: gftb-platform`
    with `app.kubernetes.io/component` in `web`, `worker`, `migrator`. Pods
    without those labels are denied on 5432.
 2. **`C` collation.** Case-insensitive comparison must be explicit (`lower()` or
    `citext`) in the app's own migrations; it is not free from the database.
-3. **The `auth` schema.** S2 vendors six `auth.*` tables. The default privileges
-   declared here cover schema `public` only, so S2's vendored migration must
-   issue its own `GRANT USAGE ON SCHEMA auth` and matching
-   `ALTER DEFAULT PRIVILEGES` for `gftb_member_runtime`.
-4. **The GUC fix choice.** Spec §1.3 requires S1's PR body to state whether it
-   took fix **A** (per-unit-of-work adapter construction) or fix **B**
-   (role-level GUC). Fix B needs an infra-owned `ALTER ROLE ... SET
-   app.tenant_id`, which is a change to `cluster.yaml` here — not something the
-   app half can do alone.
+
+And one thing that would come back to this file: §1.3's GUC fix choice. PR #172
+takes **fix A** (transaction handle out of `withTenant`), which needs nothing
+here. Fix **B** would have needed an infra-owned `ALTER ROLE ... SET
+app.tenant_id` in `cluster.yaml`.
 
 ## Recipes
 

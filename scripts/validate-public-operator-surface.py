@@ -424,11 +424,13 @@ ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "9483ae823d52184a", "46f524549c47efcf", "fa8bb4ecd56a2783", "88cb783d8b2d5fd4"
     ),
     # _member-db-migrator-image-input: holds the migration image to an exact
-    #   gftb-platform @sha256 digest and refuses the declare-only PLACEHOLDER.
-    #   Weakening this regex to accept a tag would let the code that writes the
-    #   member schema come from an unreviewed image.
+    #   @sha256 digest on one of the two admitted platform repositories (the
+    #   pre- and post-TIN-3815 slugs) and refuses the declare-only PLACEHOLDER.
+    #   Weakening this regex to accept a tag, or widening the alternation to a
+    #   third repository, would let the code that writes the member schema come
+    #   from an unreviewed image — so both edits have to be reviewed in here.
     "_member-db-migrator-image-input": _receipt(
-        "7e129d1dcaec65c1", "f46abad7db2131ef", "25cf211f093b95db", "c2cf287e19ed3fa2"
+        "dcec8e7bab2a4e62", "a154a8809aec678f", "576357caeb6a2c5c", "8f3b3cd09ad71d89"
     ),
     # member-db-stack-server-dry-run: proves the stack against the live API
     #   without mutating. Pinned so `--dry-run=server` can never quietly become

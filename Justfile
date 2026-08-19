@@ -2246,15 +2246,23 @@ _member-db-kubeconfig-input:
     test -n "${MEMBER_DB_APPLY_KUBECONFIG:-}" || { echo "Set MEMBER_DB_APPLY_KUBECONFIG to the member-db apply kubeconfig path" >&2; exit 2; }
     test -f "${MEMBER_DB_APPLY_KUBECONFIG}"
 
-#   MEMBER_DB_MIGRATOR_IMAGE    the operator-resolved gftb-platform digest
+#   MEMBER_DB_MIGRATOR_IMAGE    the operator-resolved platform image digest
 # The shape is held exactly, not loosely: a tag would let the migration that
 # writes the member schema come from an image nobody reviewed, and the committed
 # template's PLACEHOLDER is refused outright so the declare-only sentinel can
 # never reach a cluster.
+#
+# TWO REPOSITORY NAMES, ON PURPOSE. TIN-3815 renames the platform repository to
+# gftb-platform, but that rename has NOT happened: greatfallstoolbus.org PR #171
+# (S0) still publishes ghcr.io/great-falls-tool-bus/greatfallstoolbus.org.
+# Accepting only the post-rename slug would block the operator today; accepting
+# only the pre-rename one would silently expire the day the rename lands. Both
+# are admitted, and nothing else is — the digest requirement is unchanged.
+# Narrow this to the single surviving name once TIN-3815 completes.
 _member-db-migrator-image-input:
-    test -n "${MEMBER_DB_MIGRATOR_IMAGE:-}" || { echo "Set MEMBER_DB_MIGRATOR_IMAGE to the operator-resolved gftb-platform digest" >&2; exit 2; }
+    test -n "${MEMBER_DB_MIGRATOR_IMAGE:-}" || { echo "Set MEMBER_DB_MIGRATOR_IMAGE to the operator-resolved platform image digest" >&2; exit 2; }
     case "${MEMBER_DB_MIGRATOR_IMAGE}" in *PLACEHOLDER*) echo "refusing the declare-only PLACEHOLDER image; supply the real operator-resolved digest" >&2; exit 2 ;; esac
-    printf '%s' "${MEMBER_DB_MIGRATOR_IMAGE}" | grep -Eq '^ghcr\.io/great-falls-tool-bus/gftb-platform@sha256:[0-9a-f]{64}$' || { echo "MEMBER_DB_MIGRATOR_IMAGE must be ghcr.io/great-falls-tool-bus/gftb-platform@sha256:<64 lowercase hex>" >&2; exit 2; }
+    printf '%s' "${MEMBER_DB_MIGRATOR_IMAGE}" | grep -Eq '^ghcr\.io/great-falls-tool-bus/(greatfallstoolbus\.org|gftb-platform)@sha256:[0-9a-f]{64}$' || { echo "MEMBER_DB_MIGRATOR_IMAGE must be ghcr.io/great-falls-tool-bus/{greatfallstoolbus.org,gftb-platform}@sha256:<64 lowercase hex>" >&2; exit 2; }
 
 # Server-side dry-run of the database stack against the live API. No mutation.
 member-db-stack-server-dry-run: member-db-stack-validate _member-db-kubeconfig-input
