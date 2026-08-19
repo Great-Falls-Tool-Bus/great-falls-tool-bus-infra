@@ -197,7 +197,7 @@ flywheel-enroll repo="Great-Falls-Tool-Bus/great-falls-tool-bus.github.io":
     @echo "Runner provisioning is operator-gated. To provision/update the scale set:"
     @echo "  GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-enrollment-plan"
     @echo "  just arc-plan-show         # review the plan (expect no unexpected destroys)"
-    @echo "  just arc-plan-scope-check  # exact 4/8Gi -> 8/16Gi plan only"
+    @echo "  just arc-plan-scope-check  # exact capacity/cutover/rollback plan only"
     @echo "  GFTB_APPLY_CONFIRM=apply GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-apply"
     @echo "  GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-capacity-readback"
     @echo "This umbrella does NOT mutate the cluster."
@@ -417,63 +417,73 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
             "ERROR: ARC plan contains resource drift: "
             + repr([change.get("address") for change in resource_drift])
         )
-    output_changes = plan.get("output_changes", {})
-    if not isinstance(output_changes, dict):
-        raise SystemExit("ERROR: ARC plan output_changes must be an object")
 
-    output_fields = {
-        "actions",
-        "before",
-        "after",
-        "after_unknown",
-        "before_sensitive",
-        "after_sensitive",
+    # ---------------------------------------------------------------------------
+    # Enumerated ARC scope contract (TIN-2299 capacity + TIN-3902 runner group).
+    #
+    # Three plans are admitted and nothing else. Every address, action, output
+    # name, Helm `set` entry, and Helm-values byte is enumerated; there are no
+    # wildcards and no "allow anything under this prefix" escape.
+    #
+    #   capacity  1 in-place gh_nix Helm update whose only values delta is the
+    #             runner container ephemeral-storage 4Gi->8Gi / 8Gi->16Gi bump.
+    #   cutover   that same bump plus the runner-group move: 1 in-place gh_nix
+    #             Helm update (runnerGroup set entry, runner image digest, the
+    #             GF_FLYWHEEL_PROFILE_STATE env pair, template.spec
+    #             priorityClassName) and 1 create of the state-only
+    #             terraform_data.runner_group_policy receipt.
+    #   rollback  the exact byte-for-byte reverse of `cutover`: the same Helm
+    #             update inverted plus 1 destroy of the policy receipt.
+    #
+    # Any capacity, roster, image, or module-pin change beyond these requires its
+    # own reviewed scope-contract update. This guard fails closed.
+    # ---------------------------------------------------------------------------
+    HELM_ADDRESS = "module.gh_nix.helm_release.arc_runner"
+    POLICY_ADDRESS = "terraform_data.runner_group_policy"
+    DEFAULT_RUNNER_GROUP = "default"
+    DEDICATED_RUNNER_GROUP = "great-falls-tool-bus-infra"
+    RUNNER_IMAGE_LOW = (
+        "ghcr.io/tinyland-inc/actions-runner-nix@sha256:"
+        "086a6c5553f21a5ef59256ebe8fbf2d7b6bbf486def1d0f5ed1c05dcbdab084e"
+    )
+    RUNNER_IMAGE_HIGH = (
+        "ghcr.io/tinyland-inc/actions-runner-nix@sha256:"
+        "1ccce66d92dadecb648ea5c509a4806bf319b73e9730828e234c19670325397b"
+    )
+    PROFILE_STATE_ENV_NAME = "GF_FLYWHEEL_PROFILE_STATE"
+    PROFILE_STATE_ENV_VALUE = "shared-cache-backed"
+    RUNNER_PRIORITY_CLASS = "arc-runner"
+    LOW_STORAGE = {"requests": "4Gi", "limits": "8Gi"}
+    HIGH_STORAGE = {"requests": "8Gi", "limits": "16Gi"}
+    # Root outputs the advanced ARC role pin adds. They are pure source-derived
+    # receipts: creating or destroying them mutates nothing outside tofu state.
+    RUNNER_GROUP_OUTPUTS = {
+        "dind_runner_group": "",
+        "docker_runner_group": "",
+        "extra_runner_groups": {},
+        "nix_runner_group": DEDICATED_RUNNER_GROUP,
+        "overlay_tenant_legacy_shared_grant_owners": [],
+        "tofu_plan_cluster_role": "",
+        "tofu_plan_secret_read_namespaces": [],
+        "tofu_plan_service_account": "",
+        "tofu_plan_token_secret": "",
     }
-    for output_name, output in output_changes.items():
-        if not isinstance(output_name, str) or not output_name:
-            raise SystemExit("ERROR: every ARC output_changes name must be a nonempty string")
-        if not isinstance(output, dict):
-            raise SystemExit("ERROR: every ARC output_changes value must be an object")
-        observed_fields = set(output)
-        if observed_fields != output_fields:
-            raise SystemExit(
-                "ERROR: ARC output Change fields must be exact for "
-                + repr(output_name)
-                + "; missing="
-                + repr(sorted(output_fields - observed_fields))
-                + ", unexpected="
-                + repr(sorted(observed_fields - output_fields))
-            )
-        if output["actions"] != ["no-op"]:
-            raise SystemExit(
-                "ERROR: ARC output Change must have exactly no-op actions for "
-                + repr(output_name)
-            )
-        before_json = json.dumps(
-            output["before"], sort_keys=True, separators=(",", ":"), ensure_ascii=False
-        )
-        after_json = json.dumps(
-            output["after"], sort_keys=True, separators=(",", ":"), ensure_ascii=False
-        )
-        if before_json != after_json:
-            raise SystemExit(
-                "ERROR: ARC output Change modifies the value for " + repr(output_name)
-            )
-        if output["after_unknown"] is not False:
-            raise SystemExit(
-                "ERROR: ARC output Change contains unknown after-values for "
-                + repr(output_name)
-            )
-        if not isinstance(output["before_sensitive"], bool) or not isinstance(output["after_sensitive"], bool):
-            raise SystemExit(
-                "ERROR: ARC output Change has an invalid sensitive-field shape for "
-                + repr(output_name)
-            )
-        if output["before_sensitive"] != output["after_sensitive"]:
-            raise SystemExit(
-                "ERROR: ARC output Change changes sensitive-field shape for "
-                + repr(output_name)
-            )
+    POLICY_INPUT = {
+        "legacy_expires": "",
+        "legacy_reason": "",
+        "legacy_receipt": {},
+        "policy": "organization-restricted",
+        "scale_sets": [
+            {"group": DEDICATED_RUNNER_GROUP, "name": "great-falls-tool-bus-nix"}
+        ],
+    }
+    POLICY_OPAQUE_MASK = {"legacy_receipt": {}, "scale_sets": [{}]}
+
+
+    def canonical(value):
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
     all_changes = plan.get("resource_changes", [])
     if not isinstance(all_changes, list):
         raise SystemExit("ERROR: ARC plan resource_changes must be a list")
@@ -518,19 +528,36 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
         )
         for change in changes
     ]
-    expected = [
-        (
-            "module.gh_nix.helm_release.arc_runner",
-            "managed",
-            "helm_release",
-            "arc_runner",
-            ["update"],
-        )
-    ]
-    if observed != expected:
+    helm_update = (HELM_ADDRESS, "managed", "helm_release", "arc_runner", ["update"])
+    policy_create = (
+        POLICY_ADDRESS,
+        "managed",
+        "terraform_data",
+        "runner_group_policy",
+        ["create"],
+    )
+    policy_delete = (
+        POLICY_ADDRESS,
+        "managed",
+        "terraform_data",
+        "runner_group_policy",
+        ["delete"],
+    )
+    admitted_shapes = (
+        ("capacity", [helm_update]),
+        ("cutover", [policy_create, helm_update]),
+        ("rollback", [policy_delete, helm_update]),
+    )
+    shape = None
+    for candidate, expected in admitted_shapes:
+        if observed == expected:
+            shape = candidate
+            break
+    if shape is None:
         print(
-            "ERROR: ARC plan must contain exactly one in-place update to "
-            "module.gh_nix.helm_release.arc_runner; observed " + repr(observed),
+            "ERROR: ARC plan must be exactly one enumerated reviewed shape - the "
+            "gh_nix capacity update, the runner-group cutover, or its rollback; "
+            "observed " + repr(observed),
             file=sys.stderr,
         )
         print(
@@ -539,9 +566,194 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
         )
         sys.exit(1)
 
-    change = changes[0]["change"]
+    output_changes = plan.get("output_changes", {})
+    if not isinstance(output_changes, dict):
+        raise SystemExit("ERROR: ARC plan output_changes must be an object")
+    output_fields = {
+        "actions",
+        "before",
+        "after",
+        "after_unknown",
+        "before_sensitive",
+        "after_sensitive",
+    }
+    if shape == "capacity":
+        expected_output_actions = {}
+    elif shape == "cutover":
+        expected_output_actions = dict.fromkeys(RUNNER_GROUP_OUTPUTS, "create")
+    else:
+        expected_output_actions = dict.fromkeys(RUNNER_GROUP_OUTPUTS, "delete")
+    observed_output_actions = {}
+    for output_name, output in output_changes.items():
+        if not isinstance(output_name, str) or not output_name:
+            raise SystemExit("ERROR: every ARC output_changes name must be a nonempty string")
+        if not isinstance(output, dict):
+            raise SystemExit("ERROR: every ARC output_changes value must be an object")
+        observed_fields = set(output)
+        if observed_fields != output_fields:
+            raise SystemExit(
+                "ERROR: ARC output Change fields must be exact for "
+                + repr(output_name)
+                + "; missing="
+                + repr(sorted(output_fields - observed_fields))
+                + ", unexpected="
+                + repr(sorted(observed_fields - output_fields))
+            )
+        if output["after_unknown"] is not False:
+            raise SystemExit(
+                "ERROR: ARC output Change contains unknown after-values for "
+                + repr(output_name)
+            )
+        if not isinstance(output["before_sensitive"], bool) or not isinstance(output["after_sensitive"], bool):
+            raise SystemExit(
+                "ERROR: ARC output Change has an invalid sensitive-field shape for "
+                + repr(output_name)
+            )
+        expected_action = expected_output_actions.get(output_name)
+        if output["actions"] == ["no-op"]:
+            if output["before_sensitive"] != output["after_sensitive"]:
+                raise SystemExit(
+                    "ERROR: ARC output Change changes sensitive-field shape for "
+                    + repr(output_name)
+                )
+            if canonical(output["before"]) != canonical(output["after"]):
+                raise SystemExit(
+                    "ERROR: ARC output Change modifies the value for " + repr(output_name)
+                )
+            continue
+        if expected_action is None or output["actions"] != [expected_action]:
+            raise SystemExit(
+                "ERROR: ARC output Change must have exactly no-op actions for "
+                + repr(output_name)
+            )
+        if output["before_sensitive"] is not False or output["after_sensitive"] is not False:
+            raise SystemExit(
+                "ERROR: ARC runner-group output Change must be non-sensitive for "
+                + repr(output_name)
+            )
+        reviewed = canonical(RUNNER_GROUP_OUTPUTS[output_name])
+        if expected_action == "create":
+            materialized, absent = output["after"], output["before"]
+        else:
+            materialized, absent = output["before"], output["after"]
+        if absent is not None or canonical(materialized) != reviewed:
+            raise SystemExit(
+                "ERROR: ARC runner-group output Change must "
+                + expected_action
+                + " the reviewed value "
+                + reviewed
+                + " for "
+                + repr(output_name)
+            )
+        observed_output_actions[output_name] = expected_action
+    if observed_output_actions != expected_output_actions:
+        raise SystemExit(
+            "ERROR: ARC plan must change exactly the reviewed runner-group outputs; "
+            "missing="
+            + repr(sorted(set(expected_output_actions) - set(observed_output_actions)))
+            + ", unexpected="
+            + repr(sorted(set(observed_output_actions) - set(expected_output_actions)))
+        )
+
+    resource_change_fields = {
+        "actions",
+        "before",
+        "after",
+        "after_unknown",
+        "before_sensitive",
+        "after_sensitive",
+    }
+    by_address = {change.get("address"): change for change in changes}
+
+
+    def check_policy_receipt(resource):
+        change = resource.get("change", {})
+        observed_fields = set(change)
+        extra_fields = observed_fields - resource_change_fields - {"replace_paths"}
+        if extra_fields:
+            raise SystemExit(
+                "ERROR: ARC runner-group policy Change carries unexpected fields: "
+                + repr(sorted(extra_fields))
+            )
+        if change.get("replace_paths"):
+            raise SystemExit("ERROR: ARC runner-group policy plan contains replacement paths")
+        creating = change.get("actions") == ["create"]
+        if creating:
+            if change.get("before") is not None or change.get("before_sensitive") is not False:
+                raise SystemExit("ERROR: ARC runner-group policy create must have no prior state")
+            if canonical(change.get("after")) != canonical(
+                {"input": POLICY_INPUT, "triggers_replace": None}
+            ):
+                raise SystemExit(
+                    "ERROR: ARC runner-group policy create must record exactly the reviewed "
+                    "organization-restricted receipt"
+                )
+            if canonical(change.get("after_unknown")) != canonical(
+                {"id": True, "input": POLICY_OPAQUE_MASK, "output": True}
+            ):
+                raise SystemExit(
+                    "ERROR: ARC runner-group policy create has an unexpected unknown mask"
+                )
+            if canonical(change.get("after_sensitive")) != canonical(
+                {"input": POLICY_OPAQUE_MASK, "output": {}}
+            ):
+                raise SystemExit(
+                    "ERROR: ARC runner-group policy create has an unexpected sensitive mask"
+                )
+            if "action_reason" in resource:
+                raise SystemExit(
+                    "ERROR: ARC runner-group policy create must carry no action_reason"
+                )
+            return
+        if resource.get("action_reason") != "delete_because_no_resource_config":
+            raise SystemExit(
+                "ERROR: ARC runner-group policy destroy is admitted only as "
+                "delete_because_no_resource_config; observed "
+                + repr(resource.get("action_reason"))
+            )
+        if change.get("after") is not None or change.get("after_sensitive") is not False:
+            raise SystemExit("ERROR: ARC runner-group policy destroy must have no planned state")
+        if canonical(change.get("after_unknown")) != canonical({}):
+            raise SystemExit(
+                "ERROR: ARC runner-group policy destroy has an unexpected unknown mask"
+            )
+        if canonical(change.get("before_sensitive")) != canonical(
+            {"input": POLICY_OPAQUE_MASK, "output": POLICY_OPAQUE_MASK}
+        ):
+            raise SystemExit(
+                "ERROR: ARC runner-group policy destroy has an unexpected sensitive mask"
+            )
+        before_state = change.get("before")
+        if not isinstance(before_state, dict) or set(before_state) != {
+            "id",
+            "input",
+            "output",
+            "triggers_replace",
+        }:
+            raise SystemExit(
+                "ERROR: ARC runner-group policy destroy must expose the exact prior receipt fields"
+            )
+        if not isinstance(before_state["id"], str) or not before_state["id"]:
+            raise SystemExit("ERROR: ARC runner-group policy destroy must carry a concrete id")
+        if before_state["triggers_replace"] is not None:
+            raise SystemExit(
+                "ERROR: ARC runner-group policy destroy must carry no replacement trigger"
+            )
+        reviewed = canonical(POLICY_INPUT)
+        if canonical(before_state["input"]) != reviewed or canonical(before_state["output"]) != reviewed:
+            raise SystemExit(
+                "ERROR: ARC runner-group policy destroy must retire exactly the reviewed "
+                "organization-restricted receipt"
+            )
+
+
+    if shape != "capacity":
+        check_policy_receipt(by_address[POLICY_ADDRESS])
+
+    change = by_address[HELM_ADDRESS]["change"]
     if change.get("replace_paths"):
         raise SystemExit("ERROR: ARC capacity plan unexpectedly contains replacement paths")
+
 
     def sensitive_true_paths(value, mask_name, path=()):
         if isinstance(value, bool):
@@ -561,6 +773,7 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
             + mask_name
         )
 
+
     expected_sensitive_true_paths = {("repository_password",)}
     for mask_name in ("before_sensitive", "after_sensitive"):
         true_paths = sensitive_true_paths(change.get(mask_name), mask_name)
@@ -578,6 +791,7 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
     if not isinstance(after_unknown, dict):
         raise SystemExit("ERROR: ARC capacity plan after_unknown must be an object")
 
+
     def has_unknown(value):
         if value is True:
             return True
@@ -587,6 +801,7 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
             return any(has_unknown(item) for item in value)
         return False
 
+
     unknown_keys = {key for key, value in after_unknown.items() if has_unknown(value)}
     allowed_computed_unknowns = {"manifest", "metadata", "status"}
     if not unknown_keys <= allowed_computed_unknowns:
@@ -594,9 +809,12 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
             "ERROR: ARC capacity plan contains unexpected unknown after-values: "
             + repr(sorted(unknown_keys - allowed_computed_unknowns))
         )
+    # `set` carries runnerGroup, so the cutover and its rollback review it against
+    # an enumerated one-entry delta instead of requiring byte equality.
+    values_scoped_keys = {"values"} if shape == "capacity" else {"values", "set"}
     changed_known = []
     for key in sorted(set(before) | set(after)):
-        if key == "values" or key in unknown_keys:
+        if key in values_scoped_keys or key in unknown_keys:
             continue
         if before.get(key) != after.get(key):
             changed_known.append(key)
@@ -605,6 +823,44 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
             "ERROR: gh_nix Helm plan changes fields outside values: "
             + ", ".join(changed_known)
         )
+
+    if shape != "capacity":
+        before_set = before.get("set")
+        after_set = after.get("set")
+        if not (
+            isinstance(before_set, list)
+            and isinstance(after_set, list)
+            and len(before_set) == len(after_set)
+        ):
+            raise SystemExit("ERROR: gh_nix Helm set blocks must be two aligned lists")
+        for entries in (before_set, after_set):
+            if not all(isinstance(entry, dict) for entry in entries):
+                raise SystemExit("ERROR: every gh_nix Helm set entry must be an object")
+            if len([entry for entry in entries if entry.get("name") == "runnerGroup"]) != 1:
+                raise SystemExit("ERROR: gh_nix Helm set must carry exactly one runnerGroup entry")
+        if shape == "cutover":
+            group_from, group_to = DEFAULT_RUNNER_GROUP, DEDICATED_RUNNER_GROUP
+        else:
+            group_from, group_to = DEDICATED_RUNNER_GROUP, DEFAULT_RUNNER_GROUP
+        observed_set_delta = [
+            (was, now) for was, now in zip(before_set, after_set) if was != now
+        ]
+        expected_set_delta = [
+            (
+                {"name": "runnerGroup", "type": "", "value": group_from},
+                {"name": "runnerGroup", "type": "", "value": group_to},
+            )
+        ]
+        if observed_set_delta != expected_set_delta:
+            raise SystemExit(
+                "ERROR: gh_nix Helm set must change exactly runnerGroup "
+                + repr(group_from)
+                + " -> "
+                + repr(group_to)
+                + "; observed "
+                + repr(observed_set_delta)
+            )
+
     before_values = before.get("values")
     after_values = after.get("values")
     if not (
@@ -622,12 +878,15 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
         r'(?P<quote>"?)(?P<value>[0-9]+Gi)(?P=quote)(?P<suffix>\s*)$'
     )
 
+
     def indentation(line):
         return len(line) - len(line.lstrip(" "))
+
 
     def header(line):
         match = re.match(r'^\s*"?([A-Za-z0-9_-]+)"?\s*:\s*$', line)
         return match.group(1) if match else None
+
 
     def parent_header(lines, index):
         child_indent = indentation(lines[index])
@@ -638,8 +897,8 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
                 return cursor, header(lines[cursor])
         return None, None
 
-    def runner_storage(document):
-        lines = document.splitlines()
+
+    def runner_container(lines):
         name_lines = [
             index
             for index, line in enumerate(lines)
@@ -680,7 +939,12 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
             if indentation(line) <= item_indent:
                 item_end = cursor
                 break
+        return item_start, item_end, name_indent, spec_index
 
+
+    def runner_storage(document):
+        lines = document.splitlines()
+        item_start, item_end, name_indent, _ = runner_container(lines)
         entries = {}
         resources_indexes = set()
         all_storage_lines = []
@@ -705,28 +969,175 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
             raise SystemExit("ERROR: expected exactly runner request and limit storage fields")
         return entries
 
-    before_storage = runner_storage(before_values[0])
-    after_storage = runner_storage(after_values[0])
-    if before_storage != {"requests": "4Gi", "limits": "8Gi"} or after_storage != {"requests": "8Gi", "limits": "16Gi"}:
-        raise SystemExit(
-            "ERROR: expected runner resources.requests.ephemeral-storage 4Gi->8Gi "
-            "and resources.limits.ephemeral-storage 8Gi->16Gi"
+
+    def restore_low_capacity(document):
+        """Invert every enumerated runner-group delta, byte for byte.
+
+        The result must equal the pre-cutover document exactly, which is what makes
+        the cutover and its rollback the same reviewed transaction read in opposite
+        directions.
+        """
+        if not document.endswith("\n") or "\n".join(document.splitlines()) + "\n" != document:
+            raise SystemExit("ERROR: ARC Helm values must be newline-terminated LF text")
+        lines = document.splitlines()
+        item_start, item_end, name_indent, spec_index = runner_container(lines)
+
+        image_lines = [
+            index
+            for index, line in enumerate(lines)
+            if re.match(r'^\s*"?image"?\s*:\s*\S+\s*$', line)
+        ]
+        if len(image_lines) != 1:
+            raise SystemExit("ERROR: ARC Helm values must contain one runner image reference")
+        image_index = image_lines[0]
+        if not item_start <= image_index < item_end or indentation(lines[image_index]) != name_indent:
+            raise SystemExit("ERROR: runner image is not a direct runner-container field")
+        if lines[image_index].count(RUNNER_IMAGE_HIGH) != 1:
+            raise SystemExit(
+                "ERROR: runner image must be exactly the reviewed advanced ARC role-pin digest"
+            )
+
+        priority_lines = [
+            index
+            for index, line in enumerate(lines)
+            if re.match(
+                r'^\s*"?priorityClassName"?\s*:\s*"?' + re.escape(RUNNER_PRIORITY_CLASS) + r'"?\s*$',
+                line,
+            )
+        ]
+        if len(priority_lines) != 1:
+            raise SystemExit(
+                "ERROR: ARC Helm values must contain one arc-runner priorityClassName"
+            )
+        priority_index = priority_lines[0]
+        parent_index, parent = parent_header(lines, priority_index)
+        _, grandparent = parent_header(lines, parent_index)
+        if parent != "spec" or grandparent != "template" or parent_index != spec_index:
+            raise SystemExit("ERROR: priorityClassName is not a direct template.spec field")
+
+        env_lines = [
+            index
+            for index, line in enumerate(lines)
+            if re.match(
+                r'^\s*-\s+"?name"?\s*:\s*"?' + re.escape(PROFILE_STATE_ENV_NAME) + r'"?\s*$',
+                line,
+            )
+        ]
+        if len(env_lines) != 1:
+            raise SystemExit(
+                "ERROR: ARC Helm values must contain one GF_FLYWHEEL_PROFILE_STATE env entry"
+            )
+        env_index = env_lines[0]
+        if not item_start <= env_index < item_end:
+            raise SystemExit(
+                "ERROR: GF_FLYWHEEL_PROFILE_STATE is outside the runner container"
+            )
+        env_indent = indentation(lines[env_index])
+        env_parent = None
+        env_parent_index = None
+        for cursor in range(env_index - 1, -1, -1):
+            if indentation(lines[cursor]) <= env_indent and header(lines[cursor]):
+                env_parent = header(lines[cursor])
+                env_parent_index = cursor
+                break
+        if env_parent != "env" or env_parent_index is None or indentation(lines[env_parent_index]) != name_indent:
+            raise SystemExit(
+                "ERROR: GF_FLYWHEEL_PROFILE_STATE is not a direct runner-container env entry"
+            )
+        if env_parent_index < item_start:
+            raise SystemExit(
+                "ERROR: GF_FLYWHEEL_PROFILE_STATE is outside the runner container"
+            )
+        value_index = env_index + 1
+        if value_index >= item_end or not re.match(
+            r'^\s*"?value"?\s*:\s*"?' + re.escape(PROFILE_STATE_ENV_VALUE) + r'"?\s*$',
+            lines[value_index],
+        ):
+            raise SystemExit(
+                "ERROR: GF_FLYWHEEL_PROFILE_STATE must be exactly a shared-cache-backed pair"
+            )
+        if indentation(lines[value_index]) != indentation(lines[env_index]) + 2:
+            raise SystemExit(
+                "ERROR: GF_FLYWHEEL_PROFILE_STATE value is not part of its own env entry"
+            )
+
+        dropped = {priority_index, env_index, value_index}
+        kept = [
+            line.replace(RUNNER_IMAGE_HIGH, RUNNER_IMAGE_LOW)
+            if index == image_index
+            else line
+            for index, line in enumerate(lines)
+            if index not in dropped
+        ]
+        restored = "\n".join(kept) + "\n"
+        demote = {"8Gi": "4Gi", "16Gi": "8Gi"}
+        return storage.sub(
+            lambda match: (
+                match.group("prefix")
+                + match.group("quote")
+                + demote[match.group("value")]
+                + match.group("quote")
+                + match.group("suffix")
+            ),
+            restored,
         )
 
-    size_map = {"4Gi": "8Gi", "8Gi": "16Gi"}
-    expected_values = storage.sub(
-        lambda match: (
-            match.group("prefix")
-            + match.group("quote")
-            + size_map[match.group("value")]
-            + match.group("quote")
-            + match.group("suffix")
-        ),
-        before_values[0],
-    )
-    if expected_values != after_values[0]:
-        raise SystemExit("ERROR: gh_nix Helm values contain changes beyond 4/8Gi -> 8/16Gi")
-    print("ARC plan scope guard passed: exact gh_nix 4/8Gi -> 8/16Gi update only.")
+
+    before_storage = runner_storage(before_values[0])
+    after_storage = runner_storage(after_values[0])
+    if shape == "rollback":
+        expected_storage = (HIGH_STORAGE, LOW_STORAGE)
+    else:
+        expected_storage = (LOW_STORAGE, HIGH_STORAGE)
+    if (before_storage, after_storage) != expected_storage:
+        raise SystemExit(
+            "ERROR: expected runner resources.requests.ephemeral-storage "
+            + expected_storage[0]["requests"]
+            + "->"
+            + expected_storage[1]["requests"]
+            + " and resources.limits.ephemeral-storage "
+            + expected_storage[0]["limits"]
+            + "->"
+            + expected_storage[1]["limits"]
+        )
+
+    if shape == "capacity":
+        promote = {"4Gi": "8Gi", "8Gi": "16Gi"}
+        expected_values = storage.sub(
+            lambda match: (
+                match.group("prefix")
+                + match.group("quote")
+                + promote[match.group("value")]
+                + match.group("quote")
+                + match.group("suffix")
+            ),
+            before_values[0],
+        )
+        if expected_values != after_values[0]:
+            raise SystemExit("ERROR: gh_nix Helm values contain changes beyond 4/8Gi -> 8/16Gi")
+        print("ARC plan scope guard passed: exact gh_nix 4/8Gi -> 8/16Gi update only.")
+    elif shape == "cutover":
+        if restore_low_capacity(after_values[0]) != before_values[0]:
+            raise SystemExit(
+                "ERROR: gh_nix Helm values contain changes beyond the reviewed runner-group "
+                "cutover (runnerGroup, 4/8Gi -> 8/16Gi, pinned runner image digest, "
+                "GF_FLYWHEEL_PROFILE_STATE, arc-runner priorityClassName)"
+            )
+        print(
+            "ARC plan scope guard passed: exact gh_nix runner-group cutover update "
+            "plus the state-only runner_group_policy receipt."
+        )
+    else:
+        if restore_low_capacity(before_values[0]) != after_values[0]:
+            raise SystemExit(
+                "ERROR: gh_nix Helm values contain changes beyond the reviewed runner-group "
+                "rollback (runnerGroup, 8/16Gi -> 4/8Gi, pinned runner image digest, "
+                "GF_FLYWHEEL_PROFILE_STATE, arc-runner priorityClassName)"
+            )
+        print(
+            "ARC plan scope guard passed: exact gh_nix runner-group rollback update "
+            "plus the state-only runner_group_policy destroy."
+        )
     PY
     plan_digest_after="$(python3 -I -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${plan_path}")"
     test "${plan_digest_after}" = "${plan_digest}" || { echo "ARC plan changed during scope review" >&2; exit 2; }

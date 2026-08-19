@@ -47,6 +47,11 @@ PUBLIC_ROLE_EMAILS = {
 
 EXAMPLE_DOMAINS = {"example.com", "example.org", "example.net"}
 ALLOWLIST_EMAILS = {"git@github.com"}
+# Container home directories that are never an operator's local path. These are
+# fixed, publicly documented paths inside images this repo consumes, so they may
+# appear verbatim in committed plan fixtures. Enumerated exactly; a personal
+# /home/<user> or /Users/<user> path still fails.
+ALLOWLIST_HOME_PATHS = {"/home/runner"}
 BINARY_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf"}
 
 
@@ -102,7 +107,10 @@ def scan() -> list[Finding]:
                     )
             if PHONE.search(line):
                 findings.append(Finding("phone-number", rel, lineno, "phone-like literal"))
-            if HOME_PATH.search(line):
+            if any(
+                match.group(0) not in ALLOWLIST_HOME_PATHS
+                for match in HOME_PATH.finditer(line)
+            ):
                 findings.append(Finding("home-path", rel, lineno, "local user path"))
     return findings
 
@@ -120,6 +128,15 @@ def self_test() -> None:
         raise SystemExit("self-test FAILED: GitHub run id was falsely detected as phone")
     if not HOME_PATH.search("/Users/operator/project"):
         raise SystemExit("self-test FAILED: local home path not detected")
+    if not HOME_PATH.search("/home/operator/project"):
+        raise SystemExit("self-test FAILED: local Linux home path not detected")
+    for allowed in ALLOWLIST_HOME_PATHS:
+        if HOME_PATH.match(allowed) is None or HOME_PATH.match(allowed).group(0) != allowed:
+            raise SystemExit(
+                "self-test FAILED: allowlisted container home is not an exact HOME_PATH match"
+            )
+    if "/home/operator" in ALLOWLIST_HOME_PATHS or "/Users/operator" in ALLOWLIST_HOME_PATHS:
+        raise SystemExit("self-test FAILED: a personal home path is allowlisted")
     print("public-pii-surface self-test passed")
 
 
