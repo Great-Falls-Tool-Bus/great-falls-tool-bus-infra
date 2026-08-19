@@ -45,10 +45,11 @@ variable "pages_host" {
     variable back to "greatfallstoolbus-org.pages.dev" is NOT a valid
     rollback anymore -- that hostname resolves to nothing; doing so
     would point the apex at a dead origin. The real rollback is
-    on-cluster: re-dispatch this repo's web-stack.yml
-    (workflow_dispatch, confirm=apply, image=<prior known-good
-    digest>) to roll the Deployment back to a previously-served image
-    -- sequencing: docs/runbooks/oncluster-web-cutover.md P7. (Variable
+    on-cluster and attended: re-plan and re-apply the reviewed
+    web-release-* chain with the previous image digest. The
+    web-stack.yml re-dispatch this note used to name was retired by
+    TIN-3899 -- sequencing: docs/runbooks/oncluster-web-cutover.md
+    section S. (Variable
     name kept for continuity; renaming to web_origin_host is a
     follow-up.)
   EOT

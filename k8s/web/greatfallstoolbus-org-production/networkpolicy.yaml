@@ -16,8 +16,9 @@
 #
 # FAIL-CLOSED note: these policies select on the web pod labels. The Deployment
 # ships replicas: 2 and a digest-pinned image, so these rules are NOT inert —
-# they take effect whenever the dispatch-gated web-stack.yml runs
-# `just web-stack-apply`. What merging this file cannot do is apply anything:
+# they take effect whenever an attended operator runs `just web-stack-apply`
+# (TIN-3899 retired the web-stack.yml carrier that used to run it from CI).
+# What merging this file cannot do is apply anything:
 # this stack creates no Namespace (the namespace-scoped web-apply SA cannot
 # either), and the public tunnel route stays fail-closed and dashboard-managed.
 ---
@@ -118,8 +119,8 @@ spec:
 # mailman-core podSelector on 8000, NOT the Service's 8080. Scoped to that one
 # pod in that one namespace; no 0.0.0.0/0, no broad egress. This rule belongs to
 # the adapter-node origin and is live wherever that origin is applied (the
-# Deployment ships replicas: 2 and a digest pin; merging still applies nothing —
-# the only apply is the dispatch-gated web-stack.yml). The gftb-site static-origin
+# Deployment ships replicas: 2 and a digest pin; merging still applies nothing,
+# and no workflow applies it either since TIN-3899). The gftb-site static-origin
 # promotion REMOVES it: the reviewed render omits it and `just web-release-apply`
 # prunes it together with allow-egress-dns. Build-time prerender fetches do NOT
 # use this rule (they run in arc-runners, not this pod).

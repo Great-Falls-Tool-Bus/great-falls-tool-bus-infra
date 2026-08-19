@@ -2082,7 +2082,7 @@ archive-stack-apply: archive-stack-server-dry-run
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ archive_stack_dir }}
 
 # --- GFTB on-cluster web serving (TIN-2541 skeleton; TIN-2543 cutover) -------
-# DISPATCH-GATED DECLARE-ONLY IN GIT. SvelteKit adapter-node -> ClusterIP
+# ATTENDED-ONLY DECLARE-ONLY IN GIT. SvelteKit adapter-node -> ClusterIP
 # 80->3000 -> honey-ingress cloudflared tunnel, mirroring the proven MassageIthaca
 # full-on-cluster pattern. The checked-in overlay is DECLARED AND VALIDATED, not
 # parked: the Deployment carries replicas: 2 and a digest-pinned
@@ -2090,16 +2090,25 @@ archive-stack-apply: archive-stack-server-dry-run
 # Namespace, and the tunnel route is dashboard/token-managed (never in git;
 # TIN-991). scripts/validate-web-stack.sh enforces exactly that posture.
 #
-# The cutover recipes below are the operator-gated APPLY plane (TIN-2543, ADR
-# 0008), run ONLY through .github/workflows/web-stack.yml (workflow_dispatch +
-# confirm=apply + the protected web-apply environment, or the site repo's
-# repository_dispatch: web-image-published). MERGING APPLIES NOTHING; the safety
-# is that gate. The image actually served is supplied at dispatch
-# (WEB_APPLY_IMAGE) and re-pinned imperatively post-apply, so the live pin may
-# diverge from the declarative record in the tree. The namespace-scoped web-apply
-# SA cannot create namespaces; the operator mints the
-# greatfallstoolbus-org-production namespace + SA/RBAC out of band first. See
-# k8s/web/README.md and docs/runbooks/oncluster-web-cutover.md.
+# LEGACY CD RETIRED (TIN-3899, Phase 5 step 2). The cutover recipes below were
+# the operator-gated APPLY plane (TIN-2543, ADR 0008) reached through
+# .github/workflows/web-stack.yml -- workflow_dispatch + confirm=apply, or the
+# site repo's repository_dispatch: web-image-published. That workflow is DELETED:
+# no workflow in this repository applies this stack any more, and no
+# repository_dispatch consumer can reach kubectl. MERGING APPLIES NOTHING, and
+# now neither does any push to the public site repo.
+#
+# What survives is the ATTENDED carrier: an operator with an operator-custody
+# web-apply kubeconfig may still run `just web-stack-apply` by hand as
+# belt-and-braces, and `_web-stack-promotion-interlock` refuses even that once
+# the gftb-site static origin is promoted onto Deployment/greatfallstoolbus-org.
+# The image actually served is supplied by the operator (WEB_APPLY_IMAGE) and
+# re-pinned imperatively post-apply, so the live pin may diverge from the
+# declarative record in the tree. The namespace-scoped web-apply SA cannot create
+# namespaces; the operator mints the greatfallstoolbus-org-production namespace +
+# SA/RBAC out of band first. The reviewed forward path for the static origin is
+# the web-release-* chain, not this carrier. See k8s/web/README.md and
+# docs/runbooks/oncluster-web-cutover.md.
 
 web_stack_dir := "k8s/web/greatfallstoolbus-org-production"
 web_stack_ns := "greatfallstoolbus-org-production"
@@ -2107,7 +2116,8 @@ web_stack_ns := "greatfallstoolbus-org-production"
 web-stack-validate:
     bash scripts/validate-web-stack.sh {{ web_stack_dir }}
 
-# Operator-supplied cutover inputs (env-delivered by web-stack.yml; never baked):
+# Operator-supplied cutover inputs (attended env; never baked, and since
+# TIN-3899 never workflow-delivered either):
 #   WEB_APPLY_KUBECONFIG  path to the materialized namespace-scoped SA kubeconfig
 #   WEB_APPLY_IMAGE       image to serve (operator-resolved; not the PLACEHOLDER)
 # WEB_APPLY_REPLICAS    replica count to flip to (default 2, the MI prod shape)
@@ -2127,19 +2137,23 @@ _web-apply-kubeconfig-only:
 web-stack-server-dry-run: web-stack-validate _web-apply-inputs
     kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply --dry-run=server -k {{ web_stack_dir }}
 
-# PROMOTION INTERLOCK (TIN-3816). This legacy adapter-node carrier and the
-# reviewed web-release chain both mutate Deployment/greatfallstoolbus-org in
-# {{ web_stack_ns }}. Once the gftb-site static origin is promoted in place,
-# re-running this carrier would re-pin the adapter-node image over it and
-# `apply -k` would recreate allow-egress-dns / allow-egress-discuss-archive --
-# silently reverting the promotion and falsifying the SERVED proof. The carrier
-# is fired unattended by web-stack.yml's `repository_dispatch: web-image-published`
-# (sent by greatfallstoolbus.org's container-ghcr.yml on every push to main), so
-# a human gate is not enough: refuse mechanically, from live state.
+# PROMOTION INTERLOCK (TIN-3816; unattended trigger retired by TIN-3899). This
+# legacy adapter-node carrier and the reviewed web-release chain both mutate
+# Deployment/greatfallstoolbus-org in {{ web_stack_ns }}. Once the gftb-site
+# static origin is promoted in place, re-running this carrier would re-pin the
+# adapter-node image over it and `apply -k` would recreate allow-egress-dns /
+# allow-egress-discuss-archive -- silently reverting the promotion and falsifying
+# the SERVED proof.
 #
-# Retiring this carrier is Phase-5 work. Until then, the quiesce instruction in
-# docs/runbooks/oncluster-web-cutover.md section S is the operator half of this
-# interlock and this recipe is the mechanical half.
+# The carrier USED TO be fired unattended by web-stack.yml's
+# `repository_dispatch: web-image-published` (sent by greatfallstoolbus.org's
+# container-ghcr.yml on every push to main). TIN-3899 deleted that workflow and
+# the site-side signal job, so the carrier now has no automated caller at all and
+# the runbook quiesce rule is retired. This interlock is KEPT as the mechanical
+# belt-and-braces on the one remaining, attended path: it refuses from live
+# state, so an operator cannot revert the promotion by hand either, and its
+# receipt in WEB_RELEASE_CRITICAL_RECIPE_DIGESTS keeps any future re-wiring of a
+# mutating carrier failing closed at `just public-surface`.
 _web-stack-promotion-interlock: _web-apply-kubeconfig-only
     #!/usr/bin/env bash
     set -euo pipefail
@@ -2200,10 +2214,12 @@ grafana-dashboards-validate:
     bash scripts/validate-grafana-dashboards.sh {{ grafana_dashboard_dir }}
 
 # --- Reviewed gftb-site release candidate proofs ----------------------------
-# These recipes are read-only/proof-only. They deliberately do not replace the
-# legacy web-stack.yml mutation carrier: that workflow still supports the
-# current adapter-node image and must not receive the static Caddy candidate
-# until a separately reviewed exact-render/apply/rollback contract lands.
+# These recipes are read-only/proof-only. They deliberately do not share the
+# legacy `web-stack-apply` mutation carrier, which pins the adapter-node image
+# and must never receive the static Caddy candidate; that candidate travels only
+# through the reviewed exact-render/apply/rollback contract below. The workflow
+# that used to drive the legacy carrier (.github/workflows/web-stack.yml) is
+# retired (TIN-3899).
 
 _web-release-candidate-inputs:
     #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
@@ -3838,53 +3854,6 @@ web-release-apply: _reviewed-clean-main _operator-apply-confirm _web-release-app
     kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} rollout status deployment/greatfallstoolbus-org --timeout=300s
     echo "web release applied; now run the PINNED/RUNNING and SERVED proofs"
 
-# Env (delivered by web-stack.yml on the CD path; never baked):
-#   CI_GREEN_SHA   the commit SHA to gate on (client_payload.sha)
-#   CI_GREEN_REPO  owner/name of the site repo (default the GFTB site repo)
-#   GH_TOKEN       read-only token; the site repo is PUBLIC so its CI run metadata
-#                  is world-readable — a token with actions:read on it (or the
-#                  ambient GITHUB_TOKEN) is sufficient. NOT a cluster credential.
-#   CI_GREEN_TIMEOUT_SECONDS  how long to wait for CI to conclude (default 1200).
-#
-# CD "merge on green" gate: verify SITE ci.yml concluded success before cutover.
-web-cd-ci-green-gate:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    : "${CI_GREEN_SHA:?CI_GREEN_SHA is required (the site commit to gate on; client_payload.sha)}"
-    site_repo="${CI_GREEN_REPO:-Great-Falls-Tool-Bus/greatfallstoolbus.org}"
-    : "${GH_TOKEN:?GH_TOKEN is required (read-only token with actions:read on ${site_repo})}"
-    # Fail fast with a clear message if the token cannot even read the site repo,
-    # rather than looping until timeout on an auth error.
-    if ! gh api "repos/${site_repo}" --jq '.full_name' >/dev/null 2>&1; then
-      echo "::error::CI-green gate: GH_TOKEN cannot read ${site_repo}. Provision the purpose-bound SITE_CI_READ_TOKEN with actions:read on the public site repo, or rely on the ambient GITHUB_TOKEN. Fail-closed."
-      exit 1
-    fi
-    echo "CI-green gate: waiting for ${site_repo} ci.yml @ ${CI_GREEN_SHA} to conclude..."
-    deadline=$(( SECONDS + ${CI_GREEN_TIMEOUT_SECONDS:-1200} ))
-    while :; do
-      run_json="$(gh api "repos/${site_repo}/actions/workflows/ci.yml/runs?head_sha=${CI_GREEN_SHA}&event=push&per_page=1" 2>/dev/null || true)"
-      status="$(printf '%s' "${run_json}" | jq -r '.workflow_runs[0].status // "missing"')"
-      conclusion="$(printf '%s' "${run_json}" | jq -r '.workflow_runs[0].conclusion // ""')"
-      if [[ "${status}" == "completed" ]]; then
-        if [[ "${conclusion}" == "success" ]]; then
-          echo "CI-green gate PASSED: ci.yml concluded success for ${CI_GREEN_SHA}."
-          exit 0
-        fi
-        echo "::error::CI-green gate FAILED: ci.yml for ${CI_GREEN_SHA} concluded '${conclusion}' (not success). Refusing to deploy (merge-on-green)."
-        exit 1
-      fi
-      if [[ "${status}" == "missing" ]]; then
-        echo "  no ci.yml push run found yet for ${CI_GREEN_SHA}; waiting..."
-      else
-        echo "  ci.yml status=${status}; waiting..."
-      fi
-      if (( SECONDS >= deadline )); then
-        echo "::error::CI-green gate TIMEOUT: ci.yml for ${CI_GREEN_SHA} did not conclude success within ${CI_GREEN_TIMEOUT_SECONDS:-1200}s (last status='${status}'). Fail-closed."
-        exit 1
-      fi
-      sleep 20
-    done
-
 # --- K8s stack drift check (read-only; scheduled by .github/workflows/k8s-stack-drift.yml) ---
 # `kubectl diff -k <dir>` against the LIVE cluster, namespace-scoped -- no
 # mutation. Reuses the SAME kubeconfig secrets the existing server-dry-run/apply
@@ -3898,16 +3867,19 @@ web-cd-ci-green-gate:
 # zero-diff" gate.
 #
 # web is NOT held to the same bar, by design. k8s/web/greatfallstoolbus-org-production
-# is DISPATCH-GATED declare-only, not parked: it carries replicas:2 and a
+# is ATTENDED-ONLY declare-only, not parked: it carries replicas:2 and a
 # digest-pinned adapter-node image, and creates no namespace
 # (scripts/validate-web-stack.sh guards exactly that). The live state still
-# diverges, because web-stack-apply re-pins the dispatch-supplied image
-# IMPERATIVELY after `apply -k` (docs/runbooks/oncluster-web-cutover.md P3), and
-# because after the gftb-site promotion the live Deployment runs the static
-# origin, which this tree never carries. A diff there is EXPECTED, not drift, so
+# diverges, because the attended web-stack-apply carrier re-pins the
+# operator-supplied image IMPERATIVELY after `apply -k`
+# (docs/runbooks/oncluster-web-cutover.md P3), and because after the gftb-site
+# promotion the live Deployment runs the static origin, which this tree never
+# carries. That promotion is now the PERMANENT source of the diff: TIN-3899
+# retired the CD carrier workflow, so nothing reconciles this stack back toward
+# the committed adapter-node manifests. A diff there is EXPECTED, not drift, so
 # web-stack-drift-check reports it (fail_on_drift=false) and never fails the gate
-# on it. This check is read-only and therefore not interlocked; the mutating
-# carrier is (see _web-stack-promotion-interlock).
+# on it. This check is read-only and therefore not interlocked; the attended
+# mutating carrier is (see _web-stack-promotion-interlock).
 _k8s-drift-check kubeconfig namespace dir label fail_on_drift:
     #!/usr/bin/env bash
     set -uo pipefail
@@ -3943,7 +3915,8 @@ form-stack-drift-check: _mail-kubeconfig-inputs
 archive-stack-drift-check: _mail-kubeconfig-inputs
     just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ archive_stack_dir }} archive-stack true
 
-# fail_on_drift=false: see the _k8s-drift-check header -- the parked web
-# skeleton is expected to diverge from the live cutover state.
+# fail_on_drift=false: see the _k8s-drift-check header -- the committed
+# adapter-node web declaration is expected to diverge from the live promoted
+# static origin, permanently, now that the CD carrier is retired.
 web-stack-drift-check: _web-apply-kubeconfig-only
     just _k8s-drift-check "${WEB_APPLY_KUBECONFIG}" {{ web_stack_ns }} {{ web_stack_dir }} web-stack false

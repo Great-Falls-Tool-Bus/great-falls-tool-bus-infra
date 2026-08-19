@@ -343,21 +343,17 @@ roughly a day early:
   owns pin+apply; blahaj is substrate) now keeps every privileged surface out
   of the public repo, the load-bearing TIN-2537 invariant.
 
-**Rollback, corrected:** the P6 rollback (repoint DNS back to the CF Pages
-target) **no longer applies — there is no Pages project to repoint to.** The
-current, real rollback is the on-cluster re-pin primitive: re-dispatch this
-repo's `web-stack.yml` workflow (`workflow_dispatch`, `confirm=apply`,
-`image=<prior known-good
-ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:<digest>>`) to roll
-the Deployment back to a previously-served image — "the manual
-`workflow_dispatch` path... preserved intact for rollback/override to an
-arbitrary prior digest" per that workflow's own header comment. **Qualifier
-(TIN-3816):** that re-dispatch holds only while the live image is *not* a
-`ghcr.io/great-falls-tool-bus/gftb-site` reference — once section S's
-promotion has landed, `_web-stack-promotion-interlock` refuses the carrier
-and rollback follows section S's "Rollback" instead. Re-standing-up
-a Pages project from scratch is *not* the rollback story anymore; that option
-was deliberately foreclosed by this phase.
+**Rollback, corrected (and re-corrected by TIN-3899):** the P6 rollback
+(repoint DNS back to the CF Pages target) **no longer applies — there is no
+Pages project to repoint to.** For the adapter-node era the rollback was the
+on-cluster re-pin primitive: re-dispatch this repo's `web-stack.yml` workflow
+with a prior known-good
+`ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:<digest>`. **That
+workflow is now deleted.** After the gftb-site promotion the rollback primitive
+is section S's: re-plan and re-apply the `web-release-*` chain with the previous
+`WEB_APPLY_IMAGE` / `WEB_APPLY_SHA` (receipt line 12). Re-standing-up a Pages
+project from scratch is *not* the rollback story either; that option was
+deliberately foreclosed by this phase.
 
 ---
 
@@ -379,30 +375,32 @@ on-cluster inherits this path verbatim: the app repo builds the image (ambient
 `GITHUB_TOKEN`, same-org GHCR) and dispatches; the apply plane applies the
 overlay; the backstop reaper governs lanes.
 
-In **this overlay** the concrete chassis mirrors the existing
-`.github/workflows/mail-crs.yml` / `edge-plan.yml` exactly: `runs-on:
-tinyland-nix`, a protected **environment** gate, PR/push = validate-only, and a
-manual **`workflow_dispatch` with `action` choice** (`plan`/`server-dry-run`
-then `apply`), fail-soft skip-green when the environment secret is absent,
-destructive-plan guard, and a namespace kubeconfig materialized only inside the
-protected environment. That cutover workflow now exists as
-[`.github/workflows/web-stack.yml`](../../.github/workflows/web-stack.yml)
-(TIN-2543): the same chassis, but **apply-only**. It triggers ONLY on
-`workflow_dispatch` with a required `confirm=apply` sentinel (no push/PR), gates
-fail-closed on the protected `web-apply` environment holding
-`web-apply-kubeconfig`. Its retained private-core checkout is not executable
-from this public repo without a separately governed source grant, so it is not
-the current release authority. It takes the operator-resolved
-image as a dispatch `image` input (never a committed pin), and runs `just web-stack-apply`
-(promotion interlock, workload apply, imperative image pin, `replicas` patch)
-followed by an in-cluster `/health` readiness gate. It does **not** un-park the overlay: the `k8s/web/`
-tree stays DISPATCH-GATED declare-only and `scripts/validate-web-stack.sh` guards
-that shape — `replicas: 2`, a digest-pinned
+In **this overlay** the concrete chassis mirrored the existing
+`.github/workflows/mail-crs.yml` / `edge-plan.yml`: `runs-on: tinyland-nix`, a
+protected **environment** gate, PR/push = validate-only, and a manual
+**`workflow_dispatch`** apply, with the namespace kubeconfig materialized only
+inside the protected environment. That cutover workflow was
+`.github/workflows/web-stack.yml` (TIN-2543) — apply-only, `confirm=apply`
+sentinel, the protected `web-apply` environment, an operator-resolved `image`
+dispatch input (never a committed pin), `just web-stack-apply` (promotion
+interlock, workload apply, imperative image pin, `replicas` patch), then an
+in-cluster `/health` readiness gate. It also carried
+`repository_dispatch: web-image-published`, the unattended CD trigger the public
+site repo fired on every push to `main`.
+
+**TIN-3899 (Phase 5 step 2) retired that workflow.** It is deleted, together
+with the site repo's `signal-cd` job, so no workflow here applies `k8s/web` and
+no `repository_dispatch` consumer in this repository can reach `kubectl` at all.
+`scripts/validate-public-operator-surface.py` keeps it that way: the file must
+stay absent, no workflow may declare a `repository_dispatch` trigger, and the
+hosted Just-call census no longer approves `web-stack-apply`,
+`web-stack-server-dry-run`, or `web-stack-health`. The `k8s/web/` tree is
+**ATTENDED-ONLY declare-only** and `scripts/validate-web-stack.sh` guards that
+shape — `replicas: 2`, a digest-pinned
 `ghcr.io/great-falls-tool-bus/greatfallstoolbus.org` image, no `Namespace`
-object, and no in-tree apply path. The
-`greatfallstoolbus-org-production` namespace and the `web-apply` SA/RBAC are
-minted by the operator out of band first (the SA is namespace-scoped and cannot
-create namespaces).
+object, and no in-tree apply path. The `greatfallstoolbus-org-production`
+namespace and the `web-apply` SA/RBAC are minted by the operator out of band
+first (the SA is namespace-scoped and cannot create namespaces).
 
 The public app repo's `tinyland.repo.json` boundaries will need
 `owns_container_image_production=true` while `owns_gitops_apply=false` and
@@ -478,10 +476,10 @@ public app repo's CF Pages-Edit token retired only after Pages decommission"
 described the *plan*; ADR 0010 Amendment 2 overrode it — Pages is deleted and
 the token is retired as of 2026-07-06/07 (P7), not held pending a later
 decommission decision. The standing safety net is no longer "single-DNS-flip
-rollback to CF Pages" (that target no longer exists) — it is the on-cluster
-re-pin-previous-digest primitive via `web-stack.yml` (see P7's corrected
-rollback), which holds only while the live image is not a gftb-site reference
-(section S "Rollback" governs after the promotion).
+rollback to CF Pages" (that target no longer exists) — and after TIN-3899 it is
+no longer the `web-stack.yml` re-pin primitive either (that workflow is
+deleted). It is section S's re-plan/re-apply of the `web-release-*` chain with
+the previous digest (see P7's corrected rollback).
 
 ---
 
@@ -679,8 +677,11 @@ just web-release-server-dry-run
 GFTB_APPLY_CONFIRM=apply just web-release-apply
 ```
 
-Before S3, **quiesce the `greatfallstoolbus.org` repository**: no pushes to its
-`main` while this promotion is in flight (see the legacy-CD invariant below).
+Before S3 this step required **quiescing the `greatfallstoolbus.org`
+repository** — no pushes to its `main` while the promotion was in flight. That
+requirement is **retired** by TIN-3899: the legacy CD dispatch no longer exists
+at either end, so a push to the site repo cannot reach this workload (see the
+legacy-CD invariant below).
 
 `web-release-apply` refuses unless the worktree is a clean, signed checkout equal
 to canonical `main` (`_reviewed-clean-main`), `GFTB_APPLY_CONFIRM=apply` is set,
@@ -779,7 +780,7 @@ Where each line comes from in this chain:
 |---|---|
 | 1, 4, 6, 13 | Linear + the reviewing human; not machine-derived |
 | 2, 3 | the `gftb-site` source repository at `${WEB_APPLY_SHA}` |
-| 5 | the `gftb-site` required checks (`gh run list`). `web-cd-ci-green-gate` is **not** part of this release: it gates the LEGACY adapter-node CD path (`web-stack.yml`), which this promotion must be protected from — see the invariants below |
+| 5 | the `gftb-site` required checks (`gh run list`). `web-cd-ci-green-gate` was **not** part of this release: it gated the LEGACY adapter-node CD path (`web-stack.yml`), which this promotion had to be protected from. TIN-3899 retired that path and deleted both the workflow and the gate recipe — see the invariants below |
 | 7 | the `gftb-site` merge commit |
 | 8 | `just web-release-resolve-candidate`, which resolves the tag and runs `just web-release-candidate-proof` on the digest it resolved (S1) |
 | 9 | the infra carrier commit recorded by `just web-release-plan`, plus `just web-release-pinned-running-proof` |
@@ -789,46 +790,57 @@ Where each line comes from in this chain:
 
 ## Invariants this promotion must not break
 
-- **The legacy CD path must not be allowed to revert this.** THIS IS THE ONE
-  THAT BITES. `.github/workflows/web-stack.yml` still carries
+- **The legacy CD path is RETIRED: no `repository_dispatch` consumer can mutate
+  `Deployment/greatfallstoolbus-org`.** This used to be the invariant that bit.
+  `.github/workflows/web-stack.yml` carried
   `repository_dispatch: types: [web-image-published]`, which the PUBLIC site repo
-  `greatfallstoolbus.org` fires from its own `container-ghcr.yml` on **every push
-  to `main`**. That dispatch runs `just web-stack-apply` against
+  `greatfallstoolbus.org` fired from its own `container-ghcr.yml` on **every push
+  to `main`**. That dispatch ran `just web-stack-apply` against
   `Deployment/greatfallstoolbus-org` in `greatfallstoolbus-org-production` — the
-  same object this promotion cuts over. Unchecked it would (a) imperatively
-  re-pin the adapter-node digest back over the gftb-site static origin and (b)
-  re-apply the committed kustomization, which **recreates** `allow-egress-dns`
-  and `allow-egress-discuss-archive` that `web-release-apply` just deleted --
+  same object this promotion cuts over. Unchecked it would have (a) imperatively
+  re-pinned the adapter-node digest back over the gftb-site static origin and (b)
+  re-applied the committed kustomization, which **recreates** `allow-egress-dns`
+  and `allow-egress-discuss-archive` that `web-release-apply` deletes --
   omissions are not pruned -- undoing the empty-egress invariant. The next green
-  push to the site repo would silently falsify the SERVED proof.
+  push to the site repo would have silently falsified the SERVED proof.
 
-  Two things hold it:
+  **TIN-3899 (Phase 5 step 2) removed the trigger, both ends.** The workflow is
+  deleted here; the `signal-cd` job is deleted in the site repo. Three things now
+  hold the invariant:
 
-  1. **Mechanical (this repo).** `just web-stack-apply` now takes
+  1. **Nothing automated can reach the workload.** No workflow in this repository
+     applies `k8s/web`, and no workflow declares a `repository_dispatch` trigger.
+     `scripts/validate-public-operator-surface.py` enforces all three halves:
+     `web-stack.yml` must stay absent (`retired-web-cd-workflow-retained`), a
+     `repository_dispatch` trigger anywhere under `.github/workflows/` is a
+     finding (`workflow-repository-dispatch-retired`), and the hosted Just-call
+     census — an exact set, not a floor — no longer approves `web-stack-apply`,
+     `web-stack-server-dry-run`, or `web-stack-health`.
+  2. **Mechanical, on the one attended path that remains.** `just web-stack-apply`
+     survives as an operator-only belt-and-braces carrier and still takes
      `_web-stack-promotion-interlock` as its FIRST dependency. The interlock
      reads the LIVE Deployment's container image and exits non-zero if it already
      carries a `ghcr.io/great-falls-tool-bus/gftb-site` reference — i.e. exactly
      when the promotion is in place. **It precedes every mutation**: it is the
-     first dependency of the only recipe that mutates this workload, so the
-     dispatched CD job fails loudly instead of reverting. It does NOT gate the
-     workflow's *separate, earlier* `just web-stack-server-dry-run` step — that
-     step is `apply --dry-run=server` and changes nothing, so a green dry-run
-     step followed by an interlock refusal in the apply step is the expected
-     shape, not a bypass. `scripts/validate-public-operator-surface.py` fails
-     `just public-surface` if the interlock is removed, weakened, demoted out of
-     first position, or edited: its body is pinned by SHA-256 in
-     `WEB_RELEASE_CRITICAL_RECIPE_DIGESTS` like the rest of the chain.
-  2. **Operator (the other repo).** *Do not push to `greatfallstoolbus.org`
-     `main` during or after this promotion until the legacy CD dispatch is
-     retired.* Quiesce it before S3 and keep it quiesced. The interlock turns a
-     silent revert into a red workflow run, but a red run on every site push is
-     still noise the operator has to own.
+     first dependency of the only recipe that mutates this workload, so an
+     operator who runs it by hand is refused rather than reverting.
+     `scripts/validate-public-operator-surface.py` fails `just public-surface` if
+     the interlock is removed, weakened, demoted out of first position, or
+     edited: its body is pinned by SHA-256 in
+     `WEB_RELEASE_CRITICAL_RECIPE_DIGESTS` like the rest of the chain. Retaining
+     the carrier is what keeps that contract live; deleting the recipe would
+     delete its guard with it, and `IMPERATIVE_PIN_ALLOWED_RECIPES` would have to
+     go empty in the same change that removes the CD path.
+  3. **Operator: the quiesce rule is RETIRED.** The old instruction — *do not
+     push to `greatfallstoolbus.org` `main` during or after this promotion* — was
+     the operator half of the interlock and is no longer needed. Pushes to the
+     site repo build and push an image and stop there; nothing signals, nothing
+     applies, and no red run appears on every site push.
 
-  Retiring the `web-image-published` dispatch (and with it `web-stack-apply`,
-  `web-cd-ci-green-gate`, and the adapter-node image entirely) is **Phase-5**
-  work and is deliberately NOT in this change: the adapter-node workload is still
-  the live origin until S3 succeeds, and removing its only apply path before the
-  static origin is proven SERVED would leave no way to roll forward.
+  Also retired with the dispatch: `web-cd-ci-green-gate`, the merge-on-green
+  cross-repo check that existed only to gate that CD path, and the site repo's
+  `INFRA_CD_DISPATCH_TOKEN` consumer. The adapter-node image itself is still
+  built by the site repo; it is simply no longer deployed by anything.
 
 - **The pin is rendered, never patched.** Writing `kubectl set image`, a
   `scale`, a replicas patch, a `rollout undo`, a `replace -f`, a `delete …

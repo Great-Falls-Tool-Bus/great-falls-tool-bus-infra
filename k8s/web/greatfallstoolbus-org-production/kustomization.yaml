@@ -7,8 +7,9 @@ namespace: greatfallstoolbus-org-production
 # cloudflared tunnel), mirroring the MI full-on-cluster pattern.
 # `kubectl kustomize` MUST render this cleanly (the CI/`just check` guard renders
 # it). The Deployment carries the real cutover shape — replicas: 2 and a
-# digest-pinned image — so the safety is the apply GATE, not an inert manifest:
-# the only apply is the operator-gated web-stack.yml, this stack creates no
+# digest-pinned image — so the safety is that nothing applies it, not an inert
+# manifest: TIN-3899 retired the web-stack.yml carrier, so the only apply left is
+# an attended operator behind the promotion interlock, this stack creates no
 # Namespace, and no tunnel public-hostname route exists in git (it is
 # dashboard/token-managed; TIN-991). See ../README.md.
 

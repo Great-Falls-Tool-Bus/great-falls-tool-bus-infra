@@ -1,17 +1,20 @@
-# GFTB on-cluster web serving — DISPATCH-GATED declare-only (TIN-2541, ADR 0010)
+# GFTB on-cluster web serving — ATTENDED-ONLY declare-only (TIN-2541, ADR 0010, TIN-3899)
 
-> **MERGING THIS DIRECTORY APPLIES NOTHING — but it is declared and validated,
-> not parked.** `greatfallstoolbus-org-production` carries `replicas: 2` and a
-> digest-pinned production image, and `scripts/validate-web-stack.sh` (run by
-> `just web-stack-validate`) *requires* exactly that: replicas `2`, a full
+> **MERGING THIS DIRECTORY APPLIES NOTHING — and since TIN-3899 no workflow
+> applies it either.** `greatfallstoolbus-org-production` carries `replicas: 2`
+> and a digest-pinned production image, and `scripts/validate-web-stack.sh` (run
+> by `just web-stack-validate`) *requires* exactly that: replicas `2`, a full
 > `@sha256:<64 lowercase hex>` pin on this stack's own admitted repository, and a
-> hard failure on any `PLACEHOLDER` marker. The safety is the **apply gate**, not
-> an inert manifest: the only apply path is
-> [`.github/workflows/web-stack.yml`](../../.github/workflows/web-stack.yml),
-> which runs the audited `just web-stack-apply` recipe rather than raw `kubectl`,
-> and which refuses once the gftb-site promotion is live. This stack creates
-> **no** Namespace, ships **no** Secret, and changes **no** Cloudflare route or
-> DNS record.
+> hard failure on any `PLACEHOLDER` marker. The legacy CD carrier
+> `.github/workflows/web-stack.yml` — `workflow_dispatch` **and** the
+> `repository_dispatch: web-image-published` the public site repo fired on every
+> push to `main` — is **deleted**, together with the site-side signal job. No
+> workflow in this repository can mutate `Deployment/greatfallstoolbus-org`, and
+> no cross-repo dispatch can reach `kubectl`. The one surviving apply path is an
+> attended operator running `just web-stack-apply` with an operator-custody
+> kubeconfig, and `_web-stack-promotion-interlock` refuses even that once the
+> gftb-site static origin is live. This stack creates **no** Namespace, ships
+> **no** Secret, and changes **no** Cloudflare route or DNS record.
 
 ## What this is
 
@@ -46,14 +49,17 @@ visitor -> greatfallstoolbus.org (Cloudflare edge, TLS terminates here)
 | `../../tofu/intent/great-falls-tool-bus/web-oncluster-route.json` | cloudflared route intent | `applied:false`, `dns_enabled:false`, `route_enabled:false` |
 | `../../tofu/intent/great-falls-tool-bus/pr-env-lanes.schema.json` | reaper lane contract | `enabled:false`; names-only |
 
-## What actually holds this closed (the apply gate, not an inert manifest)
+## What actually holds this closed
 
-1. **Nothing applies on merge.** `web-crs.yml` is validation-only. The single
-   apply plane is `.github/workflows/web-stack.yml`, reachable two ways:
-   `workflow_dispatch` (`confirm=apply`, the protected `web-apply` environment,
-   an operator-supplied `image`) and `repository_dispatch: web-image-published`,
-   which the public site repo fires on every push to `main`. Both run
-   `just web-stack-apply`; the workflow never runs raw `kubectl`.
+1. **Nothing applies, from anywhere in CI.** `web-crs.yml` is validation-only,
+   and TIN-3899 deleted the only apply plane there ever was
+   (`.github/workflows/web-stack.yml`, reachable by `workflow_dispatch` with
+   `confirm=apply` and by `repository_dispatch: web-image-published` from the
+   public site repo). `scripts/validate-public-operator-surface.py` now fails
+   `just public-surface` if that file reappears, if any workflow declares a
+   `repository_dispatch` trigger, or if any workflow invokes `web-stack-apply` —
+   the hosted Just allowlist is an exact census, so re-adding the call is a red
+   check, not a silent regression.
 2. **The declared shape is validated, not placeholder-parked.**
    `scripts/validate-web-stack.sh` asserts `replicas: 2`, derives the admitted
    container repository from the Deployment's **own** target namespace, and
@@ -65,11 +71,15 @@ visitor -> greatfallstoolbus.org (Cloudflare edge, TLS terminates here)
    here (a `kind: Namespace` object fails validation) and the namespace-scoped
    `web-apply` SA cannot create one; the namespace, the SA/RBAC, and the GHCR
    pull Secret are operator-provisioned out of band.
-4. **The legacy CD carrier is interlocked.** `just web-stack-apply` takes
-   `_web-stack-promotion-interlock` as its FIRST dependency. The interlock reads
-   the LIVE Deployment image and refuses when it is already a
-   `ghcr.io/great-falls-tool-bus/gftb-site` reference, so the unattended
-   `repository_dispatch` path cannot revert the in-place promotion.
+4. **The surviving attended carrier is interlocked.** `just web-stack-apply`
+   takes `_web-stack-promotion-interlock` as its FIRST dependency. The interlock
+   reads the LIVE Deployment image and refuses when it is already a
+   `ghcr.io/great-falls-tool-bus/gftb-site` reference. It was written to stop the
+   unattended `repository_dispatch` path from reverting the in-place promotion;
+   that path is now gone, and the interlock is retained as belt-and-braces on the
+   attended one — an operator cannot revert the promotion by hand either. Its
+   body is SHA-256-receipted in `WEB_RELEASE_CRITICAL_RECIPE_DIGESTS`, so
+   removing, weakening, or demoting it fails `just public-surface`.
 
 ## The tunnel route is dashboard-managed (not in git)
 
@@ -129,29 +139,33 @@ and "TIN-991 / sting SPOF" premises are retired above — routes are
 dashboard-managed *process* (not infeasibility; MI proves it) and the sting SPOF
 is CI-runner, not serving.
 
-## Apply path (wired, dispatch-gated)
+## Apply path (attended only; the CD carrier is retired)
 
-The apply plane is wired, not hypothetical. Two supported routes:
+There is no CI apply plane. The historical route — the public app repo builds
+and pushes the image, fires `repository_dispatch: web-image-published`, and
+`web-stack.yml` runs `just web-stack-server-dry-run` then `just web-stack-apply`
+then `just web-stack-health` — was retired by TIN-3899 after the gftb-site
+static origin was promoted in place. Both ends are gone: the workflow here and
+the `signal-cd` job in the site repo's `container-ghcr.yml`.
 
-1. **`.github/workflows/web-stack.yml` (the wired route).** The public app repo
-   builds and pushes the image (ambient `GITHUB_TOKEN`, same-org GHCR) and fires
-   `repository_dispatch: web-image-published`; the workflow runs
-   `just web-stack-server-dry-run` (read-only), then `just web-stack-apply`
-   (promotion interlock → `web-stack-validate` → server dry-run → kustomization
-   apply → pin the dispatch-supplied image → patch replicas → wait for the
-   rollout), then `just web-stack-health`. The same workflow is reachable by
-   `workflow_dispatch` with `confirm=apply`, the protected `web-apply`
-   environment, and an operator-supplied `image`.
-2. **Direct operator `kubectl`/`tofu`.** An authorized operator applies the
-   overlay out of band with the same namespace-scoped credential.
+What remains:
 
-Both routes are **operator-gated**, and neither creates the namespace, ships a
-Secret, or touches Cloudflare: the honey-ingress tunnel route stays
-dashboard-managed and the apex/www DNS flip belongs to the edge stack (runbook
-P6, executed 2026-07-06). The gftb-site static origin is promoted **in place**
-onto this same namespace and `Deployment/greatfallstoolbus-org` by the attended
-`web-release-*` chain — no second namespace, no Cloudflare change — and
-`web-stack-apply` refuses once that promotion is live.
+1. **The attended legacy carrier (belt-and-braces).** An authorized operator with
+   an operator-custody `WEB_APPLY_KUBECONFIG` may still run
+   `just web-stack-apply` by hand (promotion interlock → `web-stack-validate` →
+   server dry-run → kustomization apply → pin the operator-supplied image → patch
+   replicas → wait for the rollout). The interlock refuses while the promoted
+   gftb-site origin is live, so in practice this path is closed until someone
+   deliberately reopens it under review.
+2. **The reviewed forward path.** The gftb-site static origin is promoted **in
+   place** onto this same namespace and `Deployment/greatfallstoolbus-org` by the
+   attended `web-release-*` chain — no second namespace, no Cloudflare change.
+   Rollback is that same chain re-planned and re-applied with the previous
+   `WEB_APPLY_IMAGE`/`WEB_APPLY_SHA`.
+
+Neither creates the namespace, ships a Secret, or touches Cloudflare: the
+honey-ingress tunnel route stays dashboard-managed and the apex/www DNS flip
+belongs to the edge stack (runbook P6, executed 2026-07-06).
 
 ## Validate (parse-only; never applies)
 
@@ -159,21 +173,17 @@ onto this same namespace and `Deployment/greatfallstoolbus-org` by the attended
 just web-stack-validate     # invariant checks + `kubectl kustomize` render
 ```
 
-The operator-gated cutover has a real apply plane: `just web-stack-apply` (with
-`just web-stack-server-dry-run` and `just web-stack-health`) runs ONLY through
-[`.github/workflows/web-stack.yml`](../../.github/workflows/web-stack.yml) — its
-`workflow_dispatch` (`confirm=apply`, the protected `web-apply` environment, the
-operator-supplied `image` input) and its `repository_dispatch`
-(`web-image-published`, sent by the site repo after it pushes an image). This
-tree is **DISPATCH-GATED declare-only**, not parked:
+`just web-stack-apply` (with `just web-stack-server-dry-run` and
+`just web-stack-health`) is attended-operator-only: no workflow invokes it, and
+no workflow may. This tree is **ATTENDED-ONLY declare-only**, not parked:
 `scripts/validate-web-stack.sh` requires `replicas: 2` and a digest-pinned
 `ghcr.io/great-falls-tool-bus/greatfallstoolbus.org` image here, and forbids a
 `Namespace` object — the namespace and the `web-apply` SA/RBAC are minted by the
 operator out of band (the SA cannot create namespaces), the tunnel route stays
 dashboard-managed, and the DNS flip (P6) plus CF Pages decommission (P7) remain
-separate operator steps. The live pin still diverges from this tree, because
-`web-stack-apply` re-pins the dispatch-supplied image imperatively after it
-applies the kustomization.
+separate operator steps. The live pin diverges from this tree permanently now:
+the promoted gftb-site origin is what runs, and nothing reconciles this
+declaration back onto it.
 
 Because `web-stack-apply` mutates the same Deployment the gftb-site release chain
 promotes, it is interlocked: `_web-stack-promotion-interlock` runs first, reads
@@ -214,7 +224,8 @@ just web-release-served-proof           # PR #109 — SERVED (line 10)
 
 Nothing in that chain runs `kubectl set image`, `kubectl scale`, or a replicas
 patch; `scripts/validate-public-operator-surface.py` scans the whole Justfile and
-allows imperative pinning only in the legacy `web-stack-apply` carrier. Full
+allows imperative pinning only in the attended legacy `web-stack-apply` carrier,
+which no workflow may invoke. Full
 procedure, inputs, rollback, and the thirteen-line release receipt:
 [`../../docs/runbooks/oncluster-web-cutover.md`](../../docs/runbooks/oncluster-web-cutover.md)
 section **S**.

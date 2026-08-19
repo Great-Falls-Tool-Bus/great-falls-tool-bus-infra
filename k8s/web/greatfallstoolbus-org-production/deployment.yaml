@@ -12,9 +12,9 @@
 # digest-pinned production image and replicas: 2 — so it is no longer inert. It
 # stays DECLARE-ONLY in the honest sense that MERGING APPLIES NOTHING; the safety
 # is the apply GATE plus the still-closed public path, not an inert manifest:
-#   1. No CI applies on merge. web-crs.yml is validation-only; the ONLY apply is
-#      web-stack.yml, which is workflow_dispatch + confirm=apply + a protected
-#      web-apply-environment kubeconfig gate (fail-closed on all three).
+#   1. No CI applies, ever. web-crs.yml is validation-only, and TIN-3899 deleted
+#      web-stack.yml, the workflow_dispatch + confirm=apply + repository_dispatch
+#      apply carrier. Applying this stack is attended-operator-only now.
 #   2. This stack creates NO Namespace object. greatfallstoolbus-org-production is
 #      provisioned out of band; the web-apply SA is namespace-scoped and cannot
 #      create it (no Namespace object here — validate-web-stack.sh enforces this).
@@ -25,11 +25,12 @@
 #   4. No Secret ships here (the GHCR pull secret is operator-provisioned in the
 #      namespace, never committed).
 #
-# At dispatch web-stack.yml still `kubectl set image` / patches replicas from the
-# operator-supplied inputs, so the SERVED digest is whatever the operator resolves
-# at runbook P2 — which will be the PUBLIC_ARCHIVE_LIVE rebuild
-# (greatfallstoolbus.org PR #111), SUPERSEDING the pin below before the actual
-# dispatch. The pin below is the declarative record of the current main image.
+# The attended `just web-stack-apply` carrier still `kubectl set image` / patches
+# replicas from the operator-supplied inputs, so a SERVED digest was historically
+# whatever the operator resolved at runbook P2. After the gftb-site promotion the
+# live Deployment runs the static origin instead, and no automated path re-pins
+# this one. The pin below is the declarative record of the adapter-node main
+# image, nothing more.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -42,8 +43,8 @@ metadata:
     app.tinyland.dev/lifecycle: declare-only
 spec:
   # ADR 0010 §5 step 3: replicas 2 (MassageIthaca production shape). Nothing
-  # schedules on merge — apply is operator-dispatch-only via web-stack.yml
-  # (workflow_dispatch + confirm=apply + protected web-apply env kubeconfig).
+  # schedules on merge — and since TIN-3899 nothing schedules from CI at all;
+  # apply is attended-operator-only behind the promotion interlock.
   # Anti-affinity spreads the 2 replicas across distinct nodes (see below).
   replicas: 2
   strategy:
@@ -124,9 +125,10 @@ spec:
           # greatfallstoolbus.org main @ 1112a93 (PR #111: /health probe +
           # PUBLIC_ARCHIVE_LIVE baked into the node image) by container-ghcr.yml
           # run 28762450649 — this image serves /health for the probes below and
-          # surfaces /discuss archive-live. Still a DECLARATIVE record: at
-          # cutover web-stack.yml `kubectl set image` overrides it with the
-          # operator-resolved digest (runbook P2); as of this pin the two match.
+          # surfaces /discuss archive-live. Still a DECLARATIVE record: the
+          # attended carrier's `kubectl set image` would override it with the
+          # operator-resolved digest (runbook P2), and the promoted gftb-site
+          # origin already does. No CI path re-pins it.
           image: ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:31cace27c5cd3e51ad4411100c83fb9019f74c9885535a916be5e5f333c929c3
           imagePullPolicy: IfNotPresent
           command: ["node", "build/index.js"]
