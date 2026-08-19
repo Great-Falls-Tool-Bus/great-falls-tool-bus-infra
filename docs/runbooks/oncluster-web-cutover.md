@@ -548,6 +548,65 @@ check`** rather than widening the guard.
 
 ## S1 — Prove the candidate (read-only, no cluster)
 
+### Where `WEB_APPLY_IMAGE` comes from
+
+`WEB_APPLY_IMAGE` is a **digest**, and this runbook previously said what it must
+look like without saying where the operator gets it. It is not typed from
+memory and it is not read off `deployment.yaml` (the committed manifests never
+carry it). There is exactly one thing to know first: `WEB_APPLY_SHA`, the
+`gftb-site` merge commit you are promoting — that comes from the `gftb-site` PR
+and its merge, i.e. receipt lines 2 and 7.
+
+**Preferred path — let the chain resolve it.** Supply only the source commit:
+
+```bash
+export WEB_APPLY_SHA=<40 hex gftb-site commit>
+unset WEB_APPLY_IMAGE
+
+just web-release-resolve-candidate
+```
+
+`web-release-resolve-candidate` constructs the one allowed tag itself
+(`ghcr.io/great-falls-tool-bus/gftb-site:sha-${WEB_APPLY_SHA}`, published by the
+`gftb-site` container publish run for that commit), resolves it to a digest in
+the same scrubbed anonymous environment the proofs use, runs
+`just web-release-candidate-proof` against that digest, then re-reads the tag and
+**refuses if it moved during the proof**. It prints one receipt line:
+
+```text
+resolved candidate: source=<40 hex> tag=<tag> digest=sha256:<64 hex>
+```
+
+It refuses to run if `WEB_APPLY_IMAGE` is already set, so a hand-copied digest
+can never ride through its receipt. Take the `digest=` field as
+`WEB_APPLY_IMAGE` for S2 and S3.
+
+**Discovery only.** If you want to look at the tag before promoting anything,
+the `gftb-site` container publish run for that commit prints the digest it
+pushed, the GHCR package UI shows it, and a read-only
+
+```bash
+crane digest ghcr.io/great-falls-tool-bus/gftb-site:sha-${WEB_APPLY_SHA}
+```
+
+says the same thing. None of those three is an *entrypoint*: they tell you what
+to expect, and `just web-release-resolve-candidate` is what establishes it.
+
+**Why a moving tag is not the threat it looks like.** The `sha-<commit>` tag is
+mutable in principle — anyone who can publish to the package can repoint it —
+but the chain never trusts the tag as an identity. Whatever digest the tag
+resolves to is proved by `web-release-candidate-proof`, which requires the image
+config to carry `org.opencontainers.image.source ==
+https://github.com/Great-Falls-Tool-Bus/gftb-site` **and**
+`org.opencontainers.image.revision == ${WEB_APPLY_SHA}` (`Justfile:2262-2263`).
+So a moved tag cannot substitute a different source commit; it can only fail the
+proof. The tag is a lookup key, the digest is the identity, and the OCI revision
+label is what binds that digest back to the commit you reviewed. Once resolved,
+`_web-release-candidate-inputs` pins `WEB_APPLY_IMAGE` to an exact `@sha256:`
+reference for every later step, so nothing downstream re-reads the tag.
+
+### The proof itself
+
 ```bash
 export WEB_APPLY_IMAGE=ghcr.io/great-falls-tool-bus/gftb-site@sha256:<64 hex>
 export WEB_APPLY_SHA=<40 hex gftb-site commit>
@@ -559,6 +618,9 @@ Anonymous, credential-free `crane` readback: the digest resolves to itself, the
 manifest is a single OCI/Docker image, the config carries the reviewed
 static-Caddy runtime identity, and `org.opencontainers.image.revision` equals
 `WEB_APPLY_SHA`. Produces **receipt line 8** (package name, tag, digest).
+`web-release-resolve-candidate` runs exactly this recipe internally, so the
+preferred path above produces the same receipt line 8 plus its own resolver
+line; there is no second, weaker proof.
 
 ## S2 — Plan (offline, no cluster, no registry)
 
@@ -683,7 +745,7 @@ Where each line comes from in this chain:
 | 2, 3 | the `gftb-site` source repository at `${WEB_APPLY_SHA}` |
 | 5 | the `gftb-site` required checks (`gh run list`). `web-cd-ci-green-gate` is **not** part of this release: it gates the LEGACY adapter-node CD path (`web-stack.yml`), which this promotion must be protected from — see the invariants below |
 | 7 | the `gftb-site` merge commit |
-| 8 | `just web-release-candidate-proof` |
+| 8 | `just web-release-resolve-candidate`, which resolves the tag and runs `just web-release-candidate-proof` on the digest it resolved (S1) |
 | 9 | the infra carrier commit recorded by `just web-release-plan`, plus `just web-release-pinned-running-proof` |
 | 10 | `just web-release-served-proof` |
 | 11 | operator observation (S4) |

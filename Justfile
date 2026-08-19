@@ -2151,6 +2151,50 @@ _web-release-candidate-inputs:
       esac
     done < <(env)
 
+# Discover the immutable candidate for ONE exact gftb-site source commit, prove
+# that digest, then re-resolve the tag and refuse if it moved. This is the
+# reviewed single entrypoint for OBTAINING WEB_APPLY_IMAGE: the operator supplies
+# only WEB_APPLY_SHA, the one allowed tag is constructed here rather than typed,
+# and the digest is never hand-copied out of a registry UI. It takes no Just
+# dependency: _web-release-candidate-inputs demands a WEB_APPLY_IMAGE that does
+# not exist yet, so the guard is applied by the nested candidate-proof call once
+# the digest is known. Tag movement between the two reads is what fails closed
+# here; movement BEFORE the first read is already harmless, because the proof
+# binds digest -> source through org.opencontainers.image.source/.revision.
+web-release-resolve-candidate:
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
+    set +x
+    set -euo pipefail
+    : "${WEB_APPLY_SHA:?Set WEB_APPLY_SHA to the exact gftb-site source commit}"
+    [[ "${WEB_APPLY_SHA}" =~ ^[0-9a-f]{40}$ ]] || { echo "WEB_APPLY_SHA must be 40 lowercase hex characters" >&2; exit 2; }
+    [[ "${WEB_APPLY_IMAGE+x}" != x ]] || { echo "WEB_APPLY_IMAGE must be unset; the resolver selects the immutable digest" >&2; exit 2; }
+    command -v crane >/dev/null 2>&1 || { echo "crane is required (nix develop provides it)" >&2; exit 1; }
+    command -v just >/dev/null 2>&1 || { echo "just is required (nix develop provides it)" >&2; exit 1; }
+    umask 077
+    source_sha="${WEB_APPLY_SHA}"
+    candidate_tag="ghcr.io/great-falls-tool-bus/gftb-site:sha-${source_sha}"
+    resolver_dir="$(mktemp -d "${TMPDIR:-/tmp}/gftb-web-resolver.XXXXXX")"
+    trap 'rm -rf "${resolver_dir}"' EXIT
+    mkdir -m 700 "${resolver_dir}/home" "${resolver_dir}/xdg" "${resolver_dir}/docker"
+    printf '{}\n' > "${resolver_dir}/docker/config.json"
+    chmod 600 "${resolver_dir}/docker/config.json"
+    crane_clean() {
+      env -i PATH="${PATH}" HOME="${resolver_dir}/home" XDG_CONFIG_HOME="${resolver_dir}/xdg" DOCKER_CONFIG="${resolver_dir}/docker" crane "$@"
+    }
+    resolve_candidate_tag() {
+      local stage="$1"
+      local resolved
+      resolved="$(crane_clean digest "${candidate_tag}")" || { echo "candidate tag ${stage} resolution failed" >&2; exit 1; }
+      [[ "${resolved}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "candidate tag ${stage} digest is malformed" >&2; exit 1; }
+      printf '%s\n' "${resolved}"
+    }
+    first_digest="$(resolve_candidate_tag first)"
+    candidate_image="ghcr.io/great-falls-tool-bus/gftb-site@${first_digest}"
+    WEB_APPLY_IMAGE="${candidate_image}" WEB_APPLY_SHA="${source_sha}" WEB_APPLY_REPLICAS=2 just web-release-candidate-proof
+    second_digest="$(resolve_candidate_tag second)"
+    [[ "${second_digest}" == "${first_digest}" ]] || { echo "candidate tag moved during the proof; refusing" >&2; exit 1; }
+    echo "resolved candidate: source=${source_sha} tag=${candidate_tag} digest=${first_digest}"
+
 # Prove the package is anonymously readable, is the selected immutable digest,
 # and carries the exact static-Caddy runtime/source identity. Every registry
 # call runs with an empty process environment and fresh Docker credential root.
