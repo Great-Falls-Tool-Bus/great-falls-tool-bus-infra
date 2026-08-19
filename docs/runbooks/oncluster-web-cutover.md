@@ -571,39 +571,69 @@ just web-release-resolve-candidate
 `gftb-site` container publish run for that commit), resolves it to a digest in
 the same scrubbed anonymous environment the proofs use, runs
 `just web-release-candidate-proof` against that digest, then re-reads the tag and
-**refuses if it moved during the proof**. It prints one receipt line:
+**refuses if it moved during the proof**. On success it writes two lines to
+stdout — the nested proof's receipt, then its own resolver receipt:
 
 ```text
+anonymous candidate proof passed: source=<40 hex> digest=sha256:<64 hex>
 resolved candidate: source=<40 hex> tag=<tag> digest=sha256:<64 hex>
 ```
 
-It refuses to run if `WEB_APPLY_IMAGE` is already set, so a hand-copied digest
-can never ride through its receipt. Take the `digest=` field as
+Neither line is written until every refusal path has been cleared, so a
+green-looking line never precedes a failure. Take the `digest=` field as
 `WEB_APPLY_IMAGE` for S2 and S3.
 
-**Discovery only.** If you want to look at the tag before promoting anything,
-the `gftb-site` container publish run for that commit prints the digest it
-pushed, the GHCR package UI shows it, and a read-only
+It refuses to run if `WEB_APPLY_IMAGE` is already set, so a hand-copied digest
+can never ride through its receipt. `WEB_APPLY_REPLICAS` is passed through to
+the nested guard untouched rather than assumed, so a stale non-`2` value in your
+shell is refused here rather than silently ignored until S2.
+
+If the second tag read fails or reports a different digest, the resolver exits
+non-zero and **that promotion attempt is over even though the proof passed** —
+the proof was of a digest whose tag no longer points at it. Do not carry the
+digest forward by hand; find out why the tag moved, then re-run
+`just web-release-resolve-candidate`.
+
+**Discovery only.** If you want to look at the candidate before promoting
+anything: the `gftb-site` container publish run for that commit prints the
+**tag** it published (`published …:sha-<commit> (resolve and consume by
+digest)`) — it does not print a digest. The digest is visible in the GHCR
+package UI, or from a read-only
 
 ```bash
 crane digest ghcr.io/great-falls-tool-bus/gftb-site:sha-${WEB_APPLY_SHA}
 ```
 
-says the same thing. None of those three is an *entrypoint*: they tell you what
-to expect, and `just web-release-resolve-candidate` is what establishes it.
+None of these is an *entrypoint*: they tell you what to expect, and
+`just web-release-resolve-candidate` is what establishes it.
 
-**Why a moving tag is not the threat it looks like.** The `sha-<commit>` tag is
-mutable in principle — anyone who can publish to the package can repoint it —
-but the chain never trusts the tag as an identity. Whatever digest the tag
-resolves to is proved by `web-release-candidate-proof`, which requires the image
-config to carry `org.opencontainers.image.source ==
+**What the tag-movement guard does and does not buy you.** The `sha-<commit>`
+tag is mutable: anyone who can publish to the package can repoint it. The chain
+never treats the tag as an identity — whatever digest it resolves to is proved
+by `web-release-candidate-proof`, which requires the image config to carry
+`org.opencontainers.image.source ==
 https://github.com/Great-Falls-Tool-Bus/gftb-site` **and**
-`org.opencontainers.image.revision == ${WEB_APPLY_SHA}` (`Justfile:2262-2263`).
-So a moved tag cannot substitute a different source commit; it can only fail the
-proof. The tag is a lookup key, the digest is the identity, and the OCI revision
-label is what binds that digest back to the commit you reviewed. Once resolved,
-`_web-release-candidate-inputs` pins `WEB_APPLY_IMAGE` to an exact `@sha256:`
-reference for every later step, so nothing downstream re-reads the tag.
+`org.opencontainers.image.revision == ${WEB_APPLY_SHA}` (the two label
+assertions in `web-release-candidate-proof`'s `jq -e` config check). That is a
+real control against the failure this promotion actually meets in practice: an
+accidental republish, a rebuilt tag, or picking up the wrong commit's image.
+
+**It is not an anti-tamper control, and this runbook does not claim it is.**
+Those labels are *publisher-asserted metadata*, not attestations — nothing
+verifies them against the source repository. A principal who can repoint the tag
+can equally build an image carrying whatever `source`/`revision` labels they
+like, and it would pass. The trust root here is therefore narrow and worth
+stating plainly: **only the `gftb-site` publish workflow can push to this
+package.** Everything above rides on that. Binding digest to source in a way
+that survives a hostile publisher would require signature or provenance
+verification — `cosign verify` or `gh attestation verify` against the resolved
+digest — and neither the `gftb-site` publish path nor this chain does that
+today. Adding it is the next hardening step, not something already in place.
+
+The tag is a lookup key; the digest is the identity. Once resolved,
+`_web-release-candidate-inputs` validates the format of `WEB_APPLY_IMAGE` as an
+exact `@sha256:` reference for every later step, so nothing downstream re-reads
+the tag.
 
 ### The proof itself
 
@@ -617,10 +647,16 @@ just web-release-candidate-proof
 Anonymous, credential-free `crane` readback: the digest resolves to itself, the
 manifest is a single OCI/Docker image, the config carries the reviewed
 static-Caddy runtime identity, and `org.opencontainers.image.revision` equals
-`WEB_APPLY_SHA`. Produces **receipt line 8** (package name, tag, digest).
-`web-release-resolve-candidate` runs exactly this recipe internally, so the
-preferred path above produces the same receipt line 8 plus its own resolver
-line; there is no second, weaker proof.
+`WEB_APPLY_SHA`.
+
+`web-release-resolve-candidate` runs exactly this recipe internally — there is no
+second, weaker proof — but note which line each one produces. This recipe's
+receipt carries **source and digest only**; it never sees a tag, because its
+input is already a digest reference. **Receipt line 8 is package name, tag, and
+digest, so it comes from the resolver's line**, which is the only place all
+three appear together. If you ran the proof directly with a digest you obtained
+some other way, you have no tag to record and no evidence of which tag it came
+from — another reason the resolver is the preferred path.
 
 ## S2 — Plan (offline, no cluster, no registry)
 

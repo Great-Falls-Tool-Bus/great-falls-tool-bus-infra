@@ -433,7 +433,7 @@ WEB_RELEASE_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     # web-release-resolve-candidate changes this digest and fails
     # `just public-surface` until the new value is reviewed in.
     "web-release-resolve-candidate": _receipt(
-        "afa6b074dfe9a22a", "ff468a968418e7fd", "1a898bc82dbf7bdf", "355509516882b445"
+        "3d20dda898a6d600", "69bcef992f05d64c", "41fd6915595ff2e9", "37c35696e3607d98"
     ),
     "web-release-candidate-proof": _receipt(
         "6347e0f7e92498e9", "c6fdfd7c5d80b0ef", "06e4818e333f3cac", "c5ace4f7652a2273"
@@ -3515,6 +3515,9 @@ def install_web_release_fixture_mocks(
                 line == "crane digest " + __TAG__
                 for line in log.read_text(encoding="utf-8").splitlines()
             )
+            if tag_call and state == "resolver-first-crane-failure" and tag_call_number == 1:
+                print("resolver registry stderr canary", file=sys.stderr)
+                raise SystemExit(23)
             if operation == "digest":
                 if state == "candidate-wrong-digest" and target == __IMAGE__:
                     print("sha256:" + "e" * 64)
@@ -4425,6 +4428,15 @@ def install_web_release_fixture_mocks(
                 raise SystemExit(0)
             # web-release-resolve-candidate re-enters the reviewed proof by bare
             # recipe name; the mock forwards exactly that argv and nothing wider.
+            # The silent-callee state stands in for a renamed or skipped recipe
+            # that exits 0 without running (JUST_ALLOW_MISSING and friends): the
+            # resolver must notice the missing proof receipt rather than trust
+            # the exit status.
+            if (
+                sys.argv[1:] == ["web-release-candidate-proof"]
+                and state == "resolver-silent-callee"
+            ):
+                raise SystemExit(0)
             if sys.argv[1:] in (
                 ["web-stack-validate"],
                 ["web-release-candidate-proof"],
@@ -4685,10 +4697,18 @@ def run_web_release_semantic_fixtures() -> None:
             diagnostic=resolver_receipt,
         )
         assert_no_imported_function("candidate resolver")
-        if resolved.stdout.splitlines()[-1:] != [resolver_receipt]:
+        # Both receipts, in order, and nothing else: the captured proof receipt
+        # first, the resolver's own line last.
+        if resolved.stdout.splitlines() != [
+            "anonymous candidate proof passed: source="
+            + WEB_RELEASE_FIXTURE_SHA
+            + " digest="
+            + WEB_RELEASE_FIXTURE_DIGEST,
+            resolver_receipt,
+        ]:
             raise SystemExit(
-                "self-test FAILED: resolver did not end on exactly one receipt "
-                f"line: {resolved.stdout!r}"
+                "self-test FAILED: resolver stdout must be the captured proof "
+                f"receipt then its own receipt line: {resolved.stdout!r}"
             )
         resolver_log = log_path.read_text(encoding="utf-8").splitlines()
         resolver_crane_calls = [
@@ -4725,15 +4745,45 @@ def run_web_release_semantic_fixtures() -> None:
             success=False,
             diagnostic="WEB_APPLY_IMAGE must be unset",
         )
-        for state, diagnostic in (
-            ("resolver-malformed-digest", "candidate tag first digest is malformed"),
+        # The resolver contributes no proxy scrubbing of its own; the claim is
+        # that the nested guard re-enters on the operator's REAL environment.
+        # Pin it: an ambient HTTPS_PROXY must surface through the resolver.
+        expect_web_release_fixture_result(
+            just_binary,
+            "web-release-resolve-candidate",
+            state_path,
+            log_path,
+            {**resolver_environment, "HTTPS_PROXY": "http://resolver-proxy-canary.invalid"},
+            "ok",
+            success=False,
+            diagnostic="Refusing ambient HTTPS_PROXY",
+        )
+        # (state, diagnostic, must the nested candidate proof have been reached?)
+        # A bad FIRST tag read has to fail before any callee runs; the remaining
+        # states are refusals of what the callee did or did not report.
+        for state, diagnostic, reaches_callee in (
+            (
+                "resolver-first-crane-failure",
+                "candidate tag first resolution failed",
+                False,
+            ),
+            (
+                "resolver-malformed-digest",
+                "candidate tag first digest is malformed",
+                False,
+            ),
+            (
+                "resolver-silent-callee",
+                "nested candidate proof did not emit its receipt",
+                True,
+            ),
             (
                 "resolver-wrong-revision",
                 "candidate OCI runtime/source contract mismatch",
+                True,
             ),
-            ("resolver-tag-moved", "candidate tag moved during the proof; refusing"),
         ):
-            expect_web_release_fixture_result(
+            refused = expect_web_release_fixture_result(
                 just_binary,
                 "web-release-resolve-candidate",
                 state_path,
@@ -4742,6 +4792,36 @@ def run_web_release_semantic_fixtures() -> None:
                 state,
                 success=False,
                 diagnostic=diagnostic,
+            )
+            if refused.stdout.strip():
+                raise SystemExit(
+                    f"self-test FAILED: refused resolver state {state!r} still "
+                    f"emitted stdout: {refused.stdout!r}"
+                )
+            nested = "nested-just web-release-candidate-proof" in log_path.read_text(
+                encoding="utf-8"
+            )
+            if nested != reaches_callee:
+                raise SystemExit(
+                    f"self-test FAILED: resolver state {state!r} nested-callee "
+                    f"reach was {nested}, expected {reaches_callee}"
+                )
+        # Tag movement is caught AFTER a fully passing proof, so this is the
+        # state that proves no green output escapes before the last gate.
+        moved = expect_web_release_fixture_result(
+            just_binary,
+            "web-release-resolve-candidate",
+            state_path,
+            log_path,
+            resolver_environment,
+            "resolver-tag-moved",
+            success=False,
+            diagnostic="candidate tag moved during the proof; refusing",
+        )
+        if moved.stdout.strip() or "anonymous candidate proof passed" in moved.stdout:
+            raise SystemExit(
+                "self-test FAILED: resolver leaked the passing proof receipt "
+                f"before refusing a moved tag: {moved.stdout!r}"
             )
 
         render = expect_web_release_fixture_result(
