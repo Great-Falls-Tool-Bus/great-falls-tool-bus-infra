@@ -55,7 +55,10 @@ name: Web Stack Apply
 # workflow's own apply-gate never touched any of those three; it only pins the
 # image and flips replicas on the already-live on-cluster origin. Rollback to a
 # prior image is re-dispatching THIS workflow with an earlier digest -- there
-# is no CF Pages fallback anymore.
+# is no CF Pages fallback anymore. That holds ONLY while the live image is not
+# a ghcr.io/great-falls-tool-bus/gftb-site reference: after the section-S
+# promotion, `just web-stack-apply`'s _web-stack-promotion-interlock refuses
+# this carrier (TIN-3816) and rollback follows the runbook's section S.
 
 on:
   workflow_dispatch:
@@ -87,7 +90,8 @@ on:
   # Before applying, the CD path GATES ON CI GREEN: it verifies the SITE repo's
   # ci.yml run for `sha` concluded success (web-cd-ci-green-gate). The manual
   # workflow_dispatch path above is preserved intact for rollback/override to an
-  # arbitrary prior digest.
+  # arbitrary prior digest -- while the live image is not a gftb-site reference;
+  # once it is, _web-stack-promotion-interlock refuses this carrier (TIN-3816).
   repository_dispatch:
     types: [web-image-published]
 

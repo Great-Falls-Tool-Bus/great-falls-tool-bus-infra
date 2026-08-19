@@ -519,6 +519,24 @@ IMPERATIVE_PIN = re.compile(
 )
 IMPERATIVE_PIN_ALLOWED_RECIPES = frozenset({"web-stack-apply"})
 
+# A brand-new recipe running `kubectl ... apply -k/-f` against the web stack
+# tree (`{{ web_stack_dir }}` or its literal path) is not an imperative pin, but
+# it would recreate allow-egress-dns / allow-egress-discuss-archive and re-pin
+# the tree's adapter-node digest WITHOUT passing through
+# _web-stack-promotion-interlock, which only web-stack-apply is bound to. Only
+# the legacy carrier and its server dry-run may apply the tree; the reviewed
+# release chain applies rendered plan bytes (`apply -f "${plan}"`), never the
+# tree. Same textual strength as IMPERATIVE_PIN: variable indirection of the
+# directory is a known residual.
+WEB_STACK_TREE_APPLY = re.compile(
+    rf"{_IMPERATIVE_PIN_KUBECTL}[^\n]*\bapply\b[^\n]*"
+    r"(?:\s-k\b|\s--kustomize\b|\s-f\b|\s--filename\b|\s-R\b|\s--recursive\b)"
+    r"[^\n]*(?:\{\{\s*web_stack_dir\s*\}\}|k8s/web/greatfallstoolbus-org-production)"
+)
+WEB_STACK_TREE_APPLY_ALLOWED_RECIPES = frozenset(
+    {"web-stack-apply", "web-stack-server-dry-run"}
+)
+
 # The legacy adapter-node carrier and the reviewed release chain mutate the SAME
 # Deployment. web-stack.yml fires `just web-stack-apply` unattended from a
 # repository_dispatch the public site repo sends on every push to main, so after
@@ -1366,6 +1384,28 @@ def scan_imperative_pin_text(text: str, path: Path) -> list[Finding]:
                     )
                 )
 
+    for name, declarations in all_just_recipe_blocks(text).items():
+        if name in WEB_STACK_TREE_APPLY_ALLOWED_RECIPES:
+            continue
+        for line, _, body in declarations:
+            match = WEB_STACK_TREE_APPLY.search(
+                IMPERATIVE_PIN_CONTINUATION.sub(" ", executable_recipe_text(body))
+            )
+            if match:
+                findings.append(
+                    Finding(
+                        "web-stack-tree-apply",
+                        path,
+                        line,
+                        f"{name} applies the web stack tree directly "
+                        f"({match.group(0).strip()!r}), bypassing "
+                        f"{WEB_STACK_PROMOTION_INTERLOCK}; only "
+                        f"{sorted(WEB_STACK_TREE_APPLY_ALLOWED_RECIPES)!r} may "
+                        "apply the tree, and the reviewed release chain applies "
+                        "rendered plan bytes instead.",
+                    )
+                )
+
     # Fold backslash continuations into one logical line, keeping the ORIGINAL
     # line number of the first physical line so findings stay navigable.
     top_level_logical: list[tuple[int, str]] = []
@@ -1393,8 +1433,20 @@ def scan_imperative_pin_text(text: str, path: Path) -> list[Finding]:
                     "pins declaratively.",
                 )
             )
+        tree_match = WEB_STACK_TREE_APPLY.search(line_text)
+        if tree_match:
+            findings.append(
+                Finding(
+                    "web-stack-tree-apply",
+                    path,
+                    index,
+                    "Justfile top level applies the web stack tree directly "
+                    f"({tree_match.group(0).strip()!r}), bypassing "
+                    f"{WEB_STACK_PROMOTION_INTERLOCK}.",
+                )
+            )
 
-    for name in sorted(IMPERATIVE_PIN_ALLOWED_RECIPES):
+    for name in sorted(IMPERATIVE_PIN_ALLOWED_RECIPES | WEB_STACK_TREE_APPLY_ALLOWED_RECIPES):
         if len(all_just_recipe_blocks(text).get(name, [])) != 1:
             findings.append(
                 Finding(
@@ -5824,6 +5876,64 @@ def self_test() -> None:
             raise SystemExit(
                 f"self-test FAILED: imperative-pin scan accepted {label}"
             )
+    web_stack_tree_apply_cases = (
+        (
+            "apply -k of the web stack tree from an unlisted recipe",
+            justfile
+            + "\nweb-stack-hotfix:\n"
+            + '    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply -k {{ web_stack_dir }}\n',
+        ),
+        (
+            "apply -f of the web stack tree from an unlisted recipe",
+            justfile
+            + "\nweb-stack-hotfix:\n"
+            + '    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply -f {{ web_stack_dir }}/deployment.yaml\n',
+        ),
+        (
+            "apply --kustomize of the literal web stack path",
+            justfile
+            + "\nweb-stack-hotfix:\n"
+            + "    kubectl --namespace {{ web_stack_ns }} apply --kustomize k8s/web/greatfallstoolbus-org-production\n",
+        ),
+        (
+            "apply -k of the tree across a backslash continuation",
+            justfile
+            + "\nweb-stack-hotfix:\n"
+            + '    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" \\\n'
+            + "      apply -k {{ web_stack_dir }}\n",
+        ),
+        (
+            "apply -k of the tree injected into the reviewed apply",
+            mutate_recipe_body(
+                justfile,
+                "web-release-apply",
+                '    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply -f "${plan}"\n',
+                '    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply -k {{ web_stack_dir }}\n',
+                "apply -k of the tree injected into the reviewed apply",
+            ),
+        ),
+    )
+    for label, fixture in web_stack_tree_apply_cases:
+        if not any(
+            finding.rule == "web-stack-tree-apply"
+            for finding in scan_imperative_pin_text(fixture, Path("Justfile"))
+        ):
+            raise SystemExit(
+                f"self-test FAILED: web-stack-tree-apply scan accepted {label}"
+            )
+    stale_tree_allowlist = justfile.replace(
+        "web-stack-server-dry-run: web-stack-validate _web-apply-inputs",
+        "web-stack-server-dry-run-renamed: web-stack-validate _web-apply-inputs",
+        1,
+    )
+    if not any(
+        finding.rule == "imperative-pin-allowlist-stale"
+        for finding in scan_imperative_pin_text(stale_tree_allowlist, Path("Justfile"))
+    ):
+        raise SystemExit(
+            "self-test FAILED: web-stack-tree-apply allowlist survived the "
+            "removal of the recipe it names"
+        )
     stale_allowlist = justfile.replace(
         "web-stack-apply: _web-stack-promotion-interlock",
         "web-stack-apply-renamed: _web-stack-promotion-interlock",

@@ -351,7 +351,11 @@ repo's `web-stack.yml` workflow (`workflow_dispatch`, `confirm=apply`,
 ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:<digest>>`) to roll
 the Deployment back to a previously-served image — "the manual
 `workflow_dispatch` path... preserved intact for rollback/override to an
-arbitrary prior digest" per that workflow's own header comment. Re-standing-up
+arbitrary prior digest" per that workflow's own header comment. **Qualifier
+(TIN-3816):** that re-dispatch holds only while the live image is *not* a
+`ghcr.io/great-falls-tool-bus/gftb-site` reference — once section S's
+promotion has landed, `_web-stack-promotion-interlock` refuses the carrier
+and rollback follows section S's "Rollback" instead. Re-standing-up
 a Pages project from scratch is *not* the rollback story anymore; that option
 was deliberately foreclosed by this phase.
 
@@ -476,7 +480,8 @@ the token is retired as of 2026-07-06/07 (P7), not held pending a later
 decommission decision. The standing safety net is no longer "single-DNS-flip
 rollback to CF Pages" (that target no longer exists) — it is the on-cluster
 re-pin-previous-digest primitive via `web-stack.yml` (see P7's corrected
-rollback).
+rollback), which holds only while the live image is not a gftb-site reference
+(section S "Rollback" governs after the promotion).
 
 ---
 
@@ -599,9 +604,33 @@ does not authorize the delete. Without the preflight the realistic failure is a
 green dry-run, a successful apply, a denied delete, and a half-done promotion
 running the new image with `allow-egress-dns` still additively permitting egress.
 
-**Rollback** is the same chain with the previous `WEB_APPLY_IMAGE` /
-`WEB_APPLY_SHA`: re-plan, re-apply. The previous digest is receipt line 12 and
-must be recorded *before* S3 so the rehearsal is possible.
+**Rollback** has two shapes, and only one of them runs through the chain:
+
+- **gftb-site → gftb-site** (every promotion after the first): the same chain
+  with the previous `WEB_APPLY_IMAGE` / `WEB_APPLY_SHA` — re-plan, re-apply.
+  The previous digest is receipt line 12 and must be recorded *before* S3 so
+  the rehearsal is possible.
+- **First promotion, back to the adapter-node origin**: **not executable
+  through the chain.** `_web-release-candidate-inputs` accepts only
+  `ghcr.io/great-falls-tool-bus/gftb-site@sha256:…`, so the receipt-line-12
+  `greatfallstoolbus.org@sha256:…` digest is refused as a candidate, and the
+  standing P7 primitive (re-dispatch `web-stack.yml` with a prior
+  `greatfallstoolbus.org` digest) is refused by `_web-stack-promotion-interlock`
+  the moment the live image is a gftb-site reference — i.e. from the end of S3,
+  *before* S4 SERVED is proven. Between S3 and a passing S4 there is therefore
+  **no repo-carried path back to the adapter-node origin.** The rollback is
+  out-of-band, attended, with the web-apply kubeconfig:
+  `kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace
+  greatfallstoolbus-org-production set image deployment/greatfallstoolbus-org
+  greatfallstoolbus-org=<receipt-line-12 greatfallstoolbus.org@sha256:…>`.
+  Once the live image is no longer gftb-site the interlock reopens, and a
+  `web-stack.yml` `workflow_dispatch` (`confirm=apply`, `image=<that digest>`)
+  restores the two egress NetworkPolicies (`allow-egress-dns`,
+  `allow-egress-discuss-archive`) that the promotion deleted. Record the
+  imperative `set image` in the release notes as an out-of-band mutation; the
+  receipt-line-12 "rollback rehearsal" **cannot** be rehearsed through the chain
+  for the first promotion, and the receipt must say so rather than claim a
+  rehearsal that did not happen.
 
 ## S4 — PINNED → RUNNING → SERVED
 
@@ -711,9 +740,17 @@ Where each line comes from in this chain:
   '{"spec":{"template":{"spec":{"containers":[{"image":…`) — literally, on one
   logical line, including through a `kubectl…` wrapper such as `kubectl_clean`
   and across backslash line continuations — anywhere in the Justfile outside the
-  allowlisted legacy `web-stack-apply` fails `just public-surface`. That scan is
-  textual and does **not** see shell *variable indirection* (`KC=kubectl; "${KC}"
-  … set image`, or a patch body assembled into a variable on a previous line).
+  allowlisted legacy `web-stack-apply` fails `just public-surface`. The same
+  scan refuses a `kubectl` tree-apply (`-k`, `-f`, `--kustomize`, `--filename`)
+  aimed at `{{ web_stack_dir }}` (or its literal path) from any recipe other than
+  `web-stack-apply` and `web-stack-server-dry-run`, because a fresh
+  tree-apply would recreate `allow-egress-dns`/`allow-egress-discuss-archive`
+  and re-pin the tree's adapter-node digest without ever passing through
+  `_web-stack-promotion-interlock` (only `web-stack-apply` is bound to it).
+  Both scans are textual and do **not** see shell *variable indirection*
+  (`KC=kubectl; "${KC}" … set image`, a patch body assembled into a variable
+  on a previous line, or the tree directory bound to a variable first and the
+  variable passed to the tree-apply on the next line).
   What makes an edit to a reviewed release recipe fail closed is the recipe-body
   SHA-256 in `WEB_RELEASE_CRITICAL_RECIPE_DIGESTS`, not this scan.
 - **One renderer.** A second renderer in the plan or apply path changes the
