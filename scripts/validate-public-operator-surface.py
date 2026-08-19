@@ -385,6 +385,12 @@ ATTENDED_OPERATOR_LOCAL_ROOTS = {
 # and their receipts are release evidence rather than hosted-CI entrypoints.
 WEB_RELEASE_RECIPE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     "_web-release-candidate-inputs": (),
+    # The digest-discovery entrypoint. It deliberately declares NO Just
+    # dependency: _web-release-candidate-inputs requires a WEB_APPLY_IMAGE that
+    # does not exist until the tag has been resolved, so the resolver re-enters
+    # the guard through its nested `just web-release-candidate-proof` call
+    # instead of running it first against an unset variable.
+    "web-release-resolve-candidate": (),
     "web-release-candidate-proof": ("_web-release-candidate-inputs",),
     "web-release-render": ("_web-release-candidate-inputs",),
     "_web-release-kubeconfig-inputs": (),
@@ -418,6 +424,16 @@ WEB_RELEASE_RECIPE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
 WEB_RELEASE_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     "_web-release-candidate-inputs": _receipt(
         "5bf45b521f65b560", "d833eda99bfbe2e6", "98727dbe6a1c782b", "4695cc4e8a8184f6"
+    ),
+    # Recomputed exactly the way this validator checks it, so a reviewer can
+    # reproduce the constant without running the whole self-test:
+    #   sha256(executable_recipe_text(just_recipe_block(Justfile, name)[2]))
+    # i.e. the recipe body with Just's indent removed and blank/comment-only
+    # lines dropped (`#!` shebangs are kept). Editing one executable line of
+    # web-release-resolve-candidate changes this digest and fails
+    # `just public-surface` until the new value is reviewed in.
+    "web-release-resolve-candidate": _receipt(
+        "3d20dda898a6d600", "69bcef992f05d64c", "41fd6915595ff2e9", "37c35696e3607d98"
     ),
     "web-release-candidate-proof": _receipt(
         "6347e0f7e92498e9", "c6fdfd7c5d80b0ef", "06e4818e333f3cac", "c5ace4f7652a2273"
@@ -2712,6 +2728,12 @@ WEB_RELEASE_FIXTURE_DIGEST = "sha256:" + "a" * 64
 WEB_RELEASE_FIXTURE_IMAGE = (
     "ghcr.io/great-falls-tool-bus/gftb-site@" + WEB_RELEASE_FIXTURE_DIGEST
 )
+# The one tag web-release-resolve-candidate is allowed to construct. The mock
+# registry only answers `crane digest` for this exact reference, so a resolver
+# that widened the tag it reads would fail the fixture rather than pass it.
+WEB_RELEASE_FIXTURE_TAG = (
+    "ghcr.io/great-falls-tool-bus/gftb-site:sha-" + WEB_RELEASE_FIXTURE_SHA
+)
 
 WEB_RELEASE_RENDER_FIXTURE = """\
 apiVersion: apps/v1
@@ -3421,6 +3443,7 @@ def install_web_release_fixture_mocks(
         "__DIGEST__": repr(WEB_RELEASE_FIXTURE_DIGEST),
         "__SHA__": repr(WEB_RELEASE_FIXTURE_SHA),
         "__IMAGE__": repr(WEB_RELEASE_FIXTURE_IMAGE),
+        "__TAG__": repr(WEB_RELEASE_FIXTURE_TAG),
         "__REPO__": repr(str(REPO)),
         "__TOPLEVEL__": repr(str(toplevel_path)),
         "__REAL_JUST__": repr(shutil.which("just") or ""),
@@ -3473,7 +3496,11 @@ def install_web_release_fixture_mocks(
             ):
                 raise SystemExit("mock crane did not receive an empty credential root")
             operation = sys.argv[1] if len(sys.argv) > 1 else ""
-            if operation in {"digest", "manifest", "config"}:
+            target = sys.argv[2] if len(sys.argv) > 2 else ""
+            if operation == "digest":
+                if sys.argv[1:] not in ([operation, __IMAGE__], [operation, __TAG__]):
+                    raise SystemExit("unexpected crane argv")
+            elif operation in {"manifest", "config"}:
                 if sys.argv[1:] != [operation, __IMAGE__]:
                     raise SystemExit("unexpected crane argv")
             elif operation == "pull":
@@ -3481,13 +3508,30 @@ def install_web_release_fixture_mocks(
                     raise SystemExit("unexpected crane pull argv")
             else:
                 raise SystemExit("unexpected crane operation: " + operation)
+            # Which of the resolver's two tag reads this is: the first happens
+            # before the nested candidate proof, the second after it.
+            tag_call = operation == "digest" and target == __TAG__
+            tag_call_number = sum(
+                line == "crane digest " + __TAG__
+                for line in log.read_text(encoding="utf-8").splitlines()
+            )
+            if tag_call and state == "resolver-first-crane-failure" and tag_call_number == 1:
+                print("resolver registry stderr canary", file=sys.stderr)
+                raise SystemExit(23)
             if operation == "digest":
-                print("sha256:" + "e" * 64 if state == "candidate-wrong-digest" else __DIGEST__)
+                if state == "candidate-wrong-digest" and target == __IMAGE__:
+                    print("sha256:" + "e" * 64)
+                elif tag_call and state == "resolver-malformed-digest":
+                    print("not-a-digest")
+                elif tag_call and state == "resolver-tag-moved" and tag_call_number == 2:
+                    print("sha256:" + "e" * 64)
+                else:
+                    print(__DIGEST__)
             elif operation == "manifest":
                 print((fixtures / "manifest.json").read_text(encoding="utf-8"))
             elif operation == "config":
                 config = json.loads((fixtures / "config.json").read_text(encoding="utf-8"))
-                if state == "candidate-wrong-revision":
+                if state in {"candidate-wrong-revision", "resolver-wrong-revision"}:
                     config["config"]["Labels"]["org.opencontainers.image.revision"] = "0" * 40
                 print(json.dumps(config))
             elif operation == "pull":
@@ -4382,7 +4426,23 @@ def install_web_release_fixture_mocks(
                     + __AUTHORITY_DIGEST__
                 )
                 raise SystemExit(0)
-            if sys.argv[1:] in (["web-stack-validate"], helper_argv, render_argv):
+            # web-release-resolve-candidate re-enters the reviewed proof by bare
+            # recipe name; the mock forwards exactly that argv and nothing wider.
+            # The silent-callee state stands in for a renamed or skipped recipe
+            # that exits 0 without running (JUST_ALLOW_MISSING and friends): the
+            # resolver must notice the missing proof receipt rather than trust
+            # the exit status.
+            if (
+                sys.argv[1:] == ["web-release-candidate-proof"]
+                and state == "resolver-silent-callee"
+            ):
+                raise SystemExit(0)
+            if sys.argv[1:] in (
+                ["web-stack-validate"],
+                ["web-release-candidate-proof"],
+                helper_argv,
+                render_argv,
+            ):
                 os.execv(__REAL_JUST__, [__REAL_JUST__, *sys.argv[1:]])
             raise SystemExit("mock nested just rejected unexpected argv")
             """
@@ -4607,6 +4667,161 @@ def run_web_release_semantic_fixtures() -> None:
                 state,
                 success=False,
                 diagnostic=diagnostic,
+            )
+
+        # web-release-resolve-candidate is the digest-DISCOVERY entrypoint: the
+        # operator supplies only the source commit, so the resolver has to
+        # construct the one allowed tag itself, prove whatever digest that tag
+        # resolves to, and read the tag a second time afterwards.
+        resolver_environment = {
+            name: value
+            for name, value in base_environment.items()
+            if name != "WEB_APPLY_IMAGE"
+        }
+        resolver_receipt = (
+            "resolved candidate: source="
+            + WEB_RELEASE_FIXTURE_SHA
+            + " tag="
+            + WEB_RELEASE_FIXTURE_TAG
+            + " digest="
+            + WEB_RELEASE_FIXTURE_DIGEST
+        )
+        resolved = expect_web_release_fixture_result(
+            just_binary,
+            "web-release-resolve-candidate",
+            state_path,
+            log_path,
+            resolver_environment,
+            "ok",
+            success=True,
+            diagnostic=resolver_receipt,
+        )
+        assert_no_imported_function("candidate resolver")
+        # Both receipts, in order, and nothing else: the captured proof receipt
+        # first, the resolver's own line last.
+        if resolved.stdout.splitlines() != [
+            "anonymous candidate proof passed: source="
+            + WEB_RELEASE_FIXTURE_SHA
+            + " digest="
+            + WEB_RELEASE_FIXTURE_DIGEST,
+            resolver_receipt,
+        ]:
+            raise SystemExit(
+                "self-test FAILED: resolver stdout must be the captured proof "
+                f"receipt then its own receipt line: {resolved.stdout!r}"
+            )
+        resolver_log = log_path.read_text(encoding="utf-8").splitlines()
+        resolver_crane_calls = [
+            line.split(" ") for line in resolver_log if line.startswith("crane ")
+        ]
+        expected_crane_calls = [
+            ["crane", "digest", WEB_RELEASE_FIXTURE_TAG],
+            ["crane", "digest", WEB_RELEASE_FIXTURE_IMAGE],
+            ["crane", "manifest", WEB_RELEASE_FIXTURE_IMAGE],
+            ["crane", "config", WEB_RELEASE_FIXTURE_IMAGE],
+            ["crane", "pull", WEB_RELEASE_FIXTURE_IMAGE],
+            ["crane", "digest", WEB_RELEASE_FIXTURE_TAG],
+        ]
+        if [call[:3] for call in resolver_crane_calls] != expected_crane_calls:
+            raise SystemExit(
+                "self-test FAILED: resolver did not read the tag, prove the "
+                "resolved digest, then re-read the same tag: "
+                f"{resolver_crane_calls!r}"
+            )
+        if "nested-just web-release-candidate-proof" not in resolver_log:
+            raise SystemExit(
+                "self-test FAILED: resolver did not re-enter the reviewed "
+                "candidate proof by recipe name"
+            )
+        # Single entrypoint: a pre-set WEB_APPLY_IMAGE would let a hand-copied
+        # digest ride through the resolver's receipt, so it is refused outright.
+        expect_web_release_fixture_result(
+            just_binary,
+            "web-release-resolve-candidate",
+            state_path,
+            log_path,
+            base_environment,
+            "ok",
+            success=False,
+            diagnostic="WEB_APPLY_IMAGE must be unset",
+        )
+        # The resolver contributes no proxy scrubbing of its own; the claim is
+        # that the nested guard re-enters on the operator's REAL environment.
+        # Pin it: an ambient HTTPS_PROXY must surface through the resolver.
+        expect_web_release_fixture_result(
+            just_binary,
+            "web-release-resolve-candidate",
+            state_path,
+            log_path,
+            {**resolver_environment, "HTTPS_PROXY": "http://resolver-proxy-canary.invalid"},
+            "ok",
+            success=False,
+            diagnostic="Refusing ambient HTTPS_PROXY",
+        )
+        # (state, diagnostic, must the nested candidate proof have been reached?)
+        # A bad FIRST tag read has to fail before any callee runs; the remaining
+        # states are refusals of what the callee did or did not report.
+        for state, diagnostic, reaches_callee in (
+            (
+                "resolver-first-crane-failure",
+                "candidate tag first resolution failed",
+                False,
+            ),
+            (
+                "resolver-malformed-digest",
+                "candidate tag first digest is malformed",
+                False,
+            ),
+            (
+                "resolver-silent-callee",
+                "nested candidate proof did not emit its receipt",
+                True,
+            ),
+            (
+                "resolver-wrong-revision",
+                "candidate OCI runtime/source contract mismatch",
+                True,
+            ),
+        ):
+            refused = expect_web_release_fixture_result(
+                just_binary,
+                "web-release-resolve-candidate",
+                state_path,
+                log_path,
+                resolver_environment,
+                state,
+                success=False,
+                diagnostic=diagnostic,
+            )
+            if refused.stdout.strip():
+                raise SystemExit(
+                    f"self-test FAILED: refused resolver state {state!r} still "
+                    f"emitted stdout: {refused.stdout!r}"
+                )
+            nested = "nested-just web-release-candidate-proof" in log_path.read_text(
+                encoding="utf-8"
+            )
+            if nested != reaches_callee:
+                raise SystemExit(
+                    f"self-test FAILED: resolver state {state!r} nested-callee "
+                    f"reach was {nested}, expected {reaches_callee}"
+                )
+        # Tag movement is caught AFTER a fully passing proof, so this is the
+        # state that proves no green output escapes before the last gate.
+        moved = expect_web_release_fixture_result(
+            just_binary,
+            "web-release-resolve-candidate",
+            state_path,
+            log_path,
+            resolver_environment,
+            "resolver-tag-moved",
+            success=False,
+            diagnostic="candidate tag moved during the proof; refusing",
+        )
+        if moved.stdout.strip() or "anonymous candidate proof passed" in moved.stdout:
+            raise SystemExit(
+                "self-test FAILED: resolver leaked the passing proof receipt "
+                f"before refusing a moved tag: {moved.stdout!r}"
             )
 
         render = expect_web_release_fixture_result(
@@ -6019,6 +6234,20 @@ def self_test() -> None:
         "release render input-guard removal",
         "web-release-recipe-dependencies-mismatch",
     )
+    # The resolver must stay dependency-free: taking _web-release-candidate-inputs
+    # would demand the very WEB_APPLY_IMAGE it exists to discover, and the only
+    # way to satisfy that guard would be to hand-copy a digest again.
+    resolver_dependency_drift = mutate_recipe_dependencies(
+        justfile,
+        "web-release-resolve-candidate",
+        ("_web-release-candidate-inputs",),
+        "release resolver dependency drift",
+    )
+    expect_web_release_contract_rejection(
+        resolver_dependency_drift,
+        "release resolver dependency drift",
+        "web-release-recipe-dependencies-mismatch",
+    )
     callee_dependency_drift = mutate_recipe_dependencies(
         justfile,
         WEB_RELEASE_VALIDATION_CALLEE,
@@ -6060,6 +6289,21 @@ def self_test() -> None:
             "    raw = Path(sys.argv[1])\n",
             "      raw = Path(sys.argv[1])\n",
             "release embedded-Python indentation drift",
+        ),
+        # The resolver's whole value is that the operator cannot choose the
+        # reference: it constructs exactly one tag from WEB_APPLY_SHA, and it
+        # re-reads that tag after the proof. Both are receipted.
+        (
+            "web-release-resolve-candidate",
+            '    candidate_tag="ghcr.io/great-falls-tool-bus/gftb-site:sha-${source_sha}"\n',
+            '    candidate_tag="${WEB_APPLY_TAG:-ghcr.io/great-falls-tool-bus/gftb-site:sha-${source_sha}}"\n',
+            "release resolver tag widening",
+        ),
+        (
+            "web-release-resolve-candidate",
+            '    [[ "${second_digest}" == "${first_digest}" ]] ||',
+            '    [[ -n "${second_digest}" ]] ||',
+            "release resolver tag-movement guard weakening",
         ),
     )
     for name, old, new, label in release_body_mutations:

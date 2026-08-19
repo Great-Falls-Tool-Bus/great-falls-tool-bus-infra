@@ -2151,6 +2151,88 @@ _web-release-candidate-inputs:
       esac
     done < <(env)
 
+# Discover the immutable candidate for ONE exact gftb-site source commit, prove
+# that digest, then re-resolve the tag and refuse if it moved. This is the
+# reviewed single entrypoint for OBTAINING WEB_APPLY_IMAGE: the operator supplies
+# only WEB_APPLY_SHA, the one allowed tag is constructed here rather than typed,
+# and the digest is never hand-copied out of a registry UI. It takes no Just
+# dependency: _web-release-candidate-inputs demands a WEB_APPLY_IMAGE that does
+# not exist yet, so the guard is applied by the nested candidate-proof call once
+# the digest is known.
+#
+# NOTHING is printed to stdout until BOTH the nested proof receipt and the
+# second tag read have been checked, so a green-looking line can never precede a
+# refusal. The proof's own receipt is captured rather than streamed for the same
+# reason, and because its exact text is what positively confirms the reviewed
+# callee actually ran: a renamed/skipped recipe that exits 0 silently (e.g. under
+# JUST_ALLOW_MISSING) yields no receipt and is refused here.
+web-release-resolve-candidate:
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
+    set +x
+    set -euo pipefail
+    : "${WEB_APPLY_SHA:?Set WEB_APPLY_SHA to the exact gftb-site source commit}"
+    [[ "${WEB_APPLY_SHA}" =~ ^[0-9a-f]{40}$ ]] || { echo "WEB_APPLY_SHA must be 40 lowercase hex characters" >&2; exit 2; }
+    [[ "${WEB_APPLY_IMAGE+x}" != x ]] || { echo "WEB_APPLY_IMAGE must be unset; the resolver selects the immutable digest" >&2; exit 2; }
+    command -v crane >/dev/null 2>&1 || { echo "crane is required (nix develop provides it)" >&2; exit 1; }
+    command -v just >/dev/null 2>&1 || { echo "just is required (nix develop provides it)" >&2; exit 1; }
+    umask 077
+    source_sha="${WEB_APPLY_SHA}"
+    candidate_tag="ghcr.io/great-falls-tool-bus/gftb-site:sha-${source_sha}"
+    temp_root="$(python3 -I - "${TMPDIR:-/tmp}" "$(git rev-parse --show-toplevel)" <<'PY'
+    import os
+    import stat
+    import sys
+    from pathlib import Path
+
+    path = Path(sys.argv[1]).resolve(strict=True)
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("TMPDIR must remain outside the public repository")
+    metadata = path.stat()
+    mode = stat.S_IMODE(metadata.st_mode)
+    private = metadata.st_uid == os.getuid() and (mode & 0o022) == 0
+    shared_sticky = metadata.st_uid == 0 and bool(mode & stat.S_ISVTX)
+    if not path.is_dir() or not (private or shared_sticky):
+        raise SystemExit("TMPDIR must be operator-private or a root-owned sticky directory")
+    print(path)
+    PY
+    )"
+    resolver_dir="$(mktemp -d "${temp_root}/gftb-web-resolver.XXXXXX")"
+    trap 'rm -rf "${resolver_dir}"' EXIT
+    mkdir -m 700 "${resolver_dir}/home" "${resolver_dir}/xdg" "${resolver_dir}/docker"
+    printf '{}\n' > "${resolver_dir}/docker/config.json"
+    chmod 600 "${resolver_dir}/docker/config.json"
+    crane_clean() {
+      env -i PATH="${PATH}" HOME="${resolver_dir}/home" XDG_CONFIG_HOME="${resolver_dir}/xdg" DOCKER_CONFIG="${resolver_dir}/docker" crane "$@"
+    }
+    resolve_candidate_tag() {
+      local stage="$1"
+      local resolved
+      resolved="$(crane_clean digest "${candidate_tag}")" || { echo "candidate tag ${stage} resolution failed" >&2; exit 1; }
+      [[ "${resolved}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "candidate tag ${stage} digest is malformed" >&2; exit 1; }
+      printf '%s\n' "${resolved}"
+    }
+    first_digest="$(resolve_candidate_tag first)"
+    candidate_image="ghcr.io/great-falls-tool-bus/gftb-site@${first_digest}"
+    # Deliberately NOT run under `env -i`: unlike the registry reads above, this
+    # is the reviewed guard re-entering on the OPERATOR's real environment.
+    # _web-release-candidate-inputs exists to refuse ambient proxy settings and a
+    # non-2 WEB_APPLY_REPLICAS; scrubbing the environment here would hide exactly
+    # the ambient state that guard is there to catch. For the same reason
+    # WEB_APPLY_REPLICAS is passed through untouched rather than pinned to 2 --
+    # the resolver discovers a digest, it does not launder release inputs. Only
+    # WEB_APPLY_IMAGE is contributed, and it is the digest just resolved.
+    proof_output="$(WEB_APPLY_IMAGE="${candidate_image}" WEB_APPLY_SHA="${source_sha}" just web-release-candidate-proof)"
+    [[ "${proof_output}" == *"anonymous candidate proof passed: source=${source_sha} digest=${first_digest}"* ]] || { echo "nested candidate proof did not emit its receipt" >&2; exit 1; }
+    second_digest="$(resolve_candidate_tag second)"
+    [[ "${second_digest}" == "${first_digest}" ]] || { echo "candidate tag moved during the proof; refusing" >&2; exit 1; }
+    printf '%s\n' "${proof_output}"
+    echo "resolved candidate: source=${source_sha} tag=${candidate_tag} digest=${first_digest}"
+
 # Prove the package is anonymously readable, is the selected immutable digest,
 # and carries the exact static-Caddy runtime/source identity. Every registry
 # call runs with an empty process environment and fresh Docker credential root.
