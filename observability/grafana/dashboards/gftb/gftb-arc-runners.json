@@ -1,0 +1,1496 @@
+{
+  "__inputs": [],
+  "__requires": [],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Great Falls Tool Bus ARC runner scale set on the shared honey substrate: great-falls-tool-bus-nix (registration identity; workflows use runs-on tinyland-nix), compared against the shared tinyland-nix set. Covers utilisation, queue pressure proxies and the PR #105 16 GiB memory envelope. Source of truth: great-falls-tool-bus-infra observability/grafana/dashboards/gftb (TIN-3896).",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Scale set utilisation",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "great-falls-tool-bus-nix runners",
+      "description": "Live runner pods for the GFTB scale set. Capacity posture is min 0 / max 4 (AGENTS.md, TIN-2165/TIN-2234): 0 is the expected idle value, 4 is saturation.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 0,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "count(kube_pod_info{namespace=\"arc-runners\", pod=~\"great-falls-tool-bus-nix-.*-runner-.*\"}) or on() vector(0)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 3
+              },
+              {
+                "color": "red",
+                "value": 4
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "tinyland-nix runners",
+      "description": "The shared tinyland-nix scale set only (the [a-z0-9]{5} hash anchor excludes tinyland-nix-heavy, -kvm, -operator, -compute-expansion, which are separate scale sets).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 5,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "count(kube_pod_info{namespace=\"arc-runners\", pod=~\"tinyland-nix-[a-z0-9]{5}-runner-.*\"}) or on() vector(0)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "GFTB share of runner pods",
+      "description": "GFTB runner pods as a fraction of every runner pod on the shared arc-runners namespace.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 10,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "(count(kube_pod_info{namespace=\"arc-runners\", pod=~\"great-falls-tool-bus-nix-.*-runner-.*\"}) or on() vector(0)) / clamp_min(count(kube_pod_info{namespace=\"arc-runners\", pod=~\".*-runner-.*\"}) or on() vector(0), 1)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "All runner pods (shared namespace)",
+      "description": "Every overlay's runners share the arc-runners namespace; the honey/sting pod budget is the scarce resource.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 14,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "count(kube_pod_info{namespace=\"arc-runners\", pod=~\".*-runner-.*\"}) or on() vector(0)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "GFTB listener restarts",
+      "description": "The promoted readback requires the listener to be one Ready zero-restart pod.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 19,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "sum(kube_pod_container_status_restarts_total{namespace=\"arc-systems\", pod=~\"great-falls-tool-bus-nix-.*-listener\"}) or on() vector(0)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Runner pods per scale set",
+      "description": "Scale set is derived from the pod name via label_replace, because kube-state-metrics label metrics (kube_pod_labels) are not enabled on this cluster. Pattern: <scaleset>-<5-char-hash>-runner-<id>.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 16,
+        "x": 0,
+        "y": 6
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "count by (scaleset) (label_replace(kube_pod_info{namespace=\"arc-runners\", pod=~\".*-runner-.*\"}, \"scaleset\", \"$1\", \"pod\", \"^(.*)-[a-z0-9]{5}-runner-.*$\"))",
+          "legendFormat": "{{scaleset}}",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max",
+            "mean"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Live runner pods",
+      "description": "Current runner pods by scale set and node. GFTB rows appear only while a GFTB job holds a runner (min 0).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 6
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "count by (scaleset, node) (label_replace(kube_pod_info{namespace=\"arc-runners\", pod=~\".*-runner-.*\"}, \"scaleset\", \"$1\", \"pod\", \"^(.*)-[a-z0-9]{5}-runner-.*$\"))",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "__name__": true,
+              "Time": true
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "inspect": true
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 9,
+      "type": "row",
+      "title": "Queue pressure and scheduling",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "panels": []
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "Pending runner pods",
+      "description": "Closest available proxy for queue depth: a runner pod created but not yet scheduled. Sustained Pending means the honey/sting pod budget is exhausted.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 16
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "count(kube_pod_status_phase{namespace=\"arc-runners\", phase=\"Pending\"} == 1) or on() vector(0)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 4
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Unschedulable runner pods",
+      "description": "Pods the scheduler has explicitly given up on: no node satisfies the request, toleration or placement.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 16
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "count(kube_pod_status_unschedulable{namespace=\"arc-runners\"} > 0) or on() vector(0)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "p95 runner ready latency",
+      "description": "Seconds from pod start to Ready, p95 across live runner pods. This is a proxy for job wait time, not job wait time itself: the true job-queued-to-job-started interval is a GitHub-side signal and is not exported (see the gap panel).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 16
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "quantile(0.95, kube_pod_status_ready_time{namespace=\"arc-runners\"} - on (namespace, pod) kube_pod_start_time{namespace=\"arc-runners\"})",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 13,
+      "type": "stat",
+      "title": "p95 runner schedule latency",
+      "description": "Seconds from pod start to Scheduled, p95. Rising here means node pressure, not image pull cost.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 16
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "quantile(0.95, kube_pod_status_scheduled_time{namespace=\"arc-runners\"} - on (namespace, pod) kube_pod_start_time{namespace=\"arc-runners\"})",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Runner pods by phase",
+      "description": "Running / Pending / Succeeded / Failed across the shared arc-runners namespace.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 20
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "sum by (phase) (kube_pod_status_phase{namespace=\"arc-runners\"} > 0)",
+          "legendFormat": "{{phase}}",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Runner ready latency per pod",
+      "description": "Per-pod start-to-Ready seconds. Nix runners that pull a cold closure show up as tall bars here.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 20
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "kube_pod_status_ready_time{namespace=\"arc-runners\"} - on (namespace, pod) kube_pod_start_time{namespace=\"arc-runners\"}",
+          "legendFormat": "{{pod}}",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 16,
+      "type": "row",
+      "title": "Memory envelope (PR #105: 16 GiB runner limit)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 28
+      },
+      "panels": []
+    },
+    {
+      "id": 17,
+      "type": "stat",
+      "title": "GFTB runner memory limit",
+      "description": "Per-runner memory limit for the GFTB scale set. PR #105 restored the bounded site-build envelope at 16 GiB (17179869184 bytes). Reads 0 while no GFTB runner is live (min 0).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 29
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "max(kube_pod_container_resource_limits{namespace=\"arc-runners\", resource=\"memory\", container=\"runner\", pod=~\"great-falls-tool-bus-nix-.*-runner-.*\"}) or on() vector(0)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 17179869184
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 18,
+      "type": "stat",
+      "title": "Runners at the 16 GiB envelope",
+      "description": "Runner pods currently carrying exactly the 16 GiB envelope.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 29
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "count(kube_pod_container_resource_limits{namespace=\"arc-runners\", resource=\"memory\", container=\"runner\"} == 17179869184) or on() vector(0)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 19,
+      "type": "stat",
+      "title": "Committed runner memory (all scale sets)",
+      "description": "Sum of every live runner's memory limit. This is the number that competes for the honey/sting budget.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 29
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "sum(kube_pod_container_resource_limits{namespace=\"arc-runners\", resource=\"memory\", container=\"runner\"}) or on() vector(0)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 20,
+      "type": "stat",
+      "title": "Lowest node memory headroom",
+      "description": "Worst-case available/total memory across the two runner-hosting nodes.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 29
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "min(node_memory_MemAvailable_bytes{job=~\"node-honey|node-sting\"} / node_memory_MemTotal_bytes{job=~\"node-honey|node-sting\"})",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.15
+              },
+              {
+                "color": "green",
+                "value": 0.3
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Committed runner memory limits vs node allocatable",
+      "description": "Envelope headroom, declarative form: how much memory the live runner pods have reserved on each node against what the node can allocate. A series with an empty node label is a Pending pod that has not been placed yet.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 34
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "sum by (node) (kube_pod_container_resource_limits{namespace=\"arc-runners\", resource=\"memory\"} * on (namespace, pod) group_left(node) kube_pod_info{namespace=\"arc-runners\"})",
+          "legendFormat": "{{node}} committed (arc-runners)",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "format": "time_series"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "kube_node_status_allocatable{resource=\"memory\", node=~\"honey|sting\"}",
+          "legendFormat": "{{node}} allocatable",
+          "range": true,
+          "instant": false,
+          "refId": "B",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Node memory available (runner hosts)",
+      "description": "Actual node-level memory from node_exporter. This is the only real memory *usage* signal available: there is no per-pod usage metric on this cluster.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 34
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "node_memory_MemAvailable_bytes{job=~\"node-honey|node-sting\"}",
+          "legendFormat": "{{job}} available",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "format": "time_series"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "node_memory_MemTotal_bytes{job=~\"node-honey|node-sting\"}",
+          "legendFormat": "{{job}} total",
+          "range": true,
+          "instant": false,
+          "refId": "B",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "min"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 23,
+      "type": "table",
+      "title": "Memory limit per runner pod",
+      "description": "Per-pod declared envelope. Compare the GFTB rows against 17179869184 (16 GiB).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 43
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "kube_pod_container_resource_limits{namespace=\"arc-runners\", resource=\"memory\", container=\"runner\"}",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "__name__": true,
+              "Time": true,
+              "instance": true,
+              "job": true,
+              "uid": true,
+              "unit": true
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "inspect": true
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 24,
+      "type": "table",
+      "title": "GFTB listener health (arc-systems)",
+      "description": "The org-scoped GFTB scale-set listener. The promoted capacity readback requires exactly one Ready, zero-restart listener pod.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 43
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "kube_pod_status_ready{namespace=\"arc-systems\", pod=~\"great-falls-tool-bus-nix-.*-listener\", condition=\"true\"}",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "kube_pod_container_status_restarts_total{namespace=\"arc-systems\", pod=~\"great-falls-tool-bus-nix-.*-listener\"}",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "B",
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "__name__": true,
+              "Time": true,
+              "instance": true,
+              "job": true,
+              "uid": true
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "inspect": true
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 25,
+      "type": "row",
+      "title": "ARC job accounting: signal not exported yet",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 51
+      },
+      "panels": []
+    },
+    {
+      "id": 26,
+      "type": "text",
+      "title": "Job queue depth, wait time and runner utilisation",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 52
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "### signal not exported yet\n\nThe panels this row would hold cannot be built today. The cluster Prometheus (`prometheus-mail`) scrapes only these jobs: `kepler`, `kube-state-metrics`, `node-bumble`, `node-honey`, `node-relay`, `node-sting`, `nut-exporter`, `prometheus`, `rspamd`. No metric name below exists in any datasource on this Grafana; none has been invented here.\n\n| Wanted signal | Metric that would carry it | Status |\n|---|---|---|\n| Queued jobs awaiting a runner | `gha_assigned_jobs`, `gha_running_jobs` (ARC listener metrics) | **absent** \u2014 the ARC controller and listeners expose metrics, but no scrape job collects them |\n| Registered / busy / idle runners per scale set | `gha_desired_runners`, `gha_idle_runners`, `gha_registered_runners` | **absent** |\n| True job wait time (queued -> started) | `gha_job_startup_duration_seconds` | **absent** |\n| Job execution duration and outcome | `gha_job_execution_duration_seconds` | **absent** |\n| Per-pod memory usage vs the 16 GiB limit | `container_memory_working_set_bytes` (cAdvisor) | **absent** \u2014 no cAdvisor / kubelet-resource scrape job exists on this cluster |\n| Per-pod CPU usage | `container_cpu_usage_seconds_total` (cAdvisor) | **absent** |\n\n**What this dashboard substitutes, and how far to trust it.** Because the ARC listener metrics are unscraped, queue depth is approximated by *Pending runner pods* and job wait time by *pod start-to-Ready latency*. Those proxies only see work that has already caused a pod to be created. A job queued in GitHub that ARC has not yet scaled up for is invisible here.\n\n**Envelope headroom is declarative, not observed.** The memory panels above chart *declared limits* (kube-state-metrics) against *node-level* available memory (node_exporter). Nothing on this cluster reports how much memory an individual runner pod is actually using, so a runner approaching its 16 GiB ceiling cannot be seen before it is OOMKilled. The after-the-fact evidence is `kube_pod_container_status_last_terminated_reason{reason=\"OOMKilled\"}`, which *is* charted on the GFTB / Web Serve and Mail dashboards and would appear for runners in the waiting/terminated tables.\n\n**Closing the gap** means adding a cAdvisor (or kubelet cadvisor endpoint) scrape job and an ARC listener/controller scrape job to the cluster Prometheus. Both are substrate-side changes owned by the Tinyland overlay, not by this GFTB overlay, and both are operator-gated."
+      }
+    }
+  ],
+  "preload": false,
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "tags": [
+    "gftb",
+    "arc",
+    "ci"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "utc",
+  "title": "GFTB / ARC Runners",
+  "uid": "gftb-arc-runners",
+  "version": 1,
+  "weekStart": ""
+}

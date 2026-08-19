@@ -38,6 +38,7 @@ check-hosted:
     just form-stack-validate
     just archive-stack-validate
     just web-stack-validate
+    just grafana-dashboards-validate
     just arc-fmt-check
     just edge-zones-fmt-check
     just edge-zones-validate
@@ -1618,6 +1619,22 @@ web-stack-health:
       exit 1
     fi
     echo "web stack health gate passed"
+
+# --- GFTB Grafana dashboards (TIN-3896) -------------------------------------
+# Checked-in dashboard JSON for the three GFTB surfaces (web serve; mail/list/
+# form; ARC runners). These are DECLARATIONS ONLY: this recipe never contacts
+# Grafana, and the repo holds no Grafana credential. Importing them into the
+# live instance is an operator action -- see the README beside the JSON for the
+# provisioning proposal and the panel inventory.
+#
+# Every PromQL expression was discovered against the live cluster Prometheus
+# before it was written; where a signal has no exporter, the dashboard carries
+# a "signal not exported yet" text panel instead of an invented metric name.
+
+grafana_dashboard_dir := "observability/grafana/dashboards/gftb"
+
+grafana-dashboards-validate:
+    bash scripts/validate-grafana-dashboards.sh {{ grafana_dashboard_dir }}
 
 # --- Reviewed gftb-site release candidate proofs ----------------------------
 # These recipes are read-only/proof-only. They deliberately do not replace the

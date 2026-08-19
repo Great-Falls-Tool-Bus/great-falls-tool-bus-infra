@@ -1,0 +1,907 @@
+{
+  "__inputs": [],
+  "__requires": [],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Great Falls Tool Bus mail, Mailman list engine and contact-form stack in namespace latoolb-us-production (mailman-core, mailman-postgres, form-handler, anubis, anubis-archive). Source of truth: great-falls-tool-bus-infra observability/grafana/dashboards/gftb (TIN-3896). Delivery, queue and form traffic signals are not exported yet: see the text panels for exactly what is missing and why.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "List, mail and form workload health",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Deployments below desired",
+      "description": "Any non-zero value means at least one of mailman-core, mailman-postgres, form-handler, anubis or anubis-archive is degraded.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 0,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "count(kube_deployment_status_replicas_unavailable{namespace=\"$namespace\"} > 0) or on() vector(0)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Pods not Ready",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 5,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "count(kube_pod_status_ready{namespace=\"$namespace\", condition=\"true\"} == 0) or on() vector(0)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Container restarts (24h)",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 10,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"$namespace\"}[24h])) or on() vector(0)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "PVCs not Bound",
+      "description": "Mailman core and Postgres are PVC-backed; an unbound claim stalls the list engine.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 15,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "count(kube_persistentvolumeclaim_status_phase{namespace=\"$namespace\", phase!=\"Bound\"} == 1) or on() vector(0)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Running pods",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 19,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "sum(kube_pod_status_phase{namespace=\"$namespace\", phase=\"Running\"}) or on() vector(0)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Replicas ready vs desired, per deployment",
+      "description": "Covers mailman-core, mailman-postgres, form-handler, anubis and anubis-archive.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "kube_deployment_status_replicas_ready{namespace=\"$namespace\"}",
+          "legendFormat": "{{deployment}} ready",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "format": "time_series"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "kube_deployment_spec_replicas{namespace=\"$namespace\"}",
+          "legendFormat": "{{deployment}} desired",
+          "range": true,
+          "instant": false,
+          "refId": "B",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "min"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Container restarts per hour",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "increase(kube_pod_container_status_restarts_total{namespace=\"$namespace\"}[1h])",
+          "legendFormat": "{{pod}} / {{container}}",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "Pod state and placement",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "kube_pod_status_phase{namespace=\"$namespace\"} > 0",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "kube_pod_info{namespace=\"$namespace\"}",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "B",
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "__name__": true,
+              "Time": true,
+              "instance": true,
+              "job": true,
+              "uid": true,
+              "created_by_kind": true,
+              "host_network": true,
+              "priority_class": true
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "inspect": true
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 10,
+      "type": "table",
+      "title": "Container waiting / last-terminated reasons",
+      "description": "Empty is healthy. OOMKilled here on mailman-core or mailman-postgres is the classic list-engine failure.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "kube_pod_container_status_waiting_reason{namespace=\"$namespace\"} > 0",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "kube_pod_container_status_last_terminated_reason{namespace=\"$namespace\"} > 0",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "B",
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "__name__": true,
+              "Time": true,
+              "Value": true,
+              "instance": true,
+              "job": true,
+              "endpoint": true,
+              "service": true,
+              "uid": true,
+              "container_id": true
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "inspect": true
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 11,
+      "type": "row",
+      "title": "Image provenance and storage",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "panels": []
+    },
+    {
+      "id": 12,
+      "type": "table",
+      "title": "Serving image digest per container",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 14,
+        "x": 0,
+        "y": 21
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "kube_pod_container_info{namespace=\"$namespace\"}",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "__name__": true,
+              "Time": true,
+              "Value": true,
+              "instance": true,
+              "job": true,
+              "uid": true
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "inspect": true
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 13,
+      "type": "table",
+      "title": "PersistentVolumeClaims",
+      "description": "Claim phase and requested size. Actual filesystem utilisation is NOT available: kubelet volume stats (kubelet_volume_stats_used_bytes) are not scraped by this Prometheus.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 10,
+        "x": 14,
+        "y": 21
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "kube_persistentvolumeclaim_status_phase{namespace=\"$namespace\"} == 1",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mail"
+          },
+          "editorMode": "code",
+          "expr": "kube_persistentvolumeclaim_resource_requests_storage_bytes{namespace=\"$namespace\"}",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "B",
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "__name__": true,
+              "Time": true,
+              "Value": true,
+              "instance": true,
+              "job": true,
+              "endpoint": true,
+              "service": true,
+              "uid": true,
+              "container_id": true
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "inspect": true
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 14,
+      "type": "row",
+      "title": "Mail queue, delivery and list traffic: signal not exported yet",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 28
+      },
+      "panels": []
+    },
+    {
+      "id": 15,
+      "type": "text",
+      "title": "Postfix / Mailman delivery signals",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 29
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "### signal not exported yet\n\nThe panels this row would hold cannot be built today. The cluster Prometheus (`prometheus-mail`) scrapes only these jobs: `kepler`, `kube-state-metrics`, `node-bumble`, `node-honey`, `node-relay`, `node-sting`, `nut-exporter`, `prometheus`, `rspamd`. No metric name below exists in any datasource on this Grafana; none has been invented here.\n\n| Wanted signal | Metric that would carry it | Status |\n|---|---|---|\n| Postfix queue depth (active/deferred/hold) | `postfix_showq_message_size_bytes` / `postfix_queue_length` (postfix_exporter) | **absent** \u2014 no postfix_exporter runs |\n| Delivery rate | `postfix_smtp_delivery_*` | **absent** |\n| Deferral / bounce rate | `postfix_smtpd_messages_*`, bounce counters | **absent** |\n| Mailman list traffic (posts, held, rejected) | `mailman_*` (no upstream exporter is deployed) | **absent** |\n| Subscriber count for keyholders@ | Mailman REST API scrape | **absent** |\n| Dovecot / IMAP sessions | `dovecot_*` | **absent** |\n\n**About rspamd**: this Prometheus *does* carry `rspamd_scanned_total`, `rspamd_actions_total`, `rspamd_spam_total` and `rspamd_ham_total` \u2014 but every series is labelled `namespace=\"tinyland-dev-production\"`, pod `rspamd-normal-*`. That is the Tinyland substrate's scanner, **not** a GFTB tenant signal, so it is deliberately not charted on a GFTB dashboard. Charting it here would attribute another tenant's mail volume to GFTB.\n\n**Loki is not an option today either**: the Loki datasource (uid `loki`) holds logs for exactly one namespace, `tinyland-staging`. There are zero log streams for `latoolb-us-production`, so no log-derived queue/delivery panel can be built. Lighting these up needs an Alloy/Promtail scrape covering the GFTB namespaces, plus a postfix/Mailman exporter beside the list engine \u2014 both operator-gated changes outside this ticket."
+      }
+    },
+    {
+      "id": 16,
+      "type": "text",
+      "title": "Contact-form endpoint and Anubis challenge signals",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mail"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 29
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "### signal not exported yet\n\nThe panels this row would hold cannot be built today. The cluster Prometheus (`prometheus-mail`) scrapes only these jobs: `kepler`, `kube-state-metrics`, `node-bumble`, `node-honey`, `node-relay`, `node-sting`, `nut-exporter`, `prometheus`, `rspamd`. No metric name below exists in any datasource on this Grafana; none has been invented here.\n\n| Wanted signal | Metric that would carry it | Status |\n|---|---|---|\n| Contact-form submit rate | form-handler `/metrics` | **absent** \u2014 the form-handler pod exposes no metrics endpoint to this Prometheus |\n| Form 4xx / 5xx rate | form-handler `/metrics` or ingress metrics | **absent** |\n| Anubis challenge issued / passed / failed | `anubis_challenges_*` | **absent** \u2014 both `anubis` and `anubis-archive` run, neither is scraped |\n| ALTCHA proof-of-work verification failures | form-handler `/metrics` | **absent** |\n| Rate-limit / abuse rejections | form-handler or edge logs | **absent** |\n\nWhat *is* visible for these components on this dashboard is workload state only: the `form-handler`, `anubis` and `anubis-archive` Deployments appear in the replica, restart, waiting-reason and image-digest panels above. That answers \"is the form path up?\" but not \"is the form path being used, and is it rejecting anything?\".\n\nPrivacy constraint on any future implementation: `meta/spec/observability-shape-2026-06-05.md` forbids PII and client IPs in the telemetry pipeline. Form panels must count events by outcome only \u2014 never by submitter, address, or IP."
+      }
+    }
+  ],
+  "preload": false,
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "tags": [
+    "gftb",
+    "mail",
+    "kubernetes"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "text": "latoolb-us-production",
+          "value": "latoolb-us-production"
+        },
+        "name": "namespace",
+        "label": "Namespace",
+        "query": "latoolb-us-production",
+        "type": "constant",
+        "hide": 2,
+        "skipUrlSync": false
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "utc",
+  "title": "GFTB / Mail, List and Form",
+  "uid": "gftb-mail-list-form",
+  "version": 1,
+  "weekStart": ""
+}
