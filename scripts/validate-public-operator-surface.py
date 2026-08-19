@@ -144,7 +144,7 @@ EDGE_RUNTIME_TF_VARS = {
 }
 
 GF_CORE_SHA = "2281b576bce0e8dd776a047b84e7464f5b508a62"
-ARC_CORE_SHA = "df510574d17b85e7f15470caf3574fcabc4768f1"
+ARC_CORE_SHA = "11ace397282ff89aeb1dfeb4a32fcbed3200c2ff"
 ARC_GLOBAL_ASSIGNMENTS = {
     "gf_core": 'env_var_or_default("GF_CORE_PATH", "../GloriousFlywheel")',
     "gf_core_ci": (
@@ -152,7 +152,7 @@ ARC_GLOBAL_ASSIGNMENTS = {
         f'"github:tinyland-inc/GloriousFlywheel/{GF_CORE_SHA}#ci")'
     ),
     "gf_core_sha": f'"{GF_CORE_SHA}"',
-    "arc_core_default": '"../GloriousFlywheel-arc-df510"',
+    "arc_core_default": '"../GloriousFlywheel-arc-11ace"',
     "arc_core_sha": f'"{ARC_CORE_SHA}"',
     "arc_core_ci_default": (
         f'"github:tinyland-inc/GloriousFlywheel/{ARC_CORE_SHA}#ci"'

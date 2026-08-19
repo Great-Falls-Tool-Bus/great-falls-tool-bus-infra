@@ -10,9 +10,9 @@ set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 gf_core := env_var_or_default("GF_CORE_PATH", "../GloriousFlywheel")
 gf_core_ci := env_var_or_default("GF_CORE_CI_PATH", "github:tinyland-inc/GloriousFlywheel/2281b576bce0e8dd776a047b84e7464f5b508a62#ci")
 gf_core_sha := "2281b576bce0e8dd776a047b84e7464f5b508a62"
-arc_core_default := "../GloriousFlywheel-arc-df510"
-arc_core_sha := "df510574d17b85e7f15470caf3574fcabc4768f1"
-arc_core_ci_default := "github:tinyland-inc/GloriousFlywheel/df510574d17b85e7f15470caf3574fcabc4768f1#ci"
+arc_core_default := "../GloriousFlywheel-arc-11ace"
+arc_core_sha := "11ace397282ff89aeb1dfeb4a32fcbed3200c2ff"
+arc_core_ci_default := "github:tinyland-inc/GloriousFlywheel/11ace397282ff89aeb1dfeb4a32fcbed3200c2ff#ci"
 arc_tfvars := "tofu/stacks/arc-runners/great-falls-tool-bus.tfvars"
 arc_backend_default := "tofu/backend/honey.s3.hcl"
 arc_cluster_uid := "cc121476-7a95-4b24-aa61-79d1f45713bd"
@@ -31,6 +31,8 @@ check-hosted:
     just core-checkout
     just taxonomy
     just taxonomy-selftest
+    just runner-group-contract-selftest
+    just runner-group-contract
     just mail-cr-validate
     just list-stack-validate
     just form-stack-validate
@@ -80,6 +82,16 @@ core-checkout-selftest:
 
 core-checkout-bazel:
     bazelisk test --lockfile_mode=off //:core_checkout_contract_tests
+
+# TIN-3902 runner-group admission contract. config/organization.yaml declares
+# the GitHub-side roster and the ARC tfvars binds the scale sets to it; nothing
+# else holds the two together, because the GloriousFlywheel arc-runners module
+# never reads the roster and the taxonomy validator only parses runner labels.
+runner-group-contract:
+    python3 -B scripts/validate-runner-group-contract.py
+
+runner-group-contract-selftest:
+    python3 -B scripts/validate-runner-group-contract.py --self-test
 
 workflow-lint:
     actionlint -ignore 'label "tinyland-nix" is unknown' -ignore 'SC2155'

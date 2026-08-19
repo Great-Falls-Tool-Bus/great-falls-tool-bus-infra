@@ -13,7 +13,26 @@ owner:
 core:
   repository: tinyland-inc/GloriousFlywheel
   module_name: attic-iac
+  # Implementation role pin. Governs the edge/DNS, mail, list, form, archive,
+  # and web consumers only. It is deliberately NOT advanced by TIN-3902: the
+  # arc-runners stack is consumed through the separate ARC role pin below, so
+  # moving this one would import six unrelated stack surfaces for no
+  # runner-group benefit.
   pinned_commit: 2281b576bce0e8dd776a047b84e7464f5b508a62
+  # ARC/OIDC role pin. What actually binds the arc-runners STACK to a commit is
+  # the Justfile: `arc_core_default` / `arc_core_ci_default` select the checkout
+  # and #ci devshell that `tofu -chdir=<core>/tofu/stacks/arc-runners` runs
+  # from, and `_reviewed-arc-core` refuses to proceed unless that checkout is
+  # clean, signed, canonical, and exactly `arc_core_sha`.
+  # scripts/validate-core-checkout.py ARC_CORE_PIN and
+  # scripts/validate-public-operator-surface.py ARC_CORE_SHA pin those Justfile
+  # strings so they cannot drift; neither validator names the arc-runners path
+  # or executes anything. This comment is a reader aid, not a declaration.
+  # TIN-3902 advanced the pin from
+  # df510574d17b85e7f15470caf3574fcabc4768f1 (2026-07-09) to
+  # 11ace397282ff89aeb1dfeb4a32fcbed3200c2ff (2026-08-18) because
+  # `runner_group` did not exist as an arc-runners stack input before
+  # GloriousFlywheel f13f8ad9 (TIN-3209, PR #1303).
 
 substrate:
   cluster:
@@ -44,3 +63,54 @@ runner_contract:
     - repo-specific runner labels
     - project identity labels
     - personal-account runner groups
+
+  # TIN-3902. GitHub runner-group admission, which is a separate boundary from
+  # ARC registration: org-scoped registration reaches every GFTB repo, but only
+  # the repositories selected below may be assigned work from this org's scale
+  # sets. This block is the reviewed declaration of that boundary. The GFTB
+  # arc-runners module surface does NOT create or reconcile the GitHub-side
+  # group (the GloriousFlywheel arc-runners stack loads only the kubernetes and
+  # helm providers and owns no `github_actions_runner_group` resource), so the
+  # group itself is an attended GitHub org-settings action; see
+  # docs/implementation-overlay.md "Runner group cutover".
+  #
+  # The name intentionally matches this overlay's repository name because the
+  # group is an owner/tenancy boundary, not a runner capability. It is NOT a
+  # runner label: workflows keep requesting the shared `tinyland-*` capability
+  # labels above, and the `forbidden` list above still holds.
+  runner_group:
+    name: great-falls-tool-bus-infra
+    visibility: selected
+    # Public repository admission accepted by operator ruling 2026-08-18
+    # (TIN-3902). `Great-Falls-Tool-Bus/greatfallstoolbus.org` is a public
+    # repository, and every entry in the roster below is meant to be
+    # EFFECTIVE, not merely recorded — so public admission must be on or the
+    # roster entry would be inert. TIN-3209's cross-tenant concern (a public
+    # repository's workflows reaching GF-substrate runners) is acknowledged
+    # and tracked there, not re-litigated here.
+    #
+    # Admission is not blanket: `visibility: selected` still means only the
+    # repository ids below are admitted. `great-falls-tool-bus-infra` itself
+    # (repository id 1286829099, public) remains EXCLUDED — its apply/drift
+    # workflows are gated to `push`/`workflow_dispatch`/`repository_dispatch`
+    # and its hosted `validate` job already runs on a GitHub-hosted runner.
+    #
+    # WARNING: with `allows_public_repositories: true` the roster below is the
+    # ONLY control keeping this repository out — the public-repository flag is
+    # no longer a second lock. Adding id 1286829099 is a one-line edit and must
+    # stay an explicit operator decision.
+    # scripts/validate-runner-group-contract.py fails on that id unless an
+    # `infra_repo_admission_ruling:` field records it.
+    allows_public_repositories: true
+    # Workflow-ref filtering is a different control and is not a substitute for
+    # the selected-repository roster.
+    restricted_to_workflows: false
+    selected_repository_ids:
+      # Great-Falls-Tool-Bus/gftb-site — private.
+      - 1336591141
+      # Great-Falls-Tool-Bus/greatfallstoolbus.org — public; admitted under the
+      # 2026-08-18 operator ruling above. When TIN-3815 moves this CI into the
+      # private successor spoke, add that repository's id here too (the repo
+      # does not exist yet); removing this entry afterwards is a separate
+      # operator decision, not automatic.
+      - 1287399122

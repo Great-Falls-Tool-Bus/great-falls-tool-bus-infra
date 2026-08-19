@@ -80,7 +80,12 @@ a new credential.
 The overlay's implementation authority remains
 `2281b576bce0e8dd776a047b84e7464f5b508a62`, shared by
 `config/organization.yaml`, `MODULE.bazel`, `Justfile`, and the non-ARC core
-workflow consumers. The ARC runner and OIDC profile surfaces retain their
-existing `df510574d17b85e7f15470caf3574fcabc4768f1` role pin. The
-finite contract checks this mapping exactly. A future convergence must review
-the executable core delta as its own adoption change.
+workflow consumers. The ARC runner and OIDC profile surfaces carry a separate
+role pin, advanced by TIN-3902 from
+`df510574d17b85e7f15470caf3574fcabc4768f1` to
+`11ace397282ff89aeb1dfeb4a32fcbed3200c2ff` so the `arc-runners` stack exposes
+the `runner_group` input. `scripts/flywheel-github-oidc-profile.sh` is
+byte-identical at both commits, so `GF_OIDC_PROFILE_SHA256` is unchanged and
+this workflow's fetched helper is the same file. The finite contract checks
+this mapping exactly. A future convergence must review the executable core
+delta as its own adoption change.
