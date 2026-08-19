@@ -39,7 +39,7 @@ instead of an inherited default. The reviewed group is:
 
 - name `great-falls-tool-bus-infra`
 - `visibility: selected`
-- `allows_public_repositories: false`
+- `allows_public_repositories: true`
 - `restricted_to_workflows: false`
 - selected repositories: `Great-Falls-Tool-Bus/gftb-site` (id `1336591141`)
   and `Great-Falls-Tool-Bus/greatfallstoolbus.org` (id `1287399122`)
@@ -65,19 +65,24 @@ Three consequences are load-bearing and must not be discovered later:
    already runs on `ubuntu-24.04`, so no PR gate depends on this. What the
    cutover does cost is the scheduled drift lanes and the push/dispatch
    validate+apply lanes in this repository; they must be re-homed or accepted
-   as manual before or shortly after cutover. Re-admitting the public repo is
-   an explicit operator decision that reverses the TIN-3209 posture, not a
-   routine roster edit.
-2. **`greatfallstoolbus.org` is selected but not yet effective.** That
-   repository is still public, and `allows_public_repositories: false` gates
-   public repositories out of the group regardless of the roster. Its CI stays
-   unadmitted until TIN-3815 moves that CI into the private successor spoke
-   (add the successor repository id to the roster once it exists), or until an
-   explicit operator decision changes the public-repository posture. Confirm at
-   group-creation time whether GitHub accepts a public repository in the
-   selected set at all; if it refuses, add the id after TIN-3815 lands.
-3. **`gftb-site` is the repository this fix actually unblocks today.** It is
-   private, so nothing else gates it.
+   as manual before or shortly after cutover. Note that with
+   `allows_public_repositories: true` (see 2), the roster is now the ONLY thing
+   keeping this repository out — the public-repository flag is no longer a
+   second lock. Adding id `1286829099` is therefore a one-line edit away and
+   must stay an explicit operator decision, not a routine roster tidy-up.
+2. **`greatfallstoolbus.org` is admitted, and that is a deliberate ruling.**
+   That repository is public, so it can only be admitted with
+   `allows_public_repositories: true`. Public repository admission is
+   **accepted by operator ruling 2026-08-18 (TIN-3902)**: the roster entry is
+   meant to be effective, not recorded-and-inert. TIN-3209's cross-tenant
+   concern — a public repository's workflows reaching GF-substrate runners —
+   is acknowledged and tracked in TIN-3209; it is not re-litigated here and it
+   is not a reason to quietly flip the flag back. When TIN-3815 moves this CI
+   into the private successor spoke, add that repository's id to the roster
+   too; removing this entry afterwards is a separate operator decision.
+3. **Both rostered repositories are unblocked by this change.** `gftb-site`
+   (private) and `greatfallstoolbus.org` (public, admitted under the ruling)
+   both become assignable once the cutover applies.
 
 The group is an owner/tenancy identity, not a runner capability. The
 `forbidden` list in `config/organization.yaml` still holds: no workflow may
@@ -276,16 +281,20 @@ groups. Create (or confirm) a group matching
 
 - name `great-falls-tool-bus-infra`
 - access: **selected repositories** (`visibility: selected`)
-- **do not** allow public repositories (`allows_public_repositories: false`)
+- **enable "Allow public repositories"** (`allows_public_repositories: true`).
+  GitHub shows a warning here; accept it. Without this checkbox the public
+  `greatfallstoolbus.org` entry is inert and the cutover only half-lands.
 - **do not** restrict to selected workflows (`restricted_to_workflows: false`)
 - selected repositories: `gftb-site` (id `1336591141`) and
   `greatfallstoolbus.org` (id `1287399122`)
 
-`greatfallstoolbus.org` is still a public repository, so with public
-repositories disallowed its jobs stay unadmitted even though it is on the
-roster; see "Organization Boundary" above. If the GitHub UI or API refuses to
-add a public repository to the selected set, leave it off and add the TIN-3815
-private successor spoke's id when that repository exists.
+`greatfallstoolbus.org` is a public repository. Its admission — and therefore
+the "Allow public repositories" checkbox — is **accepted by operator ruling
+2026-08-18 (TIN-3902)**; TIN-3209's cross-tenant concern is acknowledged and
+tracked there. See "Organization Boundary" above. Enabling the checkbox does
+not widen access beyond the roster: `visibility: selected` still admits only
+the two ids above, and this repository (`great-falls-tool-bus-infra`, id
+`1286829099`) remains excluded.
 
 This repository (`great-falls-tool-bus-infra`, id `1286829099`) is public and
 is deliberately NOT selected. Its own self-hosted apply/drift jobs stop being
@@ -403,7 +412,8 @@ kubectl --context honey -n arc-systems logs \
   --tail=50 | grep 'Calculated target runner count'
 ```
 
-While a real `gftb-site` CI run is queued, `"assigned job"` must go above `0`.
+While a real `gftb-site` or `greatfallstoolbus.org` CI run is queued,
+`"assigned job"` must go above `0`.
 A healthy, connected listener that keeps logging `"assigned job"=0` against
 live queued demand is the exact pre-cutover symptom and means admission is
 still broken — check the GitHub-side group roster from Step 0 before touching

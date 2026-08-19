@@ -30,11 +30,16 @@ Grounded mermaid diagrams (mail flow, network/ports, planes, Bazel/GF) live in
 - Scale set: `great-falls-tool-bus-nix` (ARC registration identity only;
   workflows use `runs-on: tinyland-nix`)
 - Runner group: `great-falls-tool-bus-infra` (TIN-3902). GitHub-side admission
-  boundary, `visibility: selected`, `allows_public_repositories: false`. The
-  roster is declared in `config/organization.yaml`
-  `runner_contract.runner_group`; the scale set binds to it through
-  `runner_group` / `runner_group_policy = "organization-restricted"` in the
-  ARC tfvars. This is not a runner label and not an ARC registration anchor.
+  boundary, `visibility: selected`, `allows_public_repositories: true`. The
+  roster is `gftb-site` and `greatfallstoolbus.org`, declared in
+  `config/organization.yaml` `runner_contract.runner_group`; the scale set
+  binds to it through `runner_group` /
+  `runner_group_policy = "organization-restricted"` in the ARC tfvars. This is
+  not a runner label and not an ARC registration anchor. Public repository
+  admission is accepted by operator ruling 2026-08-18 (TIN-3902) so the
+  `greatfallstoolbus.org` roster entry is effective rather than inert;
+  TIN-3209's cross-tenant concern is acknowledged and tracked there. This
+  repository itself remains excluded.
 - Shared Nix cache: `http://attic.nix-cache.svc.cluster.local`
 - Shared Bazel cache: `grpc://bazel-cache.nix-cache.svc.cluster.local:9092`
 - Shared Bazel executor: `grpc://gf-reapi-cell.gf-rbe.svc.cluster.local:8980`

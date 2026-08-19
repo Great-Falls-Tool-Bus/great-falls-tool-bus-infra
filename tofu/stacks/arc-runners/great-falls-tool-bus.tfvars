@@ -33,7 +33,10 @@ ghcr_pull_secret_name = "ghcr-pull"
 # The group name is an owner/tenancy identity, not a runner capability, so it
 # does not violate the shared-label taxonomy: workflows still request
 # `tinyland-nix`. The roster, visibility, and public-repository posture are
-# declared in config/organization.yaml `runner_contract.runner_group`.
+# declared in config/organization.yaml `runner_contract.runner_group`: two
+# selected repositories (gftb-site, greatfallstoolbus.org) with public
+# repository admission enabled per operator ruling 2026-08-18 (TIN-3902), and
+# this public infra repository itself excluded.
 #
 # NOT module-created: the GloriousFlywheel arc-runners stack loads only the
 # kubernetes and helm providers and owns no `github_actions_runner_group`

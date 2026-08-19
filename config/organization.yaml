@@ -75,24 +75,29 @@ runner_contract:
   runner_group:
     name: great-falls-tool-bus-infra
     visibility: selected
-    # TIN-3209 posture: a public repository must never be admitted to a
-    # GF-substrate runner group. This deliberately excludes
-    # `great-falls-tool-bus-infra` itself, which is public
-    # (repository id 1286829099); its own apply/drift workflows are gated to
-    # `push`/`workflow_dispatch` and its hosted `validate` job already runs on
-    # a GitHub-hosted runner.
-    allows_public_repositories: false
+    # Public repository admission accepted by operator ruling 2026-08-18
+    # (TIN-3902). `Great-Falls-Tool-Bus/greatfallstoolbus.org` is a public
+    # repository, and every entry in the roster below is meant to be
+    # EFFECTIVE, not merely recorded — so public admission must be on or the
+    # roster entry would be inert. TIN-3209's cross-tenant concern (a public
+    # repository's workflows reaching GF-substrate runners) is acknowledged
+    # and tracked there, not re-litigated here.
+    #
+    # Admission is not blanket: `visibility: selected` still means only the
+    # repository ids below are admitted. `great-falls-tool-bus-infra` itself
+    # (repository id 1286829099, public) remains EXCLUDED — its apply/drift
+    # workflows are gated to `push`/`workflow_dispatch`/`repository_dispatch`
+    # and its hosted `validate` job already runs on a GitHub-hosted runner.
+    allows_public_repositories: true
     # Workflow-ref filtering is a different control and is not a substitute for
     # the selected-repository roster.
     restricted_to_workflows: false
     selected_repository_ids:
-      # Great-Falls-Tool-Bus/gftb-site — private; admitted and effective.
+      # Great-Falls-Tool-Bus/gftb-site — private.
       - 1336591141
-      # Great-Falls-Tool-Bus/greatfallstoolbus.org — selected, but this
-      # repository is still PUBLIC, so `allows_public_repositories: false`
-      # keeps its jobs unadmitted. It is listed now so the roster is complete
-      # and so the entry does not have to be discovered again later; it becomes
-      # effective when TIN-3815 moves that CI into the private successor spoke
-      # (repository not yet created; add its id here when it exists) or when an
-      # explicit operator decision changes the public-repository posture.
+      # Great-Falls-Tool-Bus/greatfallstoolbus.org — public; admitted under the
+      # 2026-08-18 operator ruling above. When TIN-3815 moves this CI into the
+      # private successor spoke, add that repository's id here too (the repo
+      # does not exist yet); removing this entry afterwards is a separate
+      # operator decision, not automatic.
       - 1287399122

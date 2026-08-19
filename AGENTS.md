@@ -26,8 +26,12 @@ Hard rules:
   TIN-3902). That group name is an owner/tenancy admission identity, NOT a
   runner label and NOT an org-identity label — it does not violate the label
   rule above and must not be removed as if it did. Never re-point these scale
-  sets at GitHub's `Default` group, and never admit a public repository to the
-  group
+  sets at GitHub's `Default` group. Public repository admission
+  (`allows_public_repositories: true`) is accepted by operator ruling
+  2026-08-18 (TIN-3902) so the public `greatfallstoolbus.org` roster entry is
+  effective; TIN-3209's cross-tenant concern is acknowledged and tracked
+  there. Admission stays `visibility: selected` — this repository itself
+  remains excluded, and widening the roster is an operator decision
 - keep the capacity posture conservative (nix lane only,
   `nix_max_runners = 4`, no warm pool, docker/dind off) unless an explicit
   operator decision raises it; the honey/sting pod budget is the scarce
