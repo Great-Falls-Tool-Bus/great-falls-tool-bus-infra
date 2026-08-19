@@ -1,0 +1,261 @@
+# DECLARE-ONLY — MERGING APPLIES NOTHING (TIN-3817 / Member v0 slice S1, infra half).
+#
+# One DEDICATED PostgreSQL 16.15 CNPG cluster for the GFTB member substrate.
+# TIN-3817 acceptance row 1 narrows the system spec's "PostgreSQL 16 under CNPG"
+# to the exact minor 16.15; that exact minor is what this manifest pins, by
+# digest, not by tag.
+#
+# APPLY GATE. Nothing in CI applies this. The only apply path is the attended
+# operator recipes in the Justfile (`member-db-stack-server-dry-run`, then the
+# operator's own reviewed apply), each of which needs an operator-custody
+# kubeconfig that hosted CI does not hold. This stack creates NO Namespace: the
+# member-db namespace is provisioned out of band, exactly like
+# greatfallstoolbus-org-production was for the web stack, and
+# scripts/validate-member-db-stack.sh enforces the absence.
+#
+# OPERATOR SUBSTRATE, CONSUMED BY NAMED INTERFACE, NOT RE-HOMED. The
+# cloudnative-pg operator is ALREADY LIVE on honey and is estate-owned, not
+# GFTB-owned: Deployment cnpg-cloudnative-pg in namespace cnpg-system, image
+# ghcr.io/cloudnative-pg/cloudnative-pg:1.22.0, chart cloudnative-pg-0.20.0,
+# CRDs postgresql.cnpg.io/v1 installed 2026-04-23. Its declaration lives in the
+# substrate (blahaj deploy/honey/rke2-cnpg.yaml, an RKE2 HelmChart adopted
+# 2026-05-05), and AGENTS.md's no-re-homing doctrine says a consumer overlay
+# consumes it rather than importing it. This overlay therefore declares NO
+# operator install; docs/runbooks/member-db-bringup.md step O records the
+# read-only conformance check and the attended install path IF a future estate
+# ever lacks the operator.
+#
+# NO SECRET VALUES. Every credential below is a NAME. The owner/migration
+# credential is CNPG-generated (Secret `gftb-member-db-app`, never in git); the
+# runtime credential is operator-minted by name only. See
+# ../secrets.contract.yaml.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: gftb-member-db
+  namespace: members-greatfallstoolbus-org-db-production
+  labels:
+    app.kubernetes.io/name: gftb-member-db
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: great-falls-tool-bus
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  # Exact minor pinned by digest. `16.15` is the CloudNativePG system image for
+  # PostgreSQL 16.15 (org.opencontainers.image.version=16.15, built 2026-08-17);
+  # the digest below is the multi-arch INDEX digest, so it resolves on any node
+  # architecture in the estate while still being immutable. A tag would let the
+  # served minor drift off TIN-3817 acceptance row 1 silently; the validator
+  # refuses anything that is not this repository pinned by @sha256:<64 hex>.
+  imageName: ghcr.io/cloudnative-pg/postgresql@sha256:e38d10bb2c7420e62efe9afabf207c005d93cdcf30f19f692d047f7dc660271e
+  imagePullPolicy: IfNotPresent
+
+  # ONE INSTANCE TO START. Member v0 is a single-tenant membership database with
+  # an RPO/RTO contract (TIN-3817 acceptance row 8), not an HA contract: the
+  # durability answer here is continuous WAL archiving plus scheduled base
+  # backups, not a replica. The storage class is node-pinned to bumble (see
+  # `storage` below), so a second instance would not survive bumble anyway
+  # without a second pool — growing to 3 instances is a separate reviewed change
+  # that must land a non-node-pinned class first. Nothing about this shape
+  # forecloses that: `instances` is the only field that changes.
+  instances: 1
+
+  # No `postgres` superuser Secret is generated or reachable. Bootstrap SQL
+  # below still runs locally at initdb time; nothing after bootstrap has
+  # superuser.
+  enableSuperuserAccess: false
+
+  primaryUpdateStrategy: unsupervised
+  # Single instance: an in-place restart is the only honest update method (there
+  # is no replica to switch over to).
+  primaryUpdateMethod: restart
+  logLevel: info
+  startDelay: 30
+  stopDelay: 120
+  smartShutdownTimeout: 60
+
+  postgresql:
+    parameters:
+      # RPO CONTROL (TIN-3817 acceptance row 8: structured-data RPO no worse
+      # than one hour). Continuous WAL archiving to the object store below is
+      # what actually bounds RPO, and `archive_timeout` is what bounds it on an
+      # IDLE database: without it a quiet cluster can hold an unarchived partial
+      # segment indefinitely and the true RPO becomes unbounded. 300s puts the
+      # worst-case structured-data RPO at five minutes, a 12x margin inside the
+      # one-hour acceptance row. scripts/validate-member-db-stack.sh asserts
+      # this value is present and <= 3600s, so the acceptance row is a checked
+      # invariant rather than a claim in a runbook.
+      archive_timeout: "300s"
+      password_encryption: "scram-sha-256"
+      max_connections: "100"
+      shared_buffers: "256MB"
+      # Audit posture mirrors the house reference cluster
+      # (GloriousFlywheel docs/k8s-reference/base/cnpg-cluster.yaml).
+      log_statement: "ddl"
+      log_connections: "on"
+      log_disconnections: "on"
+      log_lock_waits: "on"
+      log_checkpoints: "on"
+      # The migrator holds an advisory lock across the whole migration
+      # transaction, which is deliberately long-lived, so a global
+      # statement_timeout is NOT set here: it would abort a legitimate large
+      # migration mid-flight. Per-role timeouts for the DML-only runtime role
+      # belong to the app half (S1) and are set on the role, not the cluster.
+    pg_hba:
+      # TLS-first: an SSL connection matches here and never falls through.
+      # HONEST LIMIT, do not overclaim: CNPG appends its own trailing
+      # `host all all all scram-sha-256` rule that this overlay cannot remove in
+      # 1.22, so pg_hba alone does not forbid a cleartext connection. The
+      # controls that DO forbid one are (a) the NetworkPolicy in
+      # networkpolicy.yaml, which admits port 5432 only from the three named
+      # platform workloads, and (b) the application DSN, which the app half
+      # builds with sslmode=verify-full against the CNPG-issued server cert.
+      - hostssl all all all scram-sha-256
+
+  bootstrap:
+    initdb:
+      database: gftb_member
+      # OWNER == THE NARROW MIGRATION CREDENTIAL (TIN-3817 acceptance row 2,
+      # spec S6 "Runtime role is DML-only; migration role is separate").
+      # CNPG generates this role's password into Secret `gftb-member-db-app`
+      # and it is the ONLY credential the pre-rollout migration Job receives.
+      # No web or worker pod ever gets it.
+      owner: gftb_member_migrator
+      encoding: UTF8
+      # C collation, deliberately. It is deterministic, it does not depend on a
+      # locale being generated inside the container image, and it keeps index
+      # ordering stable across a restore into a different base image — which is
+      # exactly what the RTO rehearsal depends on. HAND-OFF TO THE APP HALF:
+      # under C collation, case-insensitive email/identifier comparison must be
+      # explicit (lower(), or citext) in the app's own migrations; it is not
+      # free from the database's collation.
+      localeCollate: C
+      localeCType: C
+      postInitSQL:
+        # Cluster-scoped, so it belongs here rather than in
+        # postInitApplicationSQL. Created NOLOGIN/NOINHERIT first; the
+        # `managed.roles` block below is what grants LOGIN and binds the
+        # operator-minted password Secret, so no password ever appears in git.
+        - CREATE ROLE gftb_member_runtime NOLOGIN NOINHERIT;
+      postInitApplicationSQL:
+        # DML-ONLY RUNTIME ROLE (TIN-3817 acceptance row 2; S1 acceptance
+        # "the runtime role is rejected on CREATE TABLE and accepted on
+        # INSERT"). PostgreSQL 15+ already revokes CREATE on schema public from
+        # PUBLIC; the explicit REVOKE makes the posture legible and survives a
+        # restore into a cluster whose template1 was modified.
+        - REVOKE ALL ON SCHEMA public FROM PUBLIC;
+        - GRANT CONNECT ON DATABASE gftb_member TO gftb_member_runtime;
+        - GRANT USAGE ON SCHEMA public TO gftb_member_runtime;
+        # Default privileges are attached to the MIGRATOR role, so every table
+        # and sequence a future migration creates is automatically reachable by
+        # the runtime role with DML only — never DDL. Without the FOR ROLE
+        # clause these defaults would attach to the bootstrap superuser and
+        # would not apply to migrator-created objects at all.
+        - ALTER DEFAULT PRIVILEGES FOR ROLE gftb_member_migrator IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO gftb_member_runtime;
+        - ALTER DEFAULT PRIVILEGES FOR ROLE gftb_member_migrator IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO gftb_member_runtime;
+        # HAND-OFF TO THE APP HALF (S2, spec S1.3 note M11): the six vendored
+        # `auth.*` tables land in their own schema. This overlay does not create
+        # that schema, so S2's vendored migration must itself issue the matching
+        # GRANT USAGE ON SCHEMA auth + ALTER DEFAULT PRIVILEGES pair, or the
+        # runtime role will be able to reach public but not auth.
+
+  managed:
+    roles:
+      # Declarative role management. `ensure: present` makes CNPG reconcile the
+      # role created in postInitSQL above rather than fight it.
+      - name: gftb_member_runtime
+        ensure: present
+        comment: >-
+          GFTB Member v0 DML-only runtime role (TIN-3817 acceptance row 2).
+          Holds no DDL and no ownership; every application query reaches it
+          through the app-half withTenant() wrapper under RLS.
+        login: true
+        superuser: false
+        createdb: false
+        createrole: false
+        inherit: true
+        replication: false
+        # RLS IS THE TENANT BOUNDARY, so the runtime role must NOT be able to
+        # step around it. bypassrls: false is the single most load-bearing line
+        # in this block: with it true, every FORCE ROW LEVEL SECURITY policy the
+        # app half writes becomes decorative.
+        bypassrls: false
+        connectionLimit: 40
+        # NAME ONLY. The operator mints this Secret in-cluster before first
+        # apply (docs/runbooks/member-db-bringup.md step C2). It is
+        # kubernetes.io/basic-auth with username gftb_member_runtime; the value
+        # never enters git, CI, or a workflow log.
+        passwordSecret:
+          name: gftb-member-db-runtime
+
+  storage:
+    size: 20Gi
+    # Purpose-built class, already on the estate: zfs.csi.openebs.io, pool
+    # tank/k8s/postgresql, recordsize 8k (matches the PostgreSQL page size),
+    # zstd compression, reclaimPolicy Retain, allowVolumeExpansion true.
+    # NODE-PINNED: its allowedTopologies restrict it to kubernetes.io/hostname
+    # = bumble, which is why `instances: 1` above is honest rather than timid.
+    # Retain is the point — a deleted PVC must not take the member database's
+    # last local copy with it.
+    storageClass: openebs-bumble-postgresql-retain
+  walStorage:
+    # WAL on its own volume so a runaway WAL backlog (for example, an object
+    # store outage stalling archive_command) fills a 10Gi volume and stops the
+    # primary, instead of silently consuming the data volume's headroom and
+    # taking the database down with a full filesystem.
+    size: 10Gi
+    storageClass: openebs-bumble-postgresql-retain
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+  monitoring:
+    # The Prometheus Operator CRDs are NOT installed on honey
+    # (podmonitors.monitoring.coreos.com is absent, checked read-only
+    # 2026-08-19), so requesting a PodMonitor would make this Cluster
+    # unappliable. Metrics are still exported on :9187 and the NetworkPolicy
+    # admits the estate Prometheus to scrape them directly.
+    enablePodMonitor: false
+
+  backup:
+    # RETENTION (TIN-3817 acceptance row 8). 30d of base backups plus their WAL
+    # is what makes the RTO<=4h restore rehearsal reproducible at any point in
+    # the last month, not only against the newest backup.
+    retentionPolicy: "30d"
+    barmanObjectStore:
+      # GFTB-scoped bucket and server name. `serverName` is what namespaces the
+      # WAL/base objects inside the bucket, so a future second GFTB cluster
+      # restoring from the same bucket cannot collide with this one.
+      destinationPath: s3://gftb-member-db-backups/
+      serverName: gftb-member-db
+      # IN-CLUSTER S3 ONLY. This is the estate SeaweedFS S3 gateway, reached
+      # over cluster DNS; it is never an internet endpoint, and the validator
+      # fails closed on any endpointURL that is not a .svc.cluster.local name.
+      #
+      # OPEN OPERATOR DECISION, held in the runbook (step B1), NOT settled here:
+      # the tcfs namespace exposes both `seaweedfs:8333` and
+      # `tcfs-s3-posture-gateway:8333`, and which one is the admitted tenant
+      # entrypoint — plus whether GFTB backups may live in an estate-owned
+      # bucket at all — is an operator ruling. Because WAL archiving begins the
+      # moment this Cluster is applied, that ruling is a HARD PRE-APPLY GATE: an
+      # unreachable object store means archive_command fails, WAL accumulates on
+      # the 10Gi volume above, and the primary eventually stops.
+      endpointURL: http://seaweedfs.tcfs.svc.cluster.local:8333
+      s3Credentials:
+        # NAMES ONLY. Operator-minted in-cluster (runbook step B2).
+        accessKeyId:
+          name: gftb-member-db-backup-s3
+          key: ACCESS_KEY_ID
+        secretAccessKey:
+          name: gftb-member-db-backup-s3
+          key: ACCESS_SECRET_KEY
+      wal:
+        compression: gzip
+        maxParallel: 2
+      data:
+        compression: gzip
+        jobs: 2

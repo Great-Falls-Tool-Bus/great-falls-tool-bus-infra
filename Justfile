@@ -53,6 +53,7 @@ check-hosted:
     just web-stack-validate
     just web-stack-diff-selftest
     just grafana-dashboards-validate
+    just member-db-stack-validate
     just arc-fmt-check
     just edge-zones-fmt-check
     just edge-zones-validate
@@ -2408,6 +2409,119 @@ grafana_dashboard_dir := "observability/grafana/dashboards/gftb"
 
 grafana-dashboards-validate:
     bash scripts/validate-grafana-dashboards.sh {{ grafana_dashboard_dir }}
+
+# --- GFTB member database substrate (TIN-3817, Member v0 slice S1 infra half) -
+# DECLARE-ONLY IN GIT, ATTENDED ON THE WIRE. One dedicated PostgreSQL 16.15 CNPG
+# cluster in members-greatfallstoolbus-org-db-production, plus the pre-rollout
+# migration Job that runs platform-side with the narrow owner credential.
+#
+# MERGING APPLIES NOTHING. Only `member-db-stack-validate` is hosted (it is in
+# `check-hosted` and never contacts a cluster). Every other recipe below needs an
+# operator-custody kubeconfig that hosted CI does not hold, and the two mutating
+# ones additionally pass through `_reviewed-clean-main` + `_operator-apply-confirm`.
+# No workflow in this repository invokes any of them.
+#
+# SEQUENCING. These recipes are usable but HELD: the migration Job's image is
+# ghcr.io/great-falls-tool-bus/gftb-platform, which does not exist until slice
+# S1's app half lands. The cluster half can be brought up first; the migration
+# half cannot. docs/runbooks/member-db-bringup.md is the ordered attended path.
+
+member_db_stack_dir := "k8s/member-db/members-greatfallstoolbus-org-db-production"
+member_db_ns := "members-greatfallstoolbus-org-db-production"
+member_db_platform_ns := "members-greatfallstoolbus-org-production"
+member_db_cluster := "gftb-member-db"
+member_db_migrator_template := "k8s/member-db/members-greatfallstoolbus-org-production/job-migrator.template.yaml"
+
+# Offline declare-only guard. Hosted CI entrypoint for this stack.
+member-db-stack-validate:
+    bash scripts/validate-member-db-stack.sh {{ member_db_stack_dir }}
+
+# Operator-supplied inputs, env-delivered, never baked into the tree.
+#   MEMBER_DB_APPLY_KUBECONFIG  path to the namespace-scoped SA kubeconfig
+_member-db-kubeconfig-input:
+    test -n "${MEMBER_DB_APPLY_KUBECONFIG:-}" || { echo "Set MEMBER_DB_APPLY_KUBECONFIG to the member-db apply kubeconfig path" >&2; exit 2; }
+    test -f "${MEMBER_DB_APPLY_KUBECONFIG}"
+
+#   MEMBER_DB_MIGRATOR_IMAGE    the operator-resolved gftb-platform digest
+# The shape is held exactly, not loosely: a tag would let the migration that
+# writes the member schema come from an image nobody reviewed, and the committed
+# template's PLACEHOLDER is refused outright so the declare-only sentinel can
+# never reach a cluster.
+_member-db-migrator-image-input:
+    test -n "${MEMBER_DB_MIGRATOR_IMAGE:-}" || { echo "Set MEMBER_DB_MIGRATOR_IMAGE to the operator-resolved gftb-platform digest" >&2; exit 2; }
+    case "${MEMBER_DB_MIGRATOR_IMAGE}" in *PLACEHOLDER*) echo "refusing the declare-only PLACEHOLDER image; supply the real operator-resolved digest" >&2; exit 2 ;; esac
+    printf '%s' "${MEMBER_DB_MIGRATOR_IMAGE}" | grep -Eq '^ghcr\.io/great-falls-tool-bus/gftb-platform@sha256:[0-9a-f]{64}$' || { echo "MEMBER_DB_MIGRATOR_IMAGE must be ghcr.io/great-falls-tool-bus/gftb-platform@sha256:<64 lowercase hex>" >&2; exit 2; }
+
+# Server-side dry-run of the database stack against the live API. No mutation.
+member-db-stack-server-dry-run: member-db-stack-validate _member-db-kubeconfig-input
+    kubectl --kubeconfig "${MEMBER_DB_APPLY_KUBECONFIG}" --namespace {{ member_db_ns }} apply --dry-run=server -k {{ member_db_stack_dir }}
+
+# Attended bring-up / change apply for the database stack. The namespace must
+# already exist: the SA is namespace-scoped and cannot create it, and the stack
+# ships no Namespace object.
+member-db-stack-apply: member-db-stack-server-dry-run _reviewed-clean-main _operator-apply-confirm
+    kubectl --kubeconfig "${MEMBER_DB_APPLY_KUBECONFIG}" --namespace {{ member_db_ns }} apply -k {{ member_db_stack_dir }}
+    kubectl --kubeconfig "${MEMBER_DB_APPLY_KUBECONFIG}" --namespace {{ member_db_ns }} wait cluster/{{ member_db_cluster }} --for=condition=Ready --timeout=600s
+
+# Read-only readback. The three facts worth reading back are the ones a green
+# Ready condition does NOT prove: the served minor really is 16.15, the instance
+# really is on the retained node-pinned volume, and continuous WAL archiving is
+# actually working rather than merely configured.
+member-db-readback: _member-db-kubeconfig-input
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kc="${MEMBER_DB_APPLY_KUBECONFIG}"
+    ns="{{ member_db_ns }}"
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" get cluster/{{ member_db_cluster }} -o jsonpath='{range .status}image={.image}{"\n"}instances={.instances}{"\n"}ready={.readyInstances}{"\n"}phase={.phase}{"\n"}{end}'
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" get cluster/{{ member_db_cluster }} -o jsonpath='{"continuousArchiving="}{range .status.conditions[?(@.type=="ContinuousArchiving")]}{.status}{" "}{.message}{end}{"\n"}'
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" get pvc -l cnpg.io/cluster={{ member_db_cluster }} -o custom-columns=NAME:.metadata.name,SC:.spec.storageClassName,SIZE:.status.capacity.storage,PHASE:.status.phase
+
+# Read-only backup evidence. The RPO/RTO acceptance row is proved by a COMPLETED
+# Backup object with a stopped-at timestamp, not by the schedule existing.
+member-db-backup-verify: _member-db-kubeconfig-input
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kc="${MEMBER_DB_APPLY_KUBECONFIG}"
+    ns="{{ member_db_ns }}"
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" get scheduledbackup/{{ member_db_cluster }}-base -o jsonpath='{"schedule="}{.spec.schedule}{" suspend="}{.spec.suspend}{" lastScheduleTime="}{.status.lastScheduleTime}{"\n"}'
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" get backups.postgresql.cnpg.io -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,STARTED:.status.startedAt,STOPPED:.status.stoppedAt --sort-by=.metadata.creationTimestamp
+    completed="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get backups.postgresql.cnpg.io -o jsonpath='{range .items[?(@.status.phase=="completed")]}{.metadata.name}{"\n"}{end}' | wc -l | tr -d ' ')"
+    test "${completed}" -ge 1 || { echo "backup verification FAILED: no completed Backup object exists, so the RPO/RTO row is unproved" >&2; exit 1; }
+    echo "backup verification passed: ${completed} completed Backup object(s)"
+
+# Render the migration Job from the reviewed template with the operator-resolved
+# digest substituted. Pure text, no cluster contact. The apply path and the
+# server dry-run both go through THIS recipe, so the bytes that were dry-run are
+# the same bytes that get created.
+member-db-migrate-render: _member-db-migrator-image-input
+    #!/usr/bin/env bash
+    set -euo pipefail
+    python3 -I -c 'import pathlib, sys; t = pathlib.Path(sys.argv[1]).read_text(); m = "PLACEHOLDER-MEMBER-DB-MIGRATOR-IMAGE"; sys.exit("migration Job template no longer carries the reviewed image placeholder") if m not in t else None; sys.stdout.write(t.replace(m, sys.argv[2]))' "{{ member_db_migrator_template }}" "${MEMBER_DB_MIGRATOR_IMAGE}"
+
+# Server-side dry-run of the rendered migration Job. No mutation.
+member-db-migrate-server-dry-run: _member-db-migrator-image-input _member-db-kubeconfig-input
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just member-db-migrate-render | kubectl --kubeconfig "${MEMBER_DB_APPLY_KUBECONFIG}" --namespace {{ member_db_platform_ns }} create --dry-run=server -f -
+
+# Attended pre-rollout migration. The Job uses generateName, so each run creates
+# a fresh object and nothing has to be removed to make room for it. Re-running is
+# safe by contract, not by luck: the migrator takes a PostgreSQL advisory lock
+# and fails closed on a changed historical hash (spec S6), so a second run is
+# either a clean no-op or a refusal.
+member-db-migrate-apply: member-db-migrate-server-dry-run _reviewed-clean-main _operator-apply-confirm
+    #!/usr/bin/env bash
+    set -euo pipefail
+    test "${GFTB_MEMBER_DB_MIGRATE_CONFIRM:-}" = "member-db-migrate" || { echo "Set GFTB_MEMBER_DB_MIGRATE_CONFIRM=member-db-migrate to run the pre-rollout migration" >&2; exit 2; }
+    kc="${MEMBER_DB_APPLY_KUBECONFIG}"
+    ns="{{ member_db_platform_ns }}"
+    rendered="$(mktemp)"
+    trap 'rm -f "${rendered}"' EXIT
+    just member-db-migrate-render > "${rendered}"
+    job="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" create -f "${rendered}" -o name)"
+    echo "created ${job}"
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" wait "${job}" --for=condition=complete --timeout=900s
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" logs "${job}" --tail=200
 
 # --- Reviewed gftb-site release candidate proofs ----------------------------
 # These recipes are read-only/proof-only. They deliberately do not share the
