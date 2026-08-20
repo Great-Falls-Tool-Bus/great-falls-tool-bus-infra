@@ -96,7 +96,15 @@ decision before step S:
 Record the ruling here with a date, then update `cluster.yaml` if the endpoint
 changes. **Do not proceed to step S until this line is filled in.**
 
-> Ruling: _(unrecorded)_
+> Ruling (2026-08-20): **GFTB-owned dedicated rustfs** — digest-pinned image,
+> `local-path-sting` storage class, Retain reclaim, >=50Gi, NetworkPolicy
+> admitting only pods labeled `cnpg.io/cluster: gftb-member-db`. Neither tcfs
+> endpoint is admitted (custody findings: 10Gi/local-path/Delete reclaim, zero
+> NetworkPolicies, publicly tunneled). Recorded by the coordinating session
+> that witnessed the operator interview answer ("GFTB-owned rustfs
+> (Recommended)"), session 050cb99f, 2026-08-20 — the same interview-signature
+> mechanism that enacted ADR 0016 (meta 0f66bce3). Recommendation adopted
+> verbatim from data-plane-runway-20260820.md (operator-local brief).
 
 **B2 — bucket and credential.** Create the `gftb-member-db-backups` bucket,
 scoped to this cluster only. Mint the `gftb-member-db-backup-s3` Secret in the
