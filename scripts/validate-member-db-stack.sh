@@ -52,7 +52,7 @@ readonly WANT_RUNTIME_ROLE="gftb_app"
 readonly WANT_RUNTIME_SECRET="gftb-member-db-runtime"
 readonly WANT_MIGRATOR_SECRET="gftb-member-db-migrator-dsn"
 readonly WANT_STORAGE_CLASS="openebs-bumble-postgresql-retain"
-readonly WANT_MIGRATOR_ENTRYPOINT='["/bin/migrator"]'
+readonly WANT_MIGRATOR_ENTRYPOINT='["/usr/local/bin/migrator"]'
 readonly WANT_IMAGE_PLACEHOLDER="PLACEHOLDER-MEMBER-DB-MIGRATOR-IMAGE"
 # TIN-3817 acceptance row 8: structured-data RPO no worse than one hour. The
 # manifest declares 300s; this is the CEILING the guard enforces, so tightening

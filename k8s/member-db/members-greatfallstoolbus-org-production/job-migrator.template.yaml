@@ -94,7 +94,7 @@ spec:
           imagePullPolicy: IfNotPresent
           # One immutable image, three entrypoints (spec S6). This is the
           # migrator one; `web` and `worker` are Deployments elsewhere.
-          command: ["/bin/migrator"]
+          command: ["/usr/local/bin/migrator"]
           env:
             # THE NARROW CREDENTIAL, BY NAME ONLY. Operator-provisioned in the
             # platform namespace from the CNPG-generated `gftb-member-db-app`
