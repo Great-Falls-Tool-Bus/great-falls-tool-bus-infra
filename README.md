@@ -221,17 +221,23 @@ replacement.
    whose only Helm-values delta is the runner container's `ephemeral-storage`
    `4Gi -> 8Gi` request and `8Gi -> 16Gi` limit; the Helm `set` block is
    compared whole here, so this shape cannot smuggle a `runnerGroup` move.
-   It requires live/state still at `4Gi`/`8Gi`, as does the cutover below.
-2. **cutover** — the TIN-3902 runner-group move: that capacity delta plus the
-   `runnerGroup` Helm `set` entry `default -> great-falls-tool-bus-infra`, the
-   pinned runner image digest, the new `GF_FLYWHEEL_PROFILE_STATE` runner env
-   var, and `template.spec.priorityClassName: arc-runner`; plus one create of
-   the state-only `terraform_data.runner_group_policy` and the nine new
-   source-derived root outputs the advanced ARC role pin adds.
-3. **rollback** — the byte-exact reverse of the cutover, including the
-   capacity demotion back to `4Gi`/`8Gi`, the image digest reversal, and the
-   `terraform_data.runner_group_policy` destroy. A partial revert that leaves
-   the storage tfvars at `8Gi`/`16Gi` is refused; see
+   It requires live/state still at `4Gi`/`8Gi`. (This shape applied on
+   2026-08-17 as helm revision 6, decomposing the cutover below.)
+2. **cutover** — the TIN-3902 runner-group move: the `runnerGroup` Helm `set`
+   entry `default -> great-falls-tool-bus-infra`, the pinned runner image
+   digest, the new `GF_FLYWHEEL_PROFILE_STATE` runner env var, and
+   `template.spec.priorityClassName: arc-runner`; plus one create of the
+   state-only `terraform_data.runner_group_policy` and the nine new
+   source-derived root outputs the advanced ARC role pin adds. Its storage
+   transition is either `4Gi/8Gi -> 8Gi/16Gi` (the original combined shape)
+   or byte-identical `8Gi/16Gi` on both sides (the decomposed shape — the
+   live posture since the capacity apply).
+3. **rollback** — the byte-exact reverse of the cutover in either posture:
+   the group, image, env, and priorityClassName reversal plus the
+   `terraform_data.runner_group_policy` destroy, with storage retained at
+   `8Gi`/`16Gi` (the decomposed group-move reversal, the ratified fallback
+   from the post-cutover state) or demoted back to `4Gi`/`8Gi` (the combined
+   reversal — a deliberate capacity revert, never a rollback side effect); see
    [docs/implementation-overlay.md](docs/implementation-overlay.md) "Rollback".
 
 The guard therefore no longer blocks the TIN-3902 carrier, and a rollback does
@@ -249,17 +255,24 @@ no workflow may plan or mutate the same ARC state. Supply
 `GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive` as a one-shot value on each plan, apply,
 and readback command only after checking that condition. The normal promoted
 readback passes only when canonical state and the live scale set both report
-8Gi/16Gi, the listener is one Ready zero-restart pod, and a refreshed plan is empty. If a
+8Gi/16Gi in runner group `great-falls-tool-bus-infra`, the listener is one
+Ready zero-restart pod, and a refreshed plan is empty. If a
 localhost RustFS port-forward is lost after cluster mutation may have begun but
 before state is written, stop; the apply-attempt marker prevents blind reuse.
 Restore connectivity and reconcile the ambiguous attempt directly with
 `GFTB_ARC_READBACK_MODE=reconcile GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just
-arc-capacity-readback`. Reconciliation succeeds only for matching state/live
-4/8 GiB plus a pending plan the scope guard admits (the 8/16 GiB promotion, or
-the runner-group cutover that carries it), or matching promoted 8/16 GiB plus
-an empty refreshed plan. Every mode also requires canonical state and the live
-scale set to agree on `.spec.runnerGroup`, and `promoted` / `rolled-back`
-require it to be `great-falls-tool-bus-infra` / `default` respectively. It
+arc-capacity-readback`. Reconciliation is keyed on the refreshed plan and the
+runner group, not the storage level: a pending plan the scope guard admits —
+in any admitted posture, including live 8/16 GiB with the decomposed
+runner-group cutover pending — is re-reviewed by `arc-plan-scope-check` and
+yields the pre-change receipt, while an empty refreshed plan certifies the
+landed state (promoted at the dedicated group; a converged group-`default`
+state requires an explicit `rolled-back` re-run). Every mode also requires
+canonical state and the live scale set to agree on `.spec.runnerGroup`, and
+`promoted` / `rolled-back` require it to be `great-falls-tool-bus-infra` /
+`default` respectively; `rolled-back` certifies convergence at either
+`4Gi`/`8Gi` (combined reversal) or the capacity-retained `8Gi`/`16Gi`
+(decomposed group-move reversal). It
 consumes the attempted plan bundle; only the pre-change outcome permits
 creating and reviewing a fresh plan.
 

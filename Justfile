@@ -427,13 +427,28 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
     #
     #   capacity  1 in-place gh_nix Helm update whose only values delta is the
     #             runner container ephemeral-storage 4Gi->8Gi / 8Gi->16Gi bump.
-    #   cutover   that same bump plus the runner-group move: 1 in-place gh_nix
-    #             Helm update (runnerGroup set entry, runner image digest, the
+    #   cutover   the runner-group move: 1 in-place gh_nix Helm update
+    #             (runnerGroup set entry, runner image digest, the
     #             GF_FLYWHEEL_PROFILE_STATE env pair, template.spec
     #             priorityClassName) and 1 create of the state-only
-    #             terraform_data.runner_group_policy receipt.
+    #             terraform_data.runner_group_policy receipt. Its storage
+    #             transition is one of exactly two: 4/8Gi -> 8/16Gi (the
+    #             original combined shape, cutover carrying the capacity bump)
+    #             or 8/16Gi -> 8/16Gi with zero storage delta (the decomposed
+    #             shape; see the operational note below).
     #   rollback  the exact byte-for-byte reverse of `cutover`: the same Helm
-    #             update inverted plus 1 destroy of the policy receipt.
+    #             update inverted plus 1 destroy of the policy receipt, with
+    #             the correspondingly admitted storage transitions
+    #             8/16Gi -> 4/8Gi or 8/16Gi -> 8/16Gi.
+    #
+    # Operational fact this code cannot show: the TIN-2299 capacity bump was
+    # applied on 2026-08-17 as helm_release great-falls-tool-bus-nix revision 6
+    # with runnerGroup still `default`, decomposing TIN-3902's combined cutover.
+    # The live pre-cutover state is therefore already 8/16Gi, so a fresh cutover
+    # plan (and the ratified rollback fallback from the post-cutover state)
+    # carries no storage delta. Each shape admits both storage transitions and
+    # nothing in between: mixed states are refused, and the group-move deltas
+    # stay byte-strict either way.
     #
     # Any capacity, roster, image, or module-pin change beyond these requires its
     # own reviewed scope-contract update. This guard fails closed.
@@ -983,12 +998,20 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
         return entries
 
 
-    def restore_low_capacity(document):
+    def restore_pre_cutover(document, demote_storage):
         """Invert every enumerated runner-group delta, byte for byte.
 
         The result must equal the pre-cutover document exactly, which is what makes
         the cutover and its rollback the same reviewed transaction read in opposite
         directions.
+
+        `demote_storage` selects which of the two admitted pre-cutover documents
+        to reconstruct. True inverts the ephemeral-storage bump too (the original
+        combined shape, pre-cutover at 4/8Gi). False leaves storage untouched:
+        TIN-2299's capacity bump applied on 2026-08-17 as helm_release revision 6
+        while runnerGroup stayed `default`, so the decomposed cutover starts from
+        8/16Gi and must carry zero storage delta. The caller derives the flag
+        from the storage transition already asserted against the enumerated pair.
 
         This is not injective, and that is accepted. The pre-image is exactly
         "the pre-cutover document plus the three reviewed lines inserted at any
@@ -1094,6 +1117,8 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
             if index not in dropped
         ]
         restored = "\n".join(kept) + "\n"
+        if not demote_storage:
+            return restored
         demote = {"8Gi": "4Gi", "16Gi": "8Gi"}
         return storage.sub(
             lambda match: (
@@ -1109,21 +1134,48 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
 
     before_storage = runner_storage(before_values[0])
     after_storage = runner_storage(after_values[0])
+    # TIN-2299's capacity bump applied on 2026-08-17 as helm_release revision 6
+    # (runnerGroup still `default`), decomposing TIN-3902's combined cutover, so
+    # the move shapes each admit exactly two storage transitions: the original
+    # combined one and the post-capacity zero-delta one. The capacity shape is
+    # unchanged. Anything else -- including mixed states such as 8Gi/8Gi on
+    # either side -- is refused here before the byte-level document comparison.
     if shape == "rollback":
-        expected_storage = (HIGH_STORAGE, LOW_STORAGE)
-    else:
-        expected_storage = (LOW_STORAGE, HIGH_STORAGE)
-    if (before_storage, after_storage) != expected_storage:
-        raise SystemExit(
-            "ERROR: expected runner resources.requests.ephemeral-storage "
-            + expected_storage[0]["requests"]
-            + "->"
-            + expected_storage[1]["requests"]
-            + " and resources.limits.ephemeral-storage "
-            + expected_storage[0]["limits"]
-            + "->"
-            + expected_storage[1]["limits"]
+        admitted_storage = (
+            (HIGH_STORAGE, LOW_STORAGE),
+            (HIGH_STORAGE, HIGH_STORAGE),
         )
+    elif shape == "cutover":
+        admitted_storage = (
+            (LOW_STORAGE, HIGH_STORAGE),
+            (HIGH_STORAGE, HIGH_STORAGE),
+        )
+    else:
+        admitted_storage = ((LOW_STORAGE, HIGH_STORAGE),)
+    if (before_storage, after_storage) not in admitted_storage:
+        raise SystemExit(
+            "ERROR: expected runner resources.requests/resources.limits "
+            "ephemeral-storage to move as one of "
+            + " or ".join(
+                was["requests"]
+                + "/"
+                + was["limits"]
+                + "->"
+                + now["requests"]
+                + "/"
+                + now["limits"]
+                for was, now in admitted_storage
+            )
+            + "; observed "
+            + before_storage["requests"]
+            + "/"
+            + before_storage["limits"]
+            + "->"
+            + after_storage["requests"]
+            + "/"
+            + after_storage["limits"]
+        )
+    storage_delta = before_storage != after_storage
 
     if shape == "capacity":
         promote = {"4Gi": "8Gi", "8Gi": "16Gi"}
@@ -1141,22 +1193,24 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
             raise SystemExit("ERROR: gh_nix Helm values contain changes beyond 4/8Gi -> 8/16Gi")
         print("ARC plan scope guard passed: exact gh_nix 4/8Gi -> 8/16Gi update only.")
     elif shape == "cutover":
-        if restore_low_capacity(after_values[0]) != before_values[0]:
+        if restore_pre_cutover(after_values[0], storage_delta) != before_values[0]:
             raise SystemExit(
                 "ERROR: gh_nix Helm values contain changes beyond the reviewed runner-group "
-                "cutover (runnerGroup, 4/8Gi -> 8/16Gi, pinned runner image digest, "
-                "GF_FLYWHEEL_PROFILE_STATE, arc-runner priorityClassName)"
+                "cutover (runnerGroup, the admitted ephemeral-storage transition, "
+                "pinned runner image digest, GF_FLYWHEEL_PROFILE_STATE, "
+                "arc-runner priorityClassName)"
             )
         print(
             "ARC plan scope guard passed: exact gh_nix runner-group cutover update "
             "plus the state-only runner_group_policy receipt."
         )
     else:
-        if restore_low_capacity(before_values[0]) != after_values[0]:
+        if restore_pre_cutover(before_values[0], storage_delta) != after_values[0]:
             raise SystemExit(
                 "ERROR: gh_nix Helm values contain changes beyond the reviewed runner-group "
-                "rollback (runnerGroup, 8/16Gi -> 4/8Gi, pinned runner image digest, "
-                "GF_FLYWHEEL_PROFILE_STATE, arc-runner priorityClassName)"
+                "rollback (runnerGroup, the admitted ephemeral-storage transition, "
+                "pinned runner image digest, GF_FLYWHEEL_PROFILE_STATE, "
+                "arc-runner priorityClassName)"
             )
         print(
             "ARC plan scope guard passed: exact gh_nix runner-group rollback update "
@@ -1280,7 +1334,14 @@ arc-capacity-readback: _reviewed-clean-main _reviewed-arc-core _arc-exclusive-co
         [[ "${state_group}" == "great-falls-tool-bus-infra" ]] || { echo "ARC runner-group cutover is not converged at great-falls-tool-bus-infra" >&2; exit 2; }
     fi
     if [[ "${mode}" == "rolled-back" ]]; then
-        [[ "${state_request}" == "4Gi" && "${state_limit}" == "8Gi" ]] || { echo "ARC rollback is not converged at 4Gi/8Gi" >&2; exit 2; }
+        # TIN-2299's capacity bump applied on 2026-08-17 as helm_release
+        # great-falls-tool-bus-nix revision 6 with runnerGroup still `default`,
+        # decomposing TIN-3902's cutover. The ratified rollback from the
+        # post-cutover state is therefore the group-move reversal alone, which
+        # converges at the retained 8Gi/16Gi; the original combined reversal
+        # converges at 4Gi/8Gi and stays certifiable for a deliberate,
+        # separately-decided capacity revert. Both converge at group `default`.
+        [[ ( "${state_request}" == "4Gi" && "${state_limit}" == "8Gi" ) || ( "${state_request}" == "8Gi" && "${state_limit}" == "16Gi" ) ]] || { echo "ARC rollback is not converged at 4Gi/8Gi or the capacity-retained 8Gi/16Gi" >&2; exit 2; }
         [[ "${state_group}" == "default" ]] || { echo "ARC runner-group rollback is not converged at default" >&2; exit 2; }
     fi
     listener_json="$(kubectl --kubeconfig "${kubeconfig}" --context honey -n arc-systems get pods -l actions.github.com/scale-set-name=great-falls-tool-bus-nix,actions.github.com/scale-set-namespace=arc-runners,app.kubernetes.io/component=runner-scale-set-listener -o json)"
@@ -1296,16 +1357,29 @@ arc-capacity-readback: _reviewed-clean-main _reviewed-arc-core _arc-exclusive-co
     TF_CLI_CONFIG_FILE=/dev/null TF_VAR_k8s_config_path="${kubeconfig}" TF_DATA_DIR="${data_dir}" nix develop "${core_ci}" -c tofu -chdir="${core}/tofu/stacks/arc-runners" plan -input=false -detailed-exitcode -var-file="$(pwd)/{{ arc_tfvars }}" -out="${nochange_plan}" >"${plan_log}" 2>&1
     plan_status=$?
     set -e
-    if [[ "${state_request}" == "8Gi" && "${state_limit}" == "16Gi" ]]; then
+    # Classification is keyed on the refreshed plan and the runner group, NOT on
+    # the storage level. Storage stopped being a pre/post proxy on 2026-08-17,
+    # when TIN-2299's capacity bump applied on its own as helm_release revision 6
+    # and left the pre-cutover state already at 8Gi/16Gi: a pending decomposed
+    # cutover (or rollback) plan must still be able to reach the reconcile arm
+    # that re-runs arc-plan-scope-check, and a converged group=default state at
+    # either admitted storage level must be certifiable as rolled-back.
+    if [[ "${plan_status}" == "2" ]]; then
+        [[ "${mode}" == "reconcile" ]] || { echo "ARC state/source/live refresh is not a no-change plan (status 2); only GFTB_ARC_READBACK_MODE=reconcile may certify a pending plan" >&2; exit 2; }
+        GFTB_ARC_READBACK_MODE=reconcile GFTB_ARC_RECONCILE_PLAN_PATH="${nochange_plan}" GFTB_ARC_RECONCILE_DATA_DIR="${data_dir}" just arc-plan-scope-check
+        receipt="pre-change state/live ${state_request}/${state_limit} in runner group ${state_group} with an exact pending scope-reviewed plan; create and review a fresh plan"
+    elif [[ "${state_group}" == "great-falls-tool-bus-infra" ]]; then
+        [[ "${state_request}" == "8Gi" && "${state_limit}" == "16Gi" ]] || { echo "ARC dedicated-group state is outside the reviewed promoted capacity" >&2; exit 2; }
         [[ "${plan_status}" == "0" ]] || { echo "Promoted ARC state/source/live refresh is not a no-change plan (status ${plan_status})" >&2; exit 2; }
         receipt="promoted state/live 8Gi/16Gi in runner group ${state_group} with refreshed no-change plan"
-    elif [[ "${plan_status}" == "0" ]]; then
-        [[ "${mode}" == "rolled-back" ]] || { echo "ARC state/live is converged at 4Gi/8Gi with a no-change plan, which is a completed rollback; re-run with GFTB_ARC_READBACK_MODE=rolled-back" >&2; exit 2; }
-        receipt="rolled-back state/live 4Gi/8Gi in runner group ${state_group} with refreshed no-change plan"
     else
-        [[ "${mode}" == "reconcile" && "${plan_status}" == "2" ]] || { echo "Pre-change ARC reconciliation expected an exact pending scope-reviewed plan (status ${plan_status})" >&2; exit 2; }
-        GFTB_ARC_READBACK_MODE=reconcile GFTB_ARC_RECONCILE_PLAN_PATH="${nochange_plan}" GFTB_ARC_RECONCILE_DATA_DIR="${data_dir}" just arc-plan-scope-check
-        receipt="pre-change state/live 4Gi/8Gi in runner group ${state_group} with an exact pending scope-reviewed plan; create and review a fresh plan"
+        [[ "${plan_status}" == "0" ]] || { echo "ARC state/source/live refresh failed (status ${plan_status})" >&2; exit 2; }
+        [[ "${mode}" == "rolled-back" ]] || { echo "ARC state/live is converged in runner group default with a no-change plan, which is a completed rollback or the decomposed pre-cutover state; re-run with GFTB_ARC_READBACK_MODE=rolled-back" >&2; exit 2; }
+        if [[ "${state_request}" == "8Gi" && "${state_limit}" == "16Gi" ]]; then
+            receipt="rolled-back state/live 8Gi/16Gi in runner group default with refreshed no-change plan; decomposed group-move reversal, TIN-2299 capacity retained"
+        else
+            receipt="rolled-back state/live 4Gi/8Gi in runner group default with refreshed no-change plan"
+        fi
     fi
     just _reviewed-clean-main
     just _reviewed-arc-core
