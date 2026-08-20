@@ -291,13 +291,13 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "c37fb8c36e826dc6", "3676b9eafb3336d0", "87893f2ae0d1c1ec", "c957b577fd505498"
     ),
     "arc-plan-scope-check": _receipt(
-        "0c41b6146274684d", "0ce2041c9cea8e84", "8c22b25b861aaa13", "67784196310dbd98"
+        "581e0d278c091783", "3d8635db7d9f965f", "adb725c3cf079a96", "2d491a784a580878"
     ),
     "arc-apply": _receipt(
         "fe8c324732148b38", "c967bad1c1ccab8e", "fd3840cedf78db82", "9b5a73294ec96ef6"
     ),
     "arc-capacity-readback": _receipt(
-        "41a8bb974559c6a9", "9b582383e0694579", "4a54d26ef774fd43", "50b306320b2c4a52"
+        "10a49e33fd0cb568", "0a0b53e097661d10", "5ca9ebe461940732", "79b00a0d36efef31"
     ),
     "arc-enrollment-plan": _receipt(
         "49a0e25c1cc8c8ff", "b15096271b4271a4", "fe1d38e06e5abf79", "905f0b0d50110b7a"
@@ -2394,7 +2394,7 @@ ARC_ROLLBACK_HELM_CHANGE = {
     },
 }
 
-# TIN-2299's capacity bump applied on 2026-08-19 as helm_release
+# TIN-2299's capacity bump applied on 2026-08-17 as helm_release
 # great-falls-tool-bus-nix revision 6 with runnerGroup still `default`,
 # decomposing TIN-3902's combined cutover. The decomposed shapes reuse the
 # verbatim literals above: ARC_AFTER_VALUES is byte-for-byte the live
@@ -7668,7 +7668,7 @@ def self_test() -> None:
     #
     # The guard admits exactly three enumerated plan shapes. Each move shape
     # carries exactly two admitted storage transitions: the original combined
-    # one and, since TIN-2299's capacity bump applied on 2026-08-19 as
+    # one and, since TIN-2299's capacity bump applied on 2026-08-17 as
     # helm_release revision 6 (decomposing the cutover), the post-capacity
     # zero-delta one. `valid` above proves the pre-existing capacity plan is
     # still admitted unchanged. Everything after these is refused.
