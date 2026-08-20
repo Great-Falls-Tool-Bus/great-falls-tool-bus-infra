@@ -1,0 +1,42 @@
+{
+  "$comment": "DECLARE-ONLY — NOT APPLIED (TIN-3815 / TIN-3817). Route INTENT for the GFTB platform STAGING host, mirroring web-oncluster-route.json and fail-closed the same way: every enablement flag is false, and the tunnel public-hostname route is Cloudflare dashboard/token-managed (TIN-991), NOT created from this file. staging.greatfallstoolbus.org is exact-PR/operator QA for the platform with the APPLICATION auth path (slices doc §4 hosts row; TIN-3815) — it is PRIVATE, so unlike the public apex the planned edge posture includes a Cloudflare Access gate in front of the tunnel route, which gates WHO can reach staging while the application's own auth remains the product path under test. members.greatfallstoolbus.org (member production, application auth, never an Access substitute) is a LATER intent recorded at its own sitting, not a flag here. No live tunnel UUID or credential is inlined; the real cfargotunnel target and zone binding live in the operator-gated edge stack (tofu/stacks/edge*) and the cloudflared dashboard.",
+  "route_contract_version": "0.1.0",
+  "workload_name": "gftb-platform-web",
+  "cluster": "honey",
+  "applied": false,
+  "dns_enabled": false,
+  "route_enabled": false,
+  "zone": "greatfallstoolbus.org",
+  "dns_provider": "cloudflare",
+  "tunnel": {
+    "name": "honey-ingress",
+    "management": "cloudflare-dashboard-token-managed",
+    "cname_target": "PLACEHOLDER.cfargotunnel.com",
+    "note": "The honey-ingress tunnel is the shared house connector (blahaj:deploy/honey/retained-cloudflared.yaml). Its public-hostname routes are dashboard/token-managed (TIN-991). The real <tunnel-id>.cfargotunnel.com target is NOT inlined here; an operator adds the staging route out of band at the platform-release sitting."
+  },
+  "authority": {
+    "dns_zone_owner": "great-falls-tool-bus-infra:tofu/stacks/edge (zone-scoped token cloudflare-api-token-gftb-zones; TIN-2385)",
+    "route_mutation_policy": "operator-gated; no CI auto-applier for durable single-service routes (TIN-991)",
+    "cloudflare_credential": "protected `edge` environment only; never in this repo tree, never in the platform source repo"
+  },
+  "planned_route": {
+    "$comment": "What the staging cutover WOULD declare. Present for review only; enable_* stays false until the operator sitting that applies the platform stack (docs/runbooks/staging-platform-serving.md) authorizes it.",
+    "hostname": "staging.greatfallstoolbus.org",
+    "exposure": "cloudflare-tunnel",
+    "origin_service": "http://gftb-platform-web.members-greatfallstoolbus-org-production.svc.cluster.local:80",
+    "namespace": "members-greatfallstoolbus-org-production",
+    "tls": "terminates at the Cloudflare edge (proxied); origin hop tunnel->Service is plain in-cluster HTTP, exactly as the apex web stack",
+    "dns_record": {
+      "type": "CNAME",
+      "name": "staging.greatfallstoolbus.org",
+      "target": "PLACEHOLDER.cfargotunnel.com",
+      "proxied": true,
+      "enabled": false
+    },
+    "access": {
+      "provider": "cloudflare-access",
+      "posture": "staging is PRIVATE (TIN-3815: exact-PR/operator QA): the planned edge posture is an Access gate on this hostname, dashboard-managed, minted at the operator sitting. Access controls REACHABILITY only; the application auth path behind it is the product surface under QA and is never substituted by Access."
+    }
+  },
+  "supersedes_nothing": "The apex web-oncluster-route.json and the live gftb-site promotion are untouched. This intent is the fail-closed staging-host skeleton the attended platform-release chain builds on; it changes no live posture."
+}

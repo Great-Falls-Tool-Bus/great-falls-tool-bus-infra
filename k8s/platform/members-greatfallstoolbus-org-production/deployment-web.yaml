@@ -1,0 +1,212 @@
+# DECLARE-ONLY TEMPLATE — MERGING APPLIES NOTHING (TIN-3815 / TIN-3817).
+#
+# The GFTB platform `web` entrypoint: the SvelteKit adapter-node member and
+# inventory application (spec §6 "one immutable image, three entrypoints"),
+# served in-cluster behind a ClusterIP Service and the honey-ingress cloudflared
+# tunnel, on the same proven shape as the greatfallstoolbus-org web stack
+# (k8s/web/) and MassageIthaca before it.
+#
+# THIS IS THE STAGING SERVING SLICE. The meta launch spec's repo-ownership
+# table (spec/launch-member-v0-system-2026-08-16.md §2) gives this repository
+# "PostgreSQL, Secrets, workloads, migrations, image pins, staging/apex routes,
+# backups, runtime receipts"; the slices doc §4 rules the hosts:
+# staging.greatfallstoolbus.org is exact-PR QA with the APPLICATION auth path,
+# members.greatfallstoolbus.org is member production later (TIN-3815 — neither
+# treats Cloudflare Access as an application-auth substitute). Both hosts route
+# to THIS namespace: it is the one namespace the member-db NetworkPolicy admits
+# on 5432 (k8s/member-db PR #118), and the one the pre-rollout migration Job
+# template already targets.
+#
+# WHY THE IMAGE IS A PLACEHOLDER AND NOT A DIGEST PIN. The three-entrypoint
+# platform image does not exist yet: S0 (greatfallstoolbus.org PR #171) and the
+# S1-S3 stack above it are open but unlanded, so there is no digest an honest
+# review could pin here. This follows the member-db migrator-Job template
+# precedent exactly: the committed bytes carry the sentinel, the validator
+# FAILS if a real digest is smuggled into the tree, and the reviewed image
+# arrives at dispatch as PLATFORM_APPLY_IMAGE, held by the input guard to
+# ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:<64 lowercase hex>
+# (the pre-TIN-3815-rename identity; the guard also admits the gftb-platform
+# slug so the ADR 0014 §1.3 rename cannot silently expire it). Once the rename
+# gates pass — private CI, package pull, and rollback proved under the new
+# identity — narrow the guard to the single surviving name.
+#
+# MERGING APPLIES NOTHING: no CI invokes any platform-release recipe, this
+# stack ships no Namespace and no Secret, and the staging tunnel route intent
+# is fail-closed (tofu/intent/great-falls-tool-bus/staging-platform-route.json).
+# The only apply is the attended, operator-confirmed platform-release chain.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gftb-platform-web
+  namespace: members-greatfallstoolbus-org-production
+  labels:
+    app.kubernetes.io/name: gftb-platform-web
+    app.kubernetes.io/component: web
+    app.kubernetes.io/part-of: gftb-platform
+    app.kubernetes.io/managed-by: great-falls-tool-bus-infra
+    app.tinyland.dev/tenant: great-falls-tool-bus
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  # TWO REPLICAS is part of the connection budget, not a taste choice. The
+  # member-db managed role gftb_app carries connectionLimit: 40 (k8s/member-db
+  # cluster.yaml, PR #118) and the app half's pg.Pool defaults to max 10 per
+  # process. Steady state: web 2x10 + worker 1x10 = 30. Rollout peak: web
+  # surges +1 pod (maxSurge 1, below) while the worker uses Recreate and never
+  # surges, so the worst case is 40 <= 40. Raising replicas here without
+  # re-doing that arithmetic starves the worker of connections at rollout.
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gftb-platform-web
+      app.kubernetes.io/component: web
+  template:
+    metadata:
+      labels:
+        # THE ADMISSION CONTRACT. part-of + component are what the member-db
+        # NetworkPolicy (k8s/member-db PR #118) admits on 5432 and what this
+        # stack's own egress allows select on. Changing them here without
+        # changing both policies produces a web pod that cannot reach the
+        # database.
+        app.kubernetes.io/name: gftb-platform-web
+        app.kubernetes.io/component: web
+        app.kubernetes.io/part-of: gftb-platform
+    spec:
+      terminationGracePeriodSeconds: 15
+      automountServiceAccountToken: false
+      # House hardening (ADR 0008 §3: non-root uid/gid 1001 under adapter-node),
+      # identical to the k8s/web stack and the member-db migrator Job.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      # Node placement mirrors k8s/web: prefer the roomy workers (bumble/sting;
+      # honey is the tightest node), spread the 2 replicas across hosts so a
+      # single node loss never takes serving fully down.
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: DoesNotExist
+            - weight: 50
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values: ["bumble", "sting"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: gftb-platform-web
+                    app.kubernetes.io/component: web
+      containers:
+        - name: gftb-platform-web
+          # OPERATOR-SUPPLIED AT DISPATCH. `just platform-release-render`
+          # replaces this exact literal with PLATFORM_APPLY_IMAGE;
+          # scripts/validate-platform-stack.sh asserts the committed bytes
+          # still carry the sentinel. See the header comment.
+          image: PLACEHOLDER-PLATFORM-IMAGE
+          imagePullPolicy: IfNotPresent
+          # One immutable image, three entrypoints (spec §6). The image links
+          # the dispatcher at /usr/local/bin/{web,worker,migrator}
+          # (gftb-platform ContainerFile); this is the `web` one.
+          command: ["/usr/local/bin/web"]
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: "3000"
+            # THE RUNTIME CREDENTIAL, BY NAME ONLY (TIN-3817 hand-off row:
+            # DATABASE_URL is two never-crossed Secrets). web and worker get
+            # gftb-member-db-runtime-dsn — the DML-only gftb_app role — and
+            # NEVER gftb-member-db-migrator-dsn, which belongs to the
+            # pre-rollout migration Job alone (k8s/member-db PR #118,
+            # secrets.contract.yaml). The validator fails this stack if the
+            # migrator secret name appears anywhere in it.
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: gftb-member-db-runtime-dsn
+                  key: dsn
+            # THE ONE CONFIGURED TENANT (TIN-3817 scope). A non-secret UUID,
+            # but INTEGRITY-CRITICAL: RLS enforces "one tenant per
+            # transaction", never "the RIGHT tenant", so a wrong-but-real id
+            # would serve another tenant's rows (app half, worker.ts header).
+            # It is therefore config-review material: the sentinel below is
+            # substituted by `just platform-release-render` from GFTB_TENANT_ID
+            # under a UUID-shape guard, recorded in the plan receipt, and the
+            # follow-up once the tenant row is minted is to commit the reviewed
+            # UUID here in place of the sentinel.
+            - name: GFTB_TENANT_ID
+              value: PLACEHOLDER-GFTB-TENANT-ID
+            # STRIPE TEST-MODE RUNTIME REFERENCES (TIN-3817 hand-off; slices
+            # §3 — technically incapable of a live call: the app half refuses
+            # keys that are not sk_test_/pk_test_/whsec_). Names only, values
+            # never in git; `optional: true` because the rails slice
+            # (TIN-3818) is unlanded and the Secret is minted at the operator
+            # sitting that enables it. NetworkPolicy egress to Stripe stays
+            # CLOSED until that slice lands — these are references, not reach.
+            - name: STRIPE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: gftb-platform-stripe-testmode
+                  key: STRIPE_SECRET_KEY
+                  optional: true
+            - name: STRIPE_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: gftb-platform-stripe-testmode
+                  key: STRIPE_WEBHOOK_SECRET
+                  optional: true
+            - name: STRIPE_PUBLISHABLE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: gftb-platform-stripe-testmode
+                  key: STRIPE_PUBLISHABLE_KEY
+                  optional: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3

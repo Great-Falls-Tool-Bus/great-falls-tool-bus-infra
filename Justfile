@@ -39,6 +39,7 @@ check-hosted:
     just archive-stack-validate
     just web-stack-validate
     just grafana-dashboards-validate
+    just platform-stack-validate
     just arc-fmt-check
     just edge-zones-fmt-check
     just edge-zones-validate
@@ -2212,6 +2213,248 @@ grafana_dashboard_dir := "observability/grafana/dashboards/gftb"
 
 grafana-dashboards-validate:
     bash scripts/validate-grafana-dashboards.sh {{ grafana_dashboard_dir }}
+
+# --- GFTB platform staging serving (TIN-3815 / TIN-3817 staging slice) -------
+# DECLARE-ONLY IN GIT, ATTENDED ON THE WIRE. The web + worker Deployments and
+# the web Service for the gftb-platform app in
+# members-greatfallstoolbus-org-production, served at
+# staging.greatfallstoolbus.org (exact-PR/operator QA with the APPLICATION auth
+# path — slices doc §4 hosts row, TIN-3815) once the operator opens the
+# fail-closed route intent.
+#
+# MERGING APPLIES NOTHING. Only `platform-stack-validate` is hosted (it is in
+# `check-hosted` and never contacts a cluster). Every other recipe below is
+# operator-local: the mutating chain mirrors the reviewed web-release
+# discipline exactly — render ONCE, record the bytes, preflight that they
+# still reproduce, server-dry-run and apply THOSE bytes, then prove
+# pinned/running/served. No recipe here runs `kubectl set image`, `scale`, or
+# a replicas patch.
+#
+# SEQUENCING. Usable but HELD on named dependencies (see k8s/platform/README.md):
+# the S0-S3 app stack (no platform image exists yet), member-db PR #118
+# merge+apply plus its object-store ruling (no database, no runtime DSN Secret
+# without it), and the pre-rollout migration (that PR's member-db-migrate-apply)
+# before first serve. docs/runbooks/staging-platform-serving.md is the ordered
+# attended path.
+
+platform_stack_dir := "k8s/platform/members-greatfallstoolbus-org-production"
+platform_ns := "members-greatfallstoolbus-org-production"
+platform_web_deploy := "gftb-platform-web"
+platform_worker_deploy := "gftb-platform-worker"
+
+# Offline declare-only guard. Hosted CI entrypoint for this stack.
+platform-stack-validate:
+    bash scripts/validate-platform-stack.sh {{ platform_stack_dir }}
+
+# Operator-supplied inputs, env-delivered, never baked into the tree.
+#   PLATFORM_APPLY_IMAGE  the operator-resolved platform image digest
+#   GFTB_TENANT_ID        the one configured GFTB tenant's UUID
+#
+# TWO REPOSITORY NAMES, ON PURPOSE (same guard as the member-db migrator
+# image). TIN-3815 / ADR 0014 §1.3 rename the platform repository to
+# gftb-platform only after private CI, package pull, and rollback are proved
+# under the new identity; none of that has happened, so today's publisher is
+# ghcr.io/great-falls-tool-bus/greatfallstoolbus.org. Accepting only the
+# post-rename slug would block the operator today; accepting only the
+# pre-rename one would silently expire the day the rename lands. Both are
+# admitted, digest-pinned either way; narrow to the single surviving name once
+# the rename gates pass.
+#
+# THE TENANT ID IS INTEGRITY-CRITICAL, NOT SECRET (app half worker.ts header:
+# RLS enforces "one tenant per transaction", never "the RIGHT tenant"). It is
+# held to UUID shape here, recorded in the plan receipt, and reviewed at the
+# apply sitting like config, not like an env-var default.
+_platform-release-inputs:
+    test -n "${PLATFORM_APPLY_IMAGE:-}" || { echo "Set PLATFORM_APPLY_IMAGE to the operator-resolved platform image digest" >&2; exit 2; }
+    case "${PLATFORM_APPLY_IMAGE}" in *PLACEHOLDER*) echo "refusing the declare-only PLACEHOLDER image; supply the real operator-resolved digest" >&2; exit 2 ;; esac
+    printf '%s' "${PLATFORM_APPLY_IMAGE}" | grep -Eq '^ghcr\.io/great-falls-tool-bus/(greatfallstoolbus\.org|gftb-platform)@sha256:[0-9a-f]{64}$' || { echo "PLATFORM_APPLY_IMAGE must be ghcr.io/great-falls-tool-bus/{greatfallstoolbus.org,gftb-platform}@sha256:<64 lowercase hex>" >&2; exit 2; }
+    test -n "${GFTB_TENANT_ID:-}" || { echo "Set GFTB_TENANT_ID to the one configured GFTB tenant UUID" >&2; exit 2; }
+    case "${GFTB_TENANT_ID}" in *PLACEHOLDER*) echo "refusing the declare-only PLACEHOLDER tenant; supply the reviewed tenant UUID" >&2; exit 2 ;; esac
+    printf '%s' "${GFTB_TENANT_ID}" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' || { echo "GFTB_TENANT_ID must be a lowercase UUID" >&2; exit 2; }
+
+# The apply identity. Operator-custody, outside every repository tree, mode
+# 0600, and no ambient KUBECONFIG allowed to shadow it — the same custody bar
+# the web-release chain holds its kubeconfig to.
+_platform-release-kubeconfig-input:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${PLATFORM_APPLY_KUBECONFIG:?Set PLATFORM_APPLY_KUBECONFIG to the namespace-scoped platform-apply kubeconfig}"
+    [[ -z "${KUBECONFIG:-}" ]] || { echo "Refusing ambient KUBECONFIG; PLATFORM_APPLY_KUBECONFIG is authoritative" >&2; exit 2; }
+    python3 -I - "${PLATFORM_APPLY_KUBECONFIG}" "$(git rev-parse --show-toplevel)" <<'PY'
+    import os
+    import stat
+    import sys
+    from pathlib import Path
+
+    path = Path(sys.argv[1]).expanduser().resolve(strict=True)
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("PLATFORM_APPLY_KUBECONFIG must remain outside the repository")
+    metadata = path.stat()
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid():
+        raise SystemExit("PLATFORM_APPLY_KUBECONFIG must be a regular file owned by the operator")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise SystemExit("PLATFORM_APPLY_KUBECONFIG must have mode 0600")
+    PY
+
+# THE SINGLE RENDERER. kustomize-renders the reviewed stack and substitutes the
+# two sentinels with the guarded inputs. Pure text, no cluster contact; the
+# plan, the dry-run, and the apply all consume THIS recipe's bytes, so the
+# reviewed bytes and the applied bytes are the same bytes (the web-release
+# render property). It refuses to run if either sentinel has vanished from the
+# committed tree — a real value smuggled into git bypasses review and is
+# exactly what scripts/validate-platform-stack.sh also fails on.
+platform-release-render: _platform-release-inputs
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kubectl kustomize "{{ platform_stack_dir }}" | python3 -I -c 'import sys; t = sys.stdin.read(); img = "PLACEHOLDER-PLATFORM-IMAGE"; ten = "PLACEHOLDER-GFTB-TENANT-ID"; missing = [m for m in (img, ten) if m not in t]; sys.exit(f"committed stack no longer carries the reviewed sentinel(s): {missing}") if missing else None; sys.stdout.write(t.replace(img, sys.argv[1]).replace(ten, sys.argv[2]))' "${PLATFORM_APPLY_IMAGE}" "${GFTB_TENANT_ID}"
+
+# Plan artifacts live beside the web-release ones in the operator-private
+# .k8s-plans root (never committed; .gitignore covers it), held to the same
+# custody bar.
+_platform-release-plan-root-contract:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    umask 077
+    python3 -I - "$(git rev-parse --show-toplevel)/.k8s-plans" <<'PY'
+    import os
+    import stat
+    import sys
+    from pathlib import Path
+
+    root = Path(sys.argv[1])
+    if not root.exists() and not root.is_symlink():
+        root.mkdir(mode=0o700)
+    metadata = root.lstat()
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise SystemExit(".k8s-plans must be a real directory, not a symlink")
+    if metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) != 0o700:
+        raise SystemExit(".k8s-plans must be operator-owned and mode 0700")
+    for path in sorted(root.glob("platform-release.*")):
+        item = path.lstat()
+        if stat.S_ISLNK(item.st_mode) or not stat.S_ISREG(item.st_mode):
+            raise SystemExit(f"platform release plan artifact must be a regular file: {path.name}")
+        if item.st_uid != os.getuid() or stat.S_IMODE(item.st_mode) != 0o600:
+            raise SystemExit(f"platform release plan artifact {path.name} must be operator-owned and mode 0600")
+    PY
+
+# PLAN. Offline: renders the reviewed stack ONCE and records the bytes, their
+# digest, the selected image and tenant, and the infra carrier commit.
+# Contacts no cluster and no registry.
+platform-release-plan: _platform-release-inputs _platform-release-plan-root-contract
+    #!/usr/bin/env bash
+    set -euo pipefail
+    umask 077
+    repo_root="$(git rev-parse --show-toplevel)"
+    plan_root="${repo_root}/.k8s-plans"
+    just platform-release-render > "${plan_root}/platform-release.rendered.yaml"
+    test -s "${plan_root}/platform-release.rendered.yaml" || { echo "platform-release-render produced no manifest" >&2; exit 1; }
+    python3 -I -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${plan_root}/platform-release.rendered.yaml" > "${plan_root}/platform-release.render-sha256"
+    printf '%s\n' "${PLATFORM_APPLY_IMAGE}" > "${plan_root}/platform-release.image"
+    printf '%s\n' "${GFTB_TENANT_ID}" > "${plan_root}/platform-release.tenant"
+    git -C "${repo_root}" rev-parse HEAD > "${plan_root}/platform-release.carrier-sha"
+    chmod 600 "${plan_root}/platform-release.rendered.yaml" "${plan_root}/platform-release.render-sha256" "${plan_root}/platform-release.image" "${plan_root}/platform-release.tenant" "${plan_root}/platform-release.carrier-sha"
+    echo "platform release plan recorded"
+    echo "  image:   ${PLATFORM_APPLY_IMAGE}"
+    echo "  tenant:  ${GFTB_TENANT_ID}"
+    echo "  carrier: $(tr -d '\n' < "${plan_root}/platform-release.carrier-sha")"
+    echo "  render:  sha256:$(tr -d '\n' < "${plan_root}/platform-release.render-sha256")"
+
+# Refuse a stale or foreign plan: the inputs, the carrier, and a fresh render
+# must all still equal what the plan recorded.
+_platform-release-plan-preflight: _platform-release-inputs _platform-release-plan-root-contract
+    #!/usr/bin/env bash
+    set -euo pipefail
+    umask 077
+    repo_root="$(git rev-parse --show-toplevel)"
+    plan_root="${repo_root}/.k8s-plans"
+    for artifact in rendered.yaml render-sha256 image tenant carrier-sha; do
+      test -f "${plan_root}/platform-release.${artifact}" || { echo "No platform release plan recorded; record one with platform-release-plan first" >&2; exit 2; }
+    done
+    [[ "$(tr -d '\n' < "${plan_root}/platform-release.image")" == "${PLATFORM_APPLY_IMAGE}" ]] || { echo "Planned image differs from PLATFORM_APPLY_IMAGE; re-plan" >&2; exit 2; }
+    [[ "$(tr -d '\n' < "${plan_root}/platform-release.tenant")" == "${GFTB_TENANT_ID}" ]] || { echo "Planned tenant differs from GFTB_TENANT_ID; re-plan" >&2; exit 2; }
+    [[ "$(git -C "${repo_root}" rev-parse HEAD)" == "$(tr -d '\n' < "${plan_root}/platform-release.carrier-sha")" ]] || { echo "Infra carrier changed after the platform release plan; re-plan" >&2; exit 2; }
+    recorded_digest="$(tr -d '\n' < "${plan_root}/platform-release.render-sha256")"
+    [[ "$(python3 -I -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${plan_root}/platform-release.rendered.yaml")" == "${recorded_digest}" ]] || { echo "Recorded platform release plan bytes do not match their receipt; re-plan" >&2; exit 2; }
+    recheck="$(mktemp "${plan_root}/platform-release.recheck.XXXXXX")"
+    chmod 600 "${recheck}"
+    trap 'rm -f "${recheck}"' EXIT
+    just platform-release-render > "${recheck}"
+    [[ "$(python3 -I -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${recheck}")" == "${recorded_digest}" ]] || { echo "Reviewed manifests re-render differently than the recorded plan; re-plan" >&2; exit 2; }
+    echo "platform release plan preflight passed: render sha256:${recorded_digest}"
+
+# Server-side dry-run of the EXACT recorded plan bytes. No mutation.
+platform-release-server-dry-run: _platform-release-kubeconfig-input _platform-release-plan-preflight
+    #!/usr/bin/env bash
+    set -euo pipefail
+    repo_root="$(git rev-parse --show-toplevel)"
+    kubectl --kubeconfig "${PLATFORM_APPLY_KUBECONFIG}" --namespace {{ platform_ns }} apply --dry-run=server -f "${repo_root}/.k8s-plans/platform-release.rendered.yaml"
+
+# ATTENDED APPLY. Gated like web-release-apply: a clean, signed checkout equal
+# to canonical main, GFTB_APPLY_CONFIRM=apply, an operator-custody kubeconfig,
+# and a plan that still reproduces byte-for-byte. It dry-runs, applies the
+# recorded bytes, and waits for BOTH rollouts. The pre-rollout migration
+# (member-db PR #118's member-db-migrate-apply) must have completed first —
+# pods never migrate on startup (spec §6) — see the runbook ordering.
+platform-release-apply: _reviewed-clean-main _operator-apply-confirm _platform-release-kubeconfig-input _platform-release-plan-preflight
+    #!/usr/bin/env bash
+    set -euo pipefail
+    repo_root="$(git rev-parse --show-toplevel)"
+    plan="${repo_root}/.k8s-plans/platform-release.rendered.yaml"
+    kubectl --kubeconfig "${PLATFORM_APPLY_KUBECONFIG}" --namespace {{ platform_ns }} apply --dry-run=server -f "${plan}"
+    kubectl --kubeconfig "${PLATFORM_APPLY_KUBECONFIG}" --namespace {{ platform_ns }} apply -f "${plan}"
+    kubectl --kubeconfig "${PLATFORM_APPLY_KUBECONFIG}" --namespace {{ platform_ns }} rollout status deployment/{{ platform_web_deploy }} --timeout=300s
+    kubectl --kubeconfig "${PLATFORM_APPLY_KUBECONFIG}" --namespace {{ platform_ns }} rollout status deployment/{{ platform_worker_deploy }} --timeout=300s
+    echo "platform release applied; now run the PINNED/RUNNING and SERVED proofs"
+
+# PINNED + RUNNING proof. Read-only. Proves the LIVE Deployments carry exactly
+# the planned digest and the budgeted replica counts are ready — the receipt a
+# green rollout status does not itself print.
+platform-release-pinned-running-proof: _platform-release-inputs _platform-release-kubeconfig-input
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kc="${PLATFORM_APPLY_KUBECONFIG}"
+    ns="{{ platform_ns }}"
+    web_image="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get deployment/{{ platform_web_deploy }} -o jsonpath='{.spec.template.spec.containers[0].image}')"
+    worker_image="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get deployment/{{ platform_worker_deploy }} -o jsonpath='{.spec.template.spec.containers[0].image}')"
+    [[ "${web_image}" == "${PLATFORM_APPLY_IMAGE}" ]] || { echo "PINNED proof FAILED: web serves ${web_image}, plan says ${PLATFORM_APPLY_IMAGE}" >&2; exit 1; }
+    [[ "${worker_image}" == "${PLATFORM_APPLY_IMAGE}" ]] || { echo "PINNED proof FAILED: worker runs ${worker_image}, plan says ${PLATFORM_APPLY_IMAGE}" >&2; exit 1; }
+    web_ready="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get deployment/{{ platform_web_deploy }} -o jsonpath='{.status.readyReplicas}')"
+    worker_ready="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get deployment/{{ platform_worker_deploy }} -o jsonpath='{.status.readyReplicas}')"
+    [[ "${web_ready}" == "2" ]] || { echo "RUNNING proof FAILED: web readyReplicas ${web_ready:-0} != 2" >&2; exit 1; }
+    [[ "${worker_ready}" == "1" ]] || { echo "RUNNING proof FAILED: worker readyReplicas ${worker_ready:-0} != 1" >&2; exit 1; }
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" get pods -l app.kubernetes.io/part-of=gftb-platform -o custom-columns=NAME:.metadata.name,COMPONENT:.metadata.labels.app\\.kubernetes\\.io/component,PHASE:.status.phase,NODE:.spec.nodeName
+    echo "PINNED+RUNNING proof passed: web(2) + worker(1) on ${PLATFORM_APPLY_IMAGE}"
+
+# SERVED proof. Anonymous, from outside the cluster, against the staging host.
+# staging is PRIVATE (TIN-3815): with STAGING_ACCESS_STATE=gated the proof is
+# that an UNAUTHENTICATED request is refused toward Cloudflare Access (the
+# fail-closed receipt), optionally followed by an authenticated /health 200
+# when the operator supplies an Access service token pair. gated is the only
+# admitted state until an operator ruling makes staging public, which none of
+# the authority docs contemplates.
+platform-release-served-proof:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command -v curl >/dev/null 2>&1 || { echo "curl is required (nix develop provides it)" >&2; exit 1; }
+    [[ "${STAGING_ACCESS_STATE:?Set STAGING_ACCESS_STATE=gated after edge readback}" == "gated" ]] || { echo "staging.greatfallstoolbus.org is operator-QA-only; gated is the only admitted access state (TIN-3815)" >&2; exit 2; }
+    origin="https://staging.greatfallstoolbus.org"
+    anon_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "${origin}/health")"
+    case "${anon_code}" in
+      302|303|403) echo "SERVED proof (gate): anonymous /health -> ${anon_code} (refused toward Access)" ;;
+      *) echo "SERVED proof FAILED: anonymous /health returned ${anon_code}; expected an Access refusal (302/303/403) on the PRIVATE staging host" >&2; exit 1 ;;
+    esac
+    if [[ -n "${CF_ACCESS_CLIENT_ID:-}" && -n "${CF_ACCESS_CLIENT_SECRET:-}" ]]; then
+      auth_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 -H "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" -H "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}" "${origin}/health")"
+      [[ "${auth_code}" == "200" ]] || { echo "SERVED proof FAILED: authenticated /health returned ${auth_code}; expected 200" >&2; exit 1; }
+      echo "SERVED proof passed: gate refuses anonymous, service-token /health -> 200"
+    else
+      echo "SERVED proof (gate-only) passed; supply CF_ACCESS_CLIENT_ID/CF_ACCESS_CLIENT_SECRET for the authenticated 200 receipt"
+    fi
 
 # --- Reviewed gftb-site release candidate proofs ----------------------------
 # These recipes are read-only/proof-only. They deliberately do not share the
