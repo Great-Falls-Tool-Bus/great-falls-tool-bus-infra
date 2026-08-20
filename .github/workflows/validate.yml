@@ -1,8 +1,9 @@
 name: Validate Overlay
 
-# This public repository's validation is deliberately secret-free and runs on
-# a GitHub-hosted runner. The selected `tinyland-nix` group remains restricted
-# to admitted private repositories; validation must not weaken that boundary.
+# This public repository's validation is deliberately secret-free. It runs on
+# the GF cache-fronted `tinyland-nix` ARC runners (TIN-3914 Phase B: no
+# GitHub-hosted runners in this estate); validation stays secret-free so it
+# does not weaken the runner-group admission boundary.
 
 on:
   pull_request:
@@ -16,7 +17,7 @@ permissions:
 
 jobs:
   validate:
-    runs-on: ubuntu-24.04
+    runs-on: tinyland-nix
     timeout-minutes: 45
     steps:
       - name: Checkout overlay
