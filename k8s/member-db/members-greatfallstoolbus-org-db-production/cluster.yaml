@@ -241,19 +241,23 @@ spec:
       # restoring from the same bucket cannot collide with this one.
       destinationPath: s3://gftb-member-db-backups/
       serverName: gftb-member-db
-      # IN-CLUSTER S3 ONLY. This is the estate SeaweedFS S3 gateway, reached
-      # over cluster DNS; it is never an internet endpoint, and the validator
-      # fails closed on any endpointURL that is not a .svc.cluster.local name.
+      # IN-CLUSTER S3 ONLY. Reached over cluster DNS; never an internet
+      # endpoint, and the validator fails closed on any endpointURL that is
+      # not a .svc.cluster.local name.
       #
-      # OPEN OPERATOR DECISION, held in the runbook (step B1), NOT settled here:
-      # the tcfs namespace exposes both `seaweedfs:8333` and
-      # `tcfs-s3-posture-gateway:8333`, and which one is the admitted tenant
-      # entrypoint — plus whether GFTB backups may live in an estate-owned
-      # bucket at all — is an operator ruling. Because WAL archiving begins the
-      # moment this Cluster is applied, that ruling is a HARD PRE-APPLY GATE: an
-      # unreachable object store means archive_command fails, WAL accumulates on
-      # the 10Gi volume above, and the primary eventually stops.
-      endpointURL: http://seaweedfs.tcfs.svc.cluster.local:8333
+      # B1 RULING (docs/runbooks/member-db-bringup.md, 2026-08-20, operator
+      # interview session 050cb99f): neither tcfs endpoint is admitted for
+      # member personal data (custody findings: estate-held admin credential,
+      # writable IAM API, no NetworkPolicy floor, `:latest` images, an
+      # internet tunnel). The endpoint below is GFTB's own dedicated rustfs
+      # (rustfs.yaml), in this same namespace, admitting only this Cluster's
+      # pods on :9000 — kept inside GFTB's own apply plane rather than an
+      # estate-owned namespace GFTB does not govern. Because WAL archiving
+      # begins the moment this Cluster is applied, the rustfs stack and its
+      # NetworkPolicy must be live before this Cluster is, or archive_command
+      # fails and WAL accumulates on the 10Gi volume above until the primary
+      # stops.
+      endpointURL: http://gftb-member-db-backup-store.members-greatfallstoolbus-org-db-production.svc.cluster.local:9000
       s3Credentials:
         # NAMES ONLY. Operator-minted in-cluster (runbook step B2).
         accessKeyId:

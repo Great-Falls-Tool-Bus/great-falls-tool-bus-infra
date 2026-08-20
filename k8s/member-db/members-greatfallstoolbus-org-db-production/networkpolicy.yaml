@@ -167,8 +167,8 @@ spec:
 # Endpoints on honey (192.168.70.10/.11/.12:6443, read-only check 2026-08-19),
 # the same on-prem /24 the web Deployment's placement comment already names.
 #
-# There is deliberately NO 0.0.0.0/0 and no bare `- ports:` rule: the house S3
-# leg is scoped to the tcfs namespace, not to "anything on 443/8333".
+# There is deliberately NO 0.0.0.0/0 and no bare `- ports:` rule: the backup
+# leg is scoped to the in-namespace rustfs pod, not to "anything on 9000".
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -210,13 +210,20 @@ spec:
     # WAL archive + base backup destination (cluster.yaml barmanObjectStore).
     # This leg is what the RPO row depends on: if it is denied, archive_command
     # fails and WAL piles up on the dedicated walStorage volume.
+    #
+    # REWIRED under the B1 ruling (docs/runbooks/member-db-bringup.md,
+    # 2026-08-20): the destination is no longer the tcfs namespace's SeaweedFS
+    # gateway (estate-owned, outside GFTB's apply plane, custody findings in
+    # the ruling text) but the in-namespace gftb-member-db-backup-store rustfs
+    # Service declared in rustfs.yaml. Same-namespace podSelector, not a
+    # namespaceSelector, and port 9000 not 8333.
     - to:
-        - namespaceSelector:
+        - podSelector:
             matchLabels:
-              kubernetes.io/metadata.name: tcfs
+              app.kubernetes.io/name: gftb-member-db-backup-store
       ports:
         - protocol: TCP
-          port: 8333
+          port: 9000
     # Intra-cluster replication (inert at instances: 1, see above).
     - to:
         - podSelector:
@@ -227,3 +234,63 @@ spec:
           port: 5432
         - protocol: TCP
           port: 8000
+---
+# The GFTB-owned rustfs backup store (rustfs.yaml). Ingress admits ONLY the
+# CNPG cluster pods it backs up, on the S3 API port; nothing else in the
+# namespace (default-deny-ingress above still applies to it) or estate can
+# reach it. This is the netpol half of the B1 ruling: a GFTB-owned store kept
+# inside GFTB's own apply plane, with the secrets contract and netpol doctrine
+# already governing everything else in this namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cnpg-to-backup-store-ingress
+  namespace: members-greatfallstoolbus-org-db-production
+  labels:
+    app.kubernetes.io/name: gftb-member-db-backup-store
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: gftb-member-db-backup-store
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: gftb-member-db
+      ports:
+        - protocol: TCP
+          port: 9000
+---
+# Egress for the backup store pod itself: DNS only. rustfs is a passive S3
+# server with no outbound dependency of its own; this NetworkPolicy's mere
+# presence (policyTypes: [Egress] scoped to this pod) is what turns "no rule
+# matched" into deny, since there is no namespace-wide default-deny-egress
+# policy the way there is for ingress.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backup-store-egress-dns-only
+  namespace: members-greatfallstoolbus-org-db-production
+  labels:
+    app.kubernetes.io/name: gftb-member-db-backup-store
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: gftb-member-db-backup-store
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

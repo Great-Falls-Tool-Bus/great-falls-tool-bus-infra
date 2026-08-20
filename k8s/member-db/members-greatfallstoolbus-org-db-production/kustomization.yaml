@@ -24,6 +24,7 @@ resources:
   - cluster.yaml
   - scheduledbackup.yaml
   - networkpolicy.yaml
+  - rustfs.yaml
 
 labels:
   - includeSelectors: false
