@@ -105,6 +105,13 @@ changes. **Do not proceed to step S until this line is filled in.**
 > (Recommended)"), session 050cb99f, 2026-08-20 — the same interview-signature
 > mechanism that enacted ADR 0016 (meta 0f66bce3). Recommendation adopted
 > verbatim from data-plane-runway-20260820.md (operator-local brief).
+>
+> Placement addendum (2026-08-20, operator interview, same session): the
+> `local-path-sting` placement is a **recorded GFTB-scoped exception to
+> blahaj ADR 002** ("no durable PVC consumers on sting", cf. TIN-1965).
+> Rationale: the backup store MUST live off the DB's node (bumble) so
+> backups survive its loss; sting is the ruled exception host. A courtesy
+> note belongs on the blahaj side before/at the apply sitting.
 
 **B2 — bucket and credential.** Create the `gftb-member-db-backups` bucket,
 scoped to this cluster only. Mint the `gftb-member-db-backup-s3` Secret in the
