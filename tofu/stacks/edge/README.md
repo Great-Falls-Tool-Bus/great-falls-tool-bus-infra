@@ -72,9 +72,10 @@ the account id the Access policy needs is read off the zone lookup.
 > down no longer has a CF Pages target to flip to (a GH Pages rollback, if
 > ever needed, would first require re-standing up that publisher — it was
 > never deleted, only demoted, but has not been verified serving since this
-> section was written). The current rollback path is on-cluster: re-dispatch
-> `web-stack.yml` with a prior image digest (`docs/runbooks/oncluster-web-
-> cutover.md` P7).
+> section was written). The current rollback path is on-cluster and attended:
+> re-plan and re-apply the reviewed `web-release-*` chain with the previous
+> image digest (`docs/runbooks/oncluster-web-cutover.md` section S; the
+> `web-stack.yml` re-dispatch this note used to name was retired by TIN-3899).
 
 The apex + `www` targets are `var.pages_host`. The GH Pages → CF Pages
 flip was executed 2026-07-03: the CF Pages project exists with the

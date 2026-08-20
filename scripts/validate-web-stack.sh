@@ -6,17 +6,25 @@
 # is what keeps a stack name from being able to inject jq syntax.
 set -euo pipefail
 
-# DISPATCH-GATED declare-only guard for the GFTB on-cluster web workload
-# (TIN-2543, ADR 0010). Asserts the invariants so a regression that would open
-# the public path or auto-apply on merge fails CI before any apply. Never
-# contacts a cluster; never needs a secret.
+# ATTENDED-ONLY declare-only guard for the GFTB on-cluster web workload
+# (TIN-2543, ADR 0010; posture updated by TIN-3899). Asserts the invariants so a
+# regression that would open the public path or auto-apply on merge fails CI
+# before any apply. Never contacts a cluster; never needs a secret.
 #
 # ADR 0010 flips this stack to the executing-cutover shape: like the form stack
 # it now asserts a digest-pinned image and the running replica count (2). The
 # declare-only guarantee moves to the still-closed axes — NO Namespace object, NO
 # Secret, and a fail-closed tunnel route + reaper intent — so merging applies
-# nothing and routes no public traffic (the only apply is the dispatch-gated
-# web-stack.yml).
+# nothing and routes no public traffic.
+#
+# TIN-3899 retired the apply CARRIER, not this declaration. The dispatch-gated
+# .github/workflows/web-stack.yml is deleted, so no workflow in this repository
+# reaches this stack any more, and no repository_dispatch from the public site
+# repo reaches a cluster client of any kind. The sole surviving mutation path is
+# an attended operator running `just web-stack-apply` with an operator-custody
+# kubeconfig, and `_web-stack-promotion-interlock` refuses that once the
+# gftb-site static origin is live on Deployment/greatfallstoolbus-org. Hence
+# ATTENDED-ONLY, not DISPATCH-GATED.
 #
 # IMAGE ADMISSION IS BOUND TO THE STACK UNDER VALIDATION. The admitted container
 # repository is looked up from the Deployment's OWN target namespace, never from
@@ -78,14 +86,15 @@ assert_eq "${deploy_name}" "${app}" "Deployment name admitted in namespace ${sta
 
 # --- axis 1: replicas MUST be the ADR 0010 cutover shape (2) ------------------
 # ADR 0010 §5 step 3 flips 0 -> 2. Merging still applies nothing (web-crs.yml is
-# validate-only; the only apply is the dispatch-gated web-stack.yml).
+# validate-only, and after TIN-3899 no workflow applies this stack at all).
 replicas="$(yq -r 'select(.kind == "Deployment") | .spec.replicas' "${deploy}")"
 assert_eq "${replicas}" "2" "Deployment replicas (ADR 0010 cutover shape)"
 
 # --- axis 2: web image is a digest-pinned production reference ----------------
 # ADR 0010 makes on-prem the host; the manifest carries the real digest-pinned
-# image as the declarative record (web-stack.yml overrides it with the operator-
-# resolved digest at dispatch). Require THIS STACK's admitted GHCR repository
+# image as the declarative record (the attended `just web-stack-apply` carrier
+# overrides it with the operator-resolved digest). Require THIS STACK's admitted
+# GHCR repository
 # pinned by a full 64-hex @sha256: digest, and forbid the retired declare-only
 # PLACEHOLDER marker. Nothing else passes: no tag, no truncated or uppercase
 # digest, no other registry/owner/repository, and no sibling stack's repository.
@@ -161,4 +170,4 @@ fi
 # --- Full render must succeed (parse-only; never applies) --------------------
 kubectl kustomize "${dir}" >/dev/null
 
-echo "web stack validation passed for ${app} in ${stack_ns}: DISPATCH-GATED declare-only (replicas 2, image pinned to ${admitted_image_repo}@sha256:<64 hex>, no namespace, apply is dispatch-only), adapter-node ClusterIP 80->3000 with /health probes, default-deny + cloudflared-only public ingress, route+reaper fail-closed, no committed secrets"
+echo "web stack validation passed for ${app} in ${stack_ns}: ATTENDED-ONLY declare-only (replicas 2, image pinned to ${admitted_image_repo}@sha256:<64 hex>, no namespace, no workflow apply path -- the repository_dispatch CD carrier is retired and apply is attended-operator-only behind the promotion interlock), adapter-node ClusterIP 80->3000 with /health probes, default-deny + cloudflared-only public ingress, route+reaper fail-closed, no committed secrets"

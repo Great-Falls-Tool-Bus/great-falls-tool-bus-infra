@@ -44,7 +44,6 @@ EXPECTED_WORKFLOWS = {
     "mail-crs.yml",
     "validate.yml",
     "web-crs.yml",
-    "web-stack.yml",
 }
 
 # One entry per workflow that declares the reusable core checkout. Values are
@@ -58,7 +57,6 @@ EXPECTED_CORE_CHECKOUTS = {
     "list-crs.yml": 2,
     "mail-crs.yml": 2,
     "web-crs.yml": 1,
-    "web-stack.yml": 1,
 }
 
 # Preserve the reviewed executable authority for each role. Checkout
@@ -82,7 +80,6 @@ EXPECTED_ACTION_CHECKOUTS = {
     "mail-crs.yml": 4,
     "validate.yml": 1,
     "web-crs.yml": 2,
-    "web-stack.yml": 2,
 }
 
 EXPECTED_CORE_CI_PATH_EXPORTS = {
@@ -96,7 +93,6 @@ EXPECTED_CORE_CI_PATH_EXPORTS = {
     "mail-crs.yml": 3,
     "validate.yml": 0,
     "web-crs.yml": 1,
-    "web-stack.yml": 3,
 }
 
 EXPECTED_PERMISSIONS = {

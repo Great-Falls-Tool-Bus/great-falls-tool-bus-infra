@@ -12,12 +12,14 @@ core-consuming workflows declare exact core pins; the public repository token
 cannot fetch that private source. Do not add a PAT, deploy key, reused ARC App
 credential, or ARC kubeconfig to turn those declarations into ARC authority.
 
-## Optional Site-CI Metadata Token
+## Optional Site-CI Metadata Token — RETIRED (TIN-3899)
 
-`SITE_CI_READ_TOKEN` is an optional, purpose-bound override for the
-`web-stack.yml` repository-dispatch gate that reads the public site repository's
-Actions result. Its default is the workflow's ephemeral `github.token`. It is
-not a GloriousFlywheel source credential and must not be named or reused as one.
+`SITE_CI_READ_TOKEN` was an optional, purpose-bound override for the
+`web-stack.yml` repository-dispatch gate that read the public site repository's
+Actions result. That workflow and its `web-cd-ci-green-gate` recipe are deleted,
+so nothing consumes the name any more: no workflow reads it and no recipe
+requires it. If the secret is still provisioned, remove it. It was never a
+GloriousFlywheel source credential and must not be named or reused as one.
 
 ## Edge Backend Secrets
 

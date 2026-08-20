@@ -60,6 +60,15 @@ RAW_TOFU_WORKFLOW = re.compile(r"(?<![A-Za-z0-9_-])tofu(?:\s|-chdir\b)")
 WORKFLOW_ENV_ENTRY = re.compile(r"^          (TF_VAR_[A-Za-z0-9_]+):[ \t]*(.+)$")
 
 RETIRED_ARC_WORKFLOW = Path(".github/workflows/deploy-arc-runners.yml")
+# TIN-3899 Phase 5 step 2: the legacy adapter-node CD carrier. It was the only
+# workflow that ran `just web-stack-apply`, and its
+# `repository_dispatch: web-image-published` trigger let a push to the PUBLIC
+# site repo mutate Deployment/greatfallstoolbus-org unattended. It is deleted;
+# re-adding the file, or re-introducing ANY repository_dispatch consumer in this
+# repository, fails the public surface. The site repo's signal job is retired in
+# the same change.
+RETIRED_WEB_CD_WORKFLOW = Path(".github/workflows/web-stack.yml")
+WORKFLOW_REPOSITORY_DISPATCH = re.compile(r"^\s*repository_dispatch\s*:")
 JUST_COMMAND_START = re.compile(r"\bjust\b")
 JUST_OPTIONS_WITH_VALUES = {
     "-d": 1,
@@ -121,11 +130,7 @@ HOSTED_WORKFLOW_JUST_ALLOWLIST = {
     "mail-cr-drift-check",
     "mail-cr-server-dry-run",
     "mail-cr-validate",
-    "web-cd-ci-green-gate",
-    "web-stack-apply",
     "web-stack-drift-check",
-    "web-stack-health",
-    "web-stack-server-dry-run",
     "web-stack-validate",
 }
 
@@ -469,10 +474,10 @@ WEB_RELEASE_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "027bfae6f72ee45f", "6bd86a57e1b5d921", "d5df538b3905589c", "f111051c06f3da5e"
     ),
     # The legacy adapter-node carrier's promotion interlock. It is not part of
-    # the web-release dependency graph -- it hangs off web-stack-apply, which the
-    # hosted web-stack.yml workflow is allowed to run -- so it is receipted here
-    # but deliberately NOT an operator-local root. Its body is enforced by
-    # scan_web_stack_promotion_interlock_text.
+    # the web-release dependency graph -- it hangs off web-stack-apply, the
+    # attended legacy carrier no workflow may invoke (TIN-3899) -- so it is
+    # receipted here but deliberately NOT an operator-local root. Its body is
+    # enforced by scan_web_stack_promotion_interlock_text.
     "_web-stack-promotion-interlock": _receipt(
         "f6fbb3dc72de15bb", "38d350899029f9fb", "afb1a885f3b59950", "a5f7c8a92999df1f"
     ),
@@ -496,7 +501,11 @@ WEB_RELEASE_STACK_GLOBAL_ASSIGNMENTS = {
 # a recipe), not an enumerated recipe list, so a brand-new unlisted recipe cannot
 # reintroduce it. Exactly one recipe is allowed to do this: the legacy
 # `web-stack-apply` adapter-node carrier, whose imperative pin predates the
-# release chain and is documented in _k8s-drift-check's header.
+# release chain and is documented in _k8s-drift-check's header. TIN-3899 removed
+# that carrier's automated caller but KEPT the recipe and its promotion
+# interlock as the attended belt-and-braces path, so this allowlist stays a
+# one-element set instead of going empty and taking the interlock contract with
+# it.
 #
 # The command anchor covers wrapper names built on `kubectl` (this repo's own
 # `kubectl_clean`), and IMPERATIVE_PIN_CONTINUATION folds backslash line
@@ -554,11 +563,13 @@ WEB_STACK_TREE_APPLY_ALLOWED_RECIPES = frozenset(
 )
 
 # The legacy adapter-node carrier and the reviewed release chain mutate the SAME
-# Deployment. web-stack.yml fires `just web-stack-apply` unattended from a
-# repository_dispatch the public site repo sends on every push to main, so after
-# the gftb-site promotion that path would silently revert it. The interlock reads
-# the LIVE image and refuses; this contract makes removing or bypassing the
-# interlock a `just public-surface` failure.
+# Deployment. web-stack.yml used to fire `just web-stack-apply` unattended from a
+# repository_dispatch the public site repo sent on every push to main; TIN-3899
+# deleted both ends of that path, so the carrier is now attended-only. The
+# interlock is RETAINED as belt-and-braces on that attended path: it reads the
+# LIVE image and refuses once the gftb-site promotion is in place, and this
+# contract makes removing or bypassing it -- or re-wiring any new mutating
+# carrier around it -- a `just public-surface` failure.
 WEB_STACK_PROMOTION_INTERLOCK = "_web-stack-promotion-interlock"
 WEB_STACK_PROMOTION_INTERLOCK_DEPENDENTS = ("web-stack-apply",)
 WEB_STACK_PROMOTION_INTERLOCK_REQUIRED_TEXT = (
@@ -574,7 +585,7 @@ WEB_RELEASE_VALIDATION_CALLEE_DIGEST = _receipt(
 )
 WEB_RELEASE_VALIDATION_SCRIPT = Path("scripts/validate-web-stack.sh")
 WEB_RELEASE_VALIDATION_SCRIPT_SHA256 = _receipt(
-    "4afdba07c0fc08c9", "8b4b496fee8fa10d", "4526860ff22a4c62", "d1a4c7adab0f35ff"
+    "c590e9770a4b133e", "9988ce74e3d837cf", "a3307f05a177b286", "d09d6675199c9a01"
 )
 
 FLAKE_RELEASE_PACKAGES = ("crane", "curl")
@@ -1186,7 +1197,7 @@ def scan_web_release_operator_contract_text(
     # The promotion interlock is receipted in the same table but is deliberately
     # NOT part of the release dependency graph: that graph doubles as the
     # operator-local ROOT set, and the interlock hangs off the legacy
-    # web-stack-apply carrier that hosted web-stack.yml is allowed to run.
+    # web-stack-apply carrier, which since TIN-3899 no workflow invokes at all.
     # scan_web_stack_promotion_interlock_text enforces its body receipt.
     dependency_names |= {WEB_STACK_PROMOTION_INTERLOCK}
     if dependency_names != digest_names:
@@ -1696,6 +1707,19 @@ def scan_workflow_text(
         stripped = line.strip()
         if stripped.startswith("#"):
             continue
+        if WORKFLOW_REPOSITORY_DISPATCH.match(line):
+            findings.append(
+                Finding(
+                    "workflow-repository-dispatch-retired",
+                    path,
+                    lineno,
+                    "TIN-3899 retired the repository_dispatch CD plane: no "
+                    "workflow in this repository may consume a cross-repo "
+                    "dispatch, because that is the trigger that let a push to "
+                    "the public site repo mutate the live web Deployment "
+                    "unattended.",
+                )
+            )
         if RAW_TOFU_WORKFLOW.search(line) and " just " not in f" {line} ":
             findings.append(
                 Finding(
@@ -1784,6 +1808,18 @@ def scan_workflows() -> list[Finding]:
                 RETIRED_ARC_WORKFLOW,
                 1,
                 "Delete deploy-arc-runners.yml; sensitive ARC operations are operator-local.",
+            )
+        )
+    retired_web_cd = REPO / RETIRED_WEB_CD_WORKFLOW
+    if retired_web_cd.exists() or retired_web_cd.is_symlink():
+        findings.append(
+            Finding(
+                "retired-web-cd-workflow-retained",
+                RETIRED_WEB_CD_WORKFLOW,
+                1,
+                "Delete web-stack.yml; the legacy adapter-node CD carrier is "
+                "retired (TIN-3899). Applying k8s/web is attended-operator-only "
+                "and the reviewed forward path is the web-release-* chain.",
             )
         )
 
@@ -7165,6 +7201,51 @@ def self_test() -> None:
         )
     ):
         raise SystemExit("self-test FAILED: workflow ARC alias was accepted")
+
+    # TIN-3899: the retired CD plane. A workflow that re-declares a
+    # repository_dispatch trigger is exactly how the public site repo used to
+    # reach `just web-stack-apply` unattended, so the trigger itself is refused,
+    # and neither web-stack-apply nor its CD-only helpers remain approved for
+    # any hosted workflow.
+    if not any(
+        finding.rule == "workflow-repository-dispatch-retired"
+        for finding in scan_workflow_text(
+            "on:\n  repository_dispatch:\n    types: [web-image-published]\n",
+            Path(".github/workflows/fixture.yml"),
+            alias_recipes,
+            alias_known,
+        )
+    ):
+        raise SystemExit(
+            "self-test FAILED: a retired repository_dispatch trigger was accepted"
+        )
+    if any(
+        finding.rule == "workflow-repository-dispatch-retired"
+        for finding in scan_workflow_text(
+            "on:\n  workflow_dispatch: {}\n",
+            Path(".github/workflows/fixture.yml"),
+            alias_recipes,
+            alias_known,
+        )
+    ):
+        raise SystemExit(
+            "self-test FAILED: workflow_dispatch was mistaken for the retired "
+            "repository_dispatch CD trigger"
+        )
+    for retired_cd_recipe in (
+        "web-stack-apply",
+        "web-stack-server-dry-run",
+        "web-stack-health",
+    ):
+        if retired_cd_recipe in HOSTED_WORKFLOW_JUST_ALLOWLIST:
+            raise SystemExit(
+                "self-test FAILED: the retired legacy web CD recipe "
+                f"{retired_cd_recipe!r} is still approved for hosted workflows"
+            )
+    if (REPO / RETIRED_WEB_CD_WORKFLOW).exists():
+        raise SystemExit(
+            "self-test FAILED: the retired legacy web CD workflow is still present"
+        )
 
     transitive_wrapper = justfile + "\n" + wrapper_bodies[0]
     transitive_recipes, _ = arc_operator_recipe_closure(transitive_wrapper)
