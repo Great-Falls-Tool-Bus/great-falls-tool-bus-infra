@@ -291,7 +291,7 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "c37fb8c36e826dc6", "3676b9eafb3336d0", "87893f2ae0d1c1ec", "c957b577fd505498"
     ),
     "arc-plan-scope-check": _receipt(
-        "e6b881c364d592f3", "42bf73a298da3fa6", "401d1d090bf8c0a8", "c5e86c774a0a71c9"
+        "0c41b6146274684d", "0ce2041c9cea8e84", "8c22b25b861aaa13", "67784196310dbd98"
     ),
     "arc-apply": _receipt(
         "fe8c324732148b38", "c967bad1c1ccab8e", "fd3840cedf78db82", "9b5a73294ec96ef6"
@@ -2394,6 +2394,48 @@ ARC_ROLLBACK_HELM_CHANGE = {
     },
 }
 
+# TIN-2299's capacity bump applied on 2026-08-19 as helm_release
+# great-falls-tool-bus-nix revision 6 with runnerGroup still `default`,
+# decomposing TIN-3902's combined cutover. The decomposed shapes reuse the
+# verbatim literals above: ARC_AFTER_VALUES is byte-for-byte the live
+# post-capacity pre-cutover rendering (8/16Gi storage, pre-cutover image
+# digest, no GF_FLYWHEEL_PROFILE_STATE, no priorityClassName) and
+# ARC_CUTOVER_VALUES the post-cutover rendering, so the group move carries
+# zero storage delta on either side.
+ARC_POST_CAPACITY_CUTOVER_HELM_CHANGE = {
+    "address": "module.gh_nix.helm_release.arc_runner",
+    "module_address": "module.gh_nix",
+    "mode": "managed",
+    "type": "helm_release",
+    "name": "arc_runner",
+    "provider_name": "registry.opentofu.org/hashicorp/helm",
+    "change": {
+        "actions": ["update"],
+        "before": {"set": copy.deepcopy(ARC_HELM_SET_DEFAULT), "values": [ARC_AFTER_VALUES]},
+        "after": {"set": copy.deepcopy(ARC_HELM_SET_DEDICATED), "values": [ARC_CUTOVER_VALUES]},
+        "after_unknown": ARC_HELM_AFTER_UNKNOWN,
+        "before_sensitive": ARC_HELM_BEFORE_SENSITIVE,
+        "after_sensitive": ARC_HELM_AFTER_SENSITIVE,
+    },
+}
+
+ARC_POST_CAPACITY_ROLLBACK_HELM_CHANGE = {
+    "address": "module.gh_nix.helm_release.arc_runner",
+    "module_address": "module.gh_nix",
+    "mode": "managed",
+    "type": "helm_release",
+    "name": "arc_runner",
+    "provider_name": "registry.opentofu.org/hashicorp/helm",
+    "change": {
+        "actions": ["update"],
+        "before": {"set": copy.deepcopy(ARC_HELM_SET_DEDICATED), "values": [ARC_CUTOVER_VALUES]},
+        "after": {"set": copy.deepcopy(ARC_HELM_SET_DEFAULT), "values": [ARC_AFTER_VALUES]},
+        "after_unknown": ARC_HELM_AFTER_UNKNOWN,
+        "before_sensitive": ARC_HELM_BEFORE_SENSITIVE,
+        "after_sensitive": ARC_HELM_AFTER_SENSITIVE,
+    },
+}
+
 ARC_POLICY_CREATE = {'address': 'terraform_data.runner_group_policy',
  'mode': 'managed',
  'type': 'terraform_data',
@@ -2597,6 +2639,22 @@ def valid_arc_rollback_plan() -> dict[str, object]:
     """The reviewed TIN-3902 runner-group rollback: the cutover, exactly reversed."""
     return arc_scope_plan(
         [ARC_POLICY_DELETE, ARC_ROLLBACK_HELM_CHANGE], ARC_ROLLBACK_OUTPUT_CHANGES
+    )
+
+
+def valid_arc_post_capacity_cutover_plan() -> dict[str, object]:
+    """The TIN-3902 cutover decomposed by the applied capacity bump: group move only."""
+    return arc_scope_plan(
+        [ARC_POLICY_CREATE, ARC_POST_CAPACITY_CUTOVER_HELM_CHANGE],
+        ARC_CUTOVER_OUTPUT_CHANGES,
+    )
+
+
+def valid_arc_post_capacity_rollback_plan() -> dict[str, object]:
+    """That decomposed cutover exactly reversed: the ratified fallback from the post-cutover state."""
+    return arc_scope_plan(
+        [ARC_POLICY_DELETE, ARC_POST_CAPACITY_ROLLBACK_HELM_CHANGE],
+        ARC_ROLLBACK_OUTPUT_CHANGES,
     )
 
 
@@ -7608,13 +7666,23 @@ def self_test() -> None:
     # ---------------------------------------------------------------------
     # TIN-3902 runner-group cutover and its rollback.
     #
-    # The guard admits exactly three enumerated plans. The two below are the
-    # new ones; `valid` above proves the pre-existing capacity plan is still
-    # admitted unchanged. Everything after them is refused.
+    # The guard admits exactly three enumerated plan shapes. Each move shape
+    # carries exactly two admitted storage transitions: the original combined
+    # one and, since TIN-2299's capacity bump applied on 2026-08-19 as
+    # helm_release revision 6 (decomposing the cutover), the post-capacity
+    # zero-delta one. `valid` above proves the pre-existing capacity plan is
+    # still admitted unchanged. Everything after these is refused.
     # ---------------------------------------------------------------------
     cutover = valid_arc_cutover_plan()
     rollback = valid_arc_rollback_plan()
-    for label, plan in (("runner-group cutover", cutover), ("runner-group rollback", rollback)):
+    post_capacity_cutover = valid_arc_post_capacity_cutover_plan()
+    post_capacity_rollback = valid_arc_post_capacity_rollback_plan()
+    for label, plan in (
+        ("runner-group cutover", cutover),
+        ("runner-group rollback", rollback),
+        ("post-capacity runner-group cutover", post_capacity_cutover),
+        ("post-capacity runner-group rollback", post_capacity_rollback),
+    ):
         result = run_arc_scope_checker(scope_source, plan)
         if result.returncode != 0:
             raise SystemExit(
@@ -7622,14 +7690,19 @@ def self_test() -> None:
                 + (result.stdout + result.stderr).strip()
             )
 
-    if cutover["resource_changes"][1]["change"]["before"]["values"] != (  # type: ignore[index]
-        rollback["resource_changes"][1]["change"]["after"]["values"]  # type: ignore[index]
-    ) or cutover["resource_changes"][1]["change"]["after"]["values"] != (  # type: ignore[index]
-        rollback["resource_changes"][1]["change"]["before"]["values"]  # type: ignore[index]
+    for pair_label, forward, reverse in (
+        ("cutover", cutover, rollback),
+        ("post-capacity cutover", post_capacity_cutover, post_capacity_rollback),
     ):
-        raise SystemExit(
-            "self-test FAILED: rollback fixture is not the byte-exact reverse of the cutover"
-        )
+        if forward["resource_changes"][1]["change"]["before"]["values"] != (  # type: ignore[index]
+            reverse["resource_changes"][1]["change"]["after"]["values"]  # type: ignore[index]
+        ) or forward["resource_changes"][1]["change"]["after"]["values"] != (  # type: ignore[index]
+            reverse["resource_changes"][1]["change"]["before"]["values"]  # type: ignore[index]
+        ):
+            raise SystemExit(
+                "self-test FAILED: rollback fixture is not the byte-exact reverse "
+                f"of the {pair_label}"
+            )
 
     extra_resource = {
         "address": "kubernetes_priority_class_v1.arc_runner[0]",
@@ -7831,6 +7904,8 @@ def self_test() -> None:
         for shape_label, base, side_name in (
             ("cutover", cutover, "after"),
             ("rollback", rollback, "before"),
+            ("post-capacity cutover", post_capacity_cutover, "after"),
+            ("post-capacity rollback", post_capacity_rollback, "before"),
         ):
             plan = copy.deepcopy(base)
             side = plan["resource_changes"][1]["change"][side_name]  # type: ignore[index]
@@ -7841,6 +7916,106 @@ def self_test() -> None:
             expect_scope_rejection(
                 scope_source, f"{shape_label} with an {label}", plan, diagnostic
             )
+
+    # The zero-storage-delta admission is exactly HIGH -> HIGH on the two move
+    # shapes and nothing wider: an extra delta on the untouched (pre-cutover)
+    # side, a rollback claiming the never-live LOW -> HIGH transition, a mixed
+    # 8Gi/8Gi state on either side, and a capacity plan without its bump are
+    # all still refused.
+    def demote_storage_lines(document: str) -> str:
+        """Rewrite one values doc's runner storage from 8/16Gi down to 4/8Gi."""
+        demoted = document.replace(
+            '          "ephemeral-storage": "8Gi"\n',
+            '          "ephemeral-storage": "4Gi"\n',
+            1,
+        ).replace(
+            '          "ephemeral-storage": "16Gi"\n',
+            '          "ephemeral-storage": "8Gi"\n',
+            1,
+        )
+        if demoted == document:
+            raise SystemExit(
+                "self-test FAILED: could not construct demoted storage fixture"
+            )
+        return demoted
+
+    def mixed_storage_lines(document: str) -> str:
+        """Rewrite one values doc's runner storage limit to the mixed 8Gi/8Gi state."""
+        mixed = document.replace(
+            '          "ephemeral-storage": "16Gi"\n',
+            '          "ephemeral-storage": "8Gi"\n',
+            1,
+        )
+        if mixed == document:
+            raise SystemExit(
+                "self-test FAILED: could not construct mixed storage fixture"
+            )
+        return mixed
+
+    plan = copy.deepcopy(post_capacity_cutover)
+    before_side = plan["resource_changes"][1]["change"]["before"]  # type: ignore[index]
+    before_side["values"] = [
+        before_side["values"][0].replace(
+            '      - "name": "RUNNER_ALLOW_RUNASROOT"\n',
+            '      - "name": "GF_UNREVIEWED"\n        "value": "1"\n'
+            '      - "name": "RUNNER_ALLOW_RUNASROOT"\n',
+            1,
+        )
+    ]
+    expect_scope_rejection(
+        scope_source,
+        "post-capacity cutover with an extra pre-cutover-side env var",
+        plan,
+        "beyond the reviewed runner-group",
+    )
+
+    plan = copy.deepcopy(post_capacity_rollback)
+    after_side = plan["resource_changes"][1]["change"]["after"]  # type: ignore[index]
+    after_side["values"] = [
+        after_side["values"][0].replace(
+            '          "memory": "8Gi"\n', '          "memory": "16Gi"\n', 1
+        )
+    ]
+    expect_scope_rejection(
+        scope_source,
+        "post-capacity rollback with an extra post-rollback-side memory change",
+        plan,
+        "beyond the reviewed runner-group",
+    )
+
+    plan = copy.deepcopy(post_capacity_rollback)
+    helm_change = plan["resource_changes"][1]["change"]  # type: ignore[index]
+    helm_change["before"]["values"] = [
+        demote_storage_lines(helm_change["before"]["values"][0])
+    ]
+    expect_scope_rejection(
+        scope_source,
+        "rollback moving storage LOW -> HIGH",
+        plan,
+        "to move as one of",
+    )
+
+    for side_label, side_name in (("before", "before"), ("after", "after")):
+        plan = copy.deepcopy(post_capacity_cutover)
+        side = plan["resource_changes"][1]["change"][side_name]  # type: ignore[index]
+        side["values"] = [mixed_storage_lines(side["values"][0])]
+        expect_scope_rejection(
+            scope_source,
+            f"cutover with a mixed 8Gi/8Gi {side_label} storage state",
+            plan,
+            "to move as one of",
+        )
+
+    plan = copy.deepcopy(valid)
+    helm_change = plan["resource_changes"][0]["change"]  # type: ignore[index]
+    helm_change["before"]["values"] = [ARC_AFTER_VALUES]
+    helm_change["after"]["values"] = [ARC_AFTER_VALUES]
+    expect_scope_rejection(
+        scope_source,
+        "capacity plan with zero storage delta",
+        plan,
+        "to move as one of",
+    )
 
     policy_cases = (
         ("policy", "legacy-default"),
