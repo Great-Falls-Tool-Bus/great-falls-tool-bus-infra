@@ -1,0 +1,207 @@
+# TIN-3813 lane — mailman-listsync source: the add-only reconciler that
+# enforces the roster invariant
+#
+#     members(keyholders@latoolb.us) is a subset of members(discuss@latoolb.us)
+#
+# ratified by meta decisions/0014 ruling 5 (keyholders@ = owner-curated private
+# archive, discuss@ = public community archive) and directed by operator ruling
+# 2026-08-20 (full auto-add now; consent for the public-archive nature of
+# discuss@ travels with the keyholders@ admission decision).
+#
+# Same shape as the form-handler: upstream python runtime pinned by digest, the
+# application is this ConfigMap-mounted stdlib-only script. No build, no pushed
+# image, no third-party dependency.
+#
+# HARD PROPERTIES (asserted offline by scripts/validate-listsync-stack.sh):
+#   - ADD-ONLY: the HTTP method allowlist is GET/POST. There is no removal,
+#     unsubscribe, or settings path in this program, so a bug or a poisoned
+#     config cannot converge by shrinking discuss@ — only by growing it.
+#   - TWO LISTS ONLY: the list pair is pinned as constants and the runtime env
+#     must match those constants exactly or the run refuses before any I/O.
+#   - IDEMPOTENT: reconciliation is a set difference; HTTP 409 (already a
+#     member) is success. Re-running converges to the same state.
+#   - RETRYABLE + DEAD-LETTERED: bounded in-run retries with backoff; any
+#     unresolved failure exits non-zero so the Job is retained as Failed
+#     (kept by failedJobsHistoryLimit) and the structured JSON receipt lines
+#     land in the pod log for Loki. The next scheduled run is the retry loop.
+#   - DRY-RUN DEFAULT-ON: LISTSYNC_DRY_RUN defaults to true; reads only,
+#     reports the would-add set, mutates nothing until the operator flips it.
+#   - REDACTED RECEIPTS: subscriber addresses are logged redacted
+#     (first character + domain), per the TIN-3813 receipt-redaction and
+#     TIN-3437 off-list acknowledgement doctrine. The credential is read from
+#     env in-process and is never logged.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mailman-listsync-src
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: mailman-listsync
+    app.kubernetes.io/component: list-membership-sync
+data:
+  listsync.py: |
+    #!/usr/bin/env python3
+    """Add-only keyholders -> discuss membership reconciler (TIN-3813 lane).
+
+    Reads the member roster of the pinned source list and subscribes any
+    member missing from the pinned target list (pre_verified, pre_confirmed,
+    pre_approved). It never removes anyone, never touches any other list, and
+    never changes list settings. Receipts are structured JSON lines on stdout
+    with subscriber addresses redacted.
+    """
+    import json
+    import os
+    import sys
+    import time
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+    from base64 import b64encode
+
+    SOURCE_LIST = "keyholders.latoolb.us"
+    TARGET_LIST = "discuss.latoolb.us"
+    ALLOWED_METHODS = ("GET", "POST")
+    PAGE_SIZE = 200
+    MAX_PAGES = 50
+    ATTEMPTS = 3
+    TIMEOUT_SECONDS = 10
+
+    BASE = ""
+    AUTH = ""
+
+
+    def log(event, **fields):
+        record = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                  "event": event}
+        record.update(fields)
+        print(json.dumps(record, sort_keys=True), flush=True)
+
+
+    def redact(address):
+        local, _, domain = address.partition("@")
+        head = local[:1]
+        return head + "..." + ("@" + domain if domain else "")
+
+
+    def request(method, url, form=None):
+        if method not in ALLOWED_METHODS:
+            raise RuntimeError("method not allowed by add-only contract: %s" % method)
+        body = urllib.parse.urlencode(form).encode() if form is not None else None
+        last_error = "unknown"
+        for attempt in range(1, ATTEMPTS + 1):
+            req = urllib.request.Request(url, data=body, method=method)
+            req.add_header("Authorization", "Basic " + AUTH)
+            try:
+                with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
+                    return resp.status, resp.read()
+            except urllib.error.HTTPError as err:
+                if err.code < 500:
+                    return err.code, err.read()
+                last_error = "http %d" % err.code
+            except (urllib.error.URLError, OSError) as err:
+                reason = err.reason if isinstance(err, urllib.error.URLError) else err
+                last_error = str(reason)
+            if attempt < ATTEMPTS:
+                time.sleep(2 * attempt)
+        raise RuntimeError("request failed after %d attempts: %s %s (%s)"
+                           % (ATTEMPTS, method, url, last_error))
+
+
+    def roster(list_id):
+        """Return {lowercased email: display_name} for role=member entries."""
+        members = {}
+        for page in range(1, MAX_PAGES + 1):
+            url = ("%s/3.1/lists/%s/roster/member?count=%d&page=%d"
+                   % (BASE, list_id, PAGE_SIZE, page))
+            status, payload = request("GET", url)
+            if status != 200:
+                raise RuntimeError("roster read for %s returned HTTP %d"
+                                   % (list_id, status))
+            document = json.loads(payload)
+            entries = document.get("entries", [])
+            for entry in entries:
+                if entry.get("role") != "member":
+                    continue
+                members[entry["email"].strip().lower()] = entry.get("display_name") or ""
+            total = int(document.get("total_size", 0))
+            if not entries or page * PAGE_SIZE >= total:
+                return members
+        raise RuntimeError("roster pagination did not terminate for %s" % list_id)
+
+
+    def subscribe(address, display_name):
+        status, _ = request("POST", BASE + "/3.1/members", {
+            "list_id": TARGET_LIST,
+            "subscriber": address,
+            "display_name": display_name,
+            "pre_verified": "true",
+            "pre_confirmed": "true",
+            "pre_approved": "true",
+            "role": "member",
+        })
+        if status == 201:
+            return "added"
+        if status == 409:
+            return "already-member"
+        raise RuntimeError("subscribe returned HTTP %d" % status)
+
+
+    def main():
+        global BASE, AUTH
+        if (os.environ.get("LISTSYNC_SOURCE_LIST") != SOURCE_LIST
+                or os.environ.get("LISTSYNC_TARGET_LIST") != TARGET_LIST):
+            log("listsync.refused",
+                reason="configured lists do not match the pinned pair",
+                pinned_source=SOURCE_LIST, pinned_target=TARGET_LIST)
+            return 2
+        rest_user = os.environ.get("MAILMAN_REST_USER", "")
+        rest_password = os.environ.get("MAILMAN_REST_PASSWORD", "")
+        if not rest_user or not rest_password:
+            log("listsync.refused",
+                reason="REST credential absent; the dedicated Secret gate is closed")
+            return 2
+        BASE = os.environ.get("MAILMAN_REST_URL", "").rstrip("/")
+        if not BASE.startswith("http"):
+            log("listsync.refused", reason="MAILMAN_REST_URL is not set")
+            return 2
+        AUTH = b64encode(("%s:%s" % (rest_user, rest_password)).encode()).decode()
+        dry_run = os.environ.get("LISTSYNC_DRY_RUN", "true").strip().lower() != "false"
+
+        source = roster(SOURCE_LIST)
+        target = roster(TARGET_LIST)
+        missing = sorted(set(source) - set(target))
+        log("listsync.observed",
+            source_list=SOURCE_LIST, target_list=TARGET_LIST,
+            source_members=len(source), target_members=len(target),
+            missing=len(missing),
+            missing_redacted=[redact(a) for a in missing],
+            dry_run=dry_run)
+        if dry_run:
+            log("listsync.dry-run", would_add=len(missing))
+            return 0
+
+        failures = 0
+        for address in missing:
+            try:
+                outcome = subscribe(address, source[address])
+                log("listsync.add", subscriber=redact(address), outcome=outcome)
+            except RuntimeError as err:
+                failures += 1
+                log("listsync.add-failed", subscriber=redact(address),
+                    error=str(err))
+
+        after = roster(TARGET_LIST)
+        still_missing = sorted(set(source) - set(after))
+        log("listsync.readback",
+            target_members=len(after), still_missing=len(still_missing),
+            still_missing_redacted=[redact(a) for a in still_missing])
+        if failures or still_missing:
+            log("listsync.failed", failures=failures,
+                still_missing=len(still_missing))
+            return 1
+        log("listsync.converged", added=len(missing))
+        return 0
+
+
+    if __name__ == "__main__":
+        sys.exit(main())
