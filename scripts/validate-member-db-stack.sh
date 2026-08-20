@@ -35,6 +35,7 @@ netpol="${dir}/networkpolicy.yaml"
 kustomization="${dir}/kustomization.yaml"
 job_template="${platform_dir}/job-migrator.template.yaml"
 secrets_contract="${member_root}/secrets.contract.yaml"
+rustfs="${dir}/rustfs.yaml"
 
 # --- reviewed constants ------------------------------------------------------
 # The exact minor TIN-3817 acceptance row 1 names, and the multi-arch index
@@ -54,6 +55,18 @@ readonly WANT_MIGRATOR_SECRET="gftb-member-db-migrator-dsn"
 readonly WANT_STORAGE_CLASS="openebs-bumble-postgresql-retain"
 readonly WANT_MIGRATOR_ENTRYPOINT='["/usr/local/bin/migrator"]'
 readonly WANT_IMAGE_PLACEHOLDER="PLACEHOLDER-MEMBER-DB-MIGRATOR-IMAGE"
+# B1 ruling (2026-08-20): GFTB-owned rustfs backup store. Digest reused
+# verbatim from the house pin source, blahaj deploy/nix-cache/
+# attic-rustfs-openebs.yaml:214.
+readonly WANT_RUSTFS_REPO="docker.io/rustfs/rustfs"
+# The house pin source (blahaj attic-rustfs-openebs.yaml:214) carries both a
+# tag and a digest; the digest is what actually pins the pull, and this
+# validator requires it be present and correct regardless of the tag string.
+readonly WANT_RUSTFS_TAG="1.0.0-beta.8"
+readonly WANT_RUSTFS_DIGEST="sha256:fa19210ac4697c79d7ccca1ec9b0eb91aebacc6691991ffb14014bb3c67e6cc3"
+readonly WANT_RUSTFS_NAME="gftb-member-db-backup-store"
+readonly WANT_RUSTFS_STORAGECLASS="local-path-sting"
+readonly MIN_RUSTFS_STORAGE_GI=50
 # TIN-3817 acceptance row 8: structured-data RPO no worse than one hour. The
 # manifest declares 300s; this is the CEILING the guard enforces, so tightening
 # the manifest stays legal and loosening it past the acceptance row does not.
@@ -71,7 +84,7 @@ command -v jq >/dev/null 2>&1 || fail "jq is required"
 command -v kubectl >/dev/null 2>&1 || fail "kubectl is required for the render check"
 
 for f in "${cluster}" "${schedbackup}" "${netpol}" "${kustomization}" \
-  "${job_template}" "${secrets_contract}"; do
+  "${job_template}" "${secrets_contract}" "${rustfs}"; do
   require_file "${f}"
 done
 
@@ -318,7 +331,70 @@ if yq -r '.resources[]?' "${kustomization}" | grep -Fq "job-migrator"; then
   fail "the migration Job template must not be a kustomization resource; it is a one-shot dispatch artifact rendered by the member-db-migrate-render recipe"
 fi
 
+# --- axis 13: the GFTB-owned rustfs backup store (B1 ruling, 2026-08-20) ----
+# Four checked things: the image is digest-pinned (never a tag, never a
+# different rustfs repo), the PVC is on the Retain-carrying local-path-sting
+# class at >=50Gi, the ingress NetworkPolicy admits exactly the CNPG cluster
+# pods on :9000 and nothing broader, and cluster.yaml's endpointURL actually
+# names this Service rather than drifting back toward tcfs.
+rustfs_image="$(yq -r 'select(.kind == "StatefulSet") | .spec.template.spec.containers[] | select(.name == "rustfs") | .image' "${rustfs}")"
+if [[ ! "${rustfs_image}" =~ @sha256:[0-9a-f]{64}$ ]]; then
+  fail "rustfs StatefulSet image must be pinned by @sha256:<64 lowercase hex>; got '${rustfs_image}'"
+fi
+assert_eq "${rustfs_image}" "${WANT_RUSTFS_REPO}:${WANT_RUSTFS_TAG}@${WANT_RUSTFS_DIGEST}" \
+  "rustfs image digest (B1 ruling: digest reused from the house pin source)"
+
+rustfs_node_selector="$(yq -r 'select(.kind == "StatefulSet") | .spec.template.spec.nodeSelector["kubernetes.io/hostname"]' "${rustfs}")"
+assert_eq "${rustfs_node_selector}" "sting" "rustfs StatefulSet nodeSelector (must agree with local-path-sting's allowedTopologies)"
+
+rustfs_pvc_class="$(yq -r 'select(.kind == "PersistentVolumeClaim") | .spec.storageClassName' "${rustfs}")"
+assert_eq "${rustfs_pvc_class}" "${WANT_RUSTFS_STORAGECLASS}" \
+  "rustfs PVC storageClassName (${WANT_RUSTFS_STORAGECLASS} carries reclaimPolicy: Retain per blahaj deploy/honey/local-path-sting.yaml)"
+rustfs_pvc_size="$(yq -r 'select(.kind == "PersistentVolumeClaim") | .spec.resources.requests.storage' "${rustfs}")"
+if [[ ! "${rustfs_pvc_size}" =~ ^([0-9]+)Gi$ ]]; then
+  fail "rustfs PVC storage request must be an integer Gi quantity; got '${rustfs_pvc_size}'"
+fi
+if [ "${BASH_REMATCH[1]}" -lt "${MIN_RUSTFS_STORAGE_GI}" ]; then
+  fail "rustfs PVC storage request ${rustfs_pvc_size} is below the B1 ruling's >=${MIN_RUSTFS_STORAGE_GI}Gi floor"
+fi
+
+rustfs_ingress_pol="select(.kind == \"NetworkPolicy\" and .metadata.name == \"allow-cnpg-to-backup-store-ingress\")"
+rustfs_ingress_selector="$(yq -c "${rustfs_ingress_pol} | .spec.podSelector" "${netpol}")"
+assert_eq "${rustfs_ingress_selector}" "{\"matchLabels\":{\"app.kubernetes.io/name\":\"${WANT_RUSTFS_NAME}\"}}" \
+  "rustfs ingress NetworkPolicy podSelector (must scope to the backup store pod, not the namespace)"
+rustfs_ingress_from_ns="$(yq -r "${rustfs_ingress_pol} | .spec.ingress[].from[] | select(has(\"namespaceSelector\"))" "${netpol}")"
+test -z "${rustfs_ingress_from_ns}" || fail "rustfs ingress must admit same-namespace pods only (cnpg.io/cluster: ${WANT_CLUSTER}); a namespaceSelector was found"
+rustfs_ingress_from_pod="$(yq -r "${rustfs_ingress_pol} | .spec.ingress[].from[].podSelector.matchLabels[\"cnpg.io/cluster\"]" "${netpol}")"
+assert_eq "${rustfs_ingress_from_pod}" "${WANT_CLUSTER}" "rustfs ingress admitted source (cnpg.io/cluster label)"
+rustfs_ingress_port="$(yq -r "${rustfs_ingress_pol} | .spec.ingress[].ports[].port" "${netpol}")"
+assert_eq "${rustfs_ingress_port}" "9000" "rustfs ingress port"
+
+# Egress: exactly the DNS leg, nothing else — "zero egress beyond DNS".
+rustfs_egress_pol="select(.kind == \"NetworkPolicy\" and .metadata.name == \"backup-store-egress-dns-only\")"
+rustfs_egress_to_count="$(yq -r "${rustfs_egress_pol} | [.spec.egress[].to[]] | length" "${netpol}")"
+assert_eq "${rustfs_egress_to_count}" "1" "rustfs egress NetworkPolicy must admit exactly one destination (DNS)"
+rustfs_egress_ports="$(yq -c "${rustfs_egress_pol} | [.spec.egress[].ports[].port] | sort" "${netpol}")"
+assert_eq "${rustfs_egress_ports}" "[53,53]" "rustfs egress ports (UDP/TCP 53 only)"
+
+# The CNPG pods' own egress must now reach the rustfs Service, not tcfs — and
+# the tcfs leg must be gone entirely, not just superseded, or a stale allow
+# keeps pointing at a namespace GFTB does not govern.
+pg_egress_to_rustfs="$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-postgres-egress") | .spec.egress[].to[] | select(has("podSelector")) | .podSelector.matchLabels["app.kubernetes.io/name"] // empty' "${netpol}")"
+grep -qx "${WANT_RUSTFS_NAME}" <<<"${pg_egress_to_rustfs}" || fail "allow-postgres-egress must admit egress to the rustfs backup store pod (${WANT_RUSTFS_NAME}) on :9000"
+# Structural check, not a text grep: comments are allowed to name "tcfs" while
+# explaining the rewire (see cluster.yaml and this file's own header), but no
+# live namespaceSelector may still target it.
+tcfs_selectors="$(yq -r 'select(.kind == "NetworkPolicy") | (.spec.ingress[]?, .spec.egress[]?) | (.to[]?, .from[]?) | select(has("namespaceSelector")) | .namespaceSelector.matchLabels["kubernetes.io/metadata.name"]' "${netpol}" | grep -x "tcfs" || true)"
+test -z "${tcfs_selectors}" || fail "no live namespaceSelector may target the tcfs namespace in ${netpol} after the B1 ruling rewire"
+
+# endpointURL must actually name the Service declared in rustfs.yaml, not just
+# satisfy the generic in-cluster regex from axis 5 above.
+rustfs_svc_name="$(yq -r 'select(.kind == "Service") | .metadata.name' "${rustfs}")"
+assert_eq "${rustfs_svc_name}" "${WANT_RUSTFS_NAME}" "rustfs Service name"
+want_endpoint="http://${WANT_RUSTFS_NAME}.${WANT_DB_NS}.svc.cluster.local:9000"
+assert_eq "${endpoint}" "${want_endpoint}" "cluster.yaml barmanObjectStore endpointURL must match the rustfs Service declared in rustfs.yaml"
+
 # --- Full render must succeed (parse-only; never contacts a cluster) ---------
 kubectl kustomize "${dir}" >/dev/null
 
-echo "member-db stack validation passed for ${WANT_CLUSTER} in ${stack_ns}: DECLARE-ONLY (no namespace, no Secret object, no CI apply path), PostgreSQL 16.15 pinned to ${WANT_PG_REPO}@sha256:<64 hex> on ${WANT_STORAGE_CLASS} with a separate WAL volume, RPO bounded by archive_timeout ${archive_seconds}s to an in-cluster object store, RTO bounded by '${schedule}' base backups with ${retention} retention, ${WANT_OWNER_ROLE} (DDL) and ${WANT_RUNTIME_ROLE} (DML-only, bypassrls false) separated, default-deny admitting only ${WANT_PLATFORM_NS} ${admit_components} on 5432, migration Job entrypoint ${WANT_MIGRATOR_ENTRYPOINT} carrying only ${WANT_MIGRATOR_SECRET}"
+echo "member-db stack validation passed for ${WANT_CLUSTER} in ${stack_ns}: DECLARE-ONLY (no namespace, no Secret object, no CI apply path), PostgreSQL 16.15 pinned to ${WANT_PG_REPO}@sha256:<64 hex> on ${WANT_STORAGE_CLASS} with a separate WAL volume, RPO bounded by archive_timeout ${archive_seconds}s to an in-cluster object store, RTO bounded by '${schedule}' base backups with ${retention} retention, ${WANT_OWNER_ROLE} (DDL) and ${WANT_RUNTIME_ROLE} (DML-only, bypassrls false) separated, default-deny admitting only ${WANT_PLATFORM_NS} ${admit_components} on 5432, migration Job entrypoint ${WANT_MIGRATOR_ENTRYPOINT} carrying only ${WANT_MIGRATOR_SECRET}, backup destination ${want_endpoint} (B1 ruling: GFTB-owned rustfs, ${WANT_RUSTFS_REPO}@sha256:<64 hex> on ${WANT_RUSTFS_STORAGECLASS} >=${MIN_RUSTFS_STORAGE_GI}Gi, ingress admitting only cnpg.io/cluster=${WANT_CLUSTER} on :9000, egress DNS-only)"

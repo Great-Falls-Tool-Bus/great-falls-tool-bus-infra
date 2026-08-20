@@ -30,7 +30,8 @@ TIN-3817's acceptance rows.
 | --- | --- | --- |
 | `members-greatfallstoolbus-org-db-production/cluster.yaml` | CNPG `Cluster` `gftb-member-db`: PostgreSQL 16.15 digest-pinned, 1 instance, separate WAL volume, WAL archiving, owner + DML-only roles | database |
 | `members-greatfallstoolbus-org-db-production/scheduledbackup.yaml` | Six-hourly base backup (the RTO control) | database |
-| `members-greatfallstoolbus-org-db-production/networkpolicy.yaml` | Default-deny plus five named allows | database |
+| `members-greatfallstoolbus-org-db-production/networkpolicy.yaml` | Default-deny plus seven named allows | database |
+| `members-greatfallstoolbus-org-db-production/rustfs.yaml` | GFTB-owned rustfs StatefulSet+Service+PVC backing WAL/base-backup storage (B1 ruling, 2026-08-20) | database |
 | `members-greatfallstoolbus-org-production/job-migrator.template.yaml` | Pre-rollout migration `Job` template, image supplied at dispatch | platform |
 | `secrets.contract.yaml` | Names-only credential inventory | both |
 
