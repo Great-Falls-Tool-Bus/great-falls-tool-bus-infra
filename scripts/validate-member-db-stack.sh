@@ -36,6 +36,8 @@ kustomization="${dir}/kustomization.yaml"
 job_template="${platform_dir}/job-migrator.template.yaml"
 secrets_contract="${member_root}/secrets.contract.yaml"
 rustfs="${dir}/rustfs.yaml"
+bucket_create="${dir}/bucket-create.template.yaml"
+restore_cluster="${dir}/restore-cluster.template.yaml"
 
 # --- reviewed constants ------------------------------------------------------
 # The exact minor TIN-3817 acceptance row 1 names, and the multi-arch index
@@ -47,6 +49,11 @@ readonly WANT_PG_DIGEST="sha256:e38d10bb2c7420e62efe9afabf207c005d93cdcf30f19f69
 readonly WANT_DB_NS="members-greatfallstoolbus-org-db-production"
 readonly WANT_PLATFORM_NS="members-greatfallstoolbus-org-production"
 readonly WANT_CLUSTER="gftb-member-db"
+# B-5 (PR #118 review round): the restore rehearsal (runbook step R) is a
+# SECOND Cluster in this namespace, and two ingress policies must admit its
+# pods alongside the primary's or the rehearsal — the RTO<=4h row's only
+# proof path — cannot run.
+readonly WANT_RESTORE_CLUSTER="gftb-member-db-restore"
 readonly WANT_DATABASE="gftb_member"
 readonly WANT_OWNER_ROLE="gftb_migrator"
 readonly WANT_RUNTIME_ROLE="gftb_app"
@@ -67,6 +74,12 @@ readonly WANT_RUSTFS_DIGEST="sha256:fa19210ac4697c79d7ccca1ec9b0eb91aebacc669199
 readonly WANT_RUSTFS_NAME="gftb-member-db-backup-store"
 readonly WANT_RUSTFS_STORAGECLASS="local-path-sting"
 readonly MIN_RUSTFS_STORAGE_GI=50
+# B-3 (PR #118 review round): the bucket-create Job. Image digest reused
+# verbatim from the estate's already-vetted mc pin (blahaj
+# scripts/ci-ensure-rustfs-bucket.sh TOFU_RUSTFS_BUCKET_MC_IMAGE default).
+readonly WANT_MC_REPO="quay.io/minio/mc"
+readonly WANT_MC_DIGEST="sha256:b55b1283c0b81b8bb473c94133d4e00a552518c4796a954ddb04bb7b6e05927d"
+readonly WANT_RUSTFS_ROOT_SECRET="gftb-member-db-backup-store-root"
 # TIN-3817 acceptance row 8: structured-data RPO no worse than one hour. The
 # manifest declares 300s; this is the CEILING the guard enforces, so tightening
 # the manifest stays legal and loosening it past the acceptance row does not.
@@ -84,7 +97,8 @@ command -v jq >/dev/null 2>&1 || fail "jq is required"
 command -v kubectl >/dev/null 2>&1 || fail "kubectl is required for the render check"
 
 for f in "${cluster}" "${schedbackup}" "${netpol}" "${kustomization}" \
-  "${job_template}" "${secrets_contract}" "${rustfs}"; do
+  "${job_template}" "${secrets_contract}" "${rustfs}" "${bucket_create}" \
+  "${restore_cluster}"; do
   require_file "${f}"
 done
 
@@ -375,11 +389,17 @@ if ! grep -q "\"${job_component}\"" <<<"${admit_components}"; then
   fail "migration Job component label '${job_component}' is not in the admitted set ${admit_components}"
 fi
 
-# --- axis 12: the Job template is not stack state ----------------------------
-# Parsed, not grepped: the kustomization's header comment names the template on
-# purpose (to say where it lives), and a textual match would reject that.
+# --- axis 12: the Job templates are not stack state --------------------------
+# Parsed, not grepped: the kustomization's header comment names the templates
+# on purpose (to say where they live), and a textual match would reject that.
 if yq -r '.resources[]?' "${kustomization}" | grep -Fq "job-migrator"; then
   fail "the migration Job template must not be a kustomization resource; it is a one-shot dispatch artifact rendered by the member-db-migrate-render recipe"
+fi
+if yq -r '.resources[]?' "${kustomization}" | grep -Fq "bucket-create"; then
+  fail "the bucket-create Job template must not be a kustomization resource; it is a one-shot dispatch artifact created by the member-db-backup-bucket-create recipe"
+fi
+if yq -r '.resources[]?' "${kustomization}" | grep -Fq "restore-cluster"; then
+  fail "the restore-cluster template must not be a kustomization resource; a permanently-reconciled rehearsal cluster is not the point (B-5) — it is created and torn down by the member-db-restore-rehearsal-* recipes"
 fi
 
 # --- axis 13: the GFTB-owned rustfs backup store (B1 ruling, 2026-08-20) ----
@@ -415,10 +435,26 @@ assert_eq "${rustfs_ingress_selector}" "{\"matchLabels\":{\"app.kubernetes.io/na
   "rustfs ingress NetworkPolicy podSelector (must scope to the backup store pod, not the namespace)"
 rustfs_ingress_from_ns="$(yq -r "${rustfs_ingress_pol} | .spec.ingress[].from[] | select(has(\"namespaceSelector\"))" "${rendered}")"
 test -z "${rustfs_ingress_from_ns}" || fail "rustfs ingress must admit same-namespace pods only (cnpg.io/cluster: ${WANT_CLUSTER}); a namespaceSelector was found"
-rustfs_ingress_from_pod="$(yq -r "${rustfs_ingress_pol} | .spec.ingress[].from[].podSelector.matchLabels[\"cnpg.io/cluster\"]" "${rendered}")"
-assert_eq "${rustfs_ingress_from_pod}" "${WANT_CLUSTER}" "rustfs ingress admitted source (cnpg.io/cluster label)"
+# B-5: admits the primary AND the restore rehearsal cluster, by matchExpressions
+# In [...], never a bare matchLabels (which would admit only one) and never an
+# unbounded operator that would admit every cnpg.io/cluster value in the ns.
+rustfs_ingress_from_op="$(yq -r "${rustfs_ingress_pol} | .spec.ingress[].from[].podSelector.matchExpressions[] | select(.key == \"cnpg.io/cluster\") | .operator" "${rendered}")"
+assert_eq "${rustfs_ingress_from_op}" "In" "rustfs ingress admitted-source operator (must be a closed 'In' list)"
+rustfs_ingress_from_values="$(yq -c "${rustfs_ingress_pol} | .spec.ingress[].from[].podSelector.matchExpressions[] | select(.key == \"cnpg.io/cluster\") | .values | sort" "${rendered}")"
+assert_eq "${rustfs_ingress_from_values}" "$(yq -nc --arg a "${WANT_CLUSTER}" --arg b "${WANT_RESTORE_CLUSTER}" '[$a,$b] | sort')" \
+  "rustfs ingress admitted source set (primary + restore rehearsal cluster, nothing else)"
 rustfs_ingress_port="$(yq -r "${rustfs_ingress_pol} | .spec.ingress[].ports[].port" "${rendered}")"
 assert_eq "${rustfs_ingress_port}" "9000" "rustfs ingress port"
+
+# B-5: the CNPG operator's own ingress leg into the instance manager must
+# admit the restore rehearsal Cluster's pods too, by the SAME closed 'In'
+# list shape, or the operator never reports the rehearsal Ready.
+operator_ingress_pol="select(.kind == \"NetworkPolicy\" and .metadata.name == \"allow-cnpg-operator-ingress\")"
+operator_target_op="$(yq -r "${operator_ingress_pol} | .spec.podSelector.matchExpressions[] | select(.key == \"cnpg.io/cluster\") | .operator" "${rendered}")"
+assert_eq "${operator_target_op}" "In" "CNPG operator ingress target operator (must be a closed 'In' list)"
+operator_target_values="$(yq -c "${operator_ingress_pol} | .spec.podSelector.matchExpressions[] | select(.key == \"cnpg.io/cluster\") | .values | sort" "${rendered}")"
+assert_eq "${operator_target_values}" "$(yq -nc --arg a "${WANT_CLUSTER}" --arg b "${WANT_RESTORE_CLUSTER}" '[$a,$b] | sort')" \
+  "CNPG operator ingress target set (primary + restore rehearsal cluster, nothing else)"
 
 # Egress: exactly the DNS leg, nothing else — "zero egress beyond DNS".
 rustfs_egress_pol="select(.kind == \"NetworkPolicy\" and .metadata.name == \"backup-store-egress-dns-only\")"
@@ -444,6 +480,55 @@ rustfs_svc_name="$(yq -r 'select(.kind == "Service") | .metadata.name' "${render
 assert_eq "${rustfs_svc_name}" "${WANT_RUSTFS_NAME}" "rustfs Service name"
 want_endpoint="http://${WANT_RUSTFS_NAME}.${WANT_DB_NS}.svc.cluster.local:9000"
 assert_eq "${endpoint}" "${want_endpoint}" "cluster.yaml barmanObjectStore endpointURL must match the rustfs Service declared in rustfs.yaml"
+
+# --- axis 14: the bucket-create Job template (B-3, PR #118 review round) ----
+# Source read, deliberately (like axis 10/11 for job-migrator): this template
+# is never a kustomization member (axis 12 asserts that), so it never appears
+# in the render.
+bc_kind="$(yq -r '.kind' "${bucket_create}")"
+assert_eq "${bc_kind}" "Job" "bucket-create Job kind"
+bc_ns="$(yq -r '.metadata.namespace' "${bucket_create}")"
+assert_eq "${bc_ns}" "${WANT_DB_NS}" "bucket-create Job namespace (runs in the database namespace, alongside rustfs)"
+bc_fixed_name="$(yq -r '.metadata.name // "absent"' "${bucket_create}")"
+assert_eq "${bc_fixed_name}" "absent" "bucket-create Job must not carry a fixed metadata.name (generateName only)"
+# THE ADMISSION CONTRACT (again): this Job's pod label must be exactly the
+# value allow-cnpg-to-backup-store-ingress and allow-postgres-egress admit,
+# or it is denied by the very policy B-3 relies on to avoid a netpol change.
+bc_label="$(yq -r '.spec.template.metadata.labels["cnpg.io/cluster"]' "${bucket_create}")"
+assert_eq "${bc_label}" "${WANT_CLUSTER}" "bucket-create Job pod label (must match the NetworkPolicy admission list)"
+bc_image="$(yq -r '.spec.template.spec.containers[] | select(.name == "mc") | .image' "${bucket_create}")"
+if [[ ! "${bc_image}" =~ @sha256:[0-9a-f]{64}$ ]]; then
+  fail "bucket-create Job mc image must be pinned by @sha256:<64 lowercase hex>; got '${bc_image}'"
+fi
+assert_eq "${bc_image}" "${WANT_MC_REPO}@${WANT_MC_DIGEST}" \
+  "bucket-create Job mc image digest (reused verbatim from the estate's already-vetted pin)"
+bc_secret="$(yq -r '.spec.template.spec.containers[] | select(.name == "mc") | .envFrom[]?.secretRef.name // empty' "${bucket_create}")"
+assert_eq "${bc_secret}" "${WANT_RUSTFS_ROOT_SECRET}" \
+  "bucket-create Job credential (must be the SAME Secret rustfs.yaml's own container consumes)"
+bc_bucket="$(yq -r '.spec.template.spec.containers[] | select(.name == "mc") | .env[]? | select(.name == "RUSTFS_BUCKET") | .value' "${bucket_create}")"
+case "${destination}" in
+"s3://${bc_bucket}/") ;;
+*) fail "bucket-create Job RUSTFS_BUCKET ('${bc_bucket}') must match cluster.yaml's barmanObjectStore.destinationPath bucket ('${destination}')" ;;
+esac
+
+# --- axis 15: the restore rehearsal template (B-5, PR #118 review round) ----
+# Source read, same reasoning as axis 14: never a kustomization member.
+rc_kind="$(yq -r '.kind' "${restore_cluster}")"
+assert_eq "${rc_kind}" "Cluster" "restore-cluster template kind"
+rc_ns="$(yq -r '.metadata.namespace' "${restore_cluster}")"
+assert_eq "${rc_ns}" "${WANT_DB_NS}" "restore-cluster template namespace (same namespace as the primary, never over it)"
+rc_name="$(yq -r '.metadata.name' "${restore_cluster}")"
+assert_eq "${rc_name}" "${WANT_RESTORE_CLUSTER}" "restore-cluster template name (this is the label value both netpol fixes admit)"
+rc_server_name="$(yq -r '.spec.externalClusters[] | select(.name == "gftb-member-db-origin") | .barmanObjectStore.serverName' "${restore_cluster}")"
+assert_eq "${rc_server_name}" "${WANT_CLUSTER}" "restore-cluster externalClusters.barmanObjectStore.serverName (must read the PRIMARY's WAL/base-backup objects, not its own)"
+rc_endpoint="$(yq -r '.spec.externalClusters[] | select(.name == "gftb-member-db-origin") | .barmanObjectStore.endpointURL' "${restore_cluster}")"
+assert_eq "${rc_endpoint}" "${want_endpoint}" "restore-cluster externalClusters endpointURL must match the same rustfs Service the primary uses"
+rc_secret_names="$(yq -c '.spec.externalClusters[] | select(.name == "gftb-member-db-origin") | [.barmanObjectStore.s3Credentials.accessKeyId.name, .barmanObjectStore.s3Credentials.secretAccessKey.name] | unique' "${restore_cluster}")"
+assert_eq "${rc_secret_names}" '["gftb-member-db-backup-s3"]' "restore-cluster s3Credentials (by name only, the SAME credential the primary's archive_command uses)"
+rc_superuser="$(yq -r '.spec.enableSuperuserAccess' "${restore_cluster}")"
+assert_eq "${rc_superuser}" "false" "restore-cluster enableSuperuserAccess"
+rc_data_sc="$(yq -r '.spec.storage.storageClass' "${restore_cluster}")"
+assert_eq "${rc_data_sc}" "${WANT_STORAGE_CLASS}" "restore-cluster data storageClass"
 
 # --- Full render already happened up front (B-7) — this is where every check
 # above got its bytes from; nothing left to do here but declare victory.
