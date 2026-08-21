@@ -32,6 +32,8 @@ TIN-3817's acceptance rows.
 | `members-greatfallstoolbus-org-db-production/scheduledbackup.yaml` | Six-hourly base backup (the RTO control) | database |
 | `members-greatfallstoolbus-org-db-production/networkpolicy.yaml` | Default-deny plus seven named allows | database |
 | `members-greatfallstoolbus-org-db-production/rustfs.yaml` | GFTB-owned rustfs StatefulSet+Service+PVC backing WAL/base-backup storage (B1 ruling, 2026-08-20) | database |
+| `members-greatfallstoolbus-org-db-production/bucket-create.template.yaml` | One-shot Job that mints the `gftb-member-db-backups` bucket inside rustfs (B-3) | database |
+| `members-greatfallstoolbus-org-db-production/restore-cluster.template.yaml` | Restore-rehearsal `Cluster` template — the RTO<=4h acceptance row's proof path (B-5) | database |
 | `members-greatfallstoolbus-org-production/job-migrator.template.yaml` | Pre-rollout migration `Job` template, image supplied at dispatch | platform |
 | `secrets.contract.yaml` | Names-only credential inventory | both |
 
