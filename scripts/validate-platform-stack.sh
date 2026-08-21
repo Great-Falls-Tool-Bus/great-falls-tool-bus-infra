@@ -59,6 +59,17 @@ for f in "${deploy_web}" "${deploy_worker}" "${svc}" "${netpol}" \
   require_file "${f}"
 done
 
+# --- render ONCE, up front. Every assertion below that cares what actually
+# gets applied reads THIS file, never the source YAML directly — kustomize
+# (namespace overrides, resource list, label injection) sits between the two,
+# and a regression there (a dropped `resources:` line, a `namespace:` flip)
+# can leave every source-file assertion green while the applied bytes are
+# wrong. `kubectl kustomize` only parses the local tree; it never touches a
+# cluster. (E1, PR #121 review.)
+rendered_file="$(mktemp)"
+trap 'rm -f "${rendered_file}"' EXIT
+kubectl kustomize "${dir}" > "${rendered_file}"
+
 # --- stack identity: one admitted namespace, two admitted workloads ----------
 stack_ns="$(yq -r 'select(.kind == "Deployment") | .metadata.namespace' "${deploy_web}")"
 case "${stack_ns}" in
@@ -67,6 +78,15 @@ members-greatfallstoolbus-org-production) ;;
   fail "unknown platform stack namespace '${stack_ns}'; the only admitted GFTB platform namespace is members-greatfallstoolbus-org-production (the one k8s/member-db admits on 5432)"
   ;;
 esac
+
+# --- rendered-bytes assertions: namespace on every object + exact inventory --
+bad_ns="$(yq -r --arg ns "${stack_ns}" 'select(.metadata.namespace != $ns) | "\(.kind)/\(.metadata.name)=\(.metadata.namespace)"' "${rendered_file}")"
+[ -z "${bad_ns}" ] || fail "rendered object(s) outside namespace ${stack_ns}: ${bad_ns}"
+assert_eq "$(yq -r 'select(.kind == "Deployment") | .kind' "${rendered_file}" | wc -l | tr -d ' ')" "2" "rendered Deployment count"
+assert_eq "$(yq -r 'select(.kind == "Service") | .kind' "${rendered_file}" | wc -l | tr -d ' ')" "1" "rendered Service count"
+assert_eq "$(yq -r 'select(.kind == "NetworkPolicy") | .kind' "${rendered_file}" | wc -l | tr -d ' ')" "6" "rendered NetworkPolicy count"
+assert_eq "$(yq -r 'select(.kind == "Namespace") | .kind' "${rendered_file}" | wc -l | tr -d ' ')" "0" "rendered Namespace count (declare-only)"
+assert_eq "$(yq -r 'select(.kind == "Secret") | .kind' "${rendered_file}" | wc -l | tr -d ' ')" "0" "rendered Secret count (no committed Secrets)"
 assert_eq "$(yq -r 'select(.kind == "Deployment") | .metadata.name' "${deploy_web}")" "gftb-platform-web" "web Deployment name"
 assert_eq "$(yq -r 'select(.kind == "Deployment") | .metadata.namespace' "${deploy_worker}")" "${stack_ns}" "worker Deployment namespace"
 assert_eq "$(yq -r 'select(.kind == "Deployment") | .metadata.name' "${deploy_worker}")" "gftb-platform-worker" "worker Deployment name"
@@ -156,24 +176,35 @@ assert_eq "$(yq -r 'select(.kind == "Service") | .spec.ports[] | select(.name ==
 assert_eq "$(yq -r 'select(.kind == "Service") | .spec.selector["app.kubernetes.io/component"]' "${svc}")" "web" "Service selects the web component only"
 
 # --- NetworkPolicy doctrine: default-deny BOTH ways + named allows -----------
-assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "default-deny-ingress") | .metadata.name' "${netpol}")" "default-deny-ingress" "default-deny-ingress present"
-assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "default-deny-egress") | .metadata.name' "${netpol}")" "default-deny-egress" "default-deny-egress present"
+# (E1: read from the RENDERED stream, not the source file — the source file
+# still parses and matches even if kustomization.yaml stops listing it.)
+assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "default-deny-ingress") | .metadata.name' "${rendered_file}")" "default-deny-ingress" "default-deny-ingress present"
+assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "default-deny-egress") | .metadata.name' "${rendered_file}")" "default-deny-egress" "default-deny-egress present"
 for name in default-deny-ingress default-deny-egress; do
-  sel="$(yq -r --arg name "${name}" 'select(.kind == "NetworkPolicy" and .metadata.name == $name) | .spec.podSelector | length' "${netpol}")"
+  sel="$(yq -r --arg name "${name}" 'select(.kind == "NetworkPolicy" and .metadata.name == $name) | .spec.podSelector | length' "${rendered_file}")"
   assert_eq "${sel}" "0" "${name} selects every pod (empty podSelector)"
 done
-assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-cloudflared-tunnel-ingress") | .spec.ingress[].from[].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]' "${netpol}")" "cloudflared" "public ingress source (cloudflared tunnel namespace)"
-assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-cloudflared-tunnel-ingress") | .spec.ingress[].ports[].port' "${netpol}")" "3000" "public ingress port"
-assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-cloudflared-tunnel-ingress") | .spec.podSelector.matchLabels["app.kubernetes.io/component"]' "${netpol}")" "web" "public ingress reaches the web component only"
+assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-cloudflared-tunnel-ingress") | .spec.ingress[].from[].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]' "${rendered_file}")" "cloudflared" "public ingress source (cloudflared tunnel namespace)"
+assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-cloudflared-tunnel-ingress") | .spec.ingress[].ports[].port' "${rendered_file}")" "3000" "public ingress port"
+assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-cloudflared-tunnel-ingress") | .spec.podSelector.matchLabels["app.kubernetes.io/component"]' "${rendered_file}")" "web" "public ingress reaches the web component only"
+# DNS egress leg: scoped to cluster DNS (kube-system/kube-dns), never "to
+# everywhere" (E2, PR #121 review — mirrors #118's allow-postgres-egress).
+assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-egress-dns") | .spec.egress[].to[].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]' "${rendered_file}")" "kube-system" "DNS egress namespace (cluster DNS only, not every destination)"
+assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-egress-dns") | .spec.egress[].to[].podSelector.matchLabels["k8s-app"]' "${rendered_file}")" "kube-dns" "DNS egress pod selector (cluster DNS only, not every destination)"
 # The database egress leg: exactly the member-db instance pods, on 5432, from
 # the same three components the DB side admits (PR #118's reciprocal).
-assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-egress-member-db") | .spec.egress[].to[].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]' "${netpol}")" "members-greatfallstoolbus-org-db-production" "database egress namespace"
-assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-egress-member-db") | .spec.egress[].to[].podSelector.matchLabels["cnpg.io/cluster"]' "${netpol}")" "gftb-member-db" "database egress instance selector"
-assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-egress-member-db") | .spec.egress[].ports[].port' "${netpol}")" "5432" "database egress port"
-assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-egress-member-db") | .spec.podSelector.matchExpressions[] | select(.key == "app.kubernetes.io/component") | .values | join(",")' "${netpol}")" "web,worker,migrator" "database egress covers web, worker, AND the migrator Job"
-if yq -r 'select(.kind == "NetworkPolicy") | .spec.egress[]?.to[]? | select(has("ipBlock")) | .ipBlock.cidr' "${netpol}" | grep -q "0.0.0.0/0"; then
+assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-egress-member-db") | .spec.egress[].to[].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]' "${rendered_file}")" "members-greatfallstoolbus-org-db-production" "database egress namespace"
+assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-egress-member-db") | .spec.egress[].to[].podSelector.matchLabels["cnpg.io/cluster"]' "${rendered_file}")" "gftb-member-db" "database egress instance selector"
+assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-egress-member-db") | .spec.egress[].ports[].port' "${rendered_file}")" "5432" "database egress port"
+assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-egress-member-db") | .spec.podSelector.matchExpressions[] | select(.key == "app.kubernetes.io/component") | .values | join(",")' "${rendered_file}")" "web,worker,migrator" "database egress covers web, worker, AND the migrator Job"
+if yq -r 'select(.kind == "NetworkPolicy") | .spec.egress[]?.to[]? | select(has("ipBlock")) | .ipBlock.cidr' "${rendered_file}" | grep -q "0.0.0.0/0"; then
   fail "platform egress must not include 0.0.0.0/0 (Stripe egress is the TIN-3818 sitting's reviewed follow-up, not a broad allow)"
 fi
+# An empty/missing `to` matches EVERY destination — the same failure mode as
+# 0.0.0.0/0, and one the ipBlock-only guard above does not catch (E2, PR #121
+# review).
+empty_to_rule="$(yq -r 'select(.kind == "NetworkPolicy") | .metadata.name as $n | .spec.egress[]? | select((.to // []) | length == 0) | $n' "${rendered_file}")"
+[ -z "${empty_to_rule}" ] || fail "platform egress rule(s) in ${empty_to_rule} have an empty/missing 'to' (matches every destination, same failure mode as 0.0.0.0/0)"
 
 # --- FAIL-CLOSED axes: no Namespace, no Secret, no key material --------------
 if grep -REn "^kind:[[:space:]]*Namespace[[:space:]]*$" "${dir}" >/dev/null 2>&1; then
@@ -196,7 +227,7 @@ if jq -r '.. | strings' "${route_intent}" | grep -Eq "[0-9a-f]{8}-[0-9a-f]{4}-[0
   fail "staging route intent must NOT inline a live <uuid>.cfargotunnel.com target (dashboard/token-managed)"
 fi
 
-# --- Full render must succeed (parse-only; never applies) --------------------
-kubectl kustomize "${dir}" >/dev/null
+# --- Full render already happened up front (E1) — this is where every check
+# above got its bytes from; nothing left to do here but declare victory.
 
 echo "platform stack validation passed for gftb-platform-web + gftb-platform-worker in ${stack_ns}: DECLARE-ONLY (sentineled image/tenant, apply is the attended platform-release chain), web 2 replicas :3000 /health + worker 1 replica Recreate (gftb_app connectionLimit 40 budget), runtime-DSN-only credential boundary, default-deny both directions + cloudflared-only ingress + member-db-only egress, staging route fail-closed, no committed secrets"
