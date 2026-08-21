@@ -171,11 +171,13 @@ for f in "${render_dir}"/doc*.yaml; do
   "CronJob:mailman-listsync") rendered_cronjob_file="${f}" ;;
   "ConfigMap:mailman-listsync-src") rendered_cm_file="${f}" ;;
   "NetworkPolicy:mailman-listsync") rendered_np_sync_file="${f}" ;;
+  "NetworkPolicy:mailman-core-listsync-ingress") rendered_np_core_file="${f}" ;;
   esac
 done
 test -n "${rendered_cronjob_file}" || fail "render does not contain the mailman-listsync CronJob"
 test -n "${rendered_cm_file}" || fail "render does not contain the mailman-listsync-src ConfigMap"
 test -n "${rendered_np_sync_file}" || fail "render does not contain the mailman-listsync NetworkPolicy"
+test -n "${rendered_np_core_file:-}" || fail "render does not contain the mailman-core-listsync-ingress NetworkPolicy"
 
 rendered_suspend="$(field '.spec.suspend' "${rendered_cronjob_file}")"
 assert_eq "${rendered_suspend}" "${expected_suspend}" "RENDERED CronJob suspend must match the operator activation record (patches-block check)"
@@ -198,6 +200,14 @@ assert_eq "${rendered_egress_ports}" "53,53,8001" "RENDERED reconciler egress mu
 if field '.. | objects | select(has("ipBlock")) | .ipBlock.cidr' "${rendered_np_sync_file}" 2>/dev/null | grep -q "0.0.0.0/0"; then
   fail "RENDERED reconciler egress must not include 0.0.0.0/0 (patches-block check)"
 fi
+
+# R2 (review round-2): the core-ingress admit policy must survive the render
+# too — a patch flipping `from` to a bare podSelector admits every namespace
+# pod to core:8001 while the source-side asserts above stay green.
+rendered_core_admit="$(field '.spec.ingress[0].from[0].podSelector.matchLabels["app.kubernetes.io/name"]' "${rendered_np_core_file}")"
+assert_eq "${rendered_core_admit}" "mailman-listsync" "RENDERED core-ingress must admit only the reconciler pod (patches-block check)"
+rendered_core_port="$(field '.spec.ingress[0].ports[0].port' "${rendered_np_core_file}")"
+assert_eq "${rendered_core_port}" "8001" "RENDERED core-ingress must scope to core REST 8001 (patches-block check)"
 
 # The render's script body must be byte-identical to the source ConfigMap
 # already put through the add-only content checks above — not merely "still

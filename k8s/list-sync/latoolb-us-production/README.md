@@ -10,9 +10,15 @@ identity and no engine Secret.
 DECLARE-ONLY IN GIT: merging changes nothing. Offline validation is
 `just listsync-stack-validate` (wired into `just check-hosted`); live rollout
 is the attended `just listsync-stack-server-dry-run` / `just
-listsync-stack-apply` recipes plus the three-step activation sequence —
-operator-minted `mailman-listsync-rest` Secret, then unsuspend, then dry-run
-off, each relaxation recorded as a dated ruling in `operator-activation.yaml`.
+listsync-stack-apply` recipes plus the activation sequence — **step 0:**
+apply the suspended stack promptly after merge (zero-risk: suspended,
+dry-run on, Secret absent, NetworkPolicies select no running pods) so the
+`k8s-stack-drift` lane compares against live objects instead of reporting
+all four as drift on every scheduled run until activation (kubectl-diff
+exits nonzero for absent objects — an always-red gate trains its reader to
+ignore it); then the three attended relaxations — operator-minted
+`mailman-listsync-rest` Secret, then unsuspend, then dry-run off, each
+recorded as a dated ruling in `operator-activation.yaml`.
 
 The Mailman-core credential-scoping gap (single global REST identity; the
 TIN-3813 restricted proxy does not exist yet) is declared in
