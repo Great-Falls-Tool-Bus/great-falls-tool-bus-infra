@@ -35,6 +35,23 @@ worker Deployments ever see. (The owner DSN `gftb-member-db-migrator-dsn` is
 PR #118's step M1 and goes to the migration Job alone.) Names are recorded in
 `k8s/platform/secrets.contract.yaml`; values never enter git.
 
+## Step N — admit the NetworkPolicy family first
+
+Using the namespace-scoped `platform-apply` kubeconfig from Step 0
+precondition 3, admit `k8s/platform/members-greatfallstoolbus-org-production/
+networkpolicy.yaml` on its own, before the first migration. It carries no
+sentinels and needs no image or tenant, so nothing here blocks doing this
+standalone and early — and doing it first means the migrator (PR #118's Job,
+which shares this namespace) never runs unpoliced.
+
+Confirm all six NetworkPolicy objects exist in the namespace
+(`default-deny-ingress`, `default-deny-egress`,
+`allow-cloudflared-tunnel-ingress`, `allow-prometheus-scrape`,
+`allow-egress-dns`, `allow-egress-member-db`) before proceeding to Step M.
+The Deployments and Service in this directory are still admitted later, at
+Step S, once the platform image and tenant are known — `platform-release-apply`
+re-admits the same NetworkPolicy bytes at that point too, which is a no-op.
+
 ## Step M — pre-rollout migration first
 
 Pods never migrate on startup (spec §6). Run PR #118's chain to completion

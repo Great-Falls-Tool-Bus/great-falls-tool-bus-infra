@@ -20,9 +20,15 @@
 # part-of=gftb-platform, component=migrator — the egress allows below select
 # the migrator alongside web and worker, which is what lets that Job reach
 # 5432 once this stack's default-deny-egress exists. Sequencing note for the
-# operator: apply THIS stack and #118's database stack before the first
-# migration; the DB side's ingress policy and this side's egress policy are
-# the two halves of the same admission.
+# operator: THIS FILE is admitted on its own, BEFORE the first migration —
+# it carries no sentinels and needs no image or tenant, so nothing here
+# blocks admitting it standalone ahead of everything else in this directory.
+# Admitting it first means the migrator never runs in an unpoliced
+# namespace. The rest of this stack's Deployments/Service are admitted
+# later, once the image and tenant are known (runbook Step S). See
+# docs/runbooks/staging-platform-serving.md (Step N, before Step M) — the
+# DB side's ingress policy (#118) and this side's egress policy are the two
+# halves of the same admission.
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
