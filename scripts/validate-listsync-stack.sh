@@ -141,7 +141,72 @@ if grep -REn "^\s*(password|smtp_pass|POSTGRES_PASSWORD|SECRET_KEY|HYPERKITTY_AP
   fail "possible committed secret value under ${dir}; secrets must be referenced by name only"
 fi
 
-# --- Full render must succeed ------------------------------------------------
-kubectl kustomize "${dir}" >/dev/null
+# --- Full render must succeed, and every load-bearing gate re-asserted
+# against the APPLIED bytes, not the source files ----------------------------
+# scripts/validate-archive-stack.sh:199 is the model. Every check above reads
+# configmap-listsync.yaml / cronjob-listsync.yaml / networkpolicy.yaml
+# directly — a kustomization.yaml `patches:` block can silently relax any of
+# them at apply time while those checks keep passing, because they never look
+# at what `kubectl kustomize` actually emits. Render once, split into one
+# temp file per rendered document (yq flavors disagree on multi-document
+# handling, so splitting on `---` and reusing the same single-document
+# `field()` helper as above is the portable approach), and re-assert the
+# properties a patch could have moved.
+render_dir="$(mktemp -d)"
+trap 'rm -rf "${render_dir}"' EXIT
 
-echo "listsync stack validation passed: add-only keyholders->discuss reconciler, suspended + dry-run default-on, dedicated-Secret gated, egress pinned to core REST, digests pinned, no committed secrets"
+kubectl kustomize "${dir}" > "${render_dir}/rendered.yaml"
+awk -v out="${render_dir}" '
+  BEGIN { n = 0; file = out "/doc0.yaml" }
+  /^---$/ { n++; file = out "/doc" n ".yaml"; next }
+  { print > file }
+' "${render_dir}/rendered.yaml"
+
+rendered_cronjob_file=""
+rendered_cm_file=""
+rendered_np_sync_file=""
+for f in "${render_dir}"/doc*.yaml; do
+  test -s "${f}" || continue
+  case "$(field '.kind' "${f}"):$(field '.metadata.name' "${f}")" in
+  "CronJob:mailman-listsync") rendered_cronjob_file="${f}" ;;
+  "ConfigMap:mailman-listsync-src") rendered_cm_file="${f}" ;;
+  "NetworkPolicy:mailman-listsync") rendered_np_sync_file="${f}" ;;
+  esac
+done
+test -n "${rendered_cronjob_file}" || fail "render does not contain the mailman-listsync CronJob"
+test -n "${rendered_cm_file}" || fail "render does not contain the mailman-listsync-src ConfigMap"
+test -n "${rendered_np_sync_file}" || fail "render does not contain the mailman-listsync NetworkPolicy"
+
+rendered_suspend="$(field '.spec.suspend' "${rendered_cronjob_file}")"
+assert_eq "${rendered_suspend}" "${expected_suspend}" "RENDERED CronJob suspend must match the operator activation record (patches-block check)"
+
+rendered_dry_run="$(field '.spec.jobTemplate.spec.template.spec.containers[0].env[] | select(.name == "LISTSYNC_DRY_RUN") | .value' "${rendered_cronjob_file}")"
+assert_eq "${rendered_dry_run}" "${expected_dry_run}" "RENDERED LISTSYNC_DRY_RUN must match the operator activation record (patches-block check)"
+
+rendered_secret_name="$(field '.spec.jobTemplate.spec.template.spec.containers[0].env[] | select(.name == "MAILMAN_REST_PASSWORD") | .valueFrom.secretKeyRef.name' "${rendered_cronjob_file}")"
+assert_eq "${rendered_secret_name}" "mailman-listsync-rest" "RENDERED REST credential must still come from the dedicated Secret (patches-block check)"
+
+rendered_source_list="$(field '.spec.jobTemplate.spec.template.spec.containers[0].env[] | select(.name == "LISTSYNC_SOURCE_LIST") | .value' "${rendered_cronjob_file}")"
+assert_eq "${rendered_source_list}" "keyholders.latoolb.us" "RENDERED declared source list (patches-block check)"
+
+rendered_target_list="$(field '.spec.jobTemplate.spec.template.spec.containers[0].env[] | select(.name == "LISTSYNC_TARGET_LIST") | .value' "${rendered_cronjob_file}")"
+assert_eq "${rendered_target_list}" "discuss.latoolb.us" "RENDERED declared target list (patches-block check)"
+
+rendered_egress_ports="$(field '[.spec.egress[].ports[].port | tostring] | sort | join(",")' "${rendered_np_sync_file}")"
+assert_eq "${rendered_egress_ports}" "53,53,8001" "RENDERED reconciler egress must be DNS + core REST only (patches-block check)"
+
+if field '.. | objects | select(has("ipBlock")) | .ipBlock.cidr' "${rendered_np_sync_file}" 2>/dev/null | grep -q "0.0.0.0/0"; then
+  fail "RENDERED reconciler egress must not include 0.0.0.0/0 (patches-block check)"
+fi
+
+# The render's script body must be byte-identical to the source ConfigMap
+# already put through the add-only content checks above — not merely "still
+# contains no literal 'delete'" (that grep alone is bypassable, e.g.
+# `_VERB = "DEL" + "ETE"`, per the review's LOW note). A patch that swaps in
+# a different script entirely changes this hash.
+rendered_script="$(field '.data["listsync.py"]' "${rendered_cm_file}")"
+source_script_sha="$(printf '%s' "${script}" | sha256sum | awk '{print $1}')"
+rendered_script_sha="$(printf '%s' "${rendered_script}" | sha256sum | awk '{print $1}')"
+assert_eq "${rendered_script_sha}" "${source_script_sha}" "RENDERED listsync.py must be byte-identical to the source verified above (patches-block check)"
+
+echo "listsync stack validation passed: add-only keyholders->discuss reconciler, suspended + dry-run default-on, dedicated-Secret gated, egress pinned to core REST, digests pinned, no committed secrets, RENDERED bytes re-checked against every gate above"

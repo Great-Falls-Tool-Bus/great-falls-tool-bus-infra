@@ -3,10 +3,23 @@
 #
 #     members(keyholders@latoolb.us) is a subset of members(discuss@latoolb.us)
 #
-# ratified by meta decisions/0014 ruling 5 (keyholders@ = owner-curated private
-# archive, discuss@ = public community archive) and directed by operator ruling
-# 2026-08-20 (full auto-add now; consent for the public-archive nature of
-# discuss@ travels with the keyholders@ admission decision).
+# ratified by meta decisions/0014 §0.5 (keyholders@ = owner-curated private
+# archive, discuss@ = public community archive) and the 2026-08-20 operator
+# interview's auto-add, add-only direction. The carrier for that ruling is
+# meta decisions/0017 (TIN-3965, pending operator merge) — read that document
+# for the full provenance chain; this comment is not the source of record.
+#
+# CONSENT SCOPE (do not relax without re-reading decisions/0014 §3 and
+# decisions/0017): this reconciler does not rest on, and no ratified text
+# anywhere establishes, a doctrine that consenting to keyholders@ implies
+# consent to discuss@'s public-archive nature. decisions/0014 §3 (the Walter
+# precedent) is the standing pattern for a manual add — explicit,
+# separately-named, per-list consent obtained before the add, by the
+# operator. decisions/0017 leaves one question explicitly open rather than
+# deciding it: how, or whether, a member who is auto-added to discuss@ by
+# THIS reconciler (as distinct from a manual, consented add) learns they are
+# now on a public archive — marked there as [OPERATOR-CONFIRM]. Activating
+# this reconciler does not resolve that question.
 #
 # Same shape as the form-handler: upstream python runtime pinned by digest, the
 # application is this ConfigMap-mounted stdlib-only script. No build, no pushed
