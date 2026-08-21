@@ -2235,6 +2235,10 @@ member_db_ns := "members-greatfallstoolbus-org-db-production"
 member_db_platform_ns := "members-greatfallstoolbus-org-production"
 member_db_cluster := "gftb-member-db"
 member_db_migrator_template := "k8s/member-db/members-greatfallstoolbus-org-production/job-migrator.template.yaml"
+member_db_backup_store := "gftb-member-db-backup-store"
+member_db_bucket_create_template := "k8s/member-db/members-greatfallstoolbus-org-db-production/bucket-create.template.yaml"
+member_db_restore_cluster := "gftb-member-db-restore"
+member_db_restore_cluster_template := "k8s/member-db/members-greatfallstoolbus-org-db-production/restore-cluster.template.yaml"
 
 # Offline declare-only guard. Hosted CI entrypoint for this stack.
 member-db-stack-validate:
@@ -2268,12 +2272,62 @@ _member-db-migrator-image-input:
 member-db-stack-server-dry-run: member-db-stack-validate _member-db-kubeconfig-input
     kubectl --kubeconfig "${MEMBER_DB_APPLY_KUBECONFIG}" --namespace {{ member_db_ns }} apply --dry-run=server -k {{ member_db_stack_dir }}
 
-# Attended bring-up / change apply for the database stack. The namespace must
-# already exist: the SA is namespace-scoped and cannot create it, and the stack
-# ships no Namespace object.
-member-db-stack-apply: member-db-stack-server-dry-run _reviewed-clean-main _operator-apply-confirm
-    kubectl --kubeconfig "${MEMBER_DB_APPLY_KUBECONFIG}" --namespace {{ member_db_ns }} apply -k {{ member_db_stack_dir }}
-    kubectl --kubeconfig "${MEMBER_DB_APPLY_KUBECONFIG}" --namespace {{ member_db_ns }} wait cluster/{{ member_db_cluster }} --for=condition=Ready --timeout=600s
+# ORDERED APPLY (B-4, PR #118 review round). A single `apply -k` would land
+# rustfs and the Cluster together, but cluster.yaml's own comment says WAL
+# archiving begins the moment the Cluster is applied, so the backup store and
+# its NetworkPolicy MUST already be live and the bucket MUST already exist —
+# the split below is what actually enforces that ordering. All three recipes
+# below read the SAME rendered bytes `member-db-stack-validate` already
+# asserted (one `kubectl kustomize` call, filtered by kind), never a second,
+# unreviewed render.
+#
+# Step one: the backup store alone (NetworkPolicy family + rustfs), then wait
+# for it to actually be Ready before anything tries to write to it.
+member-db-backup-store-apply: member-db-stack-server-dry-run _reviewed-clean-main _operator-apply-confirm
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kc="${MEMBER_DB_APPLY_KUBECONFIG}"
+    ns="{{ member_db_ns }}"
+    rendered="$(mktemp)"
+    trap 'rm -f "${rendered}"' EXIT
+    kubectl kustomize {{ member_db_stack_dir }} > "${rendered}"
+    yq 'select(.kind == "NetworkPolicy" or .kind == "Service" or .kind == "StatefulSet" or .kind == "PersistentVolumeClaim")' "${rendered}" \
+      | kubectl --kubeconfig "${kc}" --namespace "${ns}" apply -f -
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" rollout status statefulset/{{ member_db_backup_store }} --timeout=300s
+
+# Step two: create the gftb-member-db-backups bucket inside the now-live
+# store (B-3). Idempotent (`mc mb --ignore-existing`); safe to re-run.
+member-db-backup-bucket-create: member-db-backup-store-apply _reviewed-clean-main _operator-apply-confirm
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kc="${MEMBER_DB_APPLY_KUBECONFIG}"
+    ns="{{ member_db_ns }}"
+    job="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" create -f {{ member_db_bucket_create_template }} -o name)"
+    echo "created ${job}"
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" wait "${job}" --for=condition=complete --timeout=120s
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" logs "${job}" --tail=50
+
+# Step three: the Cluster and its ScheduledBackup, only now that
+# archive_command has somewhere to land its first WAL segment. The namespace
+# must already exist: the SA is namespace-scoped and cannot create it, and
+# the stack ships no Namespace object.
+member-db-cluster-apply: member-db-backup-bucket-create _reviewed-clean-main _operator-apply-confirm
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kc="${MEMBER_DB_APPLY_KUBECONFIG}"
+    ns="{{ member_db_ns }}"
+    rendered="$(mktemp)"
+    trap 'rm -f "${rendered}"' EXIT
+    kubectl kustomize {{ member_db_stack_dir }} > "${rendered}"
+    yq 'select(.kind == "Cluster" or .kind == "ScheduledBackup")' "${rendered}" \
+      | kubectl --kubeconfig "${kc}" --namespace "${ns}" apply -f -
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" wait cluster/{{ member_db_cluster }} --for=condition=Ready --timeout=600s
+
+# Convenience alias: the full ordered chain, one command. `just` dedupes the
+# shared prerequisite chain, so this runs backup-store-apply, then
+# bucket-create, then cluster-apply, in that order, exactly once each.
+member-db-stack-apply: member-db-cluster-apply
+    @true
 
 # Read-only readback. The three facts worth reading back are the ones a green
 # Ready condition does NOT prove: the served minor really is 16.15, the instance
@@ -2300,6 +2354,40 @@ member-db-backup-verify: _member-db-kubeconfig-input
     completed="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get backups.postgresql.cnpg.io -o jsonpath='{range .items[?(@.status.phase=="completed")]}{.metadata.name}{"\n"}{end}' | wc -l | tr -d ' ')"
     test "${completed}" -ge 1 || { echo "backup verification FAILED: no completed Backup object exists, so the RPO/RTO row is unproved" >&2; exit 1; }
     echo "backup verification passed: ${completed} completed Backup object(s)"
+
+# --- Restore rehearsal (runbook step R; the RTO<=4h acceptance row's only
+# proof path). B-5, PR #118 review round: this was previously prose with no
+# command, and the NetworkPolicies as shipped forbade it outright. Now that
+# allow-cnpg-operator-ingress and allow-cnpg-to-backup-store-ingress both
+# admit gftb-member-db-restore alongside the primary, this actually runs.
+
+# Create the rehearsal Cluster and wait for it to report Ready. Note the
+# start time yourself before running this — the recipe does not, because the
+# RTO clock includes the object pull, which starts the instant this applies.
+member-db-restore-rehearsal-apply: member-db-backup-verify _reviewed-clean-main _operator-apply-confirm
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kc="${MEMBER_DB_APPLY_KUBECONFIG}"
+    ns="{{ member_db_ns }}"
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" apply -f {{ member_db_restore_cluster_template }}
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" wait cluster/{{ member_db_restore_cluster }} --for=condition=Ready --timeout=14400s
+    echo "restore rehearsal cluster Ready — note the end time now for the RTO measurement"
+
+# Remove the rehearsal Cluster. CNPG owns its PVCs by ownerReference, so
+# deleting the Cluster deletes them, and openebs-bumble-postgresql-retain
+# means the underlying PVs go to Released rather than being destroyed (P-2 is
+# the full reclaim-mechanics writeup; this step is the minimum the review
+# asked for — leave with nothing orphaned unaccounted for). Prints the
+# Released PVs this rehearsal leaves behind so the operator can see and
+# reclaim them rather than discovering them later.
+member-db-restore-rehearsal-teardown: _member-db-kubeconfig-input
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kc="${MEMBER_DB_APPLY_KUBECONFIG}"
+    ns="{{ member_db_ns }}"
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" delete cluster/{{ member_db_restore_cluster }} --wait=true --timeout=300s
+    echo "rehearsal Cluster removed. Released PVs left behind (openebs-bumble-postgresql-retain, reclaimPolicy Retain):"
+    kubectl --kubeconfig "${kc}" get pv -o jsonpath='{range .items[?(@.status.phase=="Released")]}{.metadata.name}{"\t"}{.spec.claimRef.namespace}{"/"}{.spec.claimRef.name}{"\n"}{end}'
 
 # Render the migration Job from the reviewed template with the operator-resolved
 # digest substituted. Pure text, no cluster contact. The apply path and the

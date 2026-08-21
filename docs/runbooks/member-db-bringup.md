@@ -10,13 +10,16 @@ the ratified member lifecycle, runs the first pre-rollout migration, and proves
 the RPO ≤ 1h / RTO ≤ 4h acceptance row with a real restore. Every step is
 **attended**. Nothing in CI applies any of it.
 
-> **Current state (2026-08-19): DECLARED, NOT APPLIED.** No `Cluster` object
+> **Current state (2026-08-21): DECLARED, NOT APPLIED.** No `Cluster` object
 > exists anywhere on the estate. No namespace has been created. No credential
-> has been minted. Steps N through R below have not been run.
+> has been minted. Steps N through R below have not been run. The object-store
+> ruling (step B1) IS closed — see below — so the remaining pre-apply blocker
+> is the app half landing (S1 below) plus, at Phase 4, merging this PR itself
+> (step S precondition, B-6).
 
 ## Read this before starting: what is actually blocked
 
-Two independent blockers, and they gate different halves of the runbook.
+One blocker gates half of this runbook; the object-store question is decided.
 
 1. **The app half of slice S1 is open but unlanded.**
    `Great-Falls-Tool-Bus/greatfallstoolbus.org` **PR #172** (draft, stacked on
@@ -29,10 +32,12 @@ Two independent blockers, and they gate different halves of the runbook.
    `gftb_migrator` (owner/DDL) and `gftb_app` (DML-only). If PR #172 renames
    either before landing, `cluster.yaml` and
    `scripts/validate-member-db-stack.sh` move with it.
-2. **The object-store ruling in step B1 is open.** WAL archiving starts the
-   moment the `Cluster` is applied, so B1 is a hard pre-apply gate for step S,
-   not a follow-up. Applying with an unreachable object store gives a database
-   that comes up healthy and then wedges when the WAL volume fills.
+2. **The object-store ruling in step B1 is CLOSED (2026-08-20).** GFTB gets
+   its own dedicated rustfs, not an estate-owned tcfs bucket. `cluster.yaml`
+   and `rustfs.yaml` already carry the ruling; step B1 below is the record of
+   it, not an open question. What remains before step S is executing B2 (the
+   bucket-create step) in order (step B, below) and, separately, B-6's
+   merge-before-Phase-4 precondition.
 
 ## Step O — CloudNativePG operator conformance (read-only)
 
@@ -79,26 +84,17 @@ the tree.
 The apply kubeconfig is operator-custody and its path is supplied as
 `MEMBER_DB_APPLY_KUBECONFIG`. It is never committed and never a CI secret.
 
-## Step B — backup destination (HARD PRE-APPLY GATE)
+## Step B — backup destination (CLOSED ruling; B2 is still pre-apply work)
 
-**B1 — the open ruling.** `cluster.yaml` declares
-`endpointURL: http://seaweedfs.tcfs.svc.cluster.local:8333` and
-`destinationPath: s3://gftb-member-db-backups/`. Two things need an operator
-decision before step S:
-
-- **Which endpoint.** The `tcfs` namespace exposes both `seaweedfs:8333` and
-  `tcfs-s3-posture-gateway:8333`. Pick the admitted tenant entrypoint.
-- **Whether an estate-owned bucket is acceptable at all** for member personal
-  data, or whether GFTB should get its own object-store lane. The validator only
-  guarantees the endpoint is in-cluster (never a public URL); it cannot make a
-  tenancy decision.
-
-Record the ruling here with a date, then update `cluster.yaml` if the endpoint
-changes. **Do not proceed to step S until this line is filled in.**
+**B1 — the ruling, CLOSED 2026-08-20.** GFTB gets its own dedicated rustfs,
+not an estate-owned tcfs bucket. This is no longer an open decision —
+`cluster.yaml` and `rustfs.yaml` already carry it — this subsection is the
+permanent record, not a gate.
 
 > Ruling (2026-08-20): **GFTB-owned dedicated rustfs** — digest-pinned image,
 > `local-path-sting` storage class, Retain reclaim, >=50Gi, NetworkPolicy
-> admitting only pods labeled `cnpg.io/cluster: gftb-member-db`. Neither tcfs
+> admitting only pods labeled `cnpg.io/cluster: gftb-member-db` (and, since
+> B-5, `gftb-member-db-restore` for the rehearsal cluster below). Neither tcfs
 > endpoint is admitted (custody findings: 10Gi/local-path/Delete reclaim, zero
 > NetworkPolicies, publicly tunneled). Recorded by the coordinating session
 > that witnessed the operator interview answer ("GFTB-owned rustfs
@@ -113,11 +109,19 @@ changes. **Do not proceed to step S until this line is filled in.**
 > backups survive its loss; sting is the ruled exception host. A courtesy
 > note belongs on the blahaj side before/at the apply sitting.
 
-**B2 — bucket and credential.** Create the `gftb-member-db-backups` bucket,
-scoped to this cluster only. Mint the `gftb-member-db-backup-s3` Secret in the
-database namespace with keys `ACCESS_KEY_ID` and `ACCESS_SECRET_KEY`. Names only
-are recorded in `k8s/member-db/secrets.contract.yaml`; the values never leave the
-cluster.
+**B2 — bucket and credential (still pre-apply work, executed as part of
+step S below).** Mint the `gftb-member-db-backup-s3` Secret AND the
+`gftb-member-db-backup-store-root` Secret in the database namespace —
+**identically**: same `ACCESS_KEY_ID`/`ACCESS_SECRET_KEY` value pair under
+the two different key-naming conventions each side needs
+(`k8s/member-db/secrets.contract.yaml` explains why this is one credential,
+not two). Values never leave the cluster.
+
+The bucket itself is created by `just member-db-backup-bucket-create`
+(B-3) — a one-shot Job carrying the `cnpg.io/cluster: gftb-member-db` label
+so the existing NetworkPolicy admits it into the store, rather than a helper
+pod the policy would deny. It is step two of the ordered chain in step S
+below; you do not run it standalone.
 
 ## Step C — credentials
 
@@ -130,7 +134,16 @@ database namespace, type `kubernetes.io/basic-auth`, `username:
 gftb_app`. `managed.roles` binds the role to it. This is the DML-only
 credential the platform's web and worker Deployments will consume.
 
-## Step S — apply the database stack
+## Step S — apply the database stack (ORDERED, B-4)
+
+**Precondition (B-6): this PR must be MERGED before this step runs.** Every
+mutating recipe below passes through `_reviewed-clean-main`, which requires
+the current branch to be `main`, a clean worktree, and `HEAD` to equal the
+verified `origin/main` tip — so none of them can run from this PR's branch,
+only after it lands. `member-db-stack-server-dry-run` (used by
+`member-db-stack-validate` and the dry-run below) does **not** carry that
+requirement, so Phase 3's read-only proof works from the branch today; Phase
+4 is gated on merging #118 first.
 
 ```bash
 just member-db-stack-validate
@@ -139,9 +152,26 @@ just member-db-stack-server-dry-run
 GFTB_APPLY_CONFIRM=apply just member-db-stack-apply
 ```
 
-`member-db-stack-apply` runs the offline guard and the server dry-run first,
-then requires a clean `main` worktree and the explicit confirmation, then applies
-and waits for `Ready`.
+`member-db-stack-apply` is a thin alias over three ordered steps — run it
+directly, or run the three yourself to watch each one land:
+
+1. `member-db-backup-store-apply` — applies ONLY the NetworkPolicy family and
+   rustfs (StatefulSet/Service/PVC), filtered from the SAME rendered
+   `kubectl kustomize` bytes `member-db-stack-validate` already asserted, and
+   waits for the StatefulSet to report Ready. `cluster.yaml`'s own comment
+   says the backup store must be live before the Cluster is, because WAL
+   archiving starts the moment the Cluster is applied — this step is what
+   actually enforces that, where a single `apply -k` could not (B-4).
+2. `member-db-backup-bucket-create` — creates the `gftb-member-db-backups`
+   bucket via the one-shot Job (B-3, step B2 above). Idempotent; safe to
+   re-run if it fails partway.
+3. `member-db-cluster-apply` — applies the Cluster and its ScheduledBackup,
+   only now that `archive_command` has somewhere to land its first WAL
+   segment, and waits for `Ready`.
+
+Each of the three passes through `_reviewed-clean-main` and
+`_operator-apply-confirm` independently; `GFTB_APPLY_CONFIRM=apply` covers
+all three in one run.
 
 **S2 — readback.** A green `Ready` condition does not prove the contract. This
 does:
@@ -226,21 +256,51 @@ Expected on a re-run: the migrator takes its advisory lock, finds every applied
 filename+hash unchanged, and exits clean. **A re-run that reports work to do is
 a red flag**, not a convenience: it means the ledger disagrees with the tree.
 
-## Step R — restore rehearsal (the RTO ≤ 4h proof)
+## Step R — restore rehearsal (the RTO ≤ 4h proof, B-5)
 
 The acceptance row is not met by declaring a backup. It is met by restoring one
 and timing it. Rehearse into a **new** cluster; never over the live one.
 
+**This now actually runs.** Before B-5, `allow-cnpg-operator-ingress` and
+`allow-cnpg-to-backup-store-ingress` admitted only `cnpg.io/cluster:
+gftb-member-db` — a label the rehearsal cluster's pods (which carry
+`cnpg.io/cluster: gftb-member-db-restore`) do not have. The operator could
+never reach the restore instance manager, and the restore pods could never
+read the backups they exist to restore, so the rehearsal cluster never
+reported `Ready`. Both policies now admit `gftb-member-db-restore` too, by
+name, alongside the primary.
+
 1. Note the start time.
-2. Create a second `Cluster` (for example `gftb-member-db-restore`) in the same
-   namespace, whose `bootstrap.recovery` sources an `externalClusters` entry
-   pointing at the same `barmanObjectStore` with `serverName: gftb-member-db`.
-   Point-in-time recovery goes in `recoveryTarget.targetTime`.
-3. Wait for it to reach `Ready`, then verify: row counts match the source at the
-   target time, and the migration ledger table is intact.
+2. Create the rehearsal `Cluster`
+   (`restore-cluster.template.yaml`, recovering from the same
+   `barmanObjectStore` with `serverName: gftb-member-db`) and wait for it to
+   reach `Ready`:
+
+   ```bash
+   GFTB_APPLY_CONFIRM=apply just member-db-restore-rehearsal-apply
+   ```
+
+   For a specific point-in-time target rather than latest-available, add
+   `spec.bootstrap.recovery.recoveryTarget.targetTime` to an operator-local
+   copy of `restore-cluster.template.yaml` before running the recipe above —
+   never commit a real timestamp to the reviewed template.
+3. Verify: row counts match the source at the target time, and the migration
+   ledger table is intact.
 4. Note the end time. **Total must be under four hours**, including the object
-   pull, not just the CNPG phase.
-5. Remove the rehearsal cluster and its PVCs.
+   pull, not just the CNPG phase — the recipe's own wait is bounded generously
+   (4h) so it cannot mask a rehearsal that ran over budget by timing out first.
+5. Remove the rehearsal cluster:
+
+   ```bash
+   just member-db-restore-rehearsal-teardown
+   ```
+
+   `openebs-bumble-postgresql-retain` means the two PVCs' underlying PVs go
+   to `Released`, not deleted, when the Cluster is removed — the recipe
+   prints them so nothing is orphaned silently. Reclaiming a `Released` PV
+   for reuse (`kubectl patch pv … -p '{"spec":{"claimRef":null}}'`) is
+   tracked as a follow-up (P-2); for a rehearsal this is expected and fine to
+   leave Released.
 
 Record the measured RTO and the RPO (the gap between the target time and the
 last committed transaction, which should be at most one `archive_timeout`
