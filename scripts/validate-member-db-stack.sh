@@ -88,22 +88,37 @@ for f in "${cluster}" "${schedbackup}" "${netpol}" "${kustomization}" \
   require_file "${f}"
 done
 
+# --- render ONCE, up front. Every assertion below that cares what actually
+# gets applied reads THIS file, never a source YAML directly — kustomize
+# (the `resources:` list, the `labels:` transformer) sits between the two,
+# and a regression there (a dropped `- networkpolicy.yaml` line, a dropped
+# `- rustfs.yaml` or `- scheduledbackup.yaml` line) can leave every
+# source-file assertion green while the applied bytes are missing an entire
+# NetworkPolicy, the backup store, or the RTO control. `kubectl kustomize`
+# only parses the local tree; it never touches a cluster. (B-7, same class as
+# #121's E1.) The migration Job template is deliberately NOT part of this
+# render (axis 12 below asserts it never becomes one), so its own assertions
+# keep reading the source file directly.
+rendered="$(mktemp)"
+trap 'rm -f "${rendered}"' EXIT
+kubectl kustomize "${dir}" > "${rendered}"
+
 # --- stack identity ----------------------------------------------------------
 # Every assertion below binds to the namespace this stack declares, so a copy of
 # this tree pointed at some other namespace fails here instead of inheriting the
 # member database's admission decisions.
-stack_ns="$(yq -r 'select(.kind == "Cluster") | .metadata.namespace' "${cluster}")"
+stack_ns="$(yq -r 'select(.kind == "Cluster") | .metadata.namespace' "${rendered}")"
 assert_eq "${stack_ns}" "${WANT_DB_NS}" "CNPG Cluster namespace"
-cluster_name="$(yq -r 'select(.kind == "Cluster") | .metadata.name' "${cluster}")"
+cluster_name="$(yq -r 'select(.kind == "Cluster") | .metadata.name' "${rendered}")"
 assert_eq "${cluster_name}" "${WANT_CLUSTER}" "CNPG Cluster name"
-api="$(yq -r 'select(.kind == "Cluster") | .apiVersion' "${cluster}")"
+api="$(yq -r 'select(.kind == "Cluster") | .apiVersion' "${rendered}")"
 assert_eq "${api}" "postgresql.cnpg.io/v1" "CNPG Cluster apiVersion"
 
 # --- axis 1: PostgreSQL 16.15, pinned by digest ------------------------------
 # A tag would let the served minor drift off the acceptance row without any
 # change to this repository. Nothing but this repository at this digest passes:
 # no tag, no truncated or uppercase digest, no other registry or fork.
-image="$(yq -r 'select(.kind == "Cluster") | .spec.imageName' "${cluster}")"
+image="$(yq -r 'select(.kind == "Cluster") | .spec.imageName' "${rendered}")"
 case "${image}" in
 *PLACEHOLDER*) fail "CNPG imageName must be a real digest-pinned reference: '${image}'" ;;
 esac
@@ -114,26 +129,26 @@ assert_eq "${image}" "${WANT_PG_REPO}@${WANT_PG_DIGEST}" \
   "CNPG image digest (TIN-3817 acceptance row 1 pins PostgreSQL 16.15)"
 
 # --- axis 2: single instance on the purpose-built, node-pinned class ---------
-instances="$(yq -r 'select(.kind == "Cluster") | .spec.instances' "${cluster}")"
+instances="$(yq -r 'select(.kind == "Cluster") | .spec.instances' "${rendered}")"
 assert_eq "${instances}" "1" "CNPG instances"
-data_sc="$(yq -r 'select(.kind == "Cluster") | .spec.storage.storageClass' "${cluster}")"
-wal_sc="$(yq -r 'select(.kind == "Cluster") | .spec.walStorage.storageClass' "${cluster}")"
+data_sc="$(yq -r 'select(.kind == "Cluster") | .spec.storage.storageClass' "${rendered}")"
+wal_sc="$(yq -r 'select(.kind == "Cluster") | .spec.walStorage.storageClass' "${rendered}")"
 assert_eq "${data_sc}" "${WANT_STORAGE_CLASS}" "data storageClass"
 assert_eq "${wal_sc}" "${WANT_STORAGE_CLASS}" "WAL storageClass"
 # WAL on its own volume is what stops an archive stall from filling the data
 # volume; losing the separation is a durability regression, not a tidy-up.
-wal_size="$(yq -r 'select(.kind == "Cluster") | .spec.walStorage.size' "${cluster}")"
+wal_size="$(yq -r 'select(.kind == "Cluster") | .spec.walStorage.size' "${rendered}")"
 test -n "${wal_size}" && [ "${wal_size}" != "null" ] || fail "walStorage.size must be declared (WAL must not share the data volume)"
 
 # --- axis 3: no superuser reachable after bootstrap --------------------------
-superuser="$(yq -r 'select(.kind == "Cluster") | .spec.enableSuperuserAccess' "${cluster}")"
+superuser="$(yq -r 'select(.kind == "Cluster") | .spec.enableSuperuserAccess' "${rendered}")"
 assert_eq "${superuser}" "false" "enableSuperuserAccess"
 
 # --- axis 4: RPO control (acceptance row 8) ----------------------------------
 # archive_timeout is what bounds RPO on an IDLE database. Without it a quiet
 # cluster holds an unarchived partial segment indefinitely and the real RPO is
 # unbounded, while every dashboard still looks healthy.
-archive_timeout="$(yq -r 'select(.kind == "Cluster") | .spec.postgresql.parameters.archive_timeout' "${cluster}")"
+archive_timeout="$(yq -r 'select(.kind == "Cluster") | .spec.postgresql.parameters.archive_timeout' "${rendered}")"
 if [[ ! "${archive_timeout}" =~ ^([0-9]+)s$ ]]; then
   fail "postgresql.parameters.archive_timeout must be declared as '<seconds>s' (RPO<=1h acceptance row); got '${archive_timeout}'"
 fi
@@ -146,40 +161,40 @@ fi
 # The backup credential and the archive destination are the two things that make
 # the RPO/RTO rows real. The destination must never become an internet endpoint
 # by edit: a public endpointURL would ship member data off the estate.
-endpoint="$(yq -r 'select(.kind == "Cluster") | .spec.backup.barmanObjectStore.endpointURL' "${cluster}")"
+endpoint="$(yq -r 'select(.kind == "Cluster") | .spec.backup.barmanObjectStore.endpointURL' "${rendered}")"
 if [[ ! "${endpoint}" =~ ^https?://[a-z0-9.-]+\.svc\.cluster\.local:[0-9]{2,5}/?$ ]]; then
   fail "barmanObjectStore.endpointURL must be an in-cluster <service>.<ns>.svc.cluster.local:<port> address; got '${endpoint}'"
 fi
-destination="$(yq -r 'select(.kind == "Cluster") | .spec.backup.barmanObjectStore.destinationPath' "${cluster}")"
+destination="$(yq -r 'select(.kind == "Cluster") | .spec.backup.barmanObjectStore.destinationPath' "${rendered}")"
 case "${destination}" in
 s3://gftb-member-db-backups*) ;;
 *) fail "barmanObjectStore.destinationPath must be the GFTB-scoped bucket s3://gftb-member-db-backups; got '${destination}'" ;;
 esac
-retention="$(yq -r 'select(.kind == "Cluster") | .spec.backup.retentionPolicy' "${cluster}")"
+retention="$(yq -r 'select(.kind == "Cluster") | .spec.backup.retentionPolicy' "${rendered}")"
 test -n "${retention}" && [ "${retention}" != "null" ] || fail "backup.retentionPolicy must be declared"
 # Credentials by NAME only. A literal `value:` anywhere under s3Credentials would
 # mean a secret value had entered git.
-if yq -r 'select(.kind == "Cluster") | .spec.backup.barmanObjectStore.s3Credentials | .. | select(type == "object") | keys[]?' "${cluster}" | grep -Ex "value|stringValue" >/dev/null 2>&1; then
+if yq -r 'select(.kind == "Cluster") | .spec.backup.barmanObjectStore.s3Credentials | .. | select(type == "object") | keys[]?' "${rendered}" | grep -Ex "value|stringValue" >/dev/null 2>&1; then
   fail "s3Credentials must reference Secret keys by name only; an inline value is present"
 fi
 
 # --- axis 6: the two-role separation (acceptance row 2) ----------------------
-database="$(yq -r 'select(.kind == "Cluster") | .spec.bootstrap.initdb.database' "${cluster}")"
-owner="$(yq -r 'select(.kind == "Cluster") | .spec.bootstrap.initdb.owner' "${cluster}")"
+database="$(yq -r 'select(.kind == "Cluster") | .spec.bootstrap.initdb.database' "${rendered}")"
+owner="$(yq -r 'select(.kind == "Cluster") | .spec.bootstrap.initdb.owner' "${rendered}")"
 assert_eq "${database}" "${WANT_DATABASE}" "bootstrap database"
 assert_eq "${owner}" "${WANT_OWNER_ROLE}" "bootstrap owner (the narrow migration credential)"
 if [ "${owner}" = "${WANT_RUNTIME_ROLE}" ]; then
   fail "the migration owner and the runtime role must be distinct roles"
 fi
 
-managed_count="$(yq -r 'select(.kind == "Cluster") | [.spec.managed.roles[]?] | length' "${cluster}")"
+managed_count="$(yq -r 'select(.kind == "Cluster") | [.spec.managed.roles[]?] | length' "${rendered}")"
 assert_eq "${managed_count}" "1" "managed.roles entries (exactly the DML-only runtime role)"
-runtime_name="$(yq -r --arg r "${WANT_RUNTIME_ROLE}" 'select(.kind == "Cluster") | .spec.managed.roles[] | select(.name == $r) | .name' "${cluster}")"
+runtime_name="$(yq -r --arg r "${WANT_RUNTIME_ROLE}" 'select(.kind == "Cluster") | .spec.managed.roles[] | select(.name == $r) | .name' "${rendered}")"
 assert_eq "${runtime_name}" "${WANT_RUNTIME_ROLE}" "managed runtime role name"
 
 runtime_field() {
   yq -r --arg r "${WANT_RUNTIME_ROLE}" --arg f "$1" \
-    'select(.kind == "Cluster") | .spec.managed.roles[] | select(.name == $r) | .[$f]' "${cluster}"
+    'select(.kind == "Cluster") | .spec.managed.roles[] | select(.name == $r) | .[$f]' "${rendered}"
 }
 # bypassrls is the single most load-bearing assertion in this file. RLS is the
 # tenant boundary the whole S1 design rests on (spec S4: "row isolation ...
@@ -192,14 +207,14 @@ assert_eq "$(runtime_field createrole)" "false" "runtime role createrole"
 assert_eq "$(runtime_field replication)" "false" "runtime role replication"
 assert_eq "$(runtime_field login)" "true" "runtime role login"
 assert_eq "$(runtime_field ensure)" "present" "runtime role ensure"
-runtime_secret="$(yq -r --arg r "${WANT_RUNTIME_ROLE}" 'select(.kind == "Cluster") | .spec.managed.roles[] | select(.name == $r) | .passwordSecret.name' "${cluster}")"
+runtime_secret="$(yq -r --arg r "${WANT_RUNTIME_ROLE}" 'select(.kind == "Cluster") | .spec.managed.roles[] | select(.name == $r) | .passwordSecret.name' "${rendered}")"
 assert_eq "${runtime_secret}" "${WANT_RUNTIME_SECRET}" "runtime role passwordSecret (by name only)"
 
 # The DML-only grant surface is set at bootstrap; losing the default-privileges
 # statements means the runtime role silently loses access to every table a later
 # migration creates, which surfaces as a production outage rather than a test
 # failure.
-init_sql="$(yq -r 'select(.kind == "Cluster") | (.spec.bootstrap.initdb.postInitSQL // [])[] , (.spec.bootstrap.initdb.postInitApplicationSQL // [])[]' "${cluster}")"
+init_sql="$(yq -r 'select(.kind == "Cluster") | (.spec.bootstrap.initdb.postInitSQL // [])[] , (.spec.bootstrap.initdb.postInitApplicationSQL // [])[]' "${rendered}")"
 grep -qi "CREATE ROLE ${WANT_RUNTIME_ROLE}" <<<"${init_sql}" || fail "bootstrap SQL must create the runtime role"
 grep -qi "ALTER DEFAULT PRIVILEGES FOR ROLE ${WANT_OWNER_ROLE}" <<<"${init_sql}" || fail "bootstrap SQL must attach default privileges to the migration owner, not to the bootstrap superuser"
 grep -qi "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${WANT_RUNTIME_ROLE}" <<<"${init_sql}" || fail "bootstrap SQL must grant DML (and only DML) on future tables to the runtime role"
@@ -210,20 +225,20 @@ fi
 # --- axis 7: metrics posture matches the estate ------------------------------
 # The Prometheus Operator CRDs are absent on honey, so a PodMonitor request
 # would make the Cluster unappliable.
-pod_monitor="$(yq -r 'select(.kind == "Cluster") | .spec.monitoring.enablePodMonitor' "${cluster}")"
+pod_monitor="$(yq -r 'select(.kind == "Cluster") | .spec.monitoring.enablePodMonitor' "${rendered}")"
 assert_eq "${pod_monitor}" "false" "monitoring.enablePodMonitor (Prometheus Operator CRDs are absent on this estate)"
 
 # --- axis 8: RTO control, the scheduled base backup --------------------------
-sb_ns="$(yq -r 'select(.kind == "ScheduledBackup") | .metadata.namespace' "${schedbackup}")"
-sb_cluster="$(yq -r 'select(.kind == "ScheduledBackup") | .spec.cluster.name' "${schedbackup}")"
+sb_ns="$(yq -r 'select(.kind == "ScheduledBackup") | .metadata.namespace' "${rendered}")"
+sb_cluster="$(yq -r 'select(.kind == "ScheduledBackup") | .spec.cluster.name' "${rendered}")"
 assert_eq "${sb_ns}" "${WANT_DB_NS}" "ScheduledBackup namespace"
 assert_eq "${sb_cluster}" "${WANT_CLUSTER}" "ScheduledBackup target cluster"
-assert_eq "$(yq -r 'select(.kind == "ScheduledBackup") | .spec.method' "${schedbackup}")" \
+assert_eq "$(yq -r 'select(.kind == "ScheduledBackup") | .spec.method' "${rendered}")" \
   "barmanObjectStore" "ScheduledBackup method"
 # A suspended schedule is an RTO breach that looks green on every dashboard.
-assert_eq "$(yq -r 'select(.kind == "ScheduledBackup") | .spec.suspend' "${schedbackup}")" \
+assert_eq "$(yq -r 'select(.kind == "ScheduledBackup") | .spec.suspend' "${rendered}")" \
   "false" "ScheduledBackup suspend (a suspended schedule breaches RTO<=4h while looking healthy)"
-schedule="$(yq -r 'select(.kind == "ScheduledBackup") | .spec.schedule' "${schedbackup}")"
+schedule="$(yq -r 'select(.kind == "ScheduledBackup") | .spec.schedule' "${rendered}")"
 # CNPG cron carries a LEADING SECONDS field. A five-field expression is read one
 # position over and silently changes the cadence, so the field count is asserted
 # rather than assumed.
@@ -238,29 +253,60 @@ if [ "${BASH_REMATCH[1]}" -gt 6 ]; then
 fi
 
 # --- axis 9: NetworkPolicy admission list ------------------------------------
-deny="$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "default-deny-ingress") | .metadata.name' "${netpol}")"
+deny="$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "default-deny-ingress") | .metadata.name' "${rendered}")"
 assert_eq "${deny}" "default-deny-ingress" "default-deny-ingress NetworkPolicy present"
-deny_selector="$(yq -c 'select(.kind == "NetworkPolicy" and .metadata.name == "default-deny-ingress") | .spec.podSelector' "${netpol}")"
+deny_selector="$(yq -c 'select(.kind == "NetworkPolicy" and .metadata.name == "default-deny-ingress") | .spec.podSelector' "${rendered}")"
 assert_eq "${deny_selector}" "{}" "default-deny-ingress selects every pod in the namespace"
 
-admit_ns="$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-platform-postgres-ingress") | .spec.ingress[].from[].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]' "${netpol}")"
+admit_ns="$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-platform-postgres-ingress") | .spec.ingress[].from[].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]' "${rendered}")"
 assert_eq "${admit_ns}" "${WANT_PLATFORM_NS}" "PostgreSQL ingress source namespace"
-admit_port="$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-platform-postgres-ingress") | .spec.ingress[].ports[].port' "${netpol}")"
+admit_port="$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-platform-postgres-ingress") | .spec.ingress[].ports[].port' "${rendered}")"
 assert_eq "${admit_port}" "5432" "PostgreSQL ingress port"
-admit_components="$(yq -c 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-platform-postgres-ingress") | [.spec.ingress[].from[].podSelector.matchExpressions[] | select(.key == "app.kubernetes.io/component") | .values[]] | sort' "${netpol}")"
+admit_components="$(yq -c 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-platform-postgres-ingress") | [.spec.ingress[].from[].podSelector.matchExpressions[] | select(.key == "app.kubernetes.io/component") | .values[]] | sort' "${rendered}")"
 assert_eq "${admit_components}" '["migrator","web","worker"]' \
   "PostgreSQL ingress admits exactly the platform web/worker/migrator components"
-admit_partof="$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-platform-postgres-ingress") | .spec.ingress[].from[].podSelector.matchLabels["app.kubernetes.io/part-of"]' "${netpol}")"
+admit_partof="$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-platform-postgres-ingress") | .spec.ingress[].from[].podSelector.matchLabels["app.kubernetes.io/part-of"]' "${rendered}")"
 assert_eq "${admit_partof}" "gftb-platform" "PostgreSQL ingress part-of selector"
 
 # No blanket allows in either direction, and no bare port-only egress rule (a
 # rule with no `to:` admits every destination on that port, including off-estate).
-if yq -r 'select(.kind == "NetworkPolicy") | (.spec.ingress[]?, .spec.egress[]?) | (.to[]?, .from[]?) | select(has("ipBlock")) | .ipBlock.cidr' "${netpol}" | grep -qx "0.0.0.0/0"; then
+if yq -r 'select(.kind == "NetworkPolicy") | (.spec.ingress[]?, .spec.egress[]?) | (.to[]?, .from[]?) | select(has("ipBlock")) | .ipBlock.cidr' "${rendered}" | grep -qx "0.0.0.0/0"; then
   fail "member-db NetworkPolicies must not include an ipBlock 0.0.0.0/0"
 fi
-if yq -r 'select(.kind == "NetworkPolicy") | .spec.egress[]? | select((.to // []) | length == 0) | "bare"' "${netpol}" | grep -q bare; then
+if yq -r 'select(.kind == "NetworkPolicy") | .spec.egress[]? | select((.to // []) | length == 0) | "bare"' "${rendered}" | grep -q bare; then
   fail "member-db egress rules must name their destination; a rule with no 'to:' admits every destination on that port"
 fi
+
+# --- render inventory: exact object count and kind, by name (B-7) -----------
+# This is what makes the three attacks the review proved (dropping
+# `- networkpolicy.yaml`, `- rustfs.yaml`, or `- scheduledbackup.yaml` from
+# kustomization.yaml) fail HERE, on a count/name mismatch, rather than
+# silently passing every per-field assertion above because those assertions
+# now read this same rendered stream and a dropped resource is simply absent
+# from it. Named, not just counted, so a rename inside the admitted set is
+# caught too.
+netpol_names="$(yq -r 'select(.kind == "NetworkPolicy") | .metadata.name' "${rendered}" | sort)"
+assert_eq "$(wc -l <<<"${netpol_names}" | tr -d ' ')" "8" "rendered NetworkPolicy count"
+assert_eq "${netpol_names}" "$(sort <<<'allow-cnpg-operator-ingress
+allow-cnpg-to-backup-store-ingress
+allow-intra-cluster
+allow-platform-postgres-ingress
+allow-postgres-egress
+allow-prometheus-scrape
+backup-store-egress-dns-only
+default-deny-ingress')" "rendered NetworkPolicy names"
+assert_eq "$(yq -r 'select(.kind == "Cluster") | .kind' "${rendered}" | wc -l | tr -d ' ')" "1" "rendered Cluster count"
+assert_eq "$(yq -r 'select(.kind == "ScheduledBackup") | .kind' "${rendered}" | wc -l | tr -d ' ')" "1" "rendered ScheduledBackup count"
+assert_eq "$(yq -r 'select(.kind == "Service") | .kind' "${rendered}" | wc -l | tr -d ' ')" "1" "rendered Service count (rustfs)"
+assert_eq "$(yq -r 'select(.kind == "StatefulSet") | .kind' "${rendered}" | wc -l | tr -d ' ')" "1" "rendered StatefulSet count (rustfs)"
+assert_eq "$(yq -r 'select(.kind == "PersistentVolumeClaim") | .kind' "${rendered}" | wc -l | tr -d ' ')" "1" "rendered PersistentVolumeClaim count (rustfs)"
+assert_eq "$(yq -r 'select(.kind == "Namespace") | .kind' "${rendered}" | wc -l | tr -d ' ')" "0" "rendered Namespace count (declare-only)"
+assert_eq "$(yq -r 'select(.kind == "Secret") | .kind' "${rendered}" | wc -l | tr -d ' ')" "0" "rendered Secret count (no committed Secrets)"
+# Every rendered object lands in the one namespace this stack governs — the
+# `namespace:` kustomization directive is itself a single point of failure
+# the per-field assertions above never look at directly.
+bad_ns="$(yq -r --arg ns "${WANT_DB_NS}" 'select(.metadata.namespace != $ns) | "\(.kind)/\(.metadata.name)=\(.metadata.namespace)"' "${rendered}")"
+[ -z "${bad_ns}" ] || fail "rendered object(s) outside namespace ${WANT_DB_NS}: ${bad_ns}"
 
 # --- FAIL-CLOSED: no Namespace, no Secret, no key material -------------------
 if grep -REn "^kind:[[:space:]]*Namespace" "${dir}" "${platform_dir}" >/dev/null 2>&1; then
@@ -342,20 +388,20 @@ fi
 # class at >=50Gi, the ingress NetworkPolicy admits exactly the CNPG cluster
 # pods on :9000 and nothing broader, and cluster.yaml's endpointURL actually
 # names this Service rather than drifting back toward tcfs.
-rustfs_image="$(yq -r 'select(.kind == "StatefulSet") | .spec.template.spec.containers[] | select(.name == "rustfs") | .image' "${rustfs}")"
+rustfs_image="$(yq -r 'select(.kind == "StatefulSet") | .spec.template.spec.containers[] | select(.name == "rustfs") | .image' "${rendered}")"
 if [[ ! "${rustfs_image}" =~ @sha256:[0-9a-f]{64}$ ]]; then
   fail "rustfs StatefulSet image must be pinned by @sha256:<64 lowercase hex>; got '${rustfs_image}'"
 fi
 assert_eq "${rustfs_image}" "${WANT_RUSTFS_REPO}:${WANT_RUSTFS_TAG}@${WANT_RUSTFS_DIGEST}" \
   "rustfs image digest (B1 ruling: digest reused from the house pin source)"
 
-rustfs_node_selector="$(yq -r 'select(.kind == "StatefulSet") | .spec.template.spec.nodeSelector["kubernetes.io/hostname"]' "${rustfs}")"
+rustfs_node_selector="$(yq -r 'select(.kind == "StatefulSet") | .spec.template.spec.nodeSelector["kubernetes.io/hostname"]' "${rendered}")"
 assert_eq "${rustfs_node_selector}" "sting" "rustfs StatefulSet nodeSelector (must agree with local-path-sting's allowedTopologies)"
 
-rustfs_pvc_class="$(yq -r 'select(.kind == "PersistentVolumeClaim") | .spec.storageClassName' "${rustfs}")"
+rustfs_pvc_class="$(yq -r 'select(.kind == "PersistentVolumeClaim") | .spec.storageClassName' "${rendered}")"
 assert_eq "${rustfs_pvc_class}" "${WANT_RUSTFS_STORAGECLASS}" \
   "rustfs PVC storageClassName (${WANT_RUSTFS_STORAGECLASS} carries reclaimPolicy: Retain per blahaj deploy/honey/local-path-sting.yaml)"
-rustfs_pvc_size="$(yq -r 'select(.kind == "PersistentVolumeClaim") | .spec.resources.requests.storage' "${rustfs}")"
+rustfs_pvc_size="$(yq -r 'select(.kind == "PersistentVolumeClaim") | .spec.resources.requests.storage' "${rendered}")"
 if [[ ! "${rustfs_pvc_size}" =~ ^([0-9]+)Gi$ ]]; then
   fail "rustfs PVC storage request must be an integer Gi quantity; got '${rustfs_pvc_size}'"
 fi
@@ -364,42 +410,42 @@ if [ "${BASH_REMATCH[1]}" -lt "${MIN_RUSTFS_STORAGE_GI}" ]; then
 fi
 
 rustfs_ingress_pol="select(.kind == \"NetworkPolicy\" and .metadata.name == \"allow-cnpg-to-backup-store-ingress\")"
-rustfs_ingress_selector="$(yq -c "${rustfs_ingress_pol} | .spec.podSelector" "${netpol}")"
+rustfs_ingress_selector="$(yq -c "${rustfs_ingress_pol} | .spec.podSelector" "${rendered}")"
 assert_eq "${rustfs_ingress_selector}" "{\"matchLabels\":{\"app.kubernetes.io/name\":\"${WANT_RUSTFS_NAME}\"}}" \
   "rustfs ingress NetworkPolicy podSelector (must scope to the backup store pod, not the namespace)"
-rustfs_ingress_from_ns="$(yq -r "${rustfs_ingress_pol} | .spec.ingress[].from[] | select(has(\"namespaceSelector\"))" "${netpol}")"
+rustfs_ingress_from_ns="$(yq -r "${rustfs_ingress_pol} | .spec.ingress[].from[] | select(has(\"namespaceSelector\"))" "${rendered}")"
 test -z "${rustfs_ingress_from_ns}" || fail "rustfs ingress must admit same-namespace pods only (cnpg.io/cluster: ${WANT_CLUSTER}); a namespaceSelector was found"
-rustfs_ingress_from_pod="$(yq -r "${rustfs_ingress_pol} | .spec.ingress[].from[].podSelector.matchLabels[\"cnpg.io/cluster\"]" "${netpol}")"
+rustfs_ingress_from_pod="$(yq -r "${rustfs_ingress_pol} | .spec.ingress[].from[].podSelector.matchLabels[\"cnpg.io/cluster\"]" "${rendered}")"
 assert_eq "${rustfs_ingress_from_pod}" "${WANT_CLUSTER}" "rustfs ingress admitted source (cnpg.io/cluster label)"
-rustfs_ingress_port="$(yq -r "${rustfs_ingress_pol} | .spec.ingress[].ports[].port" "${netpol}")"
+rustfs_ingress_port="$(yq -r "${rustfs_ingress_pol} | .spec.ingress[].ports[].port" "${rendered}")"
 assert_eq "${rustfs_ingress_port}" "9000" "rustfs ingress port"
 
 # Egress: exactly the DNS leg, nothing else — "zero egress beyond DNS".
 rustfs_egress_pol="select(.kind == \"NetworkPolicy\" and .metadata.name == \"backup-store-egress-dns-only\")"
-rustfs_egress_to_count="$(yq -r "${rustfs_egress_pol} | [.spec.egress[].to[]] | length" "${netpol}")"
+rustfs_egress_to_count="$(yq -r "${rustfs_egress_pol} | [.spec.egress[].to[]] | length" "${rendered}")"
 assert_eq "${rustfs_egress_to_count}" "1" "rustfs egress NetworkPolicy must admit exactly one destination (DNS)"
-rustfs_egress_ports="$(yq -c "${rustfs_egress_pol} | [.spec.egress[].ports[].port] | sort" "${netpol}")"
+rustfs_egress_ports="$(yq -c "${rustfs_egress_pol} | [.spec.egress[].ports[].port] | sort" "${rendered}")"
 assert_eq "${rustfs_egress_ports}" "[53,53]" "rustfs egress ports (UDP/TCP 53 only)"
 
 # The CNPG pods' own egress must now reach the rustfs Service, not tcfs — and
 # the tcfs leg must be gone entirely, not just superseded, or a stale allow
 # keeps pointing at a namespace GFTB does not govern.
-pg_egress_to_rustfs="$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-postgres-egress") | .spec.egress[].to[] | select(has("podSelector")) | .podSelector.matchLabels["app.kubernetes.io/name"] // empty' "${netpol}")"
+pg_egress_to_rustfs="$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-postgres-egress") | .spec.egress[].to[] | select(has("podSelector")) | .podSelector.matchLabels["app.kubernetes.io/name"] // empty' "${rendered}")"
 grep -qx "${WANT_RUSTFS_NAME}" <<<"${pg_egress_to_rustfs}" || fail "allow-postgres-egress must admit egress to the rustfs backup store pod (${WANT_RUSTFS_NAME}) on :9000"
 # Structural check, not a text grep: comments are allowed to name "tcfs" while
 # explaining the rewire (see cluster.yaml and this file's own header), but no
 # live namespaceSelector may still target it.
-tcfs_selectors="$(yq -r 'select(.kind == "NetworkPolicy") | (.spec.ingress[]?, .spec.egress[]?) | (.to[]?, .from[]?) | select(has("namespaceSelector")) | .namespaceSelector.matchLabels["kubernetes.io/metadata.name"]' "${netpol}" | grep -x "tcfs" || true)"
+tcfs_selectors="$(yq -r 'select(.kind == "NetworkPolicy") | (.spec.ingress[]?, .spec.egress[]?) | (.to[]?, .from[]?) | select(has("namespaceSelector")) | .namespaceSelector.matchLabels["kubernetes.io/metadata.name"]' "${rendered}" | grep -x "tcfs" || true)"
 test -z "${tcfs_selectors}" || fail "no live namespaceSelector may target the tcfs namespace in ${netpol} after the B1 ruling rewire"
 
 # endpointURL must actually name the Service declared in rustfs.yaml, not just
 # satisfy the generic in-cluster regex from axis 5 above.
-rustfs_svc_name="$(yq -r 'select(.kind == "Service") | .metadata.name' "${rustfs}")"
+rustfs_svc_name="$(yq -r 'select(.kind == "Service") | .metadata.name' "${rendered}")"
 assert_eq "${rustfs_svc_name}" "${WANT_RUSTFS_NAME}" "rustfs Service name"
 want_endpoint="http://${WANT_RUSTFS_NAME}.${WANT_DB_NS}.svc.cluster.local:9000"
 assert_eq "${endpoint}" "${want_endpoint}" "cluster.yaml barmanObjectStore endpointURL must match the rustfs Service declared in rustfs.yaml"
 
-# --- Full render must succeed (parse-only; never contacts a cluster) ---------
-kubectl kustomize "${dir}" >/dev/null
+# --- Full render already happened up front (B-7) — this is where every check
+# above got its bytes from; nothing left to do here but declare victory.
 
 echo "member-db stack validation passed for ${WANT_CLUSTER} in ${stack_ns}: DECLARE-ONLY (no namespace, no Secret object, no CI apply path), PostgreSQL 16.15 pinned to ${WANT_PG_REPO}@sha256:<64 hex> on ${WANT_STORAGE_CLASS} with a separate WAL volume, RPO bounded by archive_timeout ${archive_seconds}s to an in-cluster object store, RTO bounded by '${schedule}' base backups with ${retention} retention, ${WANT_OWNER_ROLE} (DDL) and ${WANT_RUNTIME_ROLE} (DML-only, bypassrls false) separated, default-deny admitting only ${WANT_PLATFORM_NS} ${admit_components} on 5432, migration Job entrypoint args ${WANT_MIGRATOR_ARGS} (no command:) carrying only ${WANT_MIGRATOR_SECRET}, backup destination ${want_endpoint} (B1 ruling: GFTB-owned rustfs, ${WANT_RUSTFS_REPO}@sha256:<64 hex> on ${WANT_RUSTFS_STORAGECLASS} >=${MIN_RUSTFS_STORAGE_GI}Gi, ingress admitting only cnpg.io/cluster=${WANT_CLUSTER} on :9000, egress DNS-only)"
