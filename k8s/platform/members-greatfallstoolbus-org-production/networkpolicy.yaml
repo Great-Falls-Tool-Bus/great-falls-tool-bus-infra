@@ -101,6 +101,10 @@ spec:
           port: 3000
 ---
 # Cluster DNS for every platform component, including the migrator Job.
+# Scoped to the kube-system/kube-dns pods, not an empty `to` (which matches
+# EVERY destination on 53, off-cluster included — a DNS-tunnel exfil channel
+# out of the one namespace that holds member PII). Mirrors #118's
+# allow-postgres-egress in the database namespace (E2, PR #121 review).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -119,7 +123,13 @@ spec:
         values: ["web", "worker", "migrator"]
   policyTypes: [Egress]
   egress:
-    - to: [] # cluster DNS only
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
       ports:
         - protocol: UDP
           port: 53
