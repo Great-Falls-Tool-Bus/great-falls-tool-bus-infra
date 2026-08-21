@@ -94,7 +94,16 @@ spec:
           imagePullPolicy: IfNotPresent
           # One immutable image, three entrypoints (spec S6). This is the
           # migrator one; `web` and `worker` are Deployments elsewhere.
-          command: ["/usr/local/bin/migrator"]
+          #
+          # ARGS, NOT COMMAND (B-1, PR #118 review round). The published
+          # nix2container artifact (flake.nix:166-173,199,263 in the platform
+          # repo) installs /bin/{web,worker,migrator} and dispatches the role
+          # POSITIONALLY; the ContainerFile mirror's linked-name
+          # /usr/local/bin/<role> form is the fallback CI never evaluates.
+          # `args: ["migrator"]` resolves on PATH under both builders and,
+          # unlike `command:`, does not override the image ENTRYPOINT
+          # (`["dumb-init", "--"]`), so dumb-init stays PID 1.
+          args: ["migrator"]
           env:
             # THE NARROW CREDENTIAL, BY NAME ONLY. Operator-provisioned in the
             # platform namespace from the CNPG-generated `gftb-member-db-app`
