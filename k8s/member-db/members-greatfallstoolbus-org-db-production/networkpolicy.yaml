@@ -71,6 +71,15 @@ spec:
 # :5432 for role and database reconciliation (the `managed.roles` block in
 # cluster.yaml is applied through exactly this leg). Scoped to the operator pod
 # in cnpg-system, never the whole namespace.
+#
+# COVERS THE RESTORE REHEARSAL TOO (B-5, PR #118 review round). Runbook step R
+# rehearses into a SECOND Cluster, `gftb-member-db-restore`, in this same
+# namespace — its pods carry `cnpg.io/cluster: gftb-member-db-restore`, a
+# different value than the target selector below matched before this fix.
+# Without this leg the operator cannot reach the restore instance manager and
+# the rehearsal Cluster never reports Ready, which is what made the RTO<=4h
+# acceptance row's only proof path unexecutable. The `In` list admits exactly
+# the two named clusters, never every `cnpg.io/cluster` value.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -81,8 +90,10 @@ metadata:
     app.tinyland.dev/lifecycle: declare-only
 spec:
   podSelector:
-    matchLabels:
-      cnpg.io/cluster: gftb-member-db
+    matchExpressions:
+      - key: cnpg.io/cluster
+        operator: In
+        values: ["gftb-member-db", "gftb-member-db-restore"]
   policyTypes: [Ingress]
   ingress:
     - from:
@@ -241,6 +252,14 @@ spec:
 # reach it. This is the netpol half of the B1 ruling: a GFTB-owned store kept
 # inside GFTB's own apply plane, with the secrets contract and netpol doctrine
 # already governing everything else in this namespace.
+#
+# COVERS THE RESTORE REHEARSAL TOO (B-5, PR #118 review round). The rehearsal
+# Cluster (`gftb-member-db-restore`, runbook step R) reads the same backups
+# from this same store — that is the entire point of the rehearsal — so its
+# pods need to be admitted here too, or the restore never gets past fetching
+# its base backup. The bucket-create Job (bucket-create.template.yaml, B-3)
+# also carries `cnpg.io/cluster: gftb-member-db` deliberately so it is
+# admitted by this same list without a third value.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -257,8 +276,10 @@ spec:
   ingress:
     - from:
         - podSelector:
-            matchLabels:
-              cnpg.io/cluster: gftb-member-db
+            matchExpressions:
+              - key: cnpg.io/cluster
+                operator: In
+                values: ["gftb-member-db", "gftb-member-db-restore"]
       ports:
         - protocol: TCP
           port: 9000
