@@ -88,7 +88,7 @@ EXPECTED_CORE_CI_PATH_EXPORTS = {
     "edge-plan.yml": 3,
     "flywheel-cache-proof.yml": 0,
     "form-crs.yml": 3,
-    "k8s-stack-drift.yml": 5,
+    "k8s-stack-drift.yml": 6,
     "list-crs.yml": 3,
     "mail-crs.yml": 3,
     "validate.yml": 0,

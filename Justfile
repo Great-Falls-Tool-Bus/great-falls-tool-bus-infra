@@ -35,6 +35,7 @@ check-hosted:
     just runner-group-contract
     just mail-cr-validate
     just list-stack-validate
+    just listsync-stack-validate
     just form-stack-validate
     just archive-stack-validate
     just web-stack-validate
@@ -1972,6 +1973,33 @@ list-member-add: _list-member-add-inputs _reviewed-clean-main _operator-apply-co
     test "$(classify_membership <<<"${after_json}")" = "present" || { echo "Membership readback did not converge." >&2; exit 2; }
     echo "Selected list membership added and read back."
 
+# --- keyholders -> discuss add-only membership reconciler (TIN-3813 lane) ---
+# Enforces members(keyholders@latoolb.us) as a subset of
+# members(discuss@latoolb.us) going forward (the ratified private/public list
+# pairing, meta decisions/0014 ruling 5). Mailman owns list membership and
+# account-controller owns mail RESOURCE reconciliation only (launch-member-v0
+# spec responsibilities table), so the invariant lives here in the GFTB apply
+# plane as a narrow suspended CronJob: add-only, two pinned lists, dry-run
+# default-on, no k8s API identity, egress pinned to core REST, and gated on
+# the operator-minted mailman-listsync-rest Secret (Mailman core 3.3.10 has a
+# single global REST identity — the restricted-proxy scoping TIN-3813 calls
+# for does not exist yet and is tracked there; see the manifest comments and
+# docs/runbooks/list-operations.md section 8 for the declared gap and the
+# three-step attended activation). Checked-in validation is offline; live
+# server dry-run/apply uses the same protected mail-environment kubeconfig as
+# the other latoolb-us-production stacks. Merging changes nothing on its own.
+
+listsync_stack_dir := "k8s/list-sync/latoolb-us-production"
+
+listsync-stack-validate:
+    bash scripts/validate-listsync-stack.sh {{ listsync_stack_dir }}
+
+listsync-stack-server-dry-run: listsync-stack-validate _mail-kubeconfig-inputs
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply --dry-run=server -k {{ listsync_stack_dir }}
+
+listsync-stack-apply: listsync-stack-server-dry-run
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ listsync_stack_dir }}
+
 # --- GFTB contact-intake stack (TIN-2420 Path B) ----------------------------
 # Anubis PoW gate -> stdlib form-handler -> LMTP inject to keyholders@latoolb.us
 # (the list fans out to every keyholder; LMTP needs no SMTP credential).
@@ -3861,9 +3889,9 @@ web-release-apply: _reviewed-clean-main _operator-apply-confirm _web-release-app
 # semantics of `kubectl diff`: 0 = no drift, 1 = drift found, >1 = a real error
 # (bad kubeconfig, RBAC, API reachability).
 #
-# mail/list/form/archive are TRUE zero-diff stacks: nothing patches them
-# imperatively after their `*-apply` recipe runs, so ANY diff is real drift and
-# the check fails (fail_on_drift=true), mirroring edge-drift.yml's "assert
+# mail/list/form/archive/listsync are TRUE zero-diff stacks: nothing patches
+# them imperatively after their `*-apply` recipe runs, so ANY diff is real
+# drift and the check fails (fail_on_drift=true), mirroring edge-drift.yml's "assert
 # zero-diff" gate.
 #
 # web is NOT held to the same bar, by design. k8s/web/greatfallstoolbus-org-production
@@ -3914,6 +3942,15 @@ form-stack-drift-check: _mail-kubeconfig-inputs
 
 archive-stack-drift-check: _mail-kubeconfig-inputs
     just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ archive_stack_dir }} archive-stack true
+
+# TIN-3813 EDIT-2 (infra #122 review): "activation is an operator decision in
+# git" is only true if drift enforces it. Held to the SAME true-zero-diff bar
+# as mail/list/form/archive (fail_on_drift=true), specifically so an
+# out-of-band `kubectl patch cronjob mailman-listsync -p
+# '{"spec":{"suspend":false}}'` (or a dry-run/secret/list-pair patch) shows up
+# here instead of silently taking effect between scheduled runs.
+listsync-stack-drift-check: _mail-kubeconfig-inputs
+    just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ listsync_stack_dir }} listsync-stack true
 
 # fail_on_drift=false: see the _k8s-drift-check header -- the committed
 # adapter-node web declaration is expected to diverge from the live promoted
