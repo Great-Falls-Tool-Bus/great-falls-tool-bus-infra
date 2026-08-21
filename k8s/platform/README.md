@@ -71,7 +71,7 @@ the cap: web 2×10 + web rollout surge 1×10 + worker 1×10 = 40 (the worker use
 `maxSurge: 1` and worker `replicas: 1` / `Recreate`; raising any of them is a
 budget change reviewed against `../member-db/.../cluster.yaml` first.
 
-## Dependencies (why the PR that introduced this is a draft)
+## Dependencies (why nothing here can be applied yet)
 
 1. **The platform image does not exist.** S0 (`greatfallstoolbus.org` PR
    #171) and the S1–S3 stack above it are open but unlanded; nothing publishes
