@@ -126,6 +126,7 @@ HOSTED_WORKFLOW_JUST_ALLOWLIST = {
     "list-stack-drift-check",
     "list-stack-server-dry-run",
     "list-stack-validate",
+    "listsync-stack-drift-check",
     "mail-cr-apply",
     "mail-cr-drift-check",
     "mail-cr-server-dry-run",

@@ -1,15 +1,21 @@
 name: K8s Stack Drift (zero-diff where applicable)
 
 # Scheduled, read-only drift-check lane for the namespace-scoped k8s workload
-# stacks (k8s/{mail,list,form,archive,web}): every 12h it diffs LIVE cluster
-# state against the committed manifests via `kubectl diff -k` (server-side,
-# NO apply) -- mirroring edge-drift.yml's zero-diff philosophy for
-# tofu/stacks/edge, applied here to the Kubernetes CR/workload stacks instead
-# of Tofu state.
+# stacks (k8s/{mail,list,form,archive,list-sync,web}): every 12h it diffs LIVE
+# cluster state against the committed manifests via `kubectl diff -k`
+# (server-side, NO apply) -- mirroring edge-drift.yml's zero-diff philosophy
+# for tofu/stacks/edge, applied here to the Kubernetes CR/workload stacks
+# instead of Tofu state.
 #
-# mail/list/form/archive are TRUE zero-diff stacks: nothing patches them
-# imperatively after `just <stack>-apply` runs, so any diff IS real drift and
-# FAILS the gate (hard error), same as edge-drift.yml's "assert zero-diff".
+# mail/list/form/archive/list-sync are TRUE zero-diff stacks: nothing patches
+# them imperatively after `just <stack>-apply` runs, so any diff IS real
+# drift and FAILS the gate (hard error), same as edge-drift.yml's "assert
+# zero-diff". list-sync (TIN-3813) is the add-only keyholders->discuss
+# reconciler: it ships suspend:true + LISTSYNC_DRY_RUN:"true" and its whole
+# activation story is "an operator decision in git" (infra PR #122's review,
+# EDIT-2) -- that claim is only true if an out-of-band `kubectl patch cronjob
+# mailman-listsync -p '{"spec":{"suspend":false}}'` (or any other imperative
+# relaxation) is visible somewhere. This job is that somewhere.
 #
 # web is DIFFERENT, by design, and is deliberately NOT held to the same bar:
 # k8s/web/greatfallstoolbus-org-production is ATTENDED-ONLY declare-only, not
@@ -167,6 +173,18 @@ jobs:
             export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
             nix develop "${GF_CORE_CI_PATH}" -c just archive-stack-drift-check
 
+      - name: Drift check -- list-sync stack (TIN-3813)
+        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            export GF_CORE_PATH=../GloriousFlywheel
+            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            nix develop "${GF_CORE_CI_PATH}" -c just listsync-stack-drift-check
+
       - name: Upload drift artifacts
         if: always() && steps.secrets.outputs.kubeconfig-present == 'true'
         continue-on-error: true
@@ -178,6 +196,7 @@ jobs:
             overlay/list-stack-drift.txt
             overlay/form-stack-drift.txt
             overlay/archive-stack-drift.txt
+            overlay/listsync-stack-drift.txt
           if-no-files-found: ignore
           retention-days: 7
 
