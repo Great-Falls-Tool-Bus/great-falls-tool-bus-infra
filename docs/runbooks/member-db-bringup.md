@@ -109,8 +109,12 @@ permanent record, not a gate.
 > backups survive its loss; sting is the ruled exception host. A courtesy
 > note belongs on the blahaj side before/at the apply sitting.
 
-**B2 — bucket and credential (still pre-apply work, executed as part of
-step S below).** Mint the `gftb-member-db-backup-s3` Secret AND the
+**B2 — bucket and credential. Mint BOTH Secrets BEFORE step S — only the
+bucket creation is step-S-ordered.** `rustfs.yaml`'s `envFrom` is
+`optional: false`: if the Secrets are unminted when step S applies the
+store, the pod sits in `CreateContainerConfigError` and the 300s rollout
+wait fails (loud, fast, recoverable — but avoidable). Mint the
+`gftb-member-db-backup-s3` Secret AND the
 `gftb-member-db-backup-store-root` Secret in the database namespace —
 **identically**: same `ACCESS_KEY_ID`/`ACCESS_SECRET_KEY` value pair under
 the two different key-naming conventions each side needs
