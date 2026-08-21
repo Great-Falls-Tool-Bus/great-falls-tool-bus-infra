@@ -82,7 +82,7 @@ substrate PR plus an operator apply, never something this repository applies.
 | TIN-3817 acceptance | Held by | Checked by |
 | --- | --- | --- |
 | one dedicated PostgreSQL **16.15** CNPG cluster | `cluster.yaml` `imageName` digest-pinned to the 16.15 system image | validator asserts the exact repository, a 64-hex digest, and refuses a tag |
-| migration is a **separate protected Job** | `job-migrator.template.yaml`, `command: ["/usr/local/bin/migrator"]` | validator asserts the entrypoint, `backoffLimit: 0`, and the placeholder image |
+| migration is a **separate protected Job** | `job-migrator.template.yaml`, `args: ["migrator"]` (positional dispatch, no `command:` — B-1) | validator asserts the entrypoint args, `backoffLimit: 0`, and the placeholder image |
 | with a **narrow credential** | Job gets the owner DSN; web/worker get the DML-only role | validator asserts the Job references only `gftb-member-db-migrator-dsn` |
 | runtime role is **DML-only** | `managed.roles` + `postInitApplicationSQL` default privileges | validator asserts `bypassrls: false`, `superuser: false`, `createdb`/`createrole` false |
 | **RPO no worse than one hour** | continuous WAL archiving + `archive_timeout: 300s` | validator asserts the parameter is present and `<= 3600s` |

@@ -53,7 +53,7 @@ readonly WANT_RUNTIME_ROLE="gftb_app"
 readonly WANT_RUNTIME_SECRET="gftb-member-db-runtime"
 readonly WANT_MIGRATOR_SECRET="gftb-member-db-migrator-dsn"
 readonly WANT_STORAGE_CLASS="openebs-bumble-postgresql-retain"
-readonly WANT_MIGRATOR_ENTRYPOINT='["/usr/local/bin/migrator"]'
+readonly WANT_MIGRATOR_ARGS='["migrator"]'
 readonly WANT_IMAGE_PLACEHOLDER="PLACEHOLDER-MEMBER-DB-MIGRATOR-IMAGE"
 # B1 ruling (2026-08-20): GFTB-owned rustfs backup store. Digest reused
 # verbatim from the house pin source, blahaj deploy/nix-cache/
@@ -293,8 +293,13 @@ assert_eq "${job_fixed_name}" "absent" "migration Job must not carry a fixed met
 # would be an apply-shaped artifact sitting in a declare-only stack.
 job_image="$(yq -r '.spec.template.spec.containers[] | select(.name == "migrator") | .image' "${job_template}")"
 assert_eq "${job_image}" "${WANT_IMAGE_PLACEHOLDER}" "migration Job image placeholder (the digest is supplied at dispatch)"
-job_command="$(yq -c '.spec.template.spec.containers[] | select(.name == "migrator") | .command' "${job_template}")"
-assert_eq "${job_command}" "${WANT_MIGRATOR_ENTRYPOINT}" "migration Job entrypoint (one image, three entrypoints)"
+# NO command:. B-1 (PR #118 review): `command:` overrides the image
+# ENTRYPOINT (`["dumb-init", "--"]`), so a real command would run the migrator
+# as PID 1 with no reaper. Dispatch stays through `args:` alone.
+job_command="$(yq -r '.spec.template.spec.containers[] | select(.name == "migrator") | .command // "absent"' "${job_template}")"
+assert_eq "${job_command}" "absent" "migration Job command (must be absent so the image ENTRYPOINT [dumb-init --] stays PID 1)"
+job_args="$(yq -c '.spec.template.spec.containers[] | select(.name == "migrator") | .args' "${job_template}")"
+assert_eq "${job_args}" "${WANT_MIGRATOR_ARGS}" "migration Job entrypoint (one image, three entrypoints — positional dispatch, both builders)"
 
 assert_eq "$(yq -r '.spec.backoffLimit' "${job_template}")" "0" \
   "migration Job backoffLimit (a failed migration must stay failed, not retry into a half-applied ledger)"
@@ -397,4 +402,4 @@ assert_eq "${endpoint}" "${want_endpoint}" "cluster.yaml barmanObjectStore endpo
 # --- Full render must succeed (parse-only; never contacts a cluster) ---------
 kubectl kustomize "${dir}" >/dev/null
 
-echo "member-db stack validation passed for ${WANT_CLUSTER} in ${stack_ns}: DECLARE-ONLY (no namespace, no Secret object, no CI apply path), PostgreSQL 16.15 pinned to ${WANT_PG_REPO}@sha256:<64 hex> on ${WANT_STORAGE_CLASS} with a separate WAL volume, RPO bounded by archive_timeout ${archive_seconds}s to an in-cluster object store, RTO bounded by '${schedule}' base backups with ${retention} retention, ${WANT_OWNER_ROLE} (DDL) and ${WANT_RUNTIME_ROLE} (DML-only, bypassrls false) separated, default-deny admitting only ${WANT_PLATFORM_NS} ${admit_components} on 5432, migration Job entrypoint ${WANT_MIGRATOR_ENTRYPOINT} carrying only ${WANT_MIGRATOR_SECRET}, backup destination ${want_endpoint} (B1 ruling: GFTB-owned rustfs, ${WANT_RUSTFS_REPO}@sha256:<64 hex> on ${WANT_RUSTFS_STORAGECLASS} >=${MIN_RUSTFS_STORAGE_GI}Gi, ingress admitting only cnpg.io/cluster=${WANT_CLUSTER} on :9000, egress DNS-only)"
+echo "member-db stack validation passed for ${WANT_CLUSTER} in ${stack_ns}: DECLARE-ONLY (no namespace, no Secret object, no CI apply path), PostgreSQL 16.15 pinned to ${WANT_PG_REPO}@sha256:<64 hex> on ${WANT_STORAGE_CLASS} with a separate WAL volume, RPO bounded by archive_timeout ${archive_seconds}s to an in-cluster object store, RTO bounded by '${schedule}' base backups with ${retention} retention, ${WANT_OWNER_ROLE} (DDL) and ${WANT_RUNTIME_ROLE} (DML-only, bypassrls false) separated, default-deny admitting only ${WANT_PLATFORM_NS} ${admit_components} on 5432, migration Job entrypoint args ${WANT_MIGRATOR_ARGS} (no command:) carrying only ${WANT_MIGRATOR_SECRET}, backup destination ${want_endpoint} (B1 ruling: GFTB-owned rustfs, ${WANT_RUSTFS_REPO}@sha256:<64 hex> on ${WANT_RUSTFS_STORAGECLASS} >=${MIN_RUSTFS_STORAGE_GI}Gi, ingress admitting only cnpg.io/cluster=${WANT_CLUSTER} on :9000, egress DNS-only)"
