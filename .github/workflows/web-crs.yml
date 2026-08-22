@@ -56,6 +56,7 @@ jobs:
           repository: tinyland-inc/GloriousFlywheel
           ref: ${{ env.GF_CORE_REF }}
           path: GloriousFlywheel
+          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
           persist-credentials: false
       - name: Verify GloriousFlywheel core checkout
         run: |
@@ -73,5 +74,5 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            export GF_CORE_CI_PATH="path:${GF_CORE_PATH}#ci"
             nix develop "${GF_CORE_CI_PATH}" -c just web-stack-validate
