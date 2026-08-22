@@ -1,4 +1,15 @@
-# 0002 — Preview-environment CD authority: the infra-side companion to site ADR 0010 §4
+# 0003 — Preview-environment CD authority: the infra-side companion to site ADR 0010 §4
+
+> **Numbering note:** this document originally branched as `0002`. An
+> unrelated, unmerged branch (`agent/production-convergence-prep-20260806`
+> @ `d8ff004b`, different filename,
+> `docs/decisions/0002-production-convergence-conversion.md`) independently
+> claims that slot for a different scope (production web-stack CD carrier
+> conversion). Because the two files have different names, git would merge
+> both silently with no conflict and no enforcement — "whichever lands
+> second renumbers" was an unenforced expectation, not a guarantee. This
+> document takes `0003` deterministically instead, reserving the slot here
+> rather than leaving it to chance.
 
 - **Status:** Proposed (adversarial review precedes merge; not operator-signature-only)
 - **Date:** 2026-08-21
@@ -6,9 +17,26 @@
 - **Ticket:** TIN-2535 (reopens the preview question this ADR answers)
 - **Supersedes:** this ADR's own `0001-pr-gated-ephemeral-preview-deploys.md`
   **Option A recommendation** ("Do not build an on-cluster per-PR reaper";
-  Cloudflare Pages managed previews). Per 0001's own no-silent-rewrite
-  convention, 0001's text is retained; this ADR is the ruling that supersedes
-  it, not an edit to it.
+  Cloudflare Pages managed previews), by the house no-silent-rewrite
+  convention — retain the superseded text AND land a dated annotation on
+  the superseded document itself. **0001 has no such convention of its
+  own** (checked: `0001` contains no `silent`/`supersed`/`amend`/`rewrit`/
+  `convention` language relevant to this rule — its only two
+  `convention`-adjacent hits, `:63` and `:187`, both describe `dev -> main`
+  promotion being "convention only" under a branch-protection gap, which is
+  unrelated). The convention actually lives at
+  `greatfallstoolbus.org:docs/decisions/0010-on-prem-is-the-production-host.md:171-174`
+  ("superseded per the annotations landed on those ADRs (no-silent-rewrite:
+  their text is retained, this ADR is the ruling)") and
+  `greatfallstoolbus.org:docs/decisions/0008-oncluster-production-hosting.md:10-13`
+  ("Under the no-silent-rewrite rule, 0003's text is retained; this ADR is
+  the annotation") — and restated in this repo's own
+  `docs/research/full-oncluster-web-serving-2026-07.md:319` ("retire by
+  annotation (not silent rewrite)") and `docs/mvp-decision-packet.md:53`
+  ("a dated correction note, never a silent rewrite"). This PR follows that
+  rule properly: `0001`'s text is retained below, and a dated annotation
+  banner lands on `0001` itself in this same PR (see the diff on
+  `docs/decisions/0001-pr-gated-ephemeral-preview-deploys.md`).
 - **Points CD authority at:** `meta` `decisions/0020-adopt-production-convergence-contract-2026-08-21.md`
   (Great-Falls-Tool-Bus/meta#34, DRAFT — operator merges)
 - **Ratification basis:** operator interview 2026-08-21 (session register L72),
@@ -68,13 +96,16 @@ shape now, and this ADR does not authorize building it yet (§4).
   never `tailscale funnel`), no public exposure, no Cloudflare Access gate
   needed because it never leaves the tailnet. This retires the
   cleartext-exposure concern 0001 §"Redundant" implicitly accepted by
-  defaulting to Cloudflare Pages' own gate. **Correction to this ADR's own
-  first draft:** the recipe takes no `PR=<n>` parameter — it is not yet a
-  per-PR automated lane, and as of this writing it exists only as
-  **uncommitted work** on worktree `greatfallstoolbus.org` branch
-  `feat/preview-tailnet-lane` (not pushed, not a PR). It is not this
-  document's place to describe uncommitted work as landed; it is named here
-  only as the ratified *shape* of the interim, not as a shipped artifact.
+  defaulting to Cloudflare Pages' own gate. The recipe takes no `PR=<n>`
+  parameter — it is not yet a per-PR automated lane. It is committed at
+  `e0774ea4` on `greatfallstoolbus.org` branch `feat/preview-tailnet-lane`,
+  carried by **open DRAFT PR Great-Falls-Tool-Bus/greatfallstoolbus.org#192**
+  ("feat(preview): tailnet preview lane (`just preview-tailnet`) + retire
+  dead lane-env workflow", `Justfile:482` `preview-tailnet`, `:667`
+  `preview-tailnet-down`, and the `.github/workflows/lane-env.yml`
+  deletion). Citing an open PR number here rather than a worktree path,
+  since a worktree path is unresolvable for any reviewer other than the
+  one machine that has it checked out.
 - **Ratified target (after the infra apply sitting):**
   `staging.greatfallstoolbus.org` promote-on-PR, at the serving shape ADR
   0020 §7 requires: PR-scoped state key + namespace + its own durable data
@@ -114,9 +145,9 @@ operator is this ADR's job; resolving it is a separate, future decision.
 
 ## 4. What this ADR does not authorize
 
-- No apply. `just preview-tailnet` already exists as a local recipe; nothing
-  here mints new credentials, installs a carrier, or provisions the staging
-  namespace.
+- No apply. `just preview-tailnet` exists (committed at `e0774ea4`, open PR
+  #192 — see §2); nothing here mints new credentials, installs a carrier, or
+  provisions the staging namespace.
 - No revival of the on-cluster per-PR reaper 0001 declined, in the shape
   0001 described. If/when GFTB builds a PR-scoped on-cluster environment, it
   is built to ADR 0020 §7's data-lifecycle rules, in its own reviewed PR,
@@ -124,9 +155,13 @@ operator is this ADR's job; resolving it is a separate, future decision.
   shape.
 - No route mutation. TIN-991's gap (§3) is named, not closed, by this
   document.
-- No change to `0001`'s own text (no-silent-rewrite convention, §0 above).
+- No *silent* change to `0001`'s own text. Per the house no-silent-rewrite
+  convention (front matter above), `0001`'s Option A recommendation is
+  retained verbatim and the supersession is recorded as a dated annotation
+  banner landed on `0001` itself, in this same PR — not an edit that
+  removes or rewords its text.
 
-## 5. A note on this ADR's own numbering — a finding, not a resolution
+## 5. A note on this ADR's own numbering — resolved deterministically, not left to chance
 
 This repository already carries an **unmerged** branch,
 `agent/production-convergence-prep-20260806` (commit `d8ff004b6027b1a`,
@@ -141,12 +176,15 @@ unpublished module and an operator enable ceremony, applying nothing. This
 ADR answers the **preview-environment** authority question 0010 §4 asked.
 
 Both branch from a `main` that only had `0001` in `docs/decisions/`, so both
-independently claim `0002`. **This ADR does not resolve that collision.**
-Whichever of the two branches lands second must renumber at merge time (most
-likely this ADR becomes `0003`, since the other branch's content is the
-more substantial, already-detailed engineering artifact — but that is the
-operator's or the reviewing engineer's call, not a mechanical one made here).
-Named so the collision is not discovered by surprise at merge.
+originally claimed `0002`. Because the two files have **different
+filenames** (`0002-preview-cd-authority-companion-2026-08-21.md` vs.
+`0002-production-convergence-conversion.md`), git would merge both without
+a conflict — the collision would not surface at merge time, and "whichever
+lands second must renumber" had no enforcement behind it. **This document
+now takes `0003` instead**, reserved in the header note above, so the
+collision cannot occur regardless of merge order. This ADR does not resolve
+the *other* branch's own future numbering if it ever lands (that remains
+that branch's own housekeeping) — only its own.
 
 ## Authority
 
@@ -157,4 +195,6 @@ Named so the collision is not discovered by surprise at merge.
 | Cloudflare Pages project deleted | site ADR 0010, Amendment 2 (2026-07-07, TIN-2560), run `28801030150` |
 | CD authority pointer | `meta:decisions/0020-adopt-production-convergence-contract-2026-08-21.md` (Great-Falls-Tool-Bus/meta#34, DRAFT) |
 | TIN-991 cancelled, route authority unassigned | `k8s/web/README.md:88`; `docs/runbooks/oncluster-web-cutover.md:245`; `k8s/web/pr-env-lane.md:15,84` |
-| Prior-art numbering collision | `agent/production-convergence-prep-20260806` @ `d8ff004b6027b1a` (unmerged) |
+| Prior-art numbering collision, resolved by taking 0003 | `agent/production-convergence-prep-20260806` @ `d8ff004b6027b1a` (unmerged) |
+| House no-silent-rewrite convention (real source) | `greatfallstoolbus.org:docs/decisions/0010-...md:171-174`; `greatfallstoolbus.org:docs/decisions/0008-...md:10-13`; `docs/research/full-oncluster-web-serving-2026-07.md:319`; `docs/mvp-decision-packet.md:53` |
+| `just preview-tailnet` real state | committed `e0774ea4`, open PR Great-Falls-Tool-Bus/greatfallstoolbus.org#192 |
