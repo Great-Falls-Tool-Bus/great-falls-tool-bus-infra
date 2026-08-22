@@ -127,15 +127,22 @@ AUTHORITY_DOCS = (
 )
 # History: commit 91ed60ea (2026-07-20) retired GF_CORE_DEPLOY_KEY when
 # GloriousFlywheel was public, added it to RETIRED_CORE_CREDENTIALS, and wrote
-# "do not silently restore a deploy-key/PAT ladder" into docs/ci-credentials.md
-# on the assumption a future private-repo transition would use a dedicated
-# GitHub App installation token instead. TIN-4015 (2026-08-22, operator-ruled
-# in the Linear issue text: "credential properly (deploy key pattern)")
-# supersedes that assumption: GloriousFlywheel went private again the same day
-# roster admission gave every self-hosted workflow here an actual runner, and
-# no GitHub App installation exists. The `GF_CORE_DEPLOY_KEY` repository
-# secret was never deleted (minted 2026-07-14, predates its own retirement),
-# so TIN-4015 reuses it rather than standing up new credential infrastructure.
+# "do not silently restore a deploy-key/PAT ladder ... and do not reuse the
+# org-scoped ARC registration App" into docs/ci-credentials.md on the
+# assumption a future private-repo transition would use a dedicated,
+# per-overlay contents:read GitHub App installation token instead. TIN-4015
+# (2026-08-22, operator-ruled in the Linear issue text: "credential properly
+# (deploy key pattern)") supersedes that assumption: GloriousFlywheel went
+# private again the same day roster admission gave every self-hosted workflow
+# here an actual runner, and no dedicated, per-overlay contents:read App
+# installation on tinyland-inc/GloriousFlywheel exists (a GFTB GitHub App does
+# exist -- config/organization.yaml's github_app_secret_name,
+# docs/implementation-overlay.md's "ARC GitHub App Secret" -- but it is the
+# org-scoped ARC registration App, and 91ed60ea's prohibition on reusing it
+# for this still holds; nothing here does). The `GF_CORE_DEPLOY_KEY`
+# repository secret was never deleted (minted 2026-07-14, predates its own
+# retirement), so TIN-4015 reuses it rather than standing up new credential
+# infrastructure.
 # Every core-repository checkout below (both the GF_CORE_REF family and the
 # OIDC-profile-ref checkout) must bind exactly this expression -- a read-only
 # deploy key scoped to source checkout only, never an ARC/apply credential.
@@ -534,7 +541,25 @@ def _checkout_findings(sources: dict[str, str]) -> list[str]:
                 # GF_CORE_DEPLOY_KEY (TIN-4015) -- validated exactly once, in
                 # their own dedicated blocks below. The overlay checkout's
                 # "no credential at all" rule two lines down does not apply to
-                # them.
+                # them. But an off-census path (neither the GF_CORE_REF
+                # family's "GloriousFlywheel" nor flywheel-cache-proof's
+                # "GloriousFlywheel-oidc-profile") must not be allowed to
+                # silently `continue` past every check below -- an
+                # off-census core checkout escapes both this rule AND the
+                # dedicated core-checkout census (core_indexes is itself
+                # path-scoped), which is exactly how it could otherwise carry
+                # an arbitrary credential and ref undetected.
+                allowed = (
+                    {OIDC_PROFILE_CHECKOUT_PATH}
+                    if workflow == "flywheel-cache-proof.yml"
+                    else {"GloriousFlywheel"}
+                )
+                if set(_with_values(step, "path")) != allowed:
+                    findings.append(
+                        f"{location}: core-repository checkout path must be "
+                        f"{sorted(allowed)[0]} -- an off-census core checkout "
+                        "escapes every credential, pin, and HEAD-assertion check"
+                    )
                 continue
             if re.search(
                 r"(?mi)^\s+['\"]?(?:token|ssh-key)['\"]?\s*:", step.text
@@ -847,6 +872,21 @@ def self_test(root: Path) -> None:
             Path(".github/workflows/flywheel-cache-proof.yml"),
             "          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}\n",
             "",
+        ),
+        "off-census core checkout": (
+            # B1 (PR #130 review, comment 5382527702): repointing an ordinary
+            # "Checkout overlay" step at the core repository with a path
+            # outside the two known census paths used to `continue` past both
+            # the overlay credential rule AND the (then path-scoped)
+            # core_indexes census, escaping every credential/pin/HEAD-assertion
+            # check with 0 findings. This mutation is that exact shape.
+            CORE_SELFTEST_WORKFLOW,
+            "          path: overlay\n          persist-credentials: false\n",
+            "          repository: tinyland-inc/GloriousFlywheel\n"
+            "          ref: main\n"
+            "          path: pwn\n"
+            "          token: ${{ secrets.SOME_OTHER_SECRET }}\n"
+            "          persist-credentials: false\n",
         ),
         "overlay checkout token": (
             HOSTED_SELFTEST_WORKFLOW,

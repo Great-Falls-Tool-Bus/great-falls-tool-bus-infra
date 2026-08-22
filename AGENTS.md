@@ -1,10 +1,16 @@
 # great-falls-tool-bus-infra Agent Guidance
 
 This repository is the public Great-Falls-Tool-Bus (GFTB) organization
-implementation overlay for GloriousFlywheel. Validation is secret-free and, per
-the 2026-08-19 operator ruling (TIN-3914), runs on the GF cache-fronted ARC
-fleet -- GitHub-hosted runners are not permitted anywhere in this org.
-Credentials and apply authority remain operator-owned.
+implementation overlay for GloriousFlywheel. The required `validate` workflow
+is secret-free and, per the 2026-08-19 operator ruling (TIN-3914), runs on the
+GF cache-fronted ARC fleet -- GitHub-hosted runners are not permitted anywhere
+in this org. The other self-hosted workflows hold one repository-scoped,
+read-only source-checkout credential (`GF_CORE_DEPLOY_KEY`, TIN-4015,
+2026-08-22: GloriousFlywheel went private and this repository's own
+`validate-core-checkout.py` enforces that it is the only credential any core
+checkout may carry) -- see docs/ci-credentials.md. ARC apply authority and
+Kubernetes/Cloudflare/DreamHost credentials remain operator-owned; this one
+source-read credential is not apply authority.
 
 Hard rules:
 

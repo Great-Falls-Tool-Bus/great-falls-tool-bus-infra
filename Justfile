@@ -7,6 +7,17 @@ set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 # checkout directory name. Override GF_CORE_PATH when the core source checkout
 # lives elsewhere. GF_CORE_CI_PATH is a pinned GitHub flake ref by default so
 # tooling no longer assumes a sibling checkout for the #ci devshell.
+#
+# GloriousFlywheel went private (TIN-4015, 2026-08-22). The `github:` defaults
+# below (gf_core_ci, arc_core_ci_default) are unauthenticated and now 404 for a
+# local operator who has not exported GF_CORE_CI_PATH / GF_ARC_CORE_CI_PATH.
+# The CI workflows (.github/workflows/) already export a credentialed
+# path:${GF_CORE_PATH}#ci override per-invocation and are unaffected. A local
+# operator with an authenticated GloriousFlywheel checkout at gf_core /
+# arc_core_default should export GF_CORE_CI_PATH="path:${gf_core}#ci" (or the
+# ARC equivalent) themselves; _reviewed-arc-core already accepts and verifies
+# that local-path form (see its pinned_ci/local_ci/declared_local_ci check
+# below). Not fixed here -- follow-up.
 gf_core := env_var_or_default("GF_CORE_PATH", "../GloriousFlywheel")
 gf_core_ci := env_var_or_default("GF_CORE_CI_PATH", "github:tinyland-inc/GloriousFlywheel/2281b576bce0e8dd776a047b84e7464f5b508a62#ci")
 gf_core_sha := "2281b576bce0e8dd776a047b84e7464f5b508a62"
@@ -76,9 +87,13 @@ public-surface-selftest:
 public-pii:
     python3 scripts/validate-public-pii-surface.py
 
-# Finite pinned-source declaration contract. Legacy workflows bind
-# GloriousFlywheel to the exact reviewed commit for each role, but this public
-# repository supplies no private-core deploy key, PAT, or App credential.
+# Finite pinned-source declaration contract. Workflows bind GloriousFlywheel to
+# the exact reviewed commit for each role. GloriousFlywheel went private
+# (TIN-4015, 2026-08-22); every core-repository checkout now carries exactly
+# one credential, the read-only GF_CORE_DEPLOY_KEY deploy key
+# (docs/ci-credentials.md) -- this check enforces that it is that credential,
+# on that checkout shape, and nothing broader (no token, no other secret name,
+# no off-census path).
 core-checkout:
     python3 -B scripts/validate-core-checkout.py
 

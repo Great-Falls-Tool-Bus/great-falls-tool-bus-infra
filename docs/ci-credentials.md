@@ -25,11 +25,18 @@ input. It grants `contents: read` on that one repository only: no package,
 organization-admin, workflow-write, ARC state, or Kubernetes-apply privilege.
 `scripts/validate-core-checkout.py` (`just core-checkout`) enforces that every
 core-repository checkout binds exactly this credential — no `token:`, no
-alternate secret name — and that the overlay/`validate`/`web-plan` checkouts
-remain credential-free. None of these nine workflows runs on `pull_request`
-(each job gates to `push`/`workflow_dispatch`, or declares no `pull_request`
-trigger at all — see `config/organization.yaml`'s `runner_group` comment), so
-the deploy key is never exposed to PR-authored content, fork or same-repo.
+alternate secret name, no off-census checkout path escaping the check
+entirely — and that the overlay/`validate`/`web-plan` checkouts remain
+credential-free. No **credentialed job** runs on `pull_request` (each job
+gates to `push`/`workflow_dispatch`, or declares no `pull_request` trigger at
+all — see `config/organization.yaml`'s `runner_group` comment); note that
+`flywheel-cache-proof.yml` does declare `on: pull_request` at the workflow
+level, it is the job's own `if:` that keeps `GF_CORE_DEPLOY_KEY` off every PR
+run. So the deploy key is never exposed to PR-authored content, fork or
+same-repo. This is also, as of this credential, the first time a
+`push`-triggered job with no protected `environment:` carries a
+cross-repository credential in this repository — see
+`config/organization.yaml`'s `runner_group` comment for that posture note.
 
 Do not add an ARC kubeconfig, a broader ARC App credential, or any credential
 beyond this one read-only deploy key to any of these declarations — they stay
@@ -37,18 +44,24 @@ source-checkout authority only, never ARC apply authority.
 
 **History, for the next reviewer**: commit `91ed60ea` (2026-07-20) retired
 `GF_CORE_DEPLOY_KEY`, added it to a `RETIRED_CORE_CREDENTIALS` guard, and
-wrote "do not silently restore a deploy-key/PAT ladder ... use a dedicated
-GitHub App installation token instead" here — correct at the time, because
+wrote "do not silently restore a deploy-key/PAT ladder ... **and do not reuse
+the org-scoped ARC registration App**" here — correct at the time, because
 GloriousFlywheel was public that day and no credential was needed at all. That
-guidance assumed any future private-repo transition would stand up new GitHub
-App infrastructure. TIN-4015 supersedes it: GloriousFlywheel went private
-again the same day roster admission (PR #128) gave every self-hosted workflow
-in this repository an actual runner for the first time, no GitHub App
-installation exists, and the `GF_CORE_DEPLOY_KEY` secret itself was never
-deleted (minted 2026-07-14, six days before its own retirement) — so TIN-4015
-reuses it rather than blocking on new credential infrastructure. If
-GloriousFlywheel goes private a third time, or this deploy key needs
-rotating, that is again a reviewed authority change, not a silent edit.
+guidance assumed any future private-repo transition would stand up a
+dedicated, per-overlay `contents:read` GitHub App installation token scoped
+only to `tinyland-inc/GloriousFlywheel`. TIN-4015 supersedes that assumption:
+GloriousFlywheel went private again the same day roster admission (PR #128)
+gave every self-hosted workflow in this repository an actual runner for the
+first time, no such dedicated App installation exists (a GFTB GitHub App
+does exist — `config/organization.yaml`'s `github_app_secret_name`,
+`docs/implementation-overlay.md`'s "ARC GitHub App Secret" — but it is the
+org-scoped ARC registration App, and 91ed60ea's prohibition on reusing it for
+this still holds; nothing here does), and the `GF_CORE_DEPLOY_KEY` secret
+itself was never deleted (minted 2026-07-14, six days before its own
+retirement) — so TIN-4015 reuses it rather than blocking on new credential
+infrastructure. If GloriousFlywheel goes private a third time, or this
+deploy key needs rotating, that is again a reviewed authority change, not a
+silent edit.
 
 ## Optional Site-CI Metadata Token — RETIRED (TIN-3899)
 
