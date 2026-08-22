@@ -3909,34 +3909,52 @@ web-release-apply: _reviewed-clean-main _operator-apply-confirm _web-release-app
 # semantics of `kubectl diff`: 0 = no drift, 1 = drift found, >1 = a real error
 # (bad kubeconfig, RBAC, API reachability).
 #
-# mail/list/form/archive/listsync are TRUE zero-diff stacks: nothing patches
-# them imperatively after their `*-apply` recipe runs, so ANY diff is real
-# drift and the check fails (fail_on_drift=true), mirroring edge-drift.yml's "assert
-# zero-diff" gate.
+# Every stack is now a TRUE zero-diff assertion: nothing patches any of them
+# imperatively after their apply recipe runs, so ANY diff is real drift and
+# the check fails, mirroring edge-drift.yml's "assert zero-diff" gate.
+# `fail_on_drift` was a per-caller toggle until 2026-08-21's adversarial
+# review (B1/E1) -- every one of the six callers below had already been set
+# to `true`, making the `false` branch (a "parked skeleton, EXPECTED by
+# design" warning) dead code that kept restating exactly the class of stale
+# claim this whole PR exists to retire. Removed rather than left dormant.
 #
-# web is now HELD TO THE SAME BAR (rung 1 tree honesty, 2026-08-21; session
-# register L71 Q2 rungs 1+2). k8s/web/greatfallstoolbus-org-production is
-# ATTENDED-ONLY declare-only, not parked: it carries replicas:2 and a
-# digest-pinned image of the promoted gftb-site static origin, and creates no
-# namespace (scripts/validate-web-stack.sh guards exactly that). Until this
-# fix, this header claimed the live/git divergence was PERMANENT and
-# by-design, because the tree still named the retired legacy adapter-node
-# image after the gftb-site promotion. It wasn't by design; it was this
-# declarative record never being updated at promotion time. The honest
-# invariant is: the tree pins what is served, and an operator updates it at
-# each web-release-* ceremony's pin step -- so a real diff here now means
-# either a promotion happened without updating the tree (fix the tree) or the
-# tree was hand-edited without a matching promotion (fix the cluster). Known
-# residual, NOT a regression: the web-release-* ceremony's render step
-# (Justfile `web-release-render`) always synthesizes a default-deny-egress
-# NetworkPolicy and an `app.tinyland.dev/source-sha` annotation that this
-# checked-in base does not declare (the former can't be declared here without
-# double-adding it at render time; the latter changes every release) -- expect
-# `web-stack-drift-check` to report exactly those two objects/fields until a
-# follow-up teaches the ceremony to commit its own rendered output back to
-# git. This check is read-only and therefore not interlocked; the attended
-# mutating carrier is (see _web-stack-promotion-interlock).
-_k8s-drift-check kubeconfig namespace dir label fail_on_drift:
+# web (rung 1 tree honesty, 2026-08-21; session register L71 Q2 rungs 1+2):
+# k8s/web/greatfallstoolbus-org-production is ATTENDED-ONLY declare-only, not
+# parked: it carries replicas:2 and a digest-pinned image of the promoted
+# gftb-site static origin, and creates no namespace
+# (scripts/validate-web-stack.sh guards exactly that). Until this fix, this
+# header claimed the live/git divergence was PERMANENT and by-design,
+# because the tree still named the retired legacy adapter-node image after
+# the gftb-site promotion. It wasn't by design; it was this declarative
+# record never being updated at promotion time.
+#
+# WHY WEB IS REACHABLE-ZERO-DIFF, NOT GUARANTEED-RED (adversarial review B2):
+# the web-release-* ceremony's render step (`web-release-render`)
+# unconditionally stamps `app.tinyland.dev/source-sha` onto the live
+# Deployment's pod-template annotations at every release; the checked-in base
+# deliberately never carries a static value for it (the value changes every
+# release, so no committed value could ever be "correct"). A raw `kubectl
+# diff -k` would therefore report that one annotation as drift on EVERY run,
+# forever, making a fail-on-diff gate permanently red for a reason that is
+# not drift. `web-stack-drift-check` below wires `scripts/web-stack-diff.sh`
+# in as `KUBECTL_EXTERNAL_DIFF` to strip exactly that one known-synthesized
+# annotation from both sides before diffing -- see that script for the full
+# rationale. This is scoped to the web caller only; the other five stacks
+# below are untouched and still use kubectl's own default differ.
+#
+# WHAT THIS GATE CANNOT SEE, EVEN AFTER THAT FIX: `kubectl diff -k` compares
+# the rendered LOCAL manifest set against LIVE and has no prune awareness --
+# it is blind to any object that exists ONLY on the cluster. The
+# web-release-* ceremony also synthesizes a `default-deny-egress`
+# NetworkPolicy at render time that the checked-in base does not declare;
+# that object will NEVER surface as a diff here, for any input, by
+# construction of `kubectl diff -k` itself -- there is nothing on the LOCAL
+# side to diff it against. A clean run of this gate is not evidence that
+# NetworkPolicy is absent or correct; it is simply invisible to this specific
+# check (see k8s/web/greatfallstoolbus-org-production/networkpolicy.yaml and
+# k8s/web/README.md). This check is read-only and therefore not interlocked;
+# the attended mutating carrier is (see _web-stack-promotion-interlock).
+_k8s-drift-check kubeconfig namespace dir label:
     #!/usr/bin/env bash
     set -uo pipefail
     test -n "{{ kubeconfig }}" || { echo "kubeconfig path is required"; exit 1; }
@@ -3948,42 +3966,44 @@ _k8s-drift-check kubeconfig namespace dir label fail_on_drift:
       echo "{{ label }}: zero-diff (live cluster matches git)."
       exit 0
     elif [ "${rc}" -eq 1 ]; then
-      if [ "{{ fail_on_drift }}" = "true" ]; then
-        echo "::error::{{ label }} DRIFTED: live cluster state differs from the committed manifests. See {{ label }}-drift.txt (uploaded as a workflow artifact)."
-        exit 1
-      fi
-      echo "::warning::{{ label }} shows a diff against the parked skeleton -- EXPECTED by design (see the _k8s-drift-check header comment); not treated as a drift-gate failure."
-      exit 0
+      echo "::error::{{ label }} DRIFTED: live cluster state differs from the committed manifests. See {{ label }}-drift.txt (uploaded as a workflow artifact)."
+      exit 1
     else
       echo "::error::kubectl diff errored (rc=${rc}) probing {{ label }}."
       exit "${rc}"
     fi
 
 mail-cr-drift-check: _mail-kubeconfig-inputs
-    just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ mail_cr_dir }} mail-cr true
+    just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ mail_cr_dir }} mail-cr
 
 list-stack-drift-check: _mail-kubeconfig-inputs
-    just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ list_stack_dir }} list-stack true
+    just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ list_stack_dir }} list-stack
 
 form-stack-drift-check: _mail-kubeconfig-inputs
-    just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ form_stack_dir }} form-stack true
+    just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ form_stack_dir }} form-stack
 
 archive-stack-drift-check: _mail-kubeconfig-inputs
-    just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ archive_stack_dir }} archive-stack true
+    just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ archive_stack_dir }} archive-stack
 
 # TIN-3813 EDIT-2 (infra #122 review): "activation is an operator decision in
-# git" is only true if drift enforces it. Held to the SAME true-zero-diff bar
-# as mail/list/form/archive (fail_on_drift=true), specifically so an
-# out-of-band `kubectl patch cronjob mailman-listsync -p
-# '{"spec":{"suspend":false}}'` (or a dry-run/secret/list-pair patch) shows up
-# here instead of silently taking effect between scheduled runs.
+# git" is only true if drift enforces it, specifically so an out-of-band
+# `kubectl patch cronjob mailman-listsync -p '{"spec":{"suspend":false}}'`
+# (or a dry-run/secret/list-pair patch) shows up here instead of silently
+# taking effect between scheduled runs.
 listsync-stack-drift-check: _mail-kubeconfig-inputs
-    just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ listsync_stack_dir }} listsync-stack true
+    just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ listsync_stack_dir }} listsync-stack
 
-# fail_on_drift=true (rung 1 tree honesty, 2026-08-21): see the _k8s-drift-check
-# header -- the web declaration now names the same repository the promoted
-# static origin actually runs, so a diff here is a real signal, not
-# by-design noise. Known residual: the render step's synthesized
-# default-deny-egress NetworkPolicy and source-sha annotation (see header).
+# rung 1 tree honesty (2026-08-21): see the _k8s-drift-check header -- the web
+# declaration now names the same repository the promoted static origin
+# actually runs, so a diff here is a real signal, not by-design noise.
+# KUBECTL_EXTERNAL_DIFF is set to scripts/web-stack-diff.sh (this caller
+# ONLY) so the one ceremony-synthesized `source-sha` annotation doesn't make
+# this gate permanently red -- see the _k8s-drift-check header and that
+# script for why, and for the separate default-deny-egress NetworkPolicy
+# residual this gate can never observe regardless.
 web-stack-drift-check: _web-apply-kubeconfig-only
-    just _k8s-drift-check "${WEB_APPLY_KUBECONFIG}" {{ web_stack_ns }} {{ web_stack_dir }} web-stack true
+    #!/usr/bin/env bash
+    set -euo pipefail
+    repo_root="$(git rev-parse --show-toplevel)"
+    export KUBECTL_EXTERNAL_DIFF="${repo_root}/scripts/web-stack-diff.sh"
+    just _k8s-drift-check "${WEB_APPLY_KUBECONFIG}" {{ web_stack_ns }} {{ web_stack_dir }} web-stack

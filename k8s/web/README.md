@@ -195,10 +195,15 @@ dashboard-managed, and the DNS flip (P6) plus CF Pages decommission (P7) remain
 separate operator steps. **Rung 1 tree honesty (2026-08-21):** this pin is now
 the declarative record of what is actually served — an operator updates it here
 at each `web-release-*` ceremony's pin step, it is not auto-reconciled, and
-`just web-stack-drift-check` fails on a real diff (see the Justfile
-`_k8s-drift-check` header for the one known, bounded residual: a
-ceremony-synthesized `default-deny-egress` NetworkPolicy and a per-release
-`source-sha` annotation this file does not itself declare).
+`just web-stack-drift-check` fails on a real diff. Two known gaps between this
+base and what the ceremony actually produces, handled differently (see the
+Justfile `_k8s-drift-check` header and `scripts/web-stack-diff.sh`): the
+per-release `source-sha` annotation is stripped from both sides before
+diffing (`KUBECTL_EXTERNAL_DIFF`), so it never shows up as drift; the
+ceremony-synthesized `default-deny-egress` NetworkPolicy this file does not
+declare can **never** show up as drift either way, because `kubectl diff -k`
+has no prune awareness and is structurally blind to objects that exist only
+on the cluster — a clean run of that gate is not evidence it is correct.
 
 Because `web-stack-apply` mutates the same Deployment the gftb-site release chain
 promotes, it is interlocked: `_web-stack-promotion-interlock` runs first, reads

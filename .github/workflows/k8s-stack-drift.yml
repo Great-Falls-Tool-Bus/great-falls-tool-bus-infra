@@ -30,16 +30,31 @@ name: K8s Stack Drift (zero-diff where applicable)
 # what is served, an operator updates it at each web-release-* ceremony's pin
 # step, and a real diff here now means the tree and the cluster disagree and
 # one of them needs fixing. The web job therefore FAILS the workflow on a
-# diff, same as the true-zero-diff stacks above -- with one known, bounded
-# residual: the web-release-* render step (Justfile `web-release-render`)
-# always synthesizes a default-deny-egress NetworkPolicy and an
-# `app.tinyland.dev/source-sha` annotation that the checked-in base does not
-# declare (the annotation's value changes every release; the NetworkPolicy
-# can't be declared in git without the render step double-adding it -- see the
-# deployment.yaml/networkpolicy.yaml headers). Expect exactly those two
-# objects/fields to show up on every run until a follow-up teaches the
-# ceremony to commit its own rendered output back to git. See Justfile
-# `_k8s-drift-check` for the full rationale.
+# diff, same as the true-zero-diff stacks above.
+#
+# TWO KNOWN GAPS BETWEEN THE CHECKED-IN BASE AND WHAT THE RELEASE CEREMONY
+# ACTUALLY PRODUCES (adversarial review B2, 2026-08-21) -- handled two
+# different ways, not both "expected to show up":
+#   1. `web-release-render` unconditionally stamps
+#      `app.tinyland.dev/source-sha` onto the live Deployment at every
+#      release; the base can't carry a static value (it changes every
+#      release). This job's `kubectl diff -k` runs with
+#      `KUBECTL_EXTERNAL_DIFF=scripts/web-stack-diff.sh` (Justfile
+#      `web-stack-drift-check`), which strips exactly that one annotation
+#      from both sides before diffing -- so it does NOT show up here, and a
+#      clean run is meaningful rather than permanently red for a
+#      non-drift reason.
+#   2. `web-release-render` also synthesizes a `default-deny-egress`
+#      NetworkPolicy at render time that the checked-in base does not
+#      declare. This one CANNOT be normalized the same way and will NEVER
+#      show up here, clean run or not: `kubectl diff -k` compares the
+#      rendered LOCAL manifest set against LIVE and has no prune awareness,
+#      so it is structurally blind to any object that exists only on the
+#      cluster. A clean run of this job is not evidence that NetworkPolicy
+#      is correct -- see deployment.yaml/networkpolicy.yaml headers and
+#      k8s/web/README.md for that residual.
+# See Justfile `_k8s-drift-check` and `scripts/web-stack-diff.sh` for the
+# full rationale.
 #
 # CREDENTIALS: reuses the SAME namespace-scoped kubeconfig secrets the
 # existing apply lanes already use -- no new secret is introduced here.
@@ -76,14 +91,22 @@ permissions:
 # (`kubectl diff`, never applies), so there is no correctness reason to
 # preempt a queued or running instance -- cancel-in-progress:false lets a
 # delayed run actually finish once a runner is available, up to GitHub's own
-# platform-level queued-job expiry. This does NOT fix runner-pool starvation
-# itself if the pool is currently unavailable/wedged (see the PR body's D6
-# diagnosis -- TIN-3902 already re-rostered this repo's own runner group
-# 2026-08-19, but jobs of every trigger type, not just scheduled ones, were
-# still observed stuck `queued` in this repo as of this fix, which is neither
-# explained nor covered by TIN-3971 -- that ticket's runner-group admission
-# gap is scoped to tinyland-infra's ~60 OTHER spoke/package repos, not this
-# repo's already-dedicated great-falls-tool-bus-infra group).
+# platform-level queued-job expiry. This does NOT fix the underlying
+# starvation: TIN-3902 (2026-08-18) deliberately EXCLUDED this repository
+# (id 1286829099) from the `great-falls-tool-bus-infra` runner group's
+# roster -- `config/organization.yaml` says so verbatim ("remains
+# EXCLUDED"), and `just runner-group-contract` prints it on every run
+# ("infra repository 1286829099 excluded"). TIN-3902's own plan treated that
+# as tolerable because this repo's `validate.yml` could still fall back to a
+# GitHub-hosted runner; TIN-3914 (2026-08-19, "never GitHub-hosted runners")
+# removed that fallback the very next day and nobody has reconciled the two
+# rulings since. The already-written fix is DRAFT PR #116 ("run validate on
+# GF cache-fronted runners"), correctly HELD on exactly this roster gap.
+# TIN-3971 is a DIFFERENT runner group (tinyland-infra, ~60 unrelated
+# tinyland-inc spoke/package repos) and does not cover this repo -- do not
+# cite it here. Closing the roster gap needs an explicit operator ruling
+# (scripts/validate-runner-group-contract.py's own self-test rejects a
+# silent roster addition), which is out of this PR's rung-1 scope.
 concurrency:
   group: k8s-stack-drift-${{ github.ref }}
   cancel-in-progress: false
