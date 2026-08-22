@@ -62,11 +62,19 @@ remains the production host. That premise is gone (§1). **0001's declined
 on-cluster reaper is also not simply revived as-is** — ADR 0020 governs its
 shape now, and this ADR does not authorize building it yet (§4).
 
-- **Ratified interim (now):** `tailscale serve`, per PR, via
-  `just preview-tailnet PR=<n>` — a tailnet-only preview, no public exposure,
-  no Cloudflare Access gate needed because it never leaves the tailnet. This
-  retires the cleartext-exposure concern 0001 §"Redundant" implicitly
-  accepted by defaulting to Cloudflare Pages' own gate.
+- **Ratified interim (now):** `tailscale serve` via `just preview-tailnet`
+  (platform repo `greatfallstoolbus.org`) — a tailnet-only, single-operator
+  local preview (throwaway Postgres + web/worker + `tailscale serve --bg`,
+  never `tailscale funnel`), no public exposure, no Cloudflare Access gate
+  needed because it never leaves the tailnet. This retires the
+  cleartext-exposure concern 0001 §"Redundant" implicitly accepted by
+  defaulting to Cloudflare Pages' own gate. **Correction to this ADR's own
+  first draft:** the recipe takes no `PR=<n>` parameter — it is not yet a
+  per-PR automated lane, and as of this writing it exists only as
+  **uncommitted work** on worktree `greatfallstoolbus.org` branch
+  `feat/preview-tailnet-lane` (not pushed, not a PR). It is not this
+  document's place to describe uncommitted work as landed; it is named here
+  only as the ratified *shape* of the interim, not as a shipped artifact.
 - **Ratified target (after the infra apply sitting):**
   `staging.greatfallstoolbus.org` promote-on-PR, at the serving shape ADR
   0020 §7 requires: PR-scoped state key + namespace + its own durable data
