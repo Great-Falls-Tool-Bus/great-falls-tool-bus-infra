@@ -67,14 +67,23 @@ name: Web Stack Plan (rung 2)
 # carrier -- that is `validate.yml`, which is not path-filtered and cannot
 # freeze on an unrelated PR the way a path-filtered required check can.
 #
-# HARDENED: `just web-stack-render` and `scripts/validate-web-stack.sh` both
-# now run `scripts/guard-no-remote-kustomize-resources.sh` before any
-# `kubectl kustomize` call, refusing if any kustomization file under the
-# target directory declares a `resources`/`bases`/`components`/`generators`
-# entry that looks like a URL. The committed tree has none, so this is a
-# tripwire, not a behavior change -- but it means even an attended operator
-# re-running this render locally against a mutated tree is protected, not
-# just this workflow.
+# HARDENED (round 4 -- a round-3 denylist version of this guard was proven
+# leaky by adversarial review, comments 5380010266 + 5380172269: scheme-less
+# git-host shorthand like `github.com/org/repo` bypassed its URL-prefix
+# checks entirely, and the `transformers`/`configurations`/`crds` fields
+# were absent from its field list, so all three fetched over the network
+# unguarded). `just web-stack-render` and `scripts/validate-web-stack.sh`
+# both now run `scripts/guard-no-remote-kustomize-resources.sh` before any
+# `kubectl kustomize` call. It is an ALLOWLIST, not a denylist: every
+# reference-carrying field kustomize's loader resolves through the same
+# remote-capable path (resources/bases/components/generators/transformers/
+# configurations/crds and more -- see the script header for the full list)
+# is accepted ONLY if it resolves to a real, contained local path; every
+# other form -- any URL scheme, any host-shorthand git reference, any `../`
+# escape -- is refused. The committed tree carries only plain local
+# filenames, so this is a tripwire, not a behavior change -- but it means
+# even an attended operator re-running this render locally against a
+# mutated tree is protected, not just this workflow.
 #
 # WHAT THIS DELIBERATELY DOES NOT DO, and why: it does not call
 # `web-release-render` / `web-release-plan` / `web-release-candidate-proof`

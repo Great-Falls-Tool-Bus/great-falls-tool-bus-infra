@@ -176,10 +176,13 @@ if grep -REn "AGE-SECRET-KEY-1|BEGIN [A-Z ]*PRIVATE KEY|cfat_[A-Za-z0-9_-]{8,}" 
 fi
 
 # --- Full render must succeed (parse-only; never applies) --------------------
-# guard-no-remote-kustomize-resources.sh (adversarial review, PR #127 comment
-# 5377613179): kubectl kustomize fetches remote resources/bases/components/
-# generators entries over the network with no flag required. Refuse before
-# this render, and before web-stack-render's own separate render, ever runs.
+# guard-no-remote-kustomize-resources.sh (round 4, adversarial review PR #127
+# comments 5380010266 + 5380172269): kubectl kustomize fetches remote
+# references over the network with no flag required, in more forms and more
+# fields than a denylist can enumerate -- it is an ALLOWLIST (see the script
+# header): every reference-carrying field is accepted only if it resolves to
+# a real, contained local path. Refuse before this render, and before
+# web-stack-render's own separate render, ever runs.
 bash scripts/guard-no-remote-kustomize-resources.sh "${dir}"
 kubectl kustomize "${dir}" >/dev/null
 

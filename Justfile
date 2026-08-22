@@ -38,6 +38,7 @@ check-hosted:
     just listsync-stack-validate
     just form-stack-validate
     just archive-stack-validate
+    just guard-no-remote-kustomize-resources-selftest
     just web-stack-validate
     just grafana-dashboards-validate
     just arc-fmt-check
@@ -2155,6 +2156,21 @@ archive-stack-apply: archive-stack-server-dry-run
 web_stack_dir := "k8s/web/greatfallstoolbus-org-production"
 web_stack_ns := "greatfallstoolbus-org-production"
 
+# Remote-resource ALLOWLIST guard (round 4, adversarial review PR #127
+# comments 5380010266 + 5380172269): every kustomize reference-carrying field
+# (resources/bases/components/generators/transformers/configurations/crds
+# and more -- see the script header) is accepted ONLY if it resolves to a
+# real, contained local path; everything else is refused before any
+# `kubectl kustomize` call. Replaces a round-3 denylist that adversarial
+# review proved leaky three separate ways (scheme-less git-host shorthand on
+# `resources`, and the `transformers`/`configurations`/`crds` fields being
+# absent from the field list entirely).
+guard-no-remote-kustomize-resources:
+    bash scripts/guard-no-remote-kustomize-resources.sh {{ web_stack_dir }}
+
+guard-no-remote-kustomize-resources-selftest:
+    bash scripts/guard-no-remote-kustomize-resources.sh --self-test
+
 web-stack-validate:
     bash scripts/validate-web-stack.sh {{ web_stack_dir }}
 
@@ -2188,18 +2204,16 @@ web-stack-validate:
 # apply-time-only concern, not a render residual: those two objects are not
 # in the committed tree at all, so this render never carries them either.)
 #
-# Runs the standalone remote-resource guard
-# (scripts/guard-no-remote-kustomize-resources.sh, added after adversarial
-# review PR #127 comment 5377613179 proved `kubectl kustomize` fetches remote
-# `resources`/`bases`/`components`/`generators` entries over the network with
-# no flag required -- a PR-controlled kustomization tree gets an outbound
-# connection attempt from this recipe otherwise) directly, as a plain script
-# call -- NOT via a `web-stack-validate` Just dependency, because that
-# recipe's own success message would print onto this recipe's stdout ahead of
-# the YAML, corrupting every caller that captures `just web-stack-render` as
-# a pure render (the workflow does exactly that). The guard script itself is
-# silent on success and calls no `just` recipe, so this stays outside the
-# web-release-* closure exactly as before.
+# Runs the standalone remote-resource ALLOWLIST guard
+# (scripts/guard-no-remote-kustomize-resources.sh; round 4 after adversarial
+# review found the round-3 denylist leaky -- see that script's header)
+# directly, as a plain script call -- NOT via a `web-stack-validate` Just
+# dependency, because that recipe's own success message would print onto
+# this recipe's stdout ahead of the YAML, corrupting every caller that
+# captures `just web-stack-render` as a pure render (the workflow does
+# exactly that). The guard script itself is silent on success and calls no
+# `just` recipe, so this stays outside the web-release-* closure exactly as
+# before.
 web-stack-render:
     bash scripts/guard-no-remote-kustomize-resources.sh {{ web_stack_dir }}
     kubectl kustomize {{ web_stack_dir }}

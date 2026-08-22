@@ -138,7 +138,6 @@ jobs:
       # remote-resource guard.
       - name: Render web stack plan (rung 2, PR-side; offline, no cluster, no credential)
         env:
-          GH_ACTION_TOKEN: ${{ github.token }}
           TOUCHED: ${{ steps.web_stack_touch.outputs.touched }}
         run: |
           set -euo pipefail

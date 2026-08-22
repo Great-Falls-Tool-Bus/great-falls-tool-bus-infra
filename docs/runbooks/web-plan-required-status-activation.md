@@ -73,13 +73,16 @@ this one's).
   `web-plan`'s check should be required — it still shouldn't, for the reason
   above, independent of runner availability.
 - **If someone proposes making `web-plan.yml` run on untrusted PRs again to
-  get a distinct `web-plan` required context:** re-read comment 5377613179
-  first. The specific, proven failure mode was `kubectl kustomize`'s
-  remote-resource fetch; `scripts/guard-no-remote-kustomize-resources.sh`
-  closes that one vector, but the PR #110 control is about the runner CLASS
-  (shared substrate with real kubeconfigs and the Tofu state backend), not
-  about any single script's specific behavior, and a guard closing one known
-  vector is not evidence there is no other one.
+  get a distinct `web-plan` required context:** re-read comments 5377613179,
+  5380010266, and 5380172269 first. The specific, proven failure mode was
+  `kubectl kustomize`'s remote-resource fetch; `scripts/guard-no-remote-kustomize-resources.sh`
+  is now an allowlist covering every reference-carrying field kustomize's
+  loader resolves (round 4 -- a round-3 denylist version of this same guard
+  was proven leaky three separate ways). But the PR #110 control is about
+  the runner CLASS (shared substrate with real kubeconfigs and the Tofu
+  state backend), not about any single script's specific behavior, and a
+  guard closing every known vector today is not evidence there is no other
+  one tomorrow.
 
 ## What this does not authorize
 
