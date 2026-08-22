@@ -1,0 +1,34 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: members-greatfallstoolbus-org-db-production
+
+# DECLARE-ONLY — MERGING APPLIES NOTHING (TIN-3817, Member v0 S1 infra half).
+# GFTB member substrate: one dedicated PostgreSQL 16.15 CNPG cluster, its
+# six-hourly base-backup schedule, and a default-deny network posture that
+# admits only the platform namespace's web/worker/migrator pods.
+#
+# `kubectl kustomize` MUST render this cleanly — scripts/validate-member-db-stack.sh
+# renders it as its last gate, and `just check-hosted` runs that validator.
+#
+# The migration Job is deliberately NOT a member of this kustomization. It runs
+# in the PLATFORM namespace, not here, it carries an operator-supplied image
+# that does not exist until S1's app half lands, and it is a one-shot
+# pre-rollout Job rather than stack state. It lives at
+# ../members-greatfallstoolbus-org-production/job-migrator.template.yaml and is
+# rendered by `just member-db-migrate-render`.
+#
+# No Namespace object: the member-db namespace is provisioned out of band, the
+# same posture the web stack holds, and the validator enforces the absence.
+
+resources:
+  - cluster.yaml
+  - scheduledbackup.yaml
+  - networkpolicy.yaml
+  - rustfs.yaml
+
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/managed-by: great-falls-tool-bus-infra
+      app.kubernetes.io/part-of: great-falls-tool-bus
+      app.tinyland.dev/tenant: great-falls-tool-bus

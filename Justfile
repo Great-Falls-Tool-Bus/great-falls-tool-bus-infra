@@ -40,6 +40,7 @@ check-hosted:
     just archive-stack-validate
     just web-stack-validate
     just grafana-dashboards-validate
+    just member-db-stack-validate
     just arc-fmt-check
     just edge-zones-fmt-check
     just edge-zones-validate
@@ -2254,6 +2255,215 @@ grafana_dashboard_dir := "observability/grafana/dashboards/gftb"
 
 grafana-dashboards-validate:
     bash scripts/validate-grafana-dashboards.sh {{ grafana_dashboard_dir }}
+
+# --- GFTB member database substrate (TIN-3817, Member v0 slice S1 infra half) -
+# DECLARE-ONLY IN GIT, ATTENDED ON THE WIRE. One dedicated PostgreSQL 16.15 CNPG
+# cluster in members-greatfallstoolbus-org-db-production, plus the pre-rollout
+# migration Job that runs platform-side with the narrow owner credential.
+#
+# MERGING APPLIES NOTHING. Only `member-db-stack-validate` is hosted (it is in
+# `check-hosted` and never contacts a cluster). Every other recipe below needs an
+# operator-custody kubeconfig that hosted CI does not hold, and the two mutating
+# ones additionally pass through `_reviewed-clean-main` + `_operator-apply-confirm`.
+# No workflow in this repository invokes any of them.
+#
+# SEQUENCING. These recipes are usable but HELD: the migration Job's image is
+# ghcr.io/great-falls-tool-bus/gftb-platform, which does not exist until slice
+# S1's app half lands. The cluster half can be brought up first; the migration
+# half cannot. docs/runbooks/member-db-bringup.md is the ordered attended path.
+
+member_db_stack_dir := "k8s/member-db/members-greatfallstoolbus-org-db-production"
+member_db_ns := "members-greatfallstoolbus-org-db-production"
+member_db_platform_ns := "members-greatfallstoolbus-org-production"
+member_db_cluster := "gftb-member-db"
+member_db_migrator_template := "k8s/member-db/members-greatfallstoolbus-org-production/job-migrator.template.yaml"
+member_db_backup_store := "gftb-member-db-backup-store"
+member_db_bucket_create_template := "k8s/member-db/members-greatfallstoolbus-org-db-production/bucket-create.template.yaml"
+member_db_restore_cluster := "gftb-member-db-restore"
+member_db_restore_cluster_template := "k8s/member-db/members-greatfallstoolbus-org-db-production/restore-cluster.template.yaml"
+
+# Offline declare-only guard. Hosted CI entrypoint for this stack.
+member-db-stack-validate:
+    bash scripts/validate-member-db-stack.sh {{ member_db_stack_dir }}
+
+# Operator-supplied inputs, env-delivered, never baked into the tree.
+#   MEMBER_DB_APPLY_KUBECONFIG  path to the namespace-scoped SA kubeconfig
+_member-db-kubeconfig-input:
+    test -n "${MEMBER_DB_APPLY_KUBECONFIG:-}" || { echo "Set MEMBER_DB_APPLY_KUBECONFIG to the member-db apply kubeconfig path" >&2; exit 2; }
+    test -f "${MEMBER_DB_APPLY_KUBECONFIG}"
+
+#   MEMBER_DB_MIGRATOR_IMAGE    the operator-resolved platform image digest
+# The shape is held exactly, not loosely: a tag would let the migration that
+# writes the member schema come from an image nobody reviewed, and the committed
+# template's PLACEHOLDER is refused outright so the declare-only sentinel can
+# never reach a cluster.
+#
+# TWO REPOSITORY NAMES, ON PURPOSE. TIN-3815 renames the platform repository to
+# gftb-platform, but that rename has NOT happened: greatfallstoolbus.org PR #171
+# (S0) still publishes ghcr.io/great-falls-tool-bus/greatfallstoolbus.org.
+# Accepting only the post-rename slug would block the operator today; accepting
+# only the pre-rename one would silently expire the day the rename lands. Both
+# are admitted, and nothing else is — the digest requirement is unchanged.
+# Narrow this to the single surviving name once TIN-3815 completes.
+_member-db-migrator-image-input:
+    test -n "${MEMBER_DB_MIGRATOR_IMAGE:-}" || { echo "Set MEMBER_DB_MIGRATOR_IMAGE to the operator-resolved platform image digest" >&2; exit 2; }
+    case "${MEMBER_DB_MIGRATOR_IMAGE}" in *PLACEHOLDER*) echo "refusing the declare-only PLACEHOLDER image; supply the real operator-resolved digest" >&2; exit 2 ;; esac
+    printf '%s' "${MEMBER_DB_MIGRATOR_IMAGE}" | grep -Eq '^ghcr\.io/great-falls-tool-bus/(greatfallstoolbus\.org|gftb-platform)@sha256:[0-9a-f]{64}$' || { echo "MEMBER_DB_MIGRATOR_IMAGE must be ghcr.io/great-falls-tool-bus/{greatfallstoolbus.org,gftb-platform}@sha256:<64 lowercase hex>" >&2; exit 2; }
+
+# Server-side dry-run of the database stack against the live API. No mutation.
+member-db-stack-server-dry-run: member-db-stack-validate _member-db-kubeconfig-input
+    kubectl --kubeconfig "${MEMBER_DB_APPLY_KUBECONFIG}" --namespace {{ member_db_ns }} apply --dry-run=server -k {{ member_db_stack_dir }}
+
+# ORDERED APPLY (B-4, PR #118 review round). A single `apply -k` would land
+# rustfs and the Cluster together, but cluster.yaml's own comment says WAL
+# archiving begins the moment the Cluster is applied, so the backup store and
+# its NetworkPolicy MUST already be live and the bucket MUST already exist —
+# the split below is what actually enforces that ordering. All three recipes
+# below read the SAME rendered bytes `member-db-stack-validate` already
+# asserted (one `kubectl kustomize` call, filtered by kind), never a second,
+# unreviewed render.
+#
+# Step one: the backup store alone (NetworkPolicy family + rustfs), then wait
+# for it to actually be Ready before anything tries to write to it.
+member-db-backup-store-apply: member-db-stack-server-dry-run _reviewed-clean-main _operator-apply-confirm
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kc="${MEMBER_DB_APPLY_KUBECONFIG}"
+    ns="{{ member_db_ns }}"
+    rendered="$(mktemp)"
+    trap 'rm -f "${rendered}"' EXIT
+    kubectl kustomize {{ member_db_stack_dir }} > "${rendered}"
+    yq 'select(.kind == "NetworkPolicy" or .kind == "Service" or .kind == "StatefulSet" or .kind == "PersistentVolumeClaim")' "${rendered}" \
+      | kubectl --kubeconfig "${kc}" --namespace "${ns}" apply -f -
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" rollout status statefulset/{{ member_db_backup_store }} --timeout=300s
+
+# Step two: create the gftb-member-db-backups bucket inside the now-live
+# store (B-3). Idempotent (`mc mb --ignore-existing`); safe to re-run.
+member-db-backup-bucket-create: member-db-backup-store-apply _reviewed-clean-main _operator-apply-confirm
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kc="${MEMBER_DB_APPLY_KUBECONFIG}"
+    ns="{{ member_db_ns }}"
+    job="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" create -f {{ member_db_bucket_create_template }} -o name)"
+    echo "created ${job}"
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" wait "${job}" --for=condition=complete --timeout=120s
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" logs "${job}" --tail=50
+
+# Step three: the Cluster and its ScheduledBackup, only now that
+# archive_command has somewhere to land its first WAL segment. The namespace
+# must already exist: the SA is namespace-scoped and cannot create it, and
+# the stack ships no Namespace object.
+member-db-cluster-apply: member-db-backup-bucket-create _reviewed-clean-main _operator-apply-confirm
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kc="${MEMBER_DB_APPLY_KUBECONFIG}"
+    ns="{{ member_db_ns }}"
+    rendered="$(mktemp)"
+    trap 'rm -f "${rendered}"' EXIT
+    kubectl kustomize {{ member_db_stack_dir }} > "${rendered}"
+    yq 'select(.kind == "Cluster" or .kind == "ScheduledBackup")' "${rendered}" \
+      | kubectl --kubeconfig "${kc}" --namespace "${ns}" apply -f -
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" wait cluster/{{ member_db_cluster }} --for=condition=Ready --timeout=600s
+
+# Convenience alias: the full ordered chain, one command. `just` dedupes the
+# shared prerequisite chain, so this runs backup-store-apply, then
+# bucket-create, then cluster-apply, in that order, exactly once each.
+member-db-stack-apply: member-db-cluster-apply
+    @true
+
+# Read-only readback. The three facts worth reading back are the ones a green
+# Ready condition does NOT prove: the served minor really is 16.15, the instance
+# really is on the retained node-pinned volume, and continuous WAL archiving is
+# actually working rather than merely configured.
+member-db-readback: _member-db-kubeconfig-input
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kc="${MEMBER_DB_APPLY_KUBECONFIG}"
+    ns="{{ member_db_ns }}"
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" get cluster/{{ member_db_cluster }} -o jsonpath='{range .status}image={.image}{"\n"}instances={.instances}{"\n"}ready={.readyInstances}{"\n"}phase={.phase}{"\n"}{end}'
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" get cluster/{{ member_db_cluster }} -o jsonpath='{"continuousArchiving="}{range .status.conditions[?(@.type=="ContinuousArchiving")]}{.status}{" "}{.message}{end}{"\n"}'
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" get pvc -l cnpg.io/cluster={{ member_db_cluster }} -o custom-columns=NAME:.metadata.name,SC:.spec.storageClassName,SIZE:.status.capacity.storage,PHASE:.status.phase
+
+# Read-only backup evidence. The RPO/RTO acceptance row is proved by a COMPLETED
+# Backup object with a stopped-at timestamp, not by the schedule existing.
+member-db-backup-verify: _member-db-kubeconfig-input
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kc="${MEMBER_DB_APPLY_KUBECONFIG}"
+    ns="{{ member_db_ns }}"
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" get scheduledbackup/{{ member_db_cluster }}-base -o jsonpath='{"schedule="}{.spec.schedule}{" suspend="}{.spec.suspend}{" lastScheduleTime="}{.status.lastScheduleTime}{"\n"}'
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" get backups.postgresql.cnpg.io -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,STARTED:.status.startedAt,STOPPED:.status.stoppedAt --sort-by=.metadata.creationTimestamp
+    completed="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get backups.postgresql.cnpg.io -o jsonpath='{range .items[?(@.status.phase=="completed")]}{.metadata.name}{"\n"}{end}' | wc -l | tr -d ' ')"
+    test "${completed}" -ge 1 || { echo "backup verification FAILED: no completed Backup object exists, so the RPO/RTO row is unproved" >&2; exit 1; }
+    echo "backup verification passed: ${completed} completed Backup object(s)"
+
+# --- Restore rehearsal (runbook step R; the RTO<=4h acceptance row's only
+# proof path). B-5, PR #118 review round: this was previously prose with no
+# command, and the NetworkPolicies as shipped forbade it outright. Now that
+# allow-cnpg-operator-ingress and allow-cnpg-to-backup-store-ingress both
+# admit gftb-member-db-restore alongside the primary, this actually runs.
+
+# Create the rehearsal Cluster and wait for it to report Ready. Note the
+# start time yourself before running this — the recipe does not, because the
+# RTO clock includes the object pull, which starts the instant this applies.
+member-db-restore-rehearsal-apply: member-db-backup-verify _reviewed-clean-main _operator-apply-confirm
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kc="${MEMBER_DB_APPLY_KUBECONFIG}"
+    ns="{{ member_db_ns }}"
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" apply -f {{ member_db_restore_cluster_template }}
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" wait cluster/{{ member_db_restore_cluster }} --for=condition=Ready --timeout=14400s
+    echo "restore rehearsal cluster Ready — note the end time now for the RTO measurement"
+
+# Remove the rehearsal Cluster. CNPG owns its PVCs by ownerReference, so
+# deleting the Cluster deletes them, and openebs-bumble-postgresql-retain
+# means the underlying PVs go to Released rather than being destroyed (P-2 is
+# the full reclaim-mechanics writeup; this step is the minimum the review
+# asked for — leave with nothing orphaned unaccounted for). Prints the
+# Released PVs this rehearsal leaves behind so the operator can see and
+# reclaim them rather than discovering them later.
+member-db-restore-rehearsal-teardown: _member-db-kubeconfig-input
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kc="${MEMBER_DB_APPLY_KUBECONFIG}"
+    ns="{{ member_db_ns }}"
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" delete cluster/{{ member_db_restore_cluster }} --wait=true --timeout=300s
+    echo "rehearsal Cluster removed. Released PVs left behind (openebs-bumble-postgresql-retain, reclaimPolicy Retain):"
+    kubectl --kubeconfig "${kc}" get pv -o jsonpath='{range .items[?(@.status.phase=="Released")]}{.metadata.name}{"\t"}{.spec.claimRef.namespace}{"/"}{.spec.claimRef.name}{"\n"}{end}'
+
+# Render the migration Job from the reviewed template with the operator-resolved
+# digest substituted. Pure text, no cluster contact. The apply path and the
+# server dry-run both go through THIS recipe, so the bytes that were dry-run are
+# the same bytes that get created.
+member-db-migrate-render: _member-db-migrator-image-input
+    #!/usr/bin/env bash
+    set -euo pipefail
+    python3 -I -c 'import pathlib, sys; t = pathlib.Path(sys.argv[1]).read_text(); m = "PLACEHOLDER-MEMBER-DB-MIGRATOR-IMAGE"; sys.exit("migration Job template no longer carries the reviewed image placeholder") if m not in t else None; sys.stdout.write(t.replace(m, sys.argv[2]))' "{{ member_db_migrator_template }}" "${MEMBER_DB_MIGRATOR_IMAGE}"
+
+# Server-side dry-run of the rendered migration Job. No mutation.
+member-db-migrate-server-dry-run: _member-db-migrator-image-input _member-db-kubeconfig-input
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just member-db-migrate-render | kubectl --kubeconfig "${MEMBER_DB_APPLY_KUBECONFIG}" --namespace {{ member_db_platform_ns }} create --dry-run=server -f -
+
+# Attended pre-rollout migration. The Job uses generateName, so each run creates
+# a fresh object and nothing has to be removed to make room for it. Re-running is
+# safe by contract, not by luck: the migrator takes a PostgreSQL advisory lock
+# and fails closed on a changed historical hash (spec S6), so a second run is
+# either a clean no-op or a refusal.
+member-db-migrate-apply: member-db-migrate-server-dry-run _reviewed-clean-main _operator-apply-confirm
+    #!/usr/bin/env bash
+    set -euo pipefail
+    test "${GFTB_MEMBER_DB_MIGRATE_CONFIRM:-}" = "member-db-migrate" || { echo "Set GFTB_MEMBER_DB_MIGRATE_CONFIRM=member-db-migrate to run the pre-rollout migration" >&2; exit 2; }
+    kc="${MEMBER_DB_APPLY_KUBECONFIG}"
+    ns="{{ member_db_platform_ns }}"
+    rendered="$(mktemp)"
+    trap 'rm -f "${rendered}"' EXIT
+    just member-db-migrate-render > "${rendered}"
+    job="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" create -f "${rendered}" -o name)"
+    echo "created ${job}"
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" wait "${job}" --for=condition=complete --timeout=900s
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" logs "${job}" --tail=200
 
 # --- Reviewed gftb-site release candidate proofs ----------------------------
 # These recipes are read-only/proof-only. They deliberately do not share the

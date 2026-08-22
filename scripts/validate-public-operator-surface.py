@@ -363,6 +363,66 @@ ATTENDED_RECIPE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
         "_reviewed-clean-main",
         "_operator-apply-confirm",
     ),
+    # GFTB member database substrate (TIN-3817, Member v0 slice S1 infra half).
+    # These belong in the ATTENDED lane rather than the hosted lane for the same
+    # reason list-member-add and form-altcha-secret-apply do: every one of them
+    # consumes an operator-custody kubeconfig, and two of them mutate live state
+    # holding member personal data. `member-db-stack-validate` is deliberately
+    # NOT here — it is the offline guard `check-hosted` runs, it never contacts a
+    # cluster, and adding it would taint check-hosted through the attended
+    # closure.
+    "_member-db-kubeconfig-input": (),
+    "_member-db-migrator-image-input": (),
+    "member-db-stack-server-dry-run": (
+        "member-db-stack-validate",
+        "_member-db-kubeconfig-input",
+    ),
+    # ORDERED APPLY (B-4). Split so a single `apply -k` can never again land
+    # the backup store and the Cluster together: cluster.yaml's own comment
+    # says WAL archiving begins the moment the Cluster is applied, so the
+    # store, its NetworkPolicy, and its bucket must already exist. Ordered on
+    # purpose within each recipe too: the offline guard and the server
+    # dry-run both run BEFORE the branch/worktree check and the confirmation,
+    # so an operator who is about to be told "no" finds out from the cheap
+    # check first, and the confirmation is the last thing standing between
+    # them and the apply.
+    "member-db-backup-store-apply": (
+        "member-db-stack-server-dry-run",
+        "_reviewed-clean-main",
+        "_operator-apply-confirm",
+    ),
+    "member-db-backup-bucket-create": (
+        "member-db-backup-store-apply",
+        "_reviewed-clean-main",
+        "_operator-apply-confirm",
+    ),
+    "member-db-cluster-apply": (
+        "member-db-backup-bucket-create",
+        "_reviewed-clean-main",
+        "_operator-apply-confirm",
+    ),
+    # Convenience alias for the full ordered chain. Its own body is a no-op;
+    # the mutation is entirely in its one dependency.
+    "member-db-stack-apply": ("member-db-cluster-apply",),
+    "member-db-readback": ("_member-db-kubeconfig-input",),
+    "member-db-backup-verify": ("_member-db-kubeconfig-input",),
+    # Restore rehearsal (B-5): the RTO<=4h acceptance row's only proof path.
+    "member-db-restore-rehearsal-apply": (
+        "member-db-backup-verify",
+        "_reviewed-clean-main",
+        "_operator-apply-confirm",
+    ),
+    "member-db-restore-rehearsal-teardown": ("_member-db-kubeconfig-input",),
+    "member-db-migrate-render": ("_member-db-migrator-image-input",),
+    "member-db-migrate-server-dry-run": (
+        "_member-db-migrator-image-input",
+        "_member-db-kubeconfig-input",
+    ),
+    "member-db-migrate-apply": (
+        "member-db-migrate-server-dry-run",
+        "_reviewed-clean-main",
+        "_operator-apply-confirm",
+    ),
 }
 
 ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
@@ -378,12 +438,119 @@ ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     "form-altcha-secret-apply": _receipt(
         "d394883ac79138f4", "b78253e99505ee18", "f0931c8607f62fa9", "f5c1b30b25c115ce"
     ),
+    # --- member database substrate receipts (TIN-3817) ----------------------
+    # Each value is sha256(executable_recipe_text(body)) — the recipe body with
+    # Just's indent removed and comment-only lines dropped — so prose can be
+    # edited freely and an executable line cannot. What each pin is protecting:
+    #
+    # _member-db-kubeconfig-input: the only thing standing between a fat-fingered
+    #   empty variable and `kubectl --kubeconfig ""` falling back to whatever
+    #   context the operator's ambient kubeconfig happens to point at.
+    "_member-db-kubeconfig-input": _receipt(
+        "9483ae823d52184a", "46f524549c47efcf", "fa8bb4ecd56a2783", "88cb783d8b2d5fd4"
+    ),
+    # _member-db-migrator-image-input: holds the migration image to an exact
+    #   @sha256 digest on one of the two admitted platform repositories (the
+    #   pre- and post-TIN-3815 slugs) and refuses the declare-only PLACEHOLDER.
+    #   Weakening this regex to accept a tag, or widening the alternation to a
+    #   third repository, would let the code that writes the member schema come
+    #   from an unreviewed image — so both edits have to be reviewed in here.
+    "_member-db-migrator-image-input": _receipt(
+        "dcec8e7bab2a4e62", "a154a8809aec678f", "576357caeb6a2c5c", "8f3b3cd09ad71d89"
+    ),
+    # member-db-stack-server-dry-run: proves the stack against the live API
+    #   without mutating. Pinned so `--dry-run=server` can never quietly become
+    #   a real apply through an edit to this recipe.
+    "member-db-stack-server-dry-run": _receipt(
+        "ada3b0ad80a553f7", "c3354a3daf8efa05", "7b10b346707eefd2", "24c9c27cd4ed7cc0"
+    ),
+    # member-db-backup-store-apply: step one of the ordered apply (B-4).
+    #   Pinned so the rollout-status wait cannot be dropped and the kind
+    #   filter cannot silently widen to include the Cluster.
+    "member-db-backup-store-apply": _receipt(
+        "9c1fe2c0c99baabc", "2c3d9c367e800593", "63b956fb70ce6fcb", "50c504ab884d2864"
+    ),
+    # member-db-backup-bucket-create: step two (B-3). Pinned so the
+    #   wait-for-complete and log capture stay part of the recipe.
+    "member-db-backup-bucket-create": _receipt(
+        "b36dd145a9be9183", "c4e7bdb1c29886e6", "ffb923186923a4cd", "7ebf7aa35d831094"
+    ),
+    # member-db-cluster-apply: step three — the database bring-up mutation.
+    #   Pinned so the wait on Ready cannot be dropped and the kind filter
+    #   cannot silently widen to include the backup store.
+    "member-db-cluster-apply": _receipt(
+        "e0938b6d423115cb", "3175e20e4afab385", "20ec7101580b4c32", "9f4d48dfad9a4685"
+    ),
+    # member-db-stack-apply: now a thin alias over the ordered chain. Pinned
+    #   so the alias cannot quietly grow its own parallel apply path.
+    "member-db-stack-apply": _receipt(
+        "a7a7c87b22cb53f2", "04361b38523fd5f3", "4089a334c085a4bf", "47aef492ca04a1d3"
+    ),
+    # member-db-readback: read-only, but it is release EVIDENCE — it is what
+    #   proves the served minor really is 16.15 and that ContinuousArchiving is
+    #   actually true. Pinned so the evidence cannot be narrowed to whatever
+    #   happens to be green.
+    "member-db-readback": _receipt(
+        "4fcafad4feb47a90", "197102aeeb6b16b0", "af7cd2b6a68483fa", "74e2d287ee4e7de8"
+    ),
+    # member-db-backup-verify: the RPO/RTO acceptance evidence. Pinned
+    #   specifically because of its last three lines — the check that at least
+    #   one Backup object actually reached `completed`. Deleting that check
+    #   leaves a recipe that prints a schedule and exits 0 forever.
+    "member-db-backup-verify": _receipt(
+        "5c25f55cd57d52f6", "34d8334d25d7de7d", "33080cc8a89aa368", "1c6f91512b0b273a"
+    ),
+    # member-db-restore-rehearsal-apply: the RTO<=4h acceptance row's only
+    #   proof path (B-5). Pinned so the wait-for-Ready cannot be dropped.
+    "member-db-restore-rehearsal-apply": _receipt(
+        "46f282010a52a101", "20a2b346cdbf7b1a", "ca103d9b4b9caec2", "bfc8640d0fcc47b1"
+    ),
+    # member-db-restore-rehearsal-teardown: pinned so the Released-PV printout
+    #   (the minimum "don't orphan silently" step) cannot be dropped.
+    "member-db-restore-rehearsal-teardown": _receipt(
+        "351a1db08e4e649a", "ab5c5f27475d4675", "8ac09460d67e910d", "a60048448b59b59e"
+    ),
+    # member-db-migrate-render: the single renderer. Both the dry-run and the
+    #   apply go through it, so the reviewed bytes and the created bytes are the
+    #   same bytes — the same property WEB_RELEASE_CRITICAL_RECIPE_DIGESTS
+    #   protects for web-release-render.
+    "member-db-migrate-render": _receipt(
+        "7da383bd13727092", "bd602560440eb122", "b82cf090d67449da", "e402c80cda5a79f7"
+    ),
+    "member-db-migrate-server-dry-run": _receipt(
+        "d6c529ad3029b41b", "412d186951b31caa", "ddf72afb4b694931", "fd73e747de111861"
+    ),
+    # member-db-migrate-apply: the schema mutation. Pinned so its second
+    #   confirmation (GFTB_MEMBER_DB_MIGRATE_CONFIRM) cannot be removed, and so
+    #   the wait-for-complete plus log capture that make the Job auditable stay
+    #   part of the recipe rather than an operator's habit.
+    "member-db-migrate-apply": _receipt(
+        "4114c22ae73edd99", "5e719fe800aac63f", "e50cbcd876915a2a", "eff4df3a21bfe4d0"
+    ),
 }
 
 ATTENDED_OPERATOR_LOCAL_ROOTS = {
     "_list-member-add-inputs",
     "list-member-add",
     "form-altcha-secret-apply",
+    # Member database substrate (TIN-3817). All are operator-local: no
+    # workflow, script, or composite action may invoke them, and the closure
+    # taints anything that tries to wrap one. `member-db-stack-validate` is
+    # excluded on purpose so `check-hosted` stays hosted-runnable.
+    "_member-db-kubeconfig-input",
+    "_member-db-migrator-image-input",
+    "member-db-stack-server-dry-run",
+    "member-db-backup-store-apply",
+    "member-db-backup-bucket-create",
+    "member-db-cluster-apply",
+    "member-db-stack-apply",
+    "member-db-readback",
+    "member-db-backup-verify",
+    "member-db-restore-rehearsal-apply",
+    "member-db-restore-rehearsal-teardown",
+    "member-db-migrate-render",
+    "member-db-migrate-server-dry-run",
+    "member-db-migrate-apply",
 }
 
 # The gftb-site cutover proofs are intentionally operator-local even though they

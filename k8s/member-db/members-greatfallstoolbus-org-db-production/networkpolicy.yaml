@@ -1,0 +1,317 @@
+# DECLARE-ONLY — MERGING APPLIES NOTHING (TIN-3817, Member v0 S1 infra half).
+#
+# Default-deny posture for the member database namespace, mirroring the house
+# doctrine already proven by k8s/web/.../networkpolicy.yaml (default-deny plus
+# named allows, never an ipBlock 0.0.0.0/0) and the GloriousFlywheel reference
+# database policy (docs/k8s-reference/base/network-policy.yaml).
+#
+# THE ADMISSION LIST IS THE POINT. Port 5432 is admitted from exactly three
+# workloads in exactly one namespace: the `web`, `worker`, and `migrator`
+# components of the GFTB platform in
+# members-greatfallstoolbus-org-production. Nothing else in the estate reaches
+# the member database — not the site pod, not the list/mail stacks, not another
+# tenant. The three components are selected by a single matchExpressions `In`
+# clause rather than three separate rules so the admitted set is one legible
+# line that cannot drift apart across copies.
+#
+# FAIL-CLOSED NOTE ON THE APP HALF. Those platform pods do not exist yet: S1's
+# app half (gftb-platform) has not landed. That is deliberate and it is why this
+# PR is DRAFT-HELD. A policy that names labels no pod carries yet denies
+# everything, which is the correct state until the platform pods appear wearing
+# the labels asserted here. The label contract below IS the hand-off: the app
+# half must ship pods labelled
+#   app.kubernetes.io/part-of: gftb-platform
+#   app.kubernetes.io/component: web | worker | migrator
+# or the database will refuse them.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: members-greatfallstoolbus-org-db-production
+  labels:
+    app.kubernetes.io/part-of: great-falls-tool-bus
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# Platform -> PostgreSQL. The ONLY route into the member database.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-platform-postgres-ingress
+  namespace: members-greatfallstoolbus-org-db-production
+  labels:
+    app.kubernetes.io/name: gftb-member-db
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: gftb-member-db
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: members-greatfallstoolbus-org-production
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: gftb-platform
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: ["web", "worker", "migrator"]
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+# CNPG operator -> instance manager. Without this the cluster never converges:
+# the operator reconciles instance status over :8000, and 1.22 also reaches
+# :5432 for role and database reconciliation (the `managed.roles` block in
+# cluster.yaml is applied through exactly this leg). Scoped to the operator pod
+# in cnpg-system, never the whole namespace.
+#
+# COVERS THE RESTORE REHEARSAL TOO (B-5, PR #118 review round). Runbook step R
+# rehearses into a SECOND Cluster, `gftb-member-db-restore`, in this same
+# namespace — its pods carry `cnpg.io/cluster: gftb-member-db-restore`, a
+# different value than the target selector below matched before this fix.
+# Without this leg the operator cannot reach the restore instance manager and
+# the rehearsal Cluster never reports Ready, which is what made the RTO<=4h
+# acceptance row's only proof path unexecutable. The `In` list admits exactly
+# the two named clusters, never every `cnpg.io/cluster` value.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cnpg-operator-ingress
+  namespace: members-greatfallstoolbus-org-db-production
+  labels:
+    app.kubernetes.io/name: gftb-member-db
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  podSelector:
+    matchExpressions:
+      - key: cnpg.io/cluster
+        operator: In
+        values: ["gftb-member-db", "gftb-member-db-restore"]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cnpg-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cloudnative-pg
+      ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 8000
+---
+# Estate Prometheus -> CNPG metrics exporter on :9187. The Prometheus Operator
+# CRDs are absent on honey, so cluster.yaml sets enablePodMonitor: false and the
+# scrape is configured Prometheus-side; this rule is what lets that scrape land.
+# Same source shape the web stack already uses for its own scrape allow.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-scrape
+  namespace: members-greatfallstoolbus-org-db-production
+  labels:
+    app.kubernetes.io/name: gftb-member-db
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: gftb-member-db
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: tinyland-dev-production
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9187
+---
+# Intra-cluster. Inert at instances: 1 and load-bearing the moment a replica is
+# ever added; keeping it here means growing the cluster is a one-field change
+# rather than a change that also has to remember the policy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-intra-cluster
+  namespace: members-greatfallstoolbus-org-db-production
+  labels:
+    app.kubernetes.io/name: gftb-member-db
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: gftb-member-db
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: gftb-member-db
+      ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 8000
+---
+# Least-privilege EGRESS for the database pods. Four destinations, no more.
+#
+# THE KUBERNETES API LEG IS THE ONE THAT IS EASY TO GET WRONG. The CNPG instance
+# manager inside every PostgreSQL pod watches its own Cluster resource through
+# the API server; if egress is restricted and the API is not admitted, the pod
+# never reports ready and the cluster hangs at bootstrap with no obvious cause.
+# The house reference policy (GloriousFlywheel
+# docs/k8s-reference/base/network-policy.yaml) omits this leg — it is a
+# reference doc with no applied proof behind it, and applying it as written
+# would fail exactly this way. The three /32s below are the live `kubernetes`
+# Endpoints on honey (192.168.70.10/.11/.12:6443, read-only check 2026-08-19),
+# the same on-prem /24 the web Deployment's placement comment already names.
+#
+# There is deliberately NO 0.0.0.0/0 and no bare `- ports:` rule: the backup
+# leg is scoped to the in-namespace rustfs pod, not to "anything on 9000".
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgres-egress
+  namespace: members-greatfallstoolbus-org-db-production
+  labels:
+    app.kubernetes.io/name: gftb-member-db
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: gftb-member-db
+  policyTypes: [Egress]
+  egress:
+    # Cluster DNS (rke2-coredns carries k8s-app=kube-dns; verified read-only).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Kubernetes API — see the note above; omitting this hangs bootstrap.
+    - to:
+        - ipBlock:
+            cidr: 192.168.70.10/32
+        - ipBlock:
+            cidr: 192.168.70.11/32
+        - ipBlock:
+            cidr: 192.168.70.12/32
+      ports:
+        - protocol: TCP
+          port: 6443
+    # WAL archive + base backup destination (cluster.yaml barmanObjectStore).
+    # This leg is what the RPO row depends on: if it is denied, archive_command
+    # fails and WAL piles up on the dedicated walStorage volume.
+    #
+    # REWIRED under the B1 ruling (docs/runbooks/member-db-bringup.md,
+    # 2026-08-20): the destination is no longer the tcfs namespace's SeaweedFS
+    # gateway (estate-owned, outside GFTB's apply plane, custody findings in
+    # the ruling text) but the in-namespace gftb-member-db-backup-store rustfs
+    # Service declared in rustfs.yaml. Same-namespace podSelector, not a
+    # namespaceSelector, and port 9000 not 8333.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: gftb-member-db-backup-store
+      ports:
+        - protocol: TCP
+          port: 9000
+    # Intra-cluster replication (inert at instances: 1, see above).
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: gftb-member-db
+      ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 8000
+---
+# The GFTB-owned rustfs backup store (rustfs.yaml). Ingress admits ONLY the
+# CNPG cluster pods it backs up, on the S3 API port; nothing else in the
+# namespace (default-deny-ingress above still applies to it) or estate can
+# reach it. This is the netpol half of the B1 ruling: a GFTB-owned store kept
+# inside GFTB's own apply plane, with the secrets contract and netpol doctrine
+# already governing everything else in this namespace.
+#
+# COVERS THE RESTORE REHEARSAL TOO (B-5, PR #118 review round). The rehearsal
+# Cluster (`gftb-member-db-restore`, runbook step R) reads the same backups
+# from this same store — that is the entire point of the rehearsal — so its
+# pods need to be admitted here too, or the restore never gets past fetching
+# its base backup. The bucket-create Job (bucket-create.template.yaml, B-3)
+# also carries `cnpg.io/cluster: gftb-member-db` deliberately so it is
+# admitted by this same list without a third value.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cnpg-to-backup-store-ingress
+  namespace: members-greatfallstoolbus-org-db-production
+  labels:
+    app.kubernetes.io/name: gftb-member-db-backup-store
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: gftb-member-db-backup-store
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: cnpg.io/cluster
+                operator: In
+                values: ["gftb-member-db", "gftb-member-db-restore"]
+      ports:
+        - protocol: TCP
+          port: 9000
+---
+# Egress for the backup store pod itself: DNS only. rustfs is a passive S3
+# server with no outbound dependency of its own; this NetworkPolicy's mere
+# presence (policyTypes: [Egress] scoped to this pod) is what turns "no rule
+# matched" into deny, since there is no namespace-wide default-deny-egress
+# policy the way there is for ingress.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backup-store-egress-dns-only
+  namespace: members-greatfallstoolbus-org-db-production
+  labels:
+    app.kubernetes.io/name: gftb-member-db-backup-store
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: gftb-member-db-backup-store
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
