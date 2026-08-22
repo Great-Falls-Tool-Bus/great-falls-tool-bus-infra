@@ -77,7 +77,7 @@ hide under the alternate extension.
 
 `just core-checkout` validates checkout action immutability, canonical repository,
 finite overlay/core paths, role pin, non-persistence, read-only workflow
-permission, closed HEAD assertion, all 25 exact `GF_CORE_CI_PATH` devshell
+permission, closed HEAD assertion, all 24 exact `GF_CORE_CI_PATH` devshell
 sources, the pinned-and-hashed OIDC helper URL, and absence of dedicated
 cross-repository credential inputs. `just core-checkout-selftest` proves the
 guard rejects adversarial mutations. The pinned pre-#1208 GloriousFlywheel

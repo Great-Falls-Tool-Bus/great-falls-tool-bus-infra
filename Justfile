@@ -2174,13 +2174,19 @@ web-stack-validate:
 # CI workflow, and this recipe is written to stay outside its closure by
 # construction rather than by a validator exemption. Since rung 1
 # (deployment.yaml's "TREE HONESTY" fix) the committed tree already matches
-# web-release-render's own contract for every field except the two it still
-# names as ceremony-only residuals -- the per-release source-sha annotation
-# and the synthesized default-deny-egress NetworkPolicy (plus pruning the two
-# legacy egress NetworkPolicies) -- so this render is close to, but not
+# web-release-render's own contract for every field except THREE it still
+# names as ceremony-only residuals -- in order of consequence: (1) the
+# PER-RELEASE CONTAINER IMAGE DIGEST (the field that decides what code
+# production actually runs; this render shows whatever digest is currently
+# committed, which is NOT necessarily what the next release ceremony will
+# pin), (2) the per-release source-sha annotation, and (3) the synthesized
+# default-deny-egress NetworkPolicy -- so this render is close to, but not
 # byte-identical with, what the attended ceremony would apply. Say that
-# honestly in anything that consumes this output; do not call it "the exact
-# apply-time bytes".
+# honestly, and name the digest explicitly, in anything that consumes this
+# output; do not call it "the exact apply-time bytes". (The ceremony also
+# prunes two legacy egress NetworkPolicies at apply time -- that is an
+# apply-time-only concern, not a render residual: those two objects are not
+# in the committed tree at all, so this render never carries them either.)
 web-stack-render:
     kubectl kustomize {{ web_stack_dir }}
 
