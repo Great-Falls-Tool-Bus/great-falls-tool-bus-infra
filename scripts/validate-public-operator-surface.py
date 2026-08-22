@@ -132,6 +132,7 @@ HOSTED_WORKFLOW_JUST_ALLOWLIST = {
     "mail-cr-server-dry-run",
     "mail-cr-validate",
     "web-stack-drift-check",
+    "web-stack-render",
     "web-stack-validate",
 }
 
@@ -590,8 +591,18 @@ WEB_RELEASE_VALIDATION_SCRIPT = Path("scripts/validate-web-stack.sh")
 # greatfallstoolbus.org adapter-node repository, so its bytes and this pinned
 # digest both changed together in the same PR (`shasum -a 256
 # scripts/validate-web-stack.sh`).
+# Updated again 2026-08-21 (rung 2 round 3, PR #127 comment 5377613179):
+# validate-web-stack.sh now calls scripts/guard-no-remote-kustomize-resources.sh
+# before its own `kubectl kustomize` call, so its bytes and this pinned digest
+# changed together in the same PR (same recompute command as above).
+# Updated a third time 2026-08-22 (rung 2 round 4, PR #127 comments
+# 5380010266 + 5380172269): the guard call site's comment text changed to
+# describe the allowlist design (the guard script itself moved from a
+# denylist to an allowlist; validate-web-stack.sh's own bytes changed only in
+# that comment, not in behavior), so this pinned digest changed once more in
+# the same PR (same recompute command as above).
 WEB_RELEASE_VALIDATION_SCRIPT_SHA256 = _receipt(
-    "0403613fcff0ee80", "3794d6b4d2bb324c", "8360bd836e0be3e8", "fb2f28024f9f6b6a"
+    "72a7fbc8d123013e", "84ef7f8799c1cccc", "37130a09b73229f1", "959af85964ccbcec"
 )
 
 FLAKE_RELEASE_PACKAGES = ("crane", "curl")

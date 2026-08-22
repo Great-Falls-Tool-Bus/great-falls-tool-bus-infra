@@ -38,6 +38,7 @@ check-hosted:
     just listsync-stack-validate
     just form-stack-validate
     just archive-stack-validate
+    just guard-no-remote-kustomize-resources-selftest
     just web-stack-validate
     just grafana-dashboards-validate
     just arc-fmt-check
@@ -2155,8 +2156,67 @@ archive-stack-apply: archive-stack-server-dry-run
 web_stack_dir := "k8s/web/greatfallstoolbus-org-production"
 web_stack_ns := "greatfallstoolbus-org-production"
 
+# Remote-resource ALLOWLIST guard (round 4, adversarial review PR #127
+# comments 5380010266 + 5380172269): every kustomize reference-carrying field
+# (resources/bases/components/generators/transformers/configurations/crds
+# and more -- see the script header) is accepted ONLY if it resolves to a
+# real, contained local path; everything else is refused before any
+# `kubectl kustomize` call. Replaces a round-3 denylist that adversarial
+# review proved leaky three separate ways (scheme-less git-host shorthand on
+# `resources`, and the `transformers`/`configurations`/`crds` fields being
+# absent from the field list entirely).
+guard-no-remote-kustomize-resources:
+    bash scripts/guard-no-remote-kustomize-resources.sh {{ web_stack_dir }}
+
+guard-no-remote-kustomize-resources-selftest:
+    bash scripts/guard-no-remote-kustomize-resources.sh --self-test
+
 web-stack-validate:
     bash scripts/validate-web-stack.sh {{ web_stack_dir }}
+
+# Rung 2 (org-standard-cd-pattern-truth-20260821.md sec 4.1 -- "great-falls-
+# tool-bus-infra: no preview needed; wire the existing <stack>-plan ...
+# recipes as PR-required statuses. That IS rung 2 for the overlay." --
+# ratification basis: operator interview 2026-08-21, register L71 Q2 = rungs
+# 1+2, L73). Render the COMMITTED declare-only tree to stdout: kustomize only,
+# nothing else. This is deliberately NOT web-release-render: it takes no
+# WEB_APPLY_IMAGE/WEB_APPLY_SHA, resolves no GHCR candidate, injects no
+# source-sha annotation, and synthesizes no default-deny-egress NetworkPolicy.
+# It calls no `just` recipe at all, so it cannot reach -- directly or
+# transitively -- any member of the web-release-* reviewed candidate-
+# promotion family (scripts/validate-public-operator-surface.py
+# WEB_RELEASE_OPERATOR_LOCAL_ROOTS): that family stays exactly what TIN-3899 /
+# decisions/0016 made it, attended-operator-only and unreachable from every
+# CI workflow, and this recipe is written to stay outside its closure by
+# construction rather than by a validator exemption. Since rung 1
+# (deployment.yaml's "TREE HONESTY" fix) the committed tree already matches
+# web-release-render's own contract for every field except THREE it still
+# names as ceremony-only residuals -- in order of consequence: (1) the
+# PER-RELEASE CONTAINER IMAGE DIGEST (the field that decides what code
+# production actually runs; this render shows whatever digest is currently
+# committed, which is NOT necessarily what the next release ceremony will
+# pin), (2) the per-release source-sha annotation, and (3) the synthesized
+# default-deny-egress NetworkPolicy -- so this render is close to, but not
+# byte-identical with, what the attended ceremony would apply. Say that
+# honestly, and name the digest explicitly, in anything that consumes this
+# output; do not call it "the exact apply-time bytes". (The ceremony also
+# prunes two legacy egress NetworkPolicies at apply time -- that is an
+# apply-time-only concern, not a render residual: those two objects are not
+# in the committed tree at all, so this render never carries them either.)
+#
+# Runs the standalone remote-resource ALLOWLIST guard
+# (scripts/guard-no-remote-kustomize-resources.sh; round 4 after adversarial
+# review found the round-3 denylist leaky -- see that script's header)
+# directly, as a plain script call -- NOT via a `web-stack-validate` Just
+# dependency, because that recipe's own success message would print onto
+# this recipe's stdout ahead of the YAML, corrupting every caller that
+# captures `just web-stack-render` as a pure render (the workflow does
+# exactly that). The guard script itself is silent on success and calls no
+# `just` recipe, so this stays outside the web-release-* closure exactly as
+# before.
+web-stack-render:
+    bash scripts/guard-no-remote-kustomize-resources.sh {{ web_stack_dir }}
+    kubectl kustomize {{ web_stack_dir }}
 
 # Operator-supplied cutover inputs (attended env; never baked, and since
 # TIN-3899 never workflow-delivered either):
