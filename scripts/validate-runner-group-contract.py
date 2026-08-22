@@ -326,6 +326,73 @@ def validate(org_source: str, tfvars_source: str) -> list[str]:
     return findings
 
 
+def success_message(org_source: str) -> str:
+    """Render the pass-path summary, re-deriving the observed roster and
+    infra-admission status instead of hardcoding the pre-admission constants.
+
+    A prior version of this message hardcoded the two-repository default
+    roster and unconditionally printed "infra repository ... excluded", so a
+    passing, validly-admitted run (`infra_repo_admission_ruling` present, id
+    in `selected_repository_ids`) still printed a false exclusion claim.
+    Shared by `main()` (prints it) and `self_test()` (asserts on it) so the
+    success path — the one branch no adversarial mutation exercises, since
+    every `NEGATIVE_FIXTURES` case expects `validate()` to fail — is covered.
+    """
+    block = runner_group_block(org_source)
+    observed_ids = selected_repository_ids(block)
+    infra_ruling_present = any(
+        re.fullmatch(rf"    {INFRA_ADMISSION_RULING_FIELD}:\s*[^\s#]+\s*(?:#.*)?", line)
+        for line in block
+    )
+    infra_status = (
+        "admitted" if INFRA_REPOSITORY_ID in observed_ids and infra_ruling_present
+        else "excluded"
+    )
+    return (
+        "runner-group admission contract passed: group "
+        f"{EXPECTED_GROUP_NAME} bound at policy {EXPECTED_POLICY}, visibility "
+        f"{EXPECTED_VISIBILITY}, public admission "
+        f"{str(RULED_ALLOWS_PUBLIC_REPOSITORIES).lower()} per operator ruling "
+        "2026-08-18 (TIN-3902), roster "
+        f"{sorted(observed_ids)}, "
+        f"infra repository {INFRA_REPOSITORY_ID} {infra_status}"
+    )
+
+
+def _excluded_organization_fixture(org_source: str) -> str:
+    """Derive an `organization.yaml` source with the infra repository NOT
+    admitted, regardless of whether `org_source` currently admits it: strips
+    the `infra_repo_admission_ruling` field and the id's roster line if
+    present. Anchored only on the two structural constants, never on this
+    file's current comment prose, so it stays correct as that prose changes.
+    """
+    source = re.sub(
+        rf"(?m)^ {{4}}{re.escape(INFRA_ADMISSION_RULING_FIELD)}:.*\n", "", org_source
+    )
+    source = re.sub(rf"(?m)^      - {INFRA_REPOSITORY_ID}\s*(?:#.*)?\n", "", source)
+    return source
+
+
+def _admitted_organization_fixture(org_source: str) -> str:
+    """Derive an `organization.yaml` source with the infra repository
+    admitted (id present + ruling field present), regardless of `org_source`'s
+    current state. Inverse of `_excluded_organization_fixture`.
+    """
+    source = _excluded_organization_fixture(org_source)
+    source = source.replace(
+        "    restricted_to_workflows: false\n",
+        "    restricted_to_workflows: false\n"
+        f"    {INFRA_ADMISSION_RULING_FIELD}: TEST-RULING\n",
+        1,
+    )
+    source = source.replace(
+        "      - 1287399122\n",
+        f"      - 1287399122\n      - {INFRA_REPOSITORY_ID}\n",
+        1,
+    )
+    return source
+
+
 NEGATIVE_FIXTURES: tuple[tuple[str, str, str, str], ...] = (
     (
         "public admission flipped back against the ruling",
@@ -417,9 +484,51 @@ def self_test(org_source: str, tfvars_source: str) -> None:
                 "rejected"
             )
 
+    # 9th case: the success-path message, not just the pass/fail verdict.
+    # This is the branch PR #128 review found silently lying — a passing,
+    # admitted run printing "excluded" — and no NEGATIVE_FIXTURES mutation
+    # above touches it, because every one of those expects validate() to
+    # FAIL. Exercise both directions, built from org_source so this holds
+    # whether org_source (this repo's real current file) is itself
+    # pre-admission or post-admission.
+    excluded_source = _excluded_organization_fixture(org_source)
+    excluded_findings = validate(excluded_source, tfvars_source)
+    if excluded_findings:
+        raise SystemExit(
+            "runner-group contract self-test: derived excluded fixture must "
+            f"validate cleanly; observed {excluded_findings!r}"
+        )
+    excluded_message = success_message(excluded_source)
+    if f"infra repository {INFRA_REPOSITORY_ID} excluded" not in excluded_message:
+        raise SystemExit(
+            "runner-group contract self-test: excluded fixture's success "
+            f"message must say 'excluded'; observed {excluded_message!r}"
+        )
+
+    admitted_source = _admitted_organization_fixture(org_source)
+    admitted_findings = validate(admitted_source, tfvars_source)
+    if admitted_findings:
+        raise SystemExit(
+            "runner-group contract self-test: derived admitted fixture must "
+            f"validate cleanly; observed {admitted_findings!r}"
+        )
+    admitted_message = success_message(admitted_source)
+    if f"infra repository {INFRA_REPOSITORY_ID} admitted" not in admitted_message:
+        raise SystemExit(
+            "runner-group contract self-test: admitted fixture's success "
+            f"message must say 'admitted', never 'excluded'; observed "
+            f"{admitted_message!r}"
+        )
+    if "excluded" in admitted_message:
+        raise SystemExit(
+            "runner-group contract self-test: admitted fixture's success "
+            f"message must not also say 'excluded'; observed {admitted_message!r}"
+        )
+
     print(
         f"runner-group contract self-test passed "
-        f"({len(NEGATIVE_FIXTURES)} adversarial mutations rejected)"
+        f"({len(NEGATIVE_FIXTURES)} adversarial mutations rejected, "
+        "1 success-message admitted/excluded flip verified)"
     )
 
 
@@ -442,31 +551,7 @@ def main() -> int:
             print(f"  - {finding}", file=sys.stderr)
         return 1
 
-    # Re-derive the observed roster and infra-admission status for the
-    # success message instead of hardcoding the pre-admission constants: this
-    # message previously always reported the two-repository default roster
-    # and "infra repository ... excluded" even after a validated admission
-    # (`infra_repo_admission_ruling` present, id in `selected_repository_ids`),
-    # which would have made a passing run print a false exclusion claim.
-    block = runner_group_block(org_source)
-    observed_ids = selected_repository_ids(block)
-    infra_ruling_present = any(
-        re.fullmatch(rf"    {INFRA_ADMISSION_RULING_FIELD}:\s*[^\s#]+\s*(?:#.*)?", line)
-        for line in block
-    )
-    infra_status = (
-        "admitted" if INFRA_REPOSITORY_ID in observed_ids and infra_ruling_present
-        else "excluded"
-    )
-    print(
-        "runner-group admission contract passed: group "
-        f"{EXPECTED_GROUP_NAME} bound at policy {EXPECTED_POLICY}, visibility "
-        f"{EXPECTED_VISIBILITY}, public admission "
-        f"{str(RULED_ALLOWS_PUBLIC_REPOSITORIES).lower()} per operator ruling "
-        "2026-08-18 (TIN-3902), roster "
-        f"{sorted(observed_ids)}, "
-        f"infra repository {INFRA_REPOSITORY_ID} {infra_status}"
-    )
+    print(success_message(org_source))
     return 0
 
 

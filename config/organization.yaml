@@ -100,26 +100,67 @@ runner_contract:
     # this admission (DRAFT PR #116, HELD, moves it) and was never what kept
     # PR-authored content off `tinyland-nix` — the roster was.
     #
-    # What actually makes admission safe: every self-hosted `tinyland-nix`
-    # workflow in this repository carries the PR #110 (`ae7cb63a`) event gate
-    # `if: github.event_name == 'push' || github.event_name ==
-    # 'workflow_dispatch'`, which keeps `pull_request`-triggered runs (i.e.
-    # PR-authored content on a public, `allow_forking: true` repository) off
-    # this runner class entirely. That gate is what changed since the
-    # rationale above was written, not the roster: `web-plan.yml` (added by
-    # PR #127) briefly shipped WITHOUT it in that PR's round 2 — the one
-    # tinyland-nix workflow in the estate missing the #110 gate — and had it
-    # restored in round 3 before merge (PR #127 comment 5377613179; see
-    # `.github/workflows/web-plan.yml`'s own header for the incident write-up).
-    # Every self-hosted workflow here is gated identically as of `749b8f8d`.
-    # Admission does not change custody of any credential: `web-plan.yml` and
-    # `web-crs.yml` stay `permissions: contents: read` with zero
-    # `environment:`/`secrets.` references (TIN-4004 caveat: the `tinyland-nix`
-    # runner class shares substrate with the Tofu state backend
-    # (`tofu-state-rustfs.nix-cache.svc:9000` above) regardless of which repos
-    # are on the roster — admission does not worsen that shared-substrate
-    # exposure, it only decides whether this repository's push-gated,
-    # secret-free jobs may use the class at all).
+    # What actually makes admission safe: no `pull_request_target` trigger
+    # exists anywhere in this repository, and no `pull_request`-triggered job
+    # reaches `tinyland-nix` by either of two mechanisms present across this
+    # repository's 15 `tinyland-nix` jobs (10 workflows). (1) An explicit
+    # event-gate `if:` on 12 of the 15 jobs: 8 first-jobs (archive-stack,
+    # edge-plan, flywheel-cache-proof, form-crs, list-crs, mail-crs, web-crs,
+    # web-plan) carry the PR #110 (`ae7cb63a`) `if: github.event_name ==
+    # 'push' || github.event_name == 'workflow_dispatch'`; the 4
+    # `environment: mail` credentialed `server` jobs (archive-stack, form-crs,
+    # list-crs, mail-crs) carry a narrower `if: github.event_name ==
+    # 'workflow_dispatch'` only. (2) Trigger absence on the remaining 3:
+    # `edge-drift.yml` and `k8s-stack-drift.yml`'s two jobs declare only
+    # `schedule` + `workflow_dispatch` triggers and never see `pull_request`
+    # at all. `web-plan.yml` is the one job that briefly shipped WITHOUT its
+    # #110 gate in PR #127 round 2 and had it restored in round 3 before
+    # merge (PR #127 comment 5377613179; see `.github/workflows/web-plan.yml`'s
+    # own header). STANDING INVARIANT, not a snapshot of `749b8f8d`: any
+    # workflow admitted to (or migrated within) this class must carry a
+    # trusted-event `if:` or declare no `pull_request` trigger, checked at
+    # merge time, not assumed from this comment. DRAFT PR #116 moves
+    # `validate.yml` onto `tinyland-nix`; `validate.yml` runs unfiltered on
+    # every `pull_request` with no event gate — by design, since a required
+    # status check must run on every PR — so it CANNOT adopt this gate. #116
+    # must resolve that (re-home the requirement, or accept `validate.yml` as
+    # a deliberate, reviewed exception with its own rationale) before it
+    # lands, or it falsifies this paragraph the day it merges.
+    #
+    # Admission unblocks all ten of this repository's self-hosted
+    # `tinyland-nix` workflows (archive-stack, edge-drift, edge-plan,
+    # flywheel-cache-proof, form-crs, k8s-stack-drift, list-crs, mail-crs,
+    # web-crs, web-plan) — each has had zero eligible runners since this
+    # repository was excluded, and most show a `queued` run outstanding from
+    # PR #127's merge push (2026-08-22T12:41:11Z).
+    #
+    # TIN-4004 (High, security): admission RE-ARMS a dormant credential
+    # carrier; it does not merely leave shared substrate unchanged.
+    # `edge-plan.yml` (`runs-on: tinyland-nix`, `environment: edge` — a plain
+    # environment with no required-reviewer rule, confirmed via the GitHub
+    # environments API) is handed `ARC_RUNNERS_RUSTFS_ACCESS_KEY`/`_SECRET_KEY`
+    # on `workflow_dispatch action=apply` — the literal S3 credential for the
+    # `tofu-state` bucket at `tofu-state-rustfs.nix-cache.svc:9000` (the same
+    # bucket that backs `arc-runners`' own state; see `tofu/backend/*.s3.hcl`
+    # and `docs/ci-credentials.md` "Edge Backend Secrets"). Before this PR,
+    # that job could never execute — no eligible runner — so the credential
+    # was configured but inert. After the GitHub-side admission step (see the
+    # attended apply packet), it is live: reachable only by a deliberate
+    # `workflow_dispatch`, not by PR content, but with no reviewer gate in
+    # front of it.
+    #
+    # TIN-4004 step-0 disposition: RULED, session register L77 (2026-08-22
+    # late night), Q1, verbatim: "main===prod in proper gitops CD --- such a
+    # rule for reviewership muddies up *how* code moves to main with the
+    # statefulness implied by its existence on main" → selected "3. Accept
+    # documented". An environment reviewer-gate on `edge-plan.yml` was
+    # REJECTED on principle, not on cost — the operator's position is that a
+    # human-approval gate is itself a defect in a proper gitops CD model, not
+    # a mitigation for one. Disposition: admission proceeds with this
+    # exposure documented (this paragraph is that record); no environment
+    # gate is added to `edge-plan.yml`; TIN-4004 stays OPEN, owned by the
+    # convergence program (mechanically-infallible main==prod), which is the
+    # ruled fix vehicle — not by any approval-gate follow-up to this PR.
     #
     # WARNING: with `allows_public_repositories: true` the roster below is the
     # ONLY control keeping a repository out — the public-repository flag is
@@ -148,13 +189,20 @@ runner_contract:
       - 1287399122
       # Great-Falls-Tool-Bus/great-falls-tool-bus-infra — public; this
       # repository. Admitted under operator ruling 2026-08-22 (L76; TIN-3914)
-      # per `infra_repo_admission_ruling` above. Unblocks PR #127's rung-2
-      # `web-plan.yml` (merged `749b8f8d`, `runs-on: tinyland-nix`), which has
-      # had no eligible runner since merge. Sequencing: this roster entry
-      # merges first; DRAFT PR #116 (moves `validate.yml` off
-      # `ubuntu-24.04`) and DRAFT PR #120 (TIN-3914 Phase B) un-hold and land
-      # after, per the attended apply packet — GitHub-side admission (the
-      # runner group's selected-repository list in org Settings) is a
-      # separate, attended action this file does not perform; see
-      # docs/implementation-overlay.md "Runner group cutover" Step 0.
+      # per `infra_repo_admission_ruling` above. Unblocks all ten of this
+      # repository's self-hosted `tinyland-nix` workflows (see the
+      # `runner_group` comment above), starved since roster exclusion —
+      # rung-2 `web-plan.yml` (merged `749b8f8d`) is the flagship example but
+      # not the only one, and admission also re-arms the TIN-4004 credential
+      # carrier in `edge-plan.yml` (see above — RULED accept-documented, L77,
+      # no environment gate added). Sequencing: this roster entry merges
+      # first; the GitHub-side admission step (packet Step 3) is what makes
+      # the ruled-open TIN-4004 exposure live; DRAFT PR #116
+      # (moves `validate.yml` off `ubuntu-24.04` — cannot land as-is per the
+      # STANDING INVARIANT above) and DRAFT PR #120 (TIN-3914 Phase B)
+      # un-hold and land after, per the attended apply packet. GitHub-side
+      # admission (the runner group's selected-repository list in org
+      # Settings) is itself a separate, attended action this file does not
+      # perform; see docs/implementation-overlay.md "Runner group cutover"
+      # Step 0.
       - 1286829099
