@@ -5,57 +5,76 @@ name: Web Stack Plan (rung 2)
 # 2026-08-21 (session register L71 Q2 = rungs 1+2; L73 = rung 2 builds AND
 # merges on the truth-doc basis, not gated on meta ADR 0020).
 #
-# WHAT THIS DOES: on every push to main AND every pull request (regardless of
-# which paths it touches -- see "CHECK SEMANTICS" below), render the
-# committed k8s/web declare-only tree (`just web-stack-render`, a plain
-# `kubectl kustomize`, nothing else) and validate it against the same
-# jq/yq contract the tree must already pass (`just web-stack-validate`,
-# already wired into web-crs.yml) -- but ONLY when the change actually
-# touches a web-stack path; otherwise the job no-ops green with an explicit
-# step summary saying so. Both outputs are published as a step summary and a
-# workflow artifact when the render runs, so every relevant push/PR gets a
-# computed, reviewable answer to "what does the tree currently declare".
+# TWO STANDING RULES THIS WORKFLOW MUST SATISFY SIMULTANEOUSLY, AND HOW
+# (round 3, after adversarial review PR #127 comment 5377613179 -- read this
+# section before touching triggers or the job-level `if:` below):
 #
-# CHECK SEMANTICS (fixed after adversarial review, comment 5377515480,
-# EDIT-1): the FIRST version of this workflow path-filtered the `pull_request`
-# trigger itself, and job-gated execution to `push`/`workflow_dispatch` only.
-# That is broken as a required-status design in two independent ways: (a) a
-# PR touching none of the five paths never dispatches this workflow AT ALL,
-# so a required `web-plan` check sits at "Expected -- waiting for status to
-# be reported" forever, not "green" -- measured against this repo's own
-# history, 13 of the last 30 commits on main would have been permanently
-# unmergeable under that design; (b) on a PR that DOES match the path filter,
-# the job-level `if:` skipped the job body, and GitHub counts a `skipped`
-# conclusion as SATISFYING a required status check -- so the design as first
-# written would have blocked ~43% of PRs and rubber-stamped the rest. Fixed
-# here: the workflow triggers on every `pull_request` and every `push` to
-# main, unfiltered, and the job ALWAYS runs and ALWAYS reports a real `web-plan`
-# conclusion; path relevance is detected INSIDE the job (the "Detect changed
-# web-stack paths" step) and only gates whether the render/validate step
-# actually executes -- an irrelevant change gets an explicit, real "no
-# web-stack paths touched" green, not a `skipped` conclusion and not a
-# silently-never-reported one.
+# 1. "Keep public PRs off private runners" -- PR #110 (`ae7cb63a`), which
+#    introduced `if: github.event_name == 'push' || github.event_name ==
+#    'workflow_dispatch'` into every self-hosted `tinyland-nix` workflow in
+#    this repository, and which `config/organization.yaml:94-96` cites as
+#    PART OF WHY this repository stays off the ARC runner-group roster ("its
+#    apply/drift workflows are gated to push/workflow_dispatch/
+#    repository_dispatch"). A round-2 version of this workflow removed that
+#    gate specifically for `web-plan.yml` to fix a required-status defect
+#    (see below), making it the ONLY tinyland-nix workflow without it.
+#    Adversarial review proved that exposure real, not theoretical: `kubectl
+#    kustomize` fetches remote `resources`/`bases`/`components`/`generators`
+#    entries over the network with NO flag required (a one-line addition to
+#    a scratch copy of this stack's kustomization produced a real outbound
+#    connection attempt), `scripts/validate-web-stack.sh` ran the same
+#    unguarded `kubectl kustomize` call, and both the Justfile and that
+#    script are themselves PR-controlled content sitting in this workflow's
+#    own trigger-path list -- on a PUBLIC repository with `allow_forking` and
+#    a `first_time_contributors`-only approval policy (returning contributors
+#    run unapproved), on the SAME runner class that carries real kubeconfigs
+#    and Cloudflare tokens for other stacks and sits on the same substrate as
+#    the Tofu state backend (`config/organization.yaml`'s
+#    `tofu-state-rustfs.nix-cache.svc:9000`). Restored here: the `#110` gate
+#    is back, `web-plan.yml` is push-to-main/workflow_dispatch-only again,
+#    identical in posture to the other seven self-hosted workflows (same
+#    `permissions: contents: read`, same zero `environment:`/`secrets.`
+#    refs as `web-crs.yml`, which stayed gated throughout and is the exact
+#    control that refutes any "credential-free job, different rules"
+#    argument -- the runner CLASS is shared; the job's own credential
+#    posture does not change that).
 #
-# SECURITY POSTURE, STATED PLAINLY: this is the first workflow in this
-# repository whose job body can execute on an arbitrary `pull_request` event
-# (every other self-hosted `tinyland-nix` workflow here -- archive-stack,
-# form-crs, list-crs, mail-crs, web-crs, the drift lanes -- stays job-gated to
-# trusted push/workflow_dispatch events only, specifically because THEY carry
-# a protected-environment kubeconfig secret an untrusted PR must never reach).
-# That precedent does not apply the same way here because THIS workflow binds
-# no `environment:`, requests no secret, and touches no kubeconfig or cluster
-# -- there is nothing present for a malicious PR to steal. The residual risk
-# is narrower but real: a PR that edits `Justfile`, `scripts/validate-web-stack.sh`,
-# or the `k8s/web/**` tree gets that exact edited content executed by
-# `nix develop`/`just`/`bash` on the `tinyland-nix` runner (for same-repo PRs,
-# the workflow FILE itself is also PR-controlled; for fork PRs, GitHub always
-# runs the BASE branch's workflow definition, so `GF_CORE_REF` and the
-# checkout `repository:`/`ref:` inputs stay trusted even then, but the
-# checked-out `overlay` tree's Justfile/script content is still the PR's own).
-# Worst case is arbitrary command execution on a credential-free, cluster-
-# read-free runner -- not a credential leak or a cluster mutation -- but it is
-# a real, deliberate widening of this repo's usual self-hosted+PR boundary,
-# flagged here for visibility rather than left implicit.
+# 2. "Every push to main renders the plan as a required status" (rung 2's
+#    actual mandate; org-standard-cd-pattern-truth-20260821.md:403-404) --
+#    which needs SOME check to report on every PR, not just on push to main,
+#    or a required check freezes every PR that never dispatches it. Solved
+#    WITHOUT creating a new hosted (`ubuntu-*`) dependency and WITHOUT
+#    reopening rule 1: the PR-side render lives in `.github/workflows/
+#    validate.yml`'s existing hosted `validate` job instead -- that job
+#    already runs on every `pull_request`, unfiltered, is already this
+#    repo's declared "PR validation authority" (PR #110's own commit
+#    message), is already secret-free for this purpose, and is already
+#    slated to migrate wholesale onto the GF cache-fronted runner class by
+#    DRAFT PR #120 ("ci: migrate off GitHub-hosted runners", TIN-3914 Phase
+#    B) -- so the render migrates with it for free the day #120 lands,
+#    creating ZERO new hosted surface area. See `validate.yml` for that
+#    step; it shares this file's `web-stack-render` recipe and residual list.
+#
+# THIS FILE, going forward, IS ONLY the push-to-main / manual-dispatch half:
+# it renders the committed k8s/web declare-only tree (`just web-stack-render`,
+# a plain `kubectl kustomize` behind the remote-resource guard below --
+# nothing else) and validates it against the same jq/yq contract the tree
+# must already pass (`just web-stack-validate`, already wired into
+# web-crs.yml), publishing both as a step summary and a workflow artifact on
+# every trusted push to main. It registers on `pull_request` (path-filtered,
+# exactly like `web-crs.yml`) purely for Checks-tab visibility; the job body
+# never executes for that event, and it is NEVER the PR-required-status
+# carrier -- that is `validate.yml`, which is not path-filtered and cannot
+# freeze on an unrelated PR the way a path-filtered required check can.
+#
+# HARDENED: `just web-stack-render` and `scripts/validate-web-stack.sh` both
+# now run `scripts/guard-no-remote-kustomize-resources.sh` before any
+# `kubectl kustomize` call, refusing if any kustomization file under the
+# target directory declares a `resources`/`bases`/`components`/`generators`
+# entry that looks like a URL. The committed tree has none, so this is a
+# tripwire, not a behavior change -- but it means even an attended operator
+# re-running this render locally against a mutated tree is protected, not
+# just this workflow.
 #
 # WHAT THIS DELIBERATELY DOES NOT DO, and why: it does not call
 # `web-release-render` / `web-release-plan` / `web-release-candidate-proof`
@@ -91,52 +110,50 @@ name: Web Stack Plan (rung 2)
 #
 # NOTHING APPLIES, NOTHING IS CONTACTED. This job touches no kubeconfig, no
 # cluster, no registry, and no Tofu state backend. No environment secret is
-# requested, so this workflow binds no protected `environment:` at all --
-# strictly less than every other private-runner workflow in this repo needs.
+# requested, so this workflow binds no protected `environment:` at all.
 #
-# ENFORCEMENT IS DECLARE-ONLY. This workflow is REAL -- it renders and
-# validates on every relevant push/PR -- but it is NOT wired into the branch
-# ruleset as a required status check by this change. See
-# docs/runbooks/web-plan-required-status-activation.md for why and for the
-# exact operator step that flips it on later.
+# ENFORCEMENT IS DECLARE-ONLY. Neither this workflow NOR the validate.yml
+# render step is wired into the branch ruleset as a required status by this
+# change. See docs/runbooks/web-plan-required-status-activation.md.
 #
-# RUNNER REALITY (read before assuming green means it ran): this job targets
-# `tinyland-nix`, the same GF cache-fronted ARC class every other private-
-# runner workflow in this repo uses -- never a GitHub-hosted `ubuntu-*`
-# runner. TIN-3902's roster (config/organization.yaml
-# `runner_contract.runner_group.selected_repository_ids`) currently EXCLUDES
-# this repository (id 1286829099) from that runner group, and DRAFT PR #116
-# (the chain that would admit it) is HELD pending the operator's admission
-# ruling. Until that ruling lands, a run of this workflow has no runner to
-# claim it and the Checks tab will show `web-plan` sitting `Queued` --
-# GitHub's own honestly-labeled state for "no eligible runner", not a hidden
-# failure or a silent no-op. This is exactly why enforcement stays
-# declare-only: a `Queued`-forever job as a REQUIRED check would freeze every
-# merge to main. This is a SEPARATE hazard from the check-semantics fix
-# above: that fix makes sure a real runner produces a real, meaningful
-# conclusion; it does nothing about there being no runner at all yet.
+# RUNNER REALITY for THIS file's job (read before assuming green means it
+# ran): it targets `tinyland-nix`, the same GF cache-fronted ARC class every
+# other private-runner workflow in this repo uses. TIN-3902's roster
+# (config/organization.yaml `runner_contract.runner_group.selected_repository_ids`)
+# currently EXCLUDES this repository (id 1286829099) from that runner group,
+# and DRAFT PR #116 (the chain that would admit it) is HELD pending the
+# operator's admission ruling. Until that ruling lands, a run of this
+# workflow has no runner to claim it and the Checks tab will show `web-plan`
+# sitting `Queued` -- GitHub's own honestly-labeled state for "no eligible
+# runner", not a hidden failure or a silent no-op. This does not affect PR
+# coverage at all now: the PR-side check lives in `validate.yml`, on
+# `ubuntu-24.04`, which cannot be starved by this roster gap.
 # `concurrency.cancel-in-progress: false` below is deliberate for the same
 # reason rung 1 flipped it on k8s-stack-drift.yml/edge-drift.yml (D6): with
 # `cancel-in-progress: true`, a starved queue produces a string of runs
 # cancelled-before-they-ever-started on every subsequent push, which reads as
 # ambiguous churn rather than the honest "queued, waiting on the roster
-# admission" state. `timeout-minutes` below bounds the OTHER failure mode --
-# a run that IS claimed by a runner but then hangs -- so that case fails loud
-# with a clear timeout instead of holding the runner indefinitely. GitHub
-# Actions has no native short timeout for a job that is never claimed at all
-# (self-hosted queued jobs are only auto-cancelled at the platform's ~24h
-# ceiling); building a real watchdog for that specific case would require a
-# second job on a different runner class, and every such class available to
-# this org is either `tinyland-nix` itself (same failure mode) or a
-# GitHub-hosted `ubuntu-*` runner, which house policy (TIN-3914) forbids
-# outright. Stated here plainly rather than papered over with a mechanism
-# that doesn't actually exist.
+# admission" state.
 
 on:
-  pull_request: {}
+  pull_request:
+    paths:
+      - ".github/workflows/web-plan.yml"
+      - "Justfile"
+      - "k8s/web/**"
+      - "scripts/validate-web-stack.sh"
+      - "scripts/guard-no-remote-kustomize-resources.sh"
+      - "tofu/intent/great-falls-tool-bus/**"
   push:
     branches:
       - main
+    paths:
+      - ".github/workflows/web-plan.yml"
+      - "Justfile"
+      - "k8s/web/**"
+      - "scripts/validate-web-stack.sh"
+      - "scripts/guard-no-remote-kustomize-resources.sh"
+      - "tofu/intent/great-falls-tool-bus/**"
   workflow_dispatch: {}
 
 permissions:
@@ -152,6 +169,13 @@ env:
 jobs:
   web-plan:
     name: web-plan
+    # PR #110 invariant, restored (round 3): self-hosted ARC runner + PR
+    # content never mix in this repository. `web-crs.yml`'s identical `validate`
+    # job (same runner, same permissions, same zero secrets) is the control
+    # this posture is checked against. A PR run shows this check as skipped,
+    # not hidden -- and, unlike round 2, it is also NOT this repo's PR-side
+    # web-stack signal any more; that is validate.yml now.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: tinyland-nix
     timeout-minutes: 15
     steps:
@@ -160,54 +184,6 @@ jobs:
         with:
           path: overlay
           persist-credentials: false
-          fetch-depth: 0
-
-      # Reads file names only via `git diff --name-only`; executes no
-      # repo-controlled content. Safe to run unconditionally, including on
-      # untrusted pull_request events, before anything from the tree runs.
-      - name: Detect changed web-stack paths
-        id: changed
-        working-directory: overlay
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PUSH_BEFORE_SHA: ${{ github.event.before }}
-          PUSH_AFTER_SHA: ${{ github.event.after }}
-        run: |
-          set -euo pipefail
-          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
-            echo "render=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::workflow_dispatch: rendering unconditionally (operator-requested)."
-            exit 0
-          fi
-          if [ "${EVENT_NAME}" = "pull_request" ]; then
-            base="${PR_BASE_SHA}"
-            head="${PR_HEAD_SHA}"
-          else
-            base="${PUSH_BEFORE_SHA}"
-            head="${PUSH_AFTER_SHA}"
-          fi
-          zero="0000000000000000000000000000000000000000"
-          if [ -z "${base}" ] || [ "${base}" = "${zero}" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
-            echo "::notice::No usable base commit for change detection (base='${base:-<empty>}'); rendering unconditionally -- fail open to RENDER, never to silently skip."
-            echo "render=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          changed="$(git diff --name-only "${base}" "${head}" --)"
-          echo "::group::Changed paths (${base}..${head})"
-          printf '%s\n' "${changed}"
-          echo "::endgroup::"
-          matched="false"
-          while IFS= read -r path; do
-            [ -n "${path}" ] || continue
-            case "${path}" in
-              .github/workflows/web-plan.yml|Justfile|k8s/web/*|scripts/validate-web-stack.sh|tofu/intent/great-falls-tool-bus/*)
-                matched="true"
-                ;;
-            esac
-          done <<< "${changed}"
-          echo "render=${matched}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout pinned GloriousFlywheel core
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -227,7 +203,6 @@ jobs:
           fi
 
       - name: Render and validate the committed web stack (offline; no cluster, no credential)
-        if: steps.changed.outputs.render == 'true'
         uses: ./GloriousFlywheel/.github/actions/nix-job
         with:
           push-cache: "false"
@@ -264,24 +239,8 @@ jobs:
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: No web-stack paths touched (no-op, reports green)
-        if: steps.changed.outputs.render != 'true'
-        run: |
-          {
-            echo "## GFTB web stack plan (rung 2)"
-            echo ""
-            echo "No web-stack paths touched by this change -- render skipped,"
-            echo "reporting green. This is a real, reported conclusion, not a"
-            echo "\`skipped\` check run: web-plan always executes and always"
-            echo "reports."
-            echo ""
-            echo "Paths that would trigger a render: \`.github/workflows/web-plan.yml\`,"
-            echo "\`Justfile\`, \`k8s/web/**\`, \`scripts/validate-web-stack.sh\`,"
-            echo "\`tofu/intent/great-falls-tool-bus/**\`."
-          } >> "$GITHUB_STEP_SUMMARY"
-
       - name: Upload plan artifact
-        if: always() && steps.changed.outputs.render == 'true'
+        if: always()
         continue-on-error: true
         uses: actions/upload-artifact@v7
         with:

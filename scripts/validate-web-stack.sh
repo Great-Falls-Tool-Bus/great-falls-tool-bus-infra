@@ -176,6 +176,11 @@ if grep -REn "AGE-SECRET-KEY-1|BEGIN [A-Z ]*PRIVATE KEY|cfat_[A-Za-z0-9_-]{8,}" 
 fi
 
 # --- Full render must succeed (parse-only; never applies) --------------------
+# guard-no-remote-kustomize-resources.sh (adversarial review, PR #127 comment
+# 5377613179): kubectl kustomize fetches remote resources/bases/components/
+# generators entries over the network with no flag required. Refuse before
+# this render, and before web-stack-render's own separate render, ever runs.
+bash scripts/guard-no-remote-kustomize-resources.sh "${dir}"
 kubectl kustomize "${dir}" >/dev/null
 
 echo "web stack validation passed for ${app} in ${stack_ns}: ATTENDED-ONLY declare-only (replicas 2, image pinned to ${admitted_image_repo}@sha256:<64 hex>, no namespace, no workflow apply path -- the repository_dispatch CD carrier is retired and apply is attended-operator-only behind the promotion interlock), gftb-site static-origin ClusterIP 80->3000 with /health probes, default-deny + cloudflared-only public ingress, route+reaper fail-closed, no committed secrets"

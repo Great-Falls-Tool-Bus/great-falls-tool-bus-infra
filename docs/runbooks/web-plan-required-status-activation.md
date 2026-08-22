@@ -1,195 +1,89 @@
-# Activating `web-plan` as a required status check (rung 2 enforcement)
+# The `web-plan` rung-2 topology, and why there is no activation step to run
 
-**Nothing in this document is applied by writing it.** This is the
-operator-executed activation procedure for the `web-plan` workflow
-(`.github/workflows/web-plan.yml`, TIN-3968-adjacent rung 2). No agent session
-touches the branch ruleset; only an operator with GitHub org-admin/repo-admin
-access can perform the steps below.
+**Nothing in this document is applied by writing it, and nothing here needs
+operator action to become effective — that is the point of this document.**
+Earlier drafts of this file (round 1/round 2 of PR #127) described an
+"activation" procedure for wiring a `web-plan` context into the branch
+ruleset. Adversarial review (comment 5377613179) found the mechanism that
+would have made that necessary — running the render job on untrusted
+`pull_request` events on the `tinyland-nix` self-hosted runner — reversed a
+reviewed control (PR #110, `ae7cb63a`, "keep public PRs off private
+runners") and proved the exposure real (`kubectl kustomize` fetches remote
+`resources`/`bases`/`components`/`generators` entries over the network with
+no flag required; a scratch PoC produced a real outbound connection attempt
+from a one-line kustomization edit). Round 3 fixes that by never running the
+render on an untrusted event in the first place, which is why there is no
+activation step left to document: PR coverage already rides an *existing,
+already-required* check, and the private render is *never* a PR-required
+check at all, by design, not pending activation.
 
-## Why this is a separate, later step
+## The topology, precisely
 
-`web-plan` renders the committed `k8s/web` declare-only tree (`kubectl
-kustomize`, nothing else) and validates it against its own jq/yq contract,
-entirely offline (no kubeconfig, no cluster, no Tofu state credential, and no
-reach into the reviewed `web-release-*` candidate-promotion family — see the
-workflow's own header for why that boundary is deliberate). That makes it
-*useful* the moment it merges. It does **not** make it *safe to require* the
-moment it merges, for one hazard that is independent of this workflow's own
-correctness — a runner-roster gap:
+Two workflows, two runner classes, two roles:
 
-- `web-plan` runs on `tinyland-nix`, the same GF cache-fronted ARC class every
-  other private-runner workflow in this repository uses.
-- TIN-3902's roster (`config/organization.yaml`
-  `runner_contract.runner_group.selected_repository_ids`) currently
-  **excludes** this repository (id `1286829099`) from that runner group.
-  DRAFT PR #116 (`ci/tin-3914-self-hosted-validate`) is the chain that would
-  admit it, and it is explicitly **HELD** pending the operator's admission
-  ruling.
-- The live branch ruleset today (`main-reviewed-hosted-validate`, id
-  `20930684`) requires exactly one status check: `validate`
-  (`.github/workflows/validate.yml`, which deliberately still runs on a
-  GitHub-hosted `ubuntu-24.04` runner precisely so it can never be starved).
-  See `gh api repos/Great-Falls-Tool-Bus/great-falls-tool-bus-infra/rulesets/20930684`.
+| | `validate.yml` `validate` job | `web-plan.yml` `web-plan` job |
+|---|---|---|
+| Runner | `ubuntu-24.04` (GitHub-hosted) | `tinyland-nix` (GF cache-fronted ARC, self-hosted) |
+| Triggers | `pull_request` (unfiltered), `push` to `main`, `workflow_dispatch` | `pull_request` (path-filtered, PR #110 job-gate skips the body), `push` to `main` (path-filtered), `workflow_dispatch` |
+| Runs on an untrusted PR? | Yes — always has; this is the repo's declared PR validation authority (PR #110's own commit message) | No — the job body only executes on `push`/`workflow_dispatch`, exactly like the other seven self-hosted workflows in this repo |
+| Carries the web-stack render? | Yes, as of round 3 — an additional step after `just check-hosted`, using the same `web-stack-render` recipe | Yes — this is where the render was born; still the source of truth for the recipe and its residual-list wording |
+| Reported check name | `validate` (already required — `main-reviewed-hosted-validate`, ruleset id `20930684`) | `web-plan` (**not required, never will be as designed** — see below) |
+| Secrets / `environment:` | None | None |
 
-If `web-plan` were added to that ruleset's `required_status_checks` **before**
-this repository is admitted to the `tinyland-nix` runner group, every future
-PR would produce a required check that can never be claimed by a runner.
-GitHub shows that state as `web-plan` sitting `Queued` forever — an
-honestly-labeled state, not a silent failure, but a **permanently red gate**
-all the same, because a required check that never completes blocks every
-merge exactly as hard as one that fails. That is precisely the freeze PR #116
-warns about for `validate`, and this document exists so `web-plan` does not
-repeat it.
+**PR-side coverage is complete today, requires no activation, and freezes
+nothing.** `validate.yml`'s `validate` job already runs, unfiltered, on
+every `pull_request`, and it is already the sole required status check on
+this branch's ruleset. The round-3 addition — a "Detect web-stack path
+relevance" step (wording only, never gates execution) followed by an
+always-executing "Render web stack plan" step — rides that existing,
+already-required job. There is no `skipped`-satisfies-required hazard here
+(the step can be skipped-in-wording without ever skipping-in-fact; the job
+itself, and therefore the `validate` check, always actually runs and always
+reports a real conclusion), and there is no path-filter freeze hazard either
+(`validate.yml` has never been path-filtered).
 
-### Path-coverage rationale (why this hazard, and only this one, is what's left)
+**`web-plan.yml`'s own `web-plan` check is, and will remain, NOT a required
+status check — this is a design decision, not a pending activation.** It
+cannot meaningfully be one: the job is job-gated to `push`/`workflow_dispatch`
+(the restored PR #110 invariant), so on a PR it only ever reports `skipped`
+— exactly like `web-crs.yml`'s existing `validate` job (declare-only) does
+today, and exactly why *that* job was never required either. Adding a
+`skipped`-only check to a required-status list would be pure rubber-stamp
+theater, not enforcement, so it is never added. `web-plan.yml`'s actual role
+is the rung-2 "main-side honesty" record the truth docs describe (*"every
+push to main renders the exact plan... and posts a required status"* —
+satisfied by the fact that a check DOES post on every push to main, visible
+in the Checks tab and as a workflow artifact; "required" in the ruleset
+sense was always about blocking merges, which is `validate.yml`'s job, not
+this one's).
 
-An earlier version of `web-plan.yml` path-filtered its `pull_request` trigger
-and job-gated execution to trusted push/dispatch events only. Adversarial
-review (PR #127, comment 5377515480) found that design **independently
-broken as a required-status check**, for reasons that have nothing to do with
-runner starvation: (a) a PR touching none of the five watched paths never
-dispatched the workflow at all, so a required check would sit at "Expected —
-waiting for status to be reported" forever — 13 of the last 30 commits on
-`main` at review time touched none of them; (b) on a PR that *did* match, the
-job-level `if:` skipped the job body, and GitHub counts a `skipped`
-conclusion as **satisfying** a required check — so the original design would
-have blocked the PRs it should pass and rubber-stamped the ones it should
-actually check.
+## If this topology ever needs to change
 
-That defect is fixed in the workflow itself, not here: `web-plan.yml` now
-triggers on every `pull_request` and every `push` to `main`, unfiltered, and
-the job always runs and always reports a real `web-plan` conclusion. Path
-relevance is detected *inside* the job (the "Detect changed web-stack paths"
-step) and only gates whether the render/validate step executes — an
-irrelevant change gets a real, reported "no web-stack paths touched" green,
-never a `skipped` conclusion and never a silently-never-dispatched one. That
-means the ONLY remaining reason `web-plan` cannot be required yet is the
-runner-roster gap above — the check-semantics hazard is closed, the
-starvation hazard is not, and the two preconditions below test only the
-latter.
-
-## Preconditions (both must be true before you touch the ruleset)
-
-1. **Roster admission landed.** PR #116's chain has merged, and
-   `config/organization.yaml`'s `runner_contract.runner_group.selected_repository_ids`
-   carries `1286829099` with its required `infra_repo_admission_ruling:`
-   field (`scripts/validate-runner-group-contract.py` enforces the field's
-   presence for exactly that id). Confirm with:
-
-   ```sh
-   just runner-group-contract
-   ```
-
-2. **Scheduling actually works, not just the config.** Roster admission is a
-   GitHub org-settings roster; it does not, by itself, prove a job on
-   `tinyland-nix` will actually be claimed by a runner for *this* repository.
-   Before requiring `web-plan`, manually dispatch it at least once after
-   admission lands and confirm it completes (not just "starts") — the
-   workflow always renders on `workflow_dispatch` regardless of path
-   relevance, so this exercises the same runner-claim path a real PR would:
-
-   ```sh
-   gh workflow run web-plan.yml --repo Great-Falls-Tool-Bus/great-falls-tool-bus-infra
-   gh run list --repo Great-Falls-Tool-Bus/great-falls-tool-bus-infra --workflow=web-plan.yml --limit 1
-   ```
-
-   A `Queued` run that never transitions to `In progress` means the roster
-   change has not actually resolved scheduling for this repository — do not
-   proceed to the ruleset change until a real run completes. (You do not
-   additionally need to test a PR against a web-stack path specifically —
-   that was only a distinct concern under the old, now-fixed path-filtered
-   design.)
-
-## Activation step (operator-only, GitHub UI path — preferred)
-
-1. GitHub → this repository → **Settings → Rules → Rulesets** →
-   `main-reviewed-hosted-validate`.
-2. Under the **Require status checks to pass** rule, add `web-plan` to the
-   existing `validate` requirement (do not remove `validate` — it stays the
-   hosted, always-schedulable fallback check). GitHub's picker lists checks
-   that have run at least once, which is why the manual dispatch in
-   precondition 2 must happen first.
-3. Save. The ruleset's `updated_at` timestamp is the activation record; no
-   separate ticket is required, but note the change in the program board.
-
-## Activation step (scripted alternative)
-
-The ruleset API takes the full `required_status_checks` array, not a diff, so
-read the current ruleset first and splice in the new entry rather than
-hand-writing the whole body from scratch. Do this in one sitting close to the
-GitHub UI verification step below — the rulesets API has no ETag/If-Match
-concurrency guard, so a concurrent ruleset edit by anyone else between the GET
-and the PUT is last-write-wins and would be silently discarded by this script.
-
-```sh
-export GH_TOKEN=$(cat "$GH_TOKEN_FILE" | tr -d '\n')
-gh api repos/Great-Falls-Tool-Bus/great-falls-tool-bus-infra/rulesets/20930684 \
-  > /tmp/main-ruleset-current.json
-
-# Look up web-plan's own integration_id (the app that posted its check runs)
-# from a recent completed run, rather than guessing or copying validate's
-# 15368 (a DIFFERENT GitHub App / check source). Run precondition 2's manual
-# dispatch first so a `web-plan` check run actually exists to look up.
-web_plan_sha="$(gh run list --repo Great-Falls-Tool-Bus/great-falls-tool-bus-infra \
-  --workflow=web-plan.yml --status=completed --limit 1 --json headSha --jq '.[0].headSha')"
-web_plan_integration_id="$(gh api "repos/Great-Falls-Tool-Bus/great-falls-tool-bus-infra/commits/${web_plan_sha}/check-runs" \
-  --jq '.check_runs[] | select(.name == "web-plan") | .app.id' | head -n1)"
-test -n "${web_plan_integration_id}" || { echo "no completed web-plan check run found; run precondition 2 first" >&2; exit 1; }
-
-python3 - "${web_plan_integration_id}" <<'PY'
-import json
-import sys
-
-integration_id = int(sys.argv[1])
-
-with open("/tmp/main-ruleset-current.json") as fh:
-    ruleset = json.load(fh)
-
-target_rule = next(
-    (rule for rule in ruleset["rules"] if rule["type"] == "required_status_checks"),
-    None,
-)
-if target_rule is None:
-    raise SystemExit(
-        "no required_status_checks rule found on ruleset 20930684 -- "
-        "the ruleset shape changed since this script was written; do not "
-        "silently PUT an unmodified body, stop and re-check by hand"
-    )
-
-contexts = target_rule["parameters"]["required_status_checks"]
-if not any(c["context"] == "web-plan" for c in contexts):
-    contexts.append({"context": "web-plan", "integration_id": integration_id})
-
-with open("/tmp/main-ruleset-patched.json", "w") as fh:
-    json.dump(
-        {
-            "name": ruleset["name"],
-            "target": ruleset["target"],
-            "enforcement": ruleset["enforcement"],
-            "conditions": ruleset["conditions"],
-            "bypass_actors": ruleset["bypass_actors"],
-            "rules": ruleset["rules"],
-        },
-        fh,
-    )
-PY
-
-gh api --method PUT \
-  repos/Great-Falls-Tool-Bus/great-falls-tool-bus-infra/rulesets/20930684 \
-  --input /tmp/main-ruleset-patched.json
-rm -f /tmp/main-ruleset-current.json /tmp/main-ruleset-patched.json
-```
-
-Verify immediately afterward with
-`gh api repos/Great-Falls-Tool-Bus/great-falls-tool-bus-infra/rulesets/20930684`
-and confirm `required_status_checks` now lists both `validate` (unchanged,
-`integration_id: 15368`) and `web-plan` (its own, looked-up `integration_id`),
-and that `bypass_actors` still matches the pre-edit GET.
+- **If DRAFT PR #120 (TIN-3914 Phase B) migrates `validate.yml` onto
+  `tinyland-nix`:** the web-stack render step moves with it automatically —
+  no separate migration needed, since it already lives inside that job. At
+  that point PR #120's own review is the place to re-confirm the PR-content
+  execution tradeoff, because the migration changes what runner class
+  untrusted PR content touches for the *entire* validate lane, not just this
+  render (a strictly larger question than this document's scope).
+- **If `web-plan.yml`'s own roster exclusion (TIN-3902,
+  `config/organization.yaml:94-103`) is ever lifted (PR #116, currently
+  HELD):** that only means the push-to-main render actually gets a runner
+  promptly instead of sitting `Queued`. It does not change whether
+  `web-plan`'s check should be required — it still shouldn't, for the reason
+  above, independent of runner availability.
+- **If someone proposes making `web-plan.yml` run on untrusted PRs again to
+  get a distinct `web-plan` required context:** re-read comment 5377613179
+  first. The specific, proven failure mode was `kubectl kustomize`'s
+  remote-resource fetch; `scripts/guard-no-remote-kustomize-resources.sh`
+  closes that one vector, but the PR #110 control is about the runner CLASS
+  (shared substrate with real kubeconfigs and the Tofu state backend), not
+  about any single script's specific behavior, and a guard closing one known
+  vector is not evidence there is no other one.
 
 ## What this does not authorize
 
-Activating `web-plan` as a required check changes only what blocks a merge; it
-does not add a Tofu plan surface, a kubeconfig, or any apply path. The
-`web-release-*` chain's attended-apply gate (`_operator-apply-confirm`,
+None of the above adds a Tofu plan surface, a kubeconfig, or any apply path.
+The `web-release-*` chain's attended-apply gate (`_operator-apply-confirm`,
 `_reviewed-clean-main`, the promotion interlock) is entirely unchanged by
-this document or by the workflow it activates.
+this document or by either workflow it describes.

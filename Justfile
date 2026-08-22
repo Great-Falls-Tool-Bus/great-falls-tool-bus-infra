@@ -2187,7 +2187,21 @@ web-stack-validate:
 # prunes two legacy egress NetworkPolicies at apply time -- that is an
 # apply-time-only concern, not a render residual: those two objects are not
 # in the committed tree at all, so this render never carries them either.)
+#
+# Runs the standalone remote-resource guard
+# (scripts/guard-no-remote-kustomize-resources.sh, added after adversarial
+# review PR #127 comment 5377613179 proved `kubectl kustomize` fetches remote
+# `resources`/`bases`/`components`/`generators` entries over the network with
+# no flag required -- a PR-controlled kustomization tree gets an outbound
+# connection attempt from this recipe otherwise) directly, as a plain script
+# call -- NOT via a `web-stack-validate` Just dependency, because that
+# recipe's own success message would print onto this recipe's stdout ahead of
+# the YAML, corrupting every caller that captures `just web-stack-render` as
+# a pure render (the workflow does exactly that). The guard script itself is
+# silent on success and calls no `just` recipe, so this stays outside the
+# web-release-* closure exactly as before.
 web-stack-render:
+    bash scripts/guard-no-remote-kustomize-resources.sh {{ web_stack_dir }}
     kubectl kustomize {{ web_stack_dir }}
 
 # Operator-supplied cutover inputs (attended env; never baked, and since

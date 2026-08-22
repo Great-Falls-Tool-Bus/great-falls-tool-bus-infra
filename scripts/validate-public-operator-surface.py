@@ -591,8 +591,12 @@ WEB_RELEASE_VALIDATION_SCRIPT = Path("scripts/validate-web-stack.sh")
 # greatfallstoolbus.org adapter-node repository, so its bytes and this pinned
 # digest both changed together in the same PR (`shasum -a 256
 # scripts/validate-web-stack.sh`).
+# Updated again 2026-08-21 (rung 2 round 3, PR #127 comment 5377613179):
+# validate-web-stack.sh now calls scripts/guard-no-remote-kustomize-resources.sh
+# before its own `kubectl kustomize` call, so its bytes and this pinned digest
+# changed together in the same PR (same recompute command as above).
 WEB_RELEASE_VALIDATION_SCRIPT_SHA256 = _receipt(
-    "0403613fcff0ee80", "3794d6b4d2bb324c", "8360bd836e0be3e8", "fb2f28024f9f6b6a"
+    "7d13f730f24e7b31", "93865cabaff19808", "1e5f17d710adda02", "e1aefe7ba2ecfc84"
 )
 
 FLAKE_RELEASE_PACKAGES = ("crane", "curl")
