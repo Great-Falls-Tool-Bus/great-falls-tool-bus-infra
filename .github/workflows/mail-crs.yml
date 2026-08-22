@@ -1,6 +1,6 @@
 name: Mail CRs
 
-# TIN-2379: tenant-owned MailDomain/MailAccount CRs for latoolb.us. Hosted
+# TIN-2379: tenant-owned MailDomain/MailAccount CRs for latoolb.us. The
 # Validate Overlay covers pull requests; this private-runner validation runs on
 # trusted pushes and manual dispatches. Live server dry-run/apply is protected by the
 # `mail` environment kubeconfig.

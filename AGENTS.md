@@ -1,8 +1,10 @@
 # great-falls-tool-bus-infra Agent Guidance
 
 This repository is the public Great-Falls-Tool-Bus (GFTB) organization
-implementation overlay for GloriousFlywheel. Secret-free validation may run on
-GitHub-hosted runners; credentials and apply authority remain operator-owned.
+implementation overlay for GloriousFlywheel. Validation is secret-free and, per
+the 2026-08-19 operator ruling (TIN-3914), runs on the GF cache-fronted ARC
+fleet -- GitHub-hosted runners are not permitted anywhere in this org.
+Credentials and apply authority remain operator-owned.
 
 Hard rules:
 
@@ -14,8 +16,22 @@ Hard rules:
   whose external state still requires readback or a reviewed retirement plan
 - do not introduce repo-specific or org-identity runner labels
 - keep runner labels capability-shaped and aligned with GloriousFlywheel;
-  self-hosted workflows request shared `tinyland-*` labels only. The public
-  validation workflow uses a GitHub-hosted runner
+  workflows request shared `tinyland-*` labels only. No workflow in this
+  repository may name a GitHub-hosted label (`ubuntu-*`, `macos-*`,
+  `windows-*`) in `runs-on:` (TIN-3914). The `check-hosted` Just recipe keeps
+  its name for compatibility; it now means "the checks CI runs", not "the
+  checks a GitHub-hosted runner runs"
+- ADMISSION HOLD RESOLVED (PR #128, operator ruling 2026-08-22, TIN-3914):
+  this repository joined the `great-falls-tool-bus-infra` runner group's
+  roster (see the roster rule below), so the `validate` workflow may request
+  `tinyland-nix`. `validate` is the single required status check on `main`
+  and, unlike every other self-hosted workflow here, runs unfiltered on
+  every `pull_request` with no trusted-event gate (by design — a required
+  check must run on every PR); its compensating control is staying
+  secret-free rather than event-gated. That is a standing invariant, not a
+  one-time review note: any future change to `validate.yml` that adds a
+  credential or a protected `environment:` would need its own review against
+  this exception
 - ARC registration for this org is org-scoped
   (`https://github.com/Great-Falls-Tool-Bus`); do not add repo-scoped
   registration anchors. Org-scoped registration does not override the

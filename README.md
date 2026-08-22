@@ -24,9 +24,12 @@ Grounded mermaid diagrams (mail flow, network/ports, planes, Bazel/GF) live in
 - ARC registration: `https://github.com/Great-Falls-Tool-Bus` (org-scoped, no
   repo anchors)
 - Cluster context: `honey`; shared ARC controller owner: Tinyland overlay
-- Self-hosted workflow labels: shared `tinyland-*` capability labels. ONLY
-  `tinyland-nix` is provisioned for this org today; the public repository's
-  secret-free `validate` job runs on GitHub-hosted infrastructure instead.
+- Workflow labels: shared `tinyland-*` capability labels. ONLY `tinyland-nix`
+  is provisioned for this org today. Per the 2026-08-19 operator ruling
+  (TIN-3914) no workflow here may name a GitHub-hosted label; the secret-free
+  `validate` job requests `tinyland-nix` like everything else -- see the
+  runner-group admission note below for why it's the one job here that runs
+  unfiltered on every `pull_request`.
 - Scale set: `great-falls-tool-bus-nix` (ARC registration identity only;
   workflows use `runs-on: tinyland-nix`)
 - Runner group: `great-falls-tool-bus-infra` (TIN-3902). GitHub-side admission
@@ -147,8 +150,10 @@ operation (members, moderation, settings, stack) in
 
 ## Bootstrap (read first)
 
-Secret-free pull-request validation runs on a GitHub-hosted runner and does not
-depend on ARC admission. Cluster plans and applies remain operator-local; the
+Secret-free pull-request validation runs on `tinyland-nix` (TIN-3914) and
+therefore depends on this repository's ARC runner-group admission -- see the
+note below on why this is the one job here left `pull_request`-unfiltered.
+Cluster plans and applies remain operator-local; the
 first ARC plan and apply run from the operator machine (kubectl context
 `honey`). See
 [docs/implementation-overlay.md](docs/implementation-overlay.md) for the
@@ -201,11 +206,24 @@ core-read-credential row; do not provision a key solely to satisfy that row.
 secret rotation remains a separate operator-local action through
 `just arc-app-secret-apply`; it is not part of ARC state plan/apply.
 
-Hosted `validate` is self-contained and does not fetch the private
+`validate` is self-contained and does not fetch the private
 `tinyland-inc/GloriousFlywheel` repository. Source-dependent ARC module
-validation remains operator-local against an exact reviewed checkout. The
-legacy self-hosted workflow declarations retain exact pins but are not the
-required hosted validation authority; see [CI Credentials](docs/ci-credentials.md).
+validation remains operator-local against an exact reviewed checkout. The other
+workflow declarations retain exact pins but are not the required validation
+authority; see [CI Credentials](docs/ci-credentials.md).
+
+ADMISSION HOLD RESOLVED (TIN-3914, PR #128, operator ruling 2026-08-22):
+`validate` requests `tinyland-nix`. For this org that label is published only
+by the `great-falls-tool-bus-nix` scale set, which binds to the
+`great-falls-tool-bus-infra` runner group; this repository (id `1286829099`)
+joined that group's roster in `config/organization.yaml` with the required
+`infra_repo_admission_ruling:` field. `validate` is also the only required
+status check in the `main` ruleset, and the one job in this repository that
+runs unfiltered on every `pull_request` with no trusted-event gate (every
+other self-hosted workflow here either carries the PR #110 gate or declares
+no `pull_request` trigger at all) -- its compensating control is staying
+secret-free, not event-gated. See `config/organization.yaml`'s
+`runner_group` comment for the full standing-invariant rationale.
 
 There is no ARC plan/apply workflow and no repository ARC kubeconfig. The
 guarded Just recipes, an external operator-owned mode-0600 kubeconfig, and

@@ -1,6 +1,6 @@
 name: Edge Zone Stack
 
-# TIN-2378 prep + TIN-2385 implementation: hosted Validate Overlay covers pull
+# TIN-2378 prep + TIN-2385 implementation: the Validate Overlay covers pull
 # requests; this private-runner job plans trusted pushes and manual dispatches
 # for tofu/stacks/edge (console-created zones, zone-scoped token), with apply
 # only via manual workflow_dispatch action=apply. The job binds to the protected `edge`
