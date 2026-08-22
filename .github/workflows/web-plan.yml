@@ -1,0 +1,184 @@
+name: Web Stack Plan (rung 2)
+
+# Rung 2 (org-standard-cd-pattern-truth-20260821.md sec 4.1; devenv-gitops-
+# truth-20260821.md Q2 option B). Ratification basis: operator interview
+# 2026-08-21 (session register L71 Q2 = rungs 1+2; L73 = rung 2 builds AND
+# merges on the truth-doc basis, not gated on meta ADR 0020).
+#
+# WHAT THIS DOES: on every push to main (and, for visibility, on pull
+# requests touching the web stack -- see the job-level `if:` below), render
+# the committed k8s/web declare-only tree (`just web-stack-render`, a plain
+# `kubectl kustomize`, nothing else) and validate it against the same
+# jq/yq contract the tree must already pass (`just web-stack-validate`,
+# already wired into web-crs.yml). Both outputs are published as a step
+# summary and a workflow artifact, so every push to main gets a computed,
+# reviewable answer to "what does the tree currently declare".
+#
+# WHAT THIS DELIBERATELY DOES NOT DO, and why: it does not call
+# `web-release-render` / `web-release-plan` / `web-release-candidate-proof`
+# or any other member of the reviewed web-release-* candidate-promotion
+# family, and `web-stack-render` calls no `just` recipe at all so it cannot
+# reach that family even transitively. That family is where the real
+# per-release inputs live (the GHCR candidate digest, the source-sha
+# annotation, the synthesized default-deny-egress NetworkPolicy) and
+# `scripts/validate-public-operator-surface.py`
+# (`WEB_RELEASE_OPERATOR_LOCAL_ROOTS`, the `workflow-arc-operator-recipe` /
+# `web-release-unreceipted-operator-wrapper` checks) already enforces, as a
+# pre-existing and unmodified rule, that NO GitHub workflow in this
+# repository -- hosted or self-hosted, this one included -- may reach it.
+# That rule predates this change and exists so no CI code path is ever one
+# step from `web-release-apply`; rung 2 is built to respect that boundary,
+# not to get a reviewed exception carved into it. The practical honesty this
+# buys: since rung 1 (deployment.yaml's "TREE HONESTY" fix) the committed
+# tree already matches web-release-render's own contract for every field
+# except the two it still names as ceremony-only residuals (the source-sha
+# annotation and the synthesized default-deny-egress NetworkPolicy, plus
+# pruning the two legacy egress NetworkPolicies) -- so this render is CLOSE
+# to, but is not, the exact apply-time bytes. Say so plainly wherever this
+# output is consumed; the true apply-time bytes are visible only via the
+# attended `web-release-plan`'s own output, exactly as designed. There is
+# also no Tofu stack for the k8s/web workload at all (tofu/stacks holds only
+# arc-runners/edge/edge-dns), so there is no `-detailed-exitcode` tofu plan
+# to run here either -- this offline kustomize render/validate pair is the
+# complete plan surface this stack has.
+#
+# NOTHING APPLIES, NOTHING IS CONTACTED. This job touches no kubeconfig, no
+# cluster, no registry, and no Tofu state backend. No environment secret is
+# requested, so this workflow binds no protected `environment:` at all --
+# strictly less than every other private-runner workflow in this repo needs.
+#
+# ENFORCEMENT IS DECLARE-ONLY. This workflow is REAL -- it renders and
+# validates on every trusted push to main -- but it is NOT wired into the
+# branch ruleset as a required status check by this change. See
+# docs/runbooks/web-plan-required-status-activation.md for why and for the
+# exact operator step that flips it on later.
+#
+# RUNNER REALITY (read before assuming green means it ran): this job targets
+# `tinyland-nix`, the same GF cache-fronted ARC class every other private-
+# runner workflow in this repo uses -- never a GitHub-hosted `ubuntu-*`
+# runner. TIN-3902's roster (config/organization.yaml
+# `runner_contract.runner_group.selected_repository_ids`) currently EXCLUDES
+# this repository (id 1286829099) from that runner group, and DRAFT PR #116
+# (the chain that would admit it) is HELD pending the operator's admission
+# ruling. Until that ruling lands, a run of this workflow has no runner to
+# claim it and the Checks tab will show `web-plan` sitting `Queued` --
+# GitHub's own honestly-labeled state for "no eligible runner", not a hidden
+# failure or a silent no-op. This is exactly why enforcement stays
+# declare-only: a `Queued`-forever job as a REQUIRED check would freeze every
+# merge to main. `concurrency.cancel-in-progress: false` below is deliberate
+# for the same reason rung 1 flipped it on k8s-stack-drift.yml/edge-drift.yml
+# (D6): with `cancel-in-progress: true`, a starved queue produces a string of
+# runs cancelled-before-they-ever-started on every subsequent push, which
+# reads as ambiguous churn rather than the honest "queued, waiting on the
+# roster admission" state. `timeout-minutes` below bounds the OTHER failure
+# mode -- a run that IS claimed by a runner but then hangs -- so that case
+# fails loud with a clear timeout instead of holding the runner indefinitely.
+# GitHub Actions has no native short timeout for a job that is never claimed
+# at all (self-hosted queued jobs are only auto-cancelled at the platform's
+# ~24h ceiling); building a real watchdog for that specific case would
+# require a second job on a different runner class, and every such class
+# available to this org is either `tinyland-nix` itself (same failure mode)
+# or a GitHub-hosted `ubuntu-*` runner, which house policy (TIN-3914)
+# forbids outright. Stated here plainly rather than papered over with a
+# mechanism that doesn't actually exist.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/web-plan.yml"
+      - "Justfile"
+      - "k8s/web/**"
+      - "scripts/validate-web-stack.sh"
+      - "tofu/intent/great-falls-tool-bus/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/web-plan.yml"
+      - "Justfile"
+      - "k8s/web/**"
+      - "scripts/validate-web-stack.sh"
+      - "tofu/intent/great-falls-tool-bus/**"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-plan-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GF_CORE_REF: 2281b576bce0e8dd776a047b84e7464f5b508a62
+
+jobs:
+  web-plan:
+    name: web-plan
+    # Self-hosted ARC runner + arbitrary pull_request content is a real attack
+    # surface (this is a PUBLIC repository -- config/organization.yaml notes
+    # id 1286829099 stays off the runner-group roster partly *because*
+    # apply/drift workflows here are trusted-event-only). Mirrors web-crs.yml's
+    # existing `validate` job exactly: the workflow registers on
+    # `pull_request` so a PR visibly shows a `web-plan` check, but the job body
+    # only ever executes on a trusted push to main or an explicit manual
+    # dispatch. A PR run shows as skipped, not hidden.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: tinyland-nix
+    timeout-minutes: 15
+    steps:
+      - name: Checkout overlay
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          path: overlay
+          persist-credentials: false
+
+      - name: Checkout pinned GloriousFlywheel core
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: tinyland-inc/GloriousFlywheel
+          ref: ${{ env.GF_CORE_REF }}
+          path: GloriousFlywheel
+          persist-credentials: false
+
+      - name: Verify GloriousFlywheel core checkout
+        run: |
+          set -euo pipefail
+          actual="$(git -C GloriousFlywheel rev-parse --verify HEAD)"
+          if [ "${actual}" != "${GF_CORE_REF}" ]; then
+            echo "::error::GloriousFlywheel checkout mismatch: expected ${GF_CORE_REF}, got ${actual}"
+            exit 1
+          fi
+
+      - name: Render and validate the committed web stack (offline; no cluster, no credential)
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            export GF_CORE_PATH=../GloriousFlywheel
+            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            nix develop "${GF_CORE_CI_PATH}" -c just web-stack-validate
+            nix develop "${GF_CORE_CI_PATH}" -c just web-stack-render > web-plan-rendered.yaml
+            {
+              echo "## GFTB web stack plan (rung 2 -- committed-tree render, no cluster, no credential)"
+              echo ""
+              echo "This is the COMMITTED declare-only tree, not the reviewed"
+              echo "candidate-promotion ceremony's output -- see the workflow"
+              echo "header for the exact residual gap (source-sha annotation,"
+              echo "synthesized default-deny-egress NetworkPolicy)."
+              echo ""
+              echo '```yaml'
+              cat web-plan-rendered.yaml
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload plan artifact
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: gftb-web-stack-plan
+          path: overlay/web-plan-rendered.yaml
+          if-no-files-found: ignore
+          retention-days: 7

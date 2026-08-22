@@ -56,12 +56,11 @@ Three consequences are load-bearing and must not be discovered later:
    self-hosted `runs-on: tinyland-nix` jobs — `archive-stack.yml`,
    `edge-drift.yml`, `edge-plan.yml`, `flywheel-cache-proof.yml`,
    `form-crs.yml`, `k8s-stack-drift.yml`, `list-crs.yml`, `mail-crs.yml`,
-   `web-crs.yml`, `web-stack.yml` — will not be admitted after the cutover.
+   `web-crs.yml`, `web-plan.yml` — will not be admitted after the cutover.
    None of the ten can run on a fork pull request: eight carry a job-level
-   `if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'`
-   (`web-stack.yml` uses `workflow_dispatch` / `repository_dispatch`), and the
-   two drift lanes (`edge-drift.yml`, `k8s-stack-drift.yml`) declare only
-   `schedule` + `workflow_dispatch` triggers. The hosted `validate.yml` job
+   `if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'`,
+   and the two drift lanes (`edge-drift.yml`, `k8s-stack-drift.yml`) declare
+   only `schedule` + `workflow_dispatch` triggers. The hosted `validate.yml` job
    already runs on `ubuntu-24.04`, so no PR gate depends on this. What the
    cutover does cost is the scheduled drift lanes and the push/dispatch
    validate+apply lanes in this repository; they must be re-homed or accepted

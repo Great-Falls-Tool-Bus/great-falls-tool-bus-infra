@@ -2158,6 +2158,32 @@ web_stack_ns := "greatfallstoolbus-org-production"
 web-stack-validate:
     bash scripts/validate-web-stack.sh {{ web_stack_dir }}
 
+# Rung 2 (org-standard-cd-pattern-truth-20260821.md sec 4.1 -- "great-falls-
+# tool-bus-infra: no preview needed; wire the existing <stack>-plan ...
+# recipes as PR-required statuses. That IS rung 2 for the overlay." --
+# ratification basis: operator interview 2026-08-21, register L71 Q2 = rungs
+# 1+2, L73). Render the COMMITTED declare-only tree to stdout: kustomize only,
+# nothing else. This is deliberately NOT web-release-render: it takes no
+# WEB_APPLY_IMAGE/WEB_APPLY_SHA, resolves no GHCR candidate, injects no
+# source-sha annotation, and synthesizes no default-deny-egress NetworkPolicy.
+# It calls no `just` recipe at all, so it cannot reach -- directly or
+# transitively -- any member of the web-release-* reviewed candidate-
+# promotion family (scripts/validate-public-operator-surface.py
+# WEB_RELEASE_OPERATOR_LOCAL_ROOTS): that family stays exactly what TIN-3899 /
+# decisions/0016 made it, attended-operator-only and unreachable from every
+# CI workflow, and this recipe is written to stay outside its closure by
+# construction rather than by a validator exemption. Since rung 1
+# (deployment.yaml's "TREE HONESTY" fix) the committed tree already matches
+# web-release-render's own contract for every field except the two it still
+# names as ceremony-only residuals -- the per-release source-sha annotation
+# and the synthesized default-deny-egress NetworkPolicy (plus pruning the two
+# legacy egress NetworkPolicies) -- so this render is close to, but not
+# byte-identical with, what the attended ceremony would apply. Say that
+# honestly in anything that consumes this output; do not call it "the exact
+# apply-time bytes".
+web-stack-render:
+    kubectl kustomize {{ web_stack_dir }}
+
 # Operator-supplied cutover inputs (attended env; never baked, and since
 # TIN-3899 never workflow-delivered either):
 #   WEB_APPLY_KUBECONFIG  path to the materialized namespace-scoped SA kubeconfig

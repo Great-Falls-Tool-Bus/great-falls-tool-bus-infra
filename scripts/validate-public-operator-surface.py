@@ -132,6 +132,7 @@ HOSTED_WORKFLOW_JUST_ALLOWLIST = {
     "mail-cr-server-dry-run",
     "mail-cr-validate",
     "web-stack-drift-check",
+    "web-stack-render",
     "web-stack-validate",
 }
 
