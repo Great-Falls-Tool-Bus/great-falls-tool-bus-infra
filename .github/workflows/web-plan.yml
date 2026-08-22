@@ -172,9 +172,6 @@ concurrency:
   group: web-plan-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  GF_CORE_REF: 2281b576bce0e8dd776a047b84e7464f5b508a62
-
 jobs:
   web-plan:
     name: web-plan
@@ -194,59 +191,69 @@ jobs:
           path: overlay
           persist-credentials: false
 
-      - name: Checkout pinned GloriousFlywheel core
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          repository: tinyland-inc/GloriousFlywheel
-          ref: ${{ env.GF_CORE_REF }}
-          path: GloriousFlywheel
-          persist-credentials: false
-
-      - name: Verify GloriousFlywheel core checkout
+      # No GloriousFlywheel core checkout, deliberately (post-roster-admission
+      # diagnosis: GloriousFlywheel is a PRIVATE repository, and the default
+      # GITHUB_TOKEN scoped to THIS repo has no cross-repo read access to it --
+      # every self-hosted workflow that checks it out unauthenticated, or
+      # curls its raw content unauthenticated, now fails with "Repository not
+      # found" the moment it actually gets a runner, which the roster
+      # exclusion had masked until tonight's admission (run 32578669722,
+      # web-crs.yml run 32573658211, flywheel-cache-proof.yml run 32578597531
+      # all fail the identical way). Rather than add a credential to work
+      # around that, this recipe never needed the core checkout in the first
+      # place: `web-stack-validate`/`web-stack-render` are plain
+      # kustomize+yq+jq+kubectl, and this repo's OWN `flake.nix` devshell
+      # already provides all of them directly (verified: `validate.yml`'s
+      # hosted PR-side render step already runs `nix develop .` -c just
+      # web-stack-render` with zero GloriousFlywheel involvement and passes).
+      # The `./GloriousFlywheel/.github/actions/nix-job` composite action
+      # this step used to route through exists to bootstrap Nix on a runner
+      # that might not have it and to wire the Attic build cache; neither is
+      # needed here -- `tinyland-nix` self-hosted runners ship Determinate
+      # Nix already, and this render/validate pair is too small for the cache
+      # to matter. This is strictly simpler and has one less moving part
+      # (and one less private-repo dependency) than every other self-hosted
+      # workflow in this repo, not a regression relative to them.
+      - name: Render and validate the committed web stack (offline; no cluster, no credential)
         run: |
           set -euo pipefail
-          actual="$(git -C GloriousFlywheel rev-parse --verify HEAD)"
-          if [ "${actual}" != "${GF_CORE_REF}" ]; then
-            echo "::error::GloriousFlywheel checkout mismatch: expected ${GF_CORE_REF}, got ${actual}"
+          for nixbin in /nix/var/nix/profiles/default/bin "${HOME}/.nix-profile/bin"; do
+            if [ -d "${nixbin}" ]; then
+              export PATH="${nixbin}:${PATH}"
+            fi
+          done
+          if ! command -v nix >/dev/null 2>&1; then
+            echo "::error::nix is required on the tinyland-nix runner (expected preinstalled Determinate Nix)."
             exit 1
           fi
-
-      - name: Render and validate the committed web stack (offline; no cluster, no credential)
-        uses: ./GloriousFlywheel/.github/actions/nix-job
-        with:
-          push-cache: "false"
-          command: |
-            set -euo pipefail
-            cd overlay
-            export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
-            nix develop "${GF_CORE_CI_PATH}" -c just web-stack-validate
-            nix develop "${GF_CORE_CI_PATH}" -c just web-stack-render > web-plan-rendered.yaml
-            image="$(nix develop "${GF_CORE_CI_PATH}" -c yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "greatfallstoolbus-org") | .image' web-plan-rendered.yaml)"
-            {
-              echo "## GFTB web stack plan (rung 2 -- committed-tree render, no cluster, no credential)"
-              echo ""
-              echo "This is the COMMITTED declare-only tree, not the reviewed"
-              echo "candidate-promotion ceremony's output. The ceremony still"
-              echo "supplies three things this render cannot, in order of"
-              echo "consequence:"
-              echo ""
-              echo "1. **The per-release container image digest** -- the field"
-              echo "   that decides what code production actually runs. This"
-              echo "   render shows the digest currently committed to main"
-              echo "   (below); it is NOT necessarily what the next release"
-              echo "   ceremony will pin."
-              echo "2. The per-release \`app.tinyland.dev/source-sha\` annotation."
-              echo "3. The synthesized \`default-deny-egress\` NetworkPolicy."
-              echo ""
-              echo "**Committed image digest:** \`${image}\`"
-              echo ""
-              echo "See the workflow header for the full explanation."
-              echo ""
-              echo '```yaml'
-              cat web-plan-rendered.yaml
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
+          cd overlay
+          nix develop . -c just web-stack-validate
+          nix develop . -c just web-stack-render > web-plan-rendered.yaml
+          image="$(nix develop . -c yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "greatfallstoolbus-org") | .image' web-plan-rendered.yaml)"
+          {
+            echo "## GFTB web stack plan (rung 2 -- committed-tree render, no cluster, no credential)"
+            echo ""
+            echo "This is the COMMITTED declare-only tree, not the reviewed"
+            echo "candidate-promotion ceremony's output. The ceremony still"
+            echo "supplies three things this render cannot, in order of"
+            echo "consequence:"
+            echo ""
+            echo "1. **The per-release container image digest** -- the field"
+            echo "   that decides what code production actually runs. This"
+            echo "   render shows the digest currently committed to main"
+            echo "   (below); it is NOT necessarily what the next release"
+            echo "   ceremony will pin."
+            echo "2. The per-release \`app.tinyland.dev/source-sha\` annotation."
+            echo "3. The synthesized \`default-deny-egress\` NetworkPolicy."
+            echo ""
+            echo "**Committed image digest:** \`${image}\`"
+            echo ""
+            echo "See the workflow header for the full explanation."
+            echo ""
+            echo '```yaml'
+            cat web-plan-rendered.yaml
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload plan artifact
         if: always()
