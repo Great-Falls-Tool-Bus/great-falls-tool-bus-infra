@@ -63,6 +63,7 @@ jobs:
           repository: tinyland-inc/GloriousFlywheel
           ref: ${{ env.GF_CORE_REF }}
           path: GloriousFlywheel
+          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
           persist-credentials: false
       - name: Verify GloriousFlywheel core checkout
         run: |
@@ -80,7 +81,7 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            export GF_CORE_CI_PATH="path:${GF_CORE_PATH}#ci"
             nix develop "${GF_CORE_CI_PATH}" -c just list-stack-validate
 
   server:
@@ -110,6 +111,7 @@ jobs:
           repository: tinyland-inc/GloriousFlywheel
           ref: ${{ env.GF_CORE_REF }}
           path: GloriousFlywheel
+          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
           persist-credentials: false
       - name: Verify GloriousFlywheel core checkout
         run: |
@@ -142,7 +144,7 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            export GF_CORE_CI_PATH="path:${GF_CORE_PATH}#ci"
             if [ -n "${KUBERNETES_SERVICE_HOST:-}" ]; then
               cluster_name="$(nix develop "${GF_CORE_CI_PATH}" -c kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" config view --minify -o jsonpath='{.contexts[0].context.cluster}')"
               nix develop "${GF_CORE_CI_PATH}" -c kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" config set-cluster "${cluster_name}" --server=https://kubernetes.default.svc >/dev/null
@@ -157,5 +159,5 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            export GF_CORE_CI_PATH="path:${GF_CORE_PATH}#ci"
             nix develop "${GF_CORE_CI_PATH}" -c just list-stack-apply

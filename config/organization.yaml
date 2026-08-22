@@ -205,6 +205,33 @@ runner_contract:
     # convergence program (mechanically-infallible main==prod), which is the
     # ruled fix vehicle — not by any approval-gate follow-up to this PR.
     #
+    # TIN-4015 (2026-08-22, infra PR #130): GloriousFlywheel went private,
+    # breaking every self-hosted workflow's unauthenticated core checkout the
+    # moment this admission gave them an actual runner. Nine workflows
+    # (archive-stack, edge-drift, edge-plan, flywheel-cache-proof, form-crs,
+    # k8s-stack-drift, list-crs, mail-crs, web-crs) now carry the repository
+    # secret `GF_CORE_DEPLOY_KEY` (read-only, `contents: read` on
+    # `tinyland-inc/GloriousFlywheel` only — docs/ci-credentials.md) on their
+    # core-repository checkout step. Stated plainly, not buried: this is the
+    # FIRST time a `push`-triggered job with no protected `environment:` in
+    # this repository carries a cross-repository credential — every credential
+    # before it (`MAIL_APPLY_KUBECONFIG_B64`, `WEB_APPLY_KUBECONFIG_B64`,
+    # `CLOUDFLARE_API_TOKEN_GFTB_ZONES`, `ARC_RUNNERS_RUSTFS_*`) sat behind a
+    # protected `environment:` (`mail`, `web-apply`, `edge`) and/or a
+    # `workflow_dispatch`-only gate. `GF_CORE_DEPLOY_KEY` sits behind neither —
+    # its containment is entirely the class (1)/(2) trigger gate (`if:
+    # github.event_name == 'push' || 'workflow_dispatch'`, or no
+    # `pull_request` trigger at all) this comment's three-class framing
+    # already covers, not an `environment:`. That framing's own text stays
+    # TRUE (no `if:`/`on:` changed by #130 — checked and re-checked by
+    # adversarial review), but its illustrative "credentialed ⇔
+    # `environment:`-protected" enumeration is now an undercount: seven
+    # `push`-triggered first-jobs carry a repository secret with no
+    # `environment:` at all. Acceptable — a push to `main` is post-merge and
+    # trusted, and TIN-3902/TIN-3914's public-repo-admission posture already
+    # accepted worse — but recorded here per the #116/#128 standing-record
+    # discipline rather than left implicit.
+    #
     # WARNING: with `allows_public_repositories: true` the roster below is the
     # ONLY control keeping a repository out — the public-repository flag is
     # not a second lock. Any future removal of id 1286829099 is equally an
