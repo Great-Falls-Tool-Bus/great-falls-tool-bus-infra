@@ -585,8 +585,13 @@ WEB_RELEASE_VALIDATION_CALLEE_DIGEST = _receipt(
     "482232ea1b2f080a", "aa86db3e695197c5", "61eb9b3fd8ca4210", "8643ac9e3e3ce0d2"
 )
 WEB_RELEASE_VALIDATION_SCRIPT = Path("scripts/validate-web-stack.sh")
+# Updated 2026-08-21 (rung 1 tree honesty): scripts/validate-web-stack.sh now
+# admits ghcr.io/great-falls-tool-bus/gftb-site instead of the retired legacy
+# greatfallstoolbus.org adapter-node repository, so its bytes and this pinned
+# digest both changed together in the same PR (`shasum -a 256
+# scripts/validate-web-stack.sh`).
 WEB_RELEASE_VALIDATION_SCRIPT_SHA256 = _receipt(
-    "c590e9770a4b133e", "9988ce74e3d837cf", "a3307f05a177b286", "d09d6675199c9a01"
+    "0403613fcff0ee80", "3794d6b4d2bb324c", "8360bd836e0be3e8", "fb2f28024f9f6b6a"
 )
 
 FLAKE_RELEASE_PACKAGES = ("crane", "curl")

@@ -19,30 +19,32 @@
 ## What this is
 
 The stack that serves the GFTB web app **fully on-cluster**, mirroring the proven
-MassageIthaca pattern: SvelteKit `adapter-node` → OCI image on GHCR →
-K8s `Deployment` behind a `ClusterIP` `Service` → in-cluster `cloudflared` tunnel
-edge (no Cloudflare Pages, no Vercel on the serving path). It began as the
+MassageIthaca pattern: the `gftb-site` SvelteKit `adapter-static` build served by
+Caddy → OCI image on GHCR → K8s `Deployment` behind a `ClusterIP` `Service` →
+in-cluster `cloudflared` tunnel edge (no Cloudflare Pages, no Vercel on the
+serving path). The Deployment/Service/NetworkPolicy stack itself began as the
 "DECLARE-ONLY skeleton note" of
-[`docs/decisions/0001-pr-gated-ephemeral-preview-deploys.md`](../../docs/decisions/0001-pr-gated-ephemeral-preview-deploys.md),
-was promoted to the executing cutover shape by ADR 0010, and is grounded in the
+[`docs/decisions/0001-pr-gated-ephemeral-preview-deploys.md`](../../docs/decisions/0001-pr-gated-ephemeral-preview-deploys.md)
+and was promoted to the executing cutover shape by ADR 0010, grounded in the
 TIN-2537 research brief
 (`docs/research/full-oncluster-web-serving-2026-07.md`, branch
-`docs/oncluster-web-research`).
+`docs/oncluster-web-research`); the `gftb-site` static-origin promotion (below)
+later replaced what image runs on that same stack.
 
 ```
 visitor -> greatfallstoolbus.org (Cloudflare edge, TLS terminates here)
         -> honey-ingress cloudflared tunnel   [dashboard/token-managed route — NOT in git]
         -> Service greatfallstoolbus-org:80  (ClusterIP)
-        -> Deployment greatfallstoolbus-org  (adapter-node, :3000, /health probes)
+        -> Deployment greatfallstoolbus-org  (gftb-site static Caddy origin, :3000, /health probes)
 ```
 
 ## Files
 
 | File | Role | Fail-closed posture |
 |---|---|---|
-| `greatfallstoolbus-org-production/deployment.yaml` | adapter-node web Deployment | `replicas: 2`; **digest-pinned** `ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:31cace27…` (a tag, a truncated or uppercase digest, a foreign repository, or a `PLACEHOLDER` marker fails `just web-stack-validate`); non-root 1001; read-only rootfs; `/health` probes on :3000 |
+| `greatfallstoolbus-org-production/deployment.yaml` | gftb-site static-origin web Deployment | `replicas: 2`; **digest-pinned** `ghcr.io/great-falls-tool-bus/gftb-site@sha256:e95c9588…` (a tag, a truncated or uppercase digest, a foreign repository, or a `PLACEHOLDER` marker fails `just web-stack-validate`); non-root 65532; read-only rootfs; `/health` probes on :3000 |
 | `greatfallstoolbus-org-production/service.yaml` | ClusterIP 80→3000 | internal DNS only; never internet-exposed directly |
-| `greatfallstoolbus-org-production/networkpolicy.yaml` | default-deny + explicit allows | ingress only from the `cloudflared` namespace (:3000) and prometheus; egress limited to DNS and the in-cluster discuss-archive reader (both pruned by `just web-release-apply` at the gftb-site promotion) |
+| `greatfallstoolbus-org-production/networkpolicy.yaml` | default-deny + explicit allows | ingress only from the `cloudflared` namespace (:3000) and prometheus; no egress rules declared here — the static Caddy origin makes no outbound calls, and `web-release-render` additionally synthesizes a `default-deny-egress` NetworkPolicy at ceremony time (not yet git-tracked; see the Justfile `_k8s-drift-check` header) |
 | `greatfallstoolbus-org-production/kustomization.yaml` | kustomize entrypoint | renders cleanly; creates **no** Namespace |
 | `secrets.contract.yaml` | names-only three-plane secrets contract | no values, ever |
 | `pr-env-lane.md` | reaper / PR-env lane note | parked (see below) |
@@ -63,10 +65,11 @@ visitor -> greatfallstoolbus.org (Cloudflare edge, TLS terminates here)
 2. **The declared shape is validated, not placeholder-parked.**
    `scripts/validate-web-stack.sh` asserts `replicas: 2`, derives the admitted
    container repository from the Deployment's **own** target namespace, and
-   requires `ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:<64
+   requires `ghcr.io/great-falls-tool-bus/gftb-site@sha256:<64
    lowercase hex>`. A `PLACEHOLDER` marker, a tag, a truncated or uppercase
-   digest, or any other repository — including the
-   `ghcr.io/great-falls-tool-bus/gftb-site` static-origin candidate — fails.
+   digest, or any other repository — including the retired legacy
+   `ghcr.io/great-falls-tool-bus/greatfallstoolbus.org` adapter-node image —
+   fails.
 3. **No namespace, no Secret.** `greatfallstoolbus-org-production` is not created
    here (a `kind: Namespace` object fails validation) and the namespace-scoped
    `web-apply` SA cannot create one; the namespace, the SA/RBAC, and the GHCR
@@ -93,9 +96,17 @@ only. The zone token lives in the protected `edge` environment; the
 
 ## Reaper / PR-env lane: parked
 
-Per-PR ephemeral previews are **parked**, not adopted — ADR 0001 recommends
-Cloudflare Pages managed previews instead (already Access-gated, zero pod cost).
-The on-cluster reaper contract is recorded fail-closed in
+Per-PR ephemeral previews are **parked**, not adopted. ADR 0001's recommended
+Option A — Cloudflare Pages managed previews — is now moot: that CF Pages
+project was **deleted 2026-07-06**, so it is not an available channel to adopt.
+The channel that actually exists today is the attended `web-release-*` /
+`web-stack-apply` ceremony described above (an operator runs it by hand; there
+is no per-PR automation). The **ratified target**, once the staging apply
+sitting lands (infra PR #121, LAND-verdict, apply pending —
+`staging.greatfallstoolbus.org`), is promote-on-PR against that staging host,
+per `spec/member-v0-executable-slices-2026-08-18.md:399-403,1011`; that is a
+separate, not-yet-built lane, not this parked reaper. The on-cluster reaper
+contract is recorded fail-closed in
 `pr-env-lane.md` + `pr-env-lanes.schema.json` (`enabled:false`) so a future ADR
 has a grounded start. The old honey pod-cap blocker is retired by the live probe
 below; this remains parked because GFTB has not adopted per-PR on-cluster route
@@ -177,13 +188,17 @@ just web-stack-validate     # invariant checks + `kubectl kustomize` render
 `just web-stack-health`) is attended-operator-only: no workflow invokes it, and
 no workflow may. This tree is **ATTENDED-ONLY declare-only**, not parked:
 `scripts/validate-web-stack.sh` requires `replicas: 2` and a digest-pinned
-`ghcr.io/great-falls-tool-bus/greatfallstoolbus.org` image here, and forbids a
+`ghcr.io/great-falls-tool-bus/gftb-site` image here, and forbids a
 `Namespace` object — the namespace and the `web-apply` SA/RBAC are minted by the
 operator out of band (the SA cannot create namespaces), the tunnel route stays
 dashboard-managed, and the DNS flip (P6) plus CF Pages decommission (P7) remain
-separate operator steps. The live pin diverges from this tree permanently now:
-the promoted gftb-site origin is what runs, and nothing reconciles this
-declaration back onto it.
+separate operator steps. **Rung 1 tree honesty (2026-08-21):** this pin is now
+the declarative record of what is actually served — an operator updates it here
+at each `web-release-*` ceremony's pin step, it is not auto-reconciled, and
+`just web-stack-drift-check` fails on a real diff (see the Justfile
+`_k8s-drift-check` header for the one known, bounded residual: a
+ceremony-synthesized `default-deny-egress` NetworkPolicy and a per-release
+`source-sha` annotation this file does not itself declare).
 
 Because `web-stack-apply` mutates the same Deployment the gftb-site release chain
 promotes, it is interlocked: `_web-stack-promotion-interlock` runs first, reads
@@ -198,20 +213,21 @@ the Deployment's own target namespace, not from a shared list:
 
 | Namespace | Admitted workload | Admitted image |
 |---|---|---|
-| `greatfallstoolbus-org-production` | `greatfallstoolbus-org` | `ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:<64 lowercase hex>` |
+| `greatfallstoolbus-org-production` | `greatfallstoolbus-org` | `ghcr.io/great-falls-tool-bus/gftb-site@sha256:<64 lowercase hex>` |
 
 Any other namespace fails closed, and any other repository — including the
-`ghcr.io/great-falls-tool-bus/gftb-site` static-origin candidate — is rejected
-in this stack. Tag references, truncated digests, and uppercase digests are
-rejected too.
+retired legacy `ghcr.io/great-falls-tool-bus/greatfallstoolbus.org` adapter-node
+image — is rejected in this stack. Tag references, truncated digests, and
+uppercase digests are rejected too.
 
 ## The gftb-site static-origin release chain
 
 The static `gftb-site` origin is promoted **in place**, on this same Deployment
-and Service, and its digest is never committed here. It arrives as
-`WEB_APPLY_IMAGE`, is proved anonymously, is rendered into the reviewed
-static-Caddy shape by the single renderer `just web-release-render`, and is
-applied as recorded bytes:
+and Service. It arrives as `WEB_APPLY_IMAGE`, is proved anonymously, is
+rendered into the reviewed static-Caddy shape by the single renderer
+`just web-release-render`, and is applied as recorded bytes; the operator also
+updates `deployment.yaml`'s pin (above) as part of the same ceremony so the
+declarative record and the served digest agree:
 
 ```bash
 just web-release-candidate-proof   # PR #109 — anonymous registry proof (line 8)

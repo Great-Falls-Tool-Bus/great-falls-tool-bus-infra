@@ -17,18 +17,28 @@ name: K8s Stack Drift (zero-diff where applicable)
 # mailman-listsync -p '{"spec":{"suspend":false}}'` (or any other imperative
 # relaxation) is visible somewhere. This job is that somewhere.
 #
-# web is DIFFERENT, by design, and is deliberately NOT held to the same bar:
-# k8s/web/greatfallstoolbus-org-production is ATTENDED-ONLY declare-only, not
-# parked (replicas 2 + a digest-pinned adapter-node image + no Namespace object
-# -- scripts/validate-web-stack.sh guards exactly that), while the live
-# on-cluster state carries the gftb-site static origin the reviewed
-# web-release-* chain promoted onto the same Deployment. That divergence is now
-# PERMANENT: TIN-3899 retired .github/workflows/web-stack.yml, so nothing
-# reconciles this stack back toward the committed adapter-node manifests and the
-# historical imperative re-pin performed by the legacy carrier recipe
-# (docs/runbooks/oncluster-web-cutover.md P3) no longer runs from CI at all. A
-# diff there is EXPECTED, not drift, so the web job reports its diff (step
-# summary + artifact) but never fails the workflow on it. See Justfile
+# web is now HELD TO THE SAME BAR (rung 1 tree honesty, 2026-08-21; session
+# register L71 Q2 rungs 1+2): k8s/web/greatfallstoolbus-org-production is
+# ATTENDED-ONLY declare-only, not parked (replicas 2 + a digest-pinned image of
+# the promoted gftb-site static origin + no Namespace object --
+# scripts/validate-web-stack.sh guards exactly that), and the committed
+# manifests now name the SAME repository the live on-cluster state actually
+# runs. Until this fix, this header declared the divergence PERMANENT and
+# by-design; it wasn't -- the committed manifests simply named the retired
+# legacy adapter-node image after the gftb-site promotion, and nothing ever
+# corrected the declarative record. The honest invariant is: the tree pins
+# what is served, an operator updates it at each web-release-* ceremony's pin
+# step, and a real diff here now means the tree and the cluster disagree and
+# one of them needs fixing. The web job therefore FAILS the workflow on a
+# diff, same as the true-zero-diff stacks above -- with one known, bounded
+# residual: the web-release-* render step (Justfile `web-release-render`)
+# always synthesizes a default-deny-egress NetworkPolicy and an
+# `app.tinyland.dev/source-sha` annotation that the checked-in base does not
+# declare (the annotation's value changes every release; the NetworkPolicy
+# can't be declared in git without the render step double-adding it -- see the
+# deployment.yaml/networkpolicy.yaml headers). Expect exactly those two
+# objects/fields to show up on every run until a follow-up teaches the
+# ceremony to commit its own rendered output back to git. See Justfile
 # `_k8s-drift-check` for the full rationale.
 #
 # CREDENTIALS: reuses the SAME namespace-scoped kubeconfig secrets the
@@ -54,9 +64,29 @@ on:
 permissions:
   contents: read
 
+# D6 (2026-08-21 truthing; rung 1 fix): cancel-in-progress was true, keyed only
+# on github.ref (constant across every scheduled run). `gh run list` showed
+# this lane's scheduled runs sitting `queued` for ~11h45m-12h20m and then
+# turning `cancelled` -- almost exactly one 12h cron interval -- because the
+# NEXT scheduled run's concurrency group cancelled the STILL-QUEUED previous
+# one before a runner was ever offered to it. Once a run is starved past the
+# next schedule boundary, cancel-in-progress:true guarantees it can never
+# complete, which is exactly how a non-completing gate reads as green (nothing
+# ever fails; it just silently never finishes). This job is read-only
+# (`kubectl diff`, never applies), so there is no correctness reason to
+# preempt a queued or running instance -- cancel-in-progress:false lets a
+# delayed run actually finish once a runner is available, up to GitHub's own
+# platform-level queued-job expiry. This does NOT fix runner-pool starvation
+# itself if the pool is currently unavailable/wedged (see the PR body's D6
+# diagnosis -- TIN-3902 already re-rostered this repo's own runner group
+# 2026-08-19, but jobs of every trigger type, not just scheduled ones, were
+# still observed stuck `queued` in this repo as of this fix, which is neither
+# explained nor covered by TIN-3971 -- that ticket's runner-group admission
+# gap is scoped to tinyland-infra's ~60 OTHER spoke/package repos, not this
+# repo's already-dedicated great-falls-tool-bus-infra group).
 concurrency:
   group: k8s-stack-drift-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   GF_CORE_REF: 2281b576bce0e8dd776a047b84e7464f5b508a62
@@ -201,7 +231,7 @@ jobs:
           retention-days: 7
 
   web-stack-drift:
-    name: Report web-stack diff (informational; the promoted origin diverges by design)
+    name: Assert web-stack diff (fails on diff; see header for the known residual)
     runs-on: tinyland-nix
     timeout-minutes: 20
     # The protected `web-apply` environment. This read-only diff job is now its
@@ -259,7 +289,7 @@ jobs:
           chmod 600 "${kubeconfig}"
           echo "WEB_APPLY_KUBECONFIG=${kubeconfig}" >> "$GITHUB_ENV"
 
-      - name: Diff report -- web stack (never fails; see header)
+      - name: Diff check -- web stack (fails on diff; see header)
         if: steps.secrets.outputs.kubeconfig-present == 'true'
         uses: ./GloriousFlywheel/.github/actions/nix-job
         with:

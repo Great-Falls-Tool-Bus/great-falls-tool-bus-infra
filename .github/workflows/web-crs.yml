@@ -1,14 +1,14 @@
 name: Web Stack
 
-# TIN-2541: GFTB on-cluster web serving DECLARE-ONLY skeleton (SvelteKit
-# adapter-node -> ClusterIP 80->3000 -> honey-ingress cloudflared tunnel,
-# mirroring the MassageIthaca full-on-cluster pattern).
+# TIN-2541: GFTB on-cluster web serving DECLARE-ONLY skeleton (the promoted
+# gftb-site static Caddy origin -> ClusterIP 80->3000 -> honey-ingress
+# cloudflared tunnel, mirroring the MassageIthaca full-on-cluster pattern).
 #
 # This workflow is VALIDATION-ONLY. Hosted Validate Overlay covers pull
 # requests; this private-runner job runs only on trusted push/manual events. It
 # runs the repo validator, including the render check, and enforces the
-# fail-closed invariants (replicas 0, placeholder image, no namespace, no secret,
-# fail-closed route/reaper intent).
+# fail-closed invariants (replicas 2, digest-pinned image, no namespace, no
+# secret, fail-closed route/reaper intent).
 # There is intentionally NO server-dry-run/apply job: applying this skeleton is
 # not a supported operation. A live cutover is operator-gated under a superseding
 # hosting ADR, out of band. See k8s/web/README.md and

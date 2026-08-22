@@ -25,9 +25,17 @@ on:
 permissions:
   contents: read
 
+# D6 (2026-08-21 truthing; rung 1 fix): same fix as k8s-stack-drift.yml.
+# cancel-in-progress:true, keyed only on github.ref, was letting each new
+# scheduled run cancel the still-queued previous one before it ever got a
+# runner -- turning transient runner starvation into permanent, silent
+# non-completion (`gh run list` shows this lane's runs going straight from
+# `queued` to `cancelled` at ~12h intervals). This lane only plans
+# (`tofu plan`, never applies), so nothing is lost by letting a delayed run
+# finish instead of preempting it.
 concurrency:
   group: edge-drift-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   GF_CORE_REF: 2281b576bce0e8dd776a047b84e7464f5b508a62
