@@ -55,9 +55,17 @@ committed `k8s/web` tree with `kubectl kustomize` and validates it with
 `scripts/validate-web-stack.sh`, contacting no registry, cluster, or Tofu
 state backend — but runs on the self-hosted `tinyland-nix` class like every
 other apply/drift lane in this repo, not on a GitHub-hosted runner; it binds
-no protected `environment:` because it needs none. Self-hosted workload and
-non-ARC apply lanes remain separately gated. ARC plan/apply always happens on
-the operator machine (see docs/implementation-overlay.md).
+no protected `environment:` because it needs none. It also does not check
+out GloriousFlywheel core at all (fixed post-roster-admission, TIN-3914: the
+core repository is private, and the default `GITHUB_TOKEN` scoped to this
+repo cannot read it — every self-hosted workflow that touched it,
+unauthenticated, failed the moment it actually got a runner). This repo's
+own `flake.nix` devshell already provides everything `web-stack-validate`/
+`web-stack-render` need, so `web-plan.yml` is simpler than the other
+self-hosted lanes, not merely equivalent to them — one fewer moving part,
+and one fewer private-repo dependency. Self-hosted workload and non-ARC
+apply lanes remain separately gated. ARC plan/apply always happens on the
+operator machine (see docs/implementation-overlay.md).
 
 ## Why It Exists
 
@@ -70,14 +78,15 @@ core product logic into this repo.
 
 ## Current Status
 
-The finite `.yml`/`.yaml` census covers 11 workflows. Nine are core-checkout
-consumers with 14 exact-SHA checkout declarations. The other two workflows do
-not check out core; they remain in the census so a new source consumer cannot
-hide under the alternate extension.
+The finite `.yml`/`.yaml` census covers 11 workflows. Eight are core-checkout
+consumers with 13 exact-SHA checkout declarations. The other three workflows
+(`validate.yml`, `flywheel-cache-proof.yml`, `web-plan.yml`) do not check out
+core; they remain in the census so a new source consumer cannot hide under
+the alternate extension.
 
 `just core-checkout` validates checkout action immutability, canonical repository,
 finite overlay/core paths, role pin, non-persistence, read-only workflow
-permission, closed HEAD assertion, all 24 exact `GF_CORE_CI_PATH` devshell
+permission, closed HEAD assertion, all 23 exact `GF_CORE_CI_PATH` devshell
 sources, the pinned-and-hashed OIDC helper URL, and absence of dedicated
 cross-repository credential inputs. `just core-checkout-selftest` proves the
 guard rejects adversarial mutations. The pinned pre-#1208 GloriousFlywheel

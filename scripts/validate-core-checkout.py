@@ -58,7 +58,6 @@ EXPECTED_CORE_CHECKOUTS = {
     "list-crs.yml": 2,
     "mail-crs.yml": 2,
     "web-crs.yml": 1,
-    "web-plan.yml": 1,
 }
 
 # Preserve the reviewed executable authority for each role. Checkout
@@ -82,7 +81,7 @@ EXPECTED_ACTION_CHECKOUTS = {
     "mail-crs.yml": 4,
     "validate.yml": 1,
     "web-crs.yml": 2,
-    "web-plan.yml": 2,
+    "web-plan.yml": 1,
 }
 
 EXPECTED_CORE_CI_PATH_EXPORTS = {
@@ -96,7 +95,7 @@ EXPECTED_CORE_CI_PATH_EXPORTS = {
     "mail-crs.yml": 3,
     "validate.yml": 0,
     "web-crs.yml": 1,
-    "web-plan.yml": 1,
+    "web-plan.yml": 0,
 }
 
 EXPECTED_PERMISSIONS = {
