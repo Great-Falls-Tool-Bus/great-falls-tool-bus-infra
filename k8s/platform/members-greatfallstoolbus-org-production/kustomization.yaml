@@ -1,0 +1,31 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: members-greatfallstoolbus-org-production
+
+# DECLARE-ONLY — MERGING APPLIES NOTHING (TIN-3815 / TIN-3817).
+# GFTB platform staging serving stack: web + worker Deployments and the web
+# ClusterIP Service behind the fail-closed staging.greatfallstoolbus.org route
+# intent, plus the namespace's default-deny NetworkPolicy family.
+# `kubectl kustomize` MUST render this cleanly (`just platform-stack-validate`
+# renders it). The committed Deployments carry the PLACEHOLDER-PLATFORM-IMAGE
+# sentinel — no platform image exists until the S0-S3 app stack lands — so the
+# tree cannot be applied as-is even by accident: the reviewed digest arrives
+# only through the attended platform-release chain, which renders, records,
+# dry-runs, and applies the same bytes. This stack creates no Namespace and
+# ships no Secret; the pre-rollout migration Job template that shares this
+# namespace belongs to k8s/member-db (PR #118) and is deliberately NOT a
+# resource here (it is one-shot, generateName, created per release — not
+# reconciled stack state). See ../README.md.
+
+resources:
+  - deployment-web.yaml
+  - deployment-worker.yaml
+  - service-web.yaml
+  - networkpolicy.yaml
+
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/managed-by: great-falls-tool-bus-infra
+      app.kubernetes.io/part-of: gftb-platform
+      app.tinyland.dev/tenant: great-falls-tool-bus

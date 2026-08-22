@@ -1,0 +1,138 @@
+# DECLARE-ONLY TEMPLATE — MERGING APPLIES NOTHING (TIN-3815 / TIN-3817).
+#
+# The GFTB platform `worker` entrypoint: the transactional-outbox dispatch loop
+# (TIN-3817 slice S3, greatfallstoolbus.org PR #173) and NOTHING else — no HTTP
+# listener, no migrations on startup (spec §6: only the migrator runs DDL), no
+# live delivery targets. It exits 78 (EX_UNAVAILABLE) when the database or
+# tenant is unconfigured/unreachable/nonexistent, so a misconfigured worker is
+# a VISIBLE CrashLoopBackOff, never a healthy-looking idle pod.
+#
+# Image admission, sentinel discipline, and the render/plan/apply chain are
+# identical to deployment-web.yaml — read its header; it is the same image,
+# selected by a different entrypoint.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gftb-platform-worker
+  namespace: members-greatfallstoolbus-org-production
+  labels:
+    app.kubernetes.io/name: gftb-platform-worker
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: gftb-platform
+    app.kubernetes.io/managed-by: great-falls-tool-bus-infra
+    app.tinyland.dev/tenant: great-falls-tool-bus
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  # ONE REPLICA, and Recreate rather than RollingUpdate, both for the
+  # connection budget (see deployment-web.yaml: gftb_app connectionLimit 40;
+  # web 2x10 + web surge 10 + worker 10 = 40). Correctness does not need a
+  # second worker: the outbox claim is FOR UPDATE SKIP LOCKED under a
+  # per-claim lease token, so concurrency is safe but not required, and
+  # Recreate means a rollout never runs two workers' pools at once. Raising
+  # this replica count is a budget decision first.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gftb-platform-worker
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        # THE ADMISSION CONTRACT — same as deployment-web.yaml: these labels
+        # are what the member-db NetworkPolicy admits on 5432 and what this
+        # stack's egress allows select on.
+        app.kubernetes.io/name: gftb-platform-worker
+        app.kubernetes.io/component: worker
+        app.kubernetes.io/part-of: gftb-platform
+    spec:
+      # Long enough for a graceful drain: the worker traps SIGTERM, finishes
+      # the in-flight job, and releases its lease. A job it cannot finish is
+      # re-claimed after lease expiry — at-least-once by contract.
+      terminationGracePeriodSeconds: 30
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: DoesNotExist
+            - weight: 50
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values: ["bumble", "sting"]
+      containers:
+        - name: gftb-platform-worker
+          # OPERATOR-SUPPLIED AT DISPATCH — same sentinel discipline as
+          # deployment-web.yaml; the validator asserts it is intact.
+          image: PLACEHOLDER-PLATFORM-IMAGE
+          imagePullPolicy: IfNotPresent
+          # One immutable image, three entrypoints (spec §6); this is the
+          # `worker` one. No ports: the worker listens on nothing.
+          command: ["/usr/local/bin/worker"]
+          env:
+            - name: NODE_ENV
+              value: production
+            # THE RUNTIME CREDENTIAL, BY NAME ONLY — the DML-only gftb_app
+            # role, exactly as the web Deployment consumes it and exactly as
+            # never handed to the migration Job. See deployment-web.yaml and
+            # ../secrets.contract.yaml.
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: gftb-member-db-runtime-dsn
+                  key: dsn
+            # Substituted by `just platform-release-render`; integrity-critical
+            # config-review material. See deployment-web.yaml.
+            - name: GFTB_TENANT_ID
+              value: PLACEHOLDER-GFTB-TENANT-ID
+            # PER-REPLICA WORKER IDENTITY via the downward API: each pod's
+            # lease_owner carries its own pod name (TIN-3817 hand-off row).
+            # After the S3 review this is OBSERVABILITY, not the guard — the
+            # completion/release/renewal guard is the per-claim lease token,
+            # so even identical ids cannot stomp rows — but per-pod names keep
+            # `lease_owner` attributable when the replica count ever rises,
+            # and they cost nothing.
+            - name: GFTB_WORKER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            # Stripe test-mode references ride the worker too: S9 registers
+            # the first Stripe outbox handlers in this process. Same names,
+            # same optional posture, same closed egress as deployment-web.yaml.
+            - name: STRIPE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: gftb-platform-stripe-testmode
+                  key: STRIPE_SECRET_KEY
+                  optional: true
+            - name: STRIPE_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: gftb-platform-stripe-testmode
+                  key: STRIPE_WEBHOOK_SECRET
+                  optional: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

@@ -1,0 +1,33 @@
+# DECLARE-ONLY — MERGING APPLIES NOTHING (TIN-3815 / TIN-3817).
+#
+# ClusterIP 80 -> 3000 in front of the web Deployment, the same shape as
+# k8s/web/greatfallstoolbus-org-production/service.yaml. Internal DNS only;
+# never internet-exposed directly. The public path, once the operator opens it,
+# is: staging.greatfallstoolbus.org (Cloudflare edge) -> honey-ingress
+# cloudflared tunnel (dashboard/token-managed route, NOT in git) -> this
+# Service -> the web pods. The route intent stays fail-closed in
+# ../../../tofu/intent/great-falls-tool-bus/staging-platform-route.json.
+# Only the web entrypoint is served; the worker listens on nothing and has no
+# Service.
+apiVersion: v1
+kind: Service
+metadata:
+  name: gftb-platform-web
+  namespace: members-greatfallstoolbus-org-production
+  labels:
+    app.kubernetes.io/name: gftb-platform-web
+    app.kubernetes.io/component: web
+    app.kubernetes.io/part-of: gftb-platform
+    app.kubernetes.io/managed-by: great-falls-tool-bus-infra
+    app.tinyland.dev/tenant: great-falls-tool-bus
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: gftb-platform-web
+    app.kubernetes.io/component: web
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

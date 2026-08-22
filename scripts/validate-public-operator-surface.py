@@ -363,6 +363,48 @@ ATTENDED_RECIPE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
         "_reviewed-clean-main",
         "_operator-apply-confirm",
     ),
+    # GFTB platform staging serving (TIN-3815 / TIN-3817 staging slice). The
+    # attended platform-release chain mirrors the web-release discipline —
+    # render once, record the bytes, preflight, dry-run and apply the SAME
+    # bytes, then prove pinned/running/served — so every recipe that consumes
+    # an operator-custody credential or feeds the mutation is receipt-bound
+    # here. `platform-stack-validate` is deliberately NOT here: it is the
+    # offline guard `check-hosted` runs, it never contacts a cluster, and
+    # adding it would taint check-hosted through the attended closure.
+    "_platform-release-inputs": (),
+    "_platform-release-kubeconfig-input": (),
+    # The single renderer. Both the plan and the preflight re-render through
+    # it, so the reviewed bytes and the applied bytes are the same bytes — the
+    # property WEB_RELEASE_CRITICAL_RECIPE_DIGESTS protects for
+    # web-release-render, protected the same way here.
+    "platform-release-render": ("_platform-release-inputs",),
+    "_platform-release-plan-root-contract": (),
+    "platform-release-plan": (
+        "_platform-release-inputs",
+        "_platform-release-plan-root-contract",
+    ),
+    "_platform-release-plan-preflight": (
+        "_platform-release-inputs",
+        "_platform-release-plan-root-contract",
+    ),
+    "platform-release-server-dry-run": (
+        "_platform-release-kubeconfig-input",
+        "_platform-release-plan-preflight",
+    ),
+    # Ordered like web-release-apply: the reviewed-carrier and confirmation
+    # guards stand in front, the kubeconfig custody check and the byte-exact
+    # plan preflight run before any mutation is attempted.
+    "platform-release-apply": (
+        "_reviewed-clean-main",
+        "_operator-apply-confirm",
+        "_platform-release-kubeconfig-input",
+        "_platform-release-plan-preflight",
+    ),
+    "platform-release-pinned-running-proof": (
+        "_platform-release-inputs",
+        "_platform-release-kubeconfig-input",
+    ),
+    "platform-release-served-proof": (),
 }
 
 ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
@@ -378,12 +420,83 @@ ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     "form-altcha-secret-apply": _receipt(
         "d394883ac79138f4", "b78253e99505ee18", "f0931c8607f62fa9", "f5c1b30b25c115ce"
     ),
+    # --- platform staging serving receipts (TIN-3815 / TIN-3817) ------------
+    # Each value is sha256(executable_recipe_text(body)) — prose edits are
+    # free, an executable line is not. What each pin is protecting:
+    #
+    # _platform-release-inputs: holds the serving image to an exact @sha256
+    #   digest on one of the two admitted platform repositories (the pre- and
+    #   post-TIN-3815-rename slugs), refuses the declare-only PLACEHOLDERs,
+    #   and holds the integrity-critical tenant id to UUID shape. Widening the
+    #   repository alternation or dropping the tenant guard must be reviewed
+    #   in here.
+    "_platform-release-inputs": _receipt(
+        "a5c5252b6e7ca149", "a4a2272b17a587ef", "81e0e5a789fd637c", "8cc64accd78858f9"
+    ),
+    # _platform-release-kubeconfig-input: the custody bar between an ambient
+    #   kubeconfig context and the member-data namespace.
+    "_platform-release-kubeconfig-input": _receipt(
+        "d4691ca921dc2f69", "135e09433d755159", "4e20bbc9d2b88201", "2b99a7893381ca9d"
+    ),
+    # platform-release-render: the single renderer; refuses to run when the
+    #   committed sentinels have vanished, so a digest smuggled into git can
+    #   never be laundered through the render.
+    "platform-release-render": _receipt(
+        "ac0e346fd4c310ed", "be3a37563440c7e5", "c46700314a985730", "48ab005b9938fdc4"
+    ),
+    "_platform-release-plan-root-contract": _receipt(
+        "ebf3de9991e622a2", "5b1be15f906593dc", "cb30d87b74d2ace1", "751b3178509f188b"
+    ),
+    "platform-release-plan": _receipt(
+        "557dfe42211a9660", "a5f199fba23f6dc8", "46b02550c1ddc8cc", "1c149e0179f23152"
+    ),
+    # _platform-release-plan-preflight: what makes the apply byte-exact — the
+    #   recorded bytes must hash to their receipt AND re-render identically
+    #   from the current carrier before anything touches the wire.
+    "_platform-release-plan-preflight": _receipt(
+        "4d82810bb93b522f", "2043db77d8ff14c6", "83444a6678e6eca1", "e2f6c1b9532a4617"
+    ),
+    "platform-release-server-dry-run": _receipt(
+        "0af1efe9cb262f4a", "0c0e5ec8516fcbd4", "58ee551d6cf8ec9a", "e625ddd244b185fc"
+    ),
+    # platform-release-apply: the serving mutation. Pinned so the double
+    #   dry-run cannot be dropped and the two rollout waits stay part of the
+    #   recipe rather than an operator's habit.
+    "platform-release-apply": _receipt(
+        "6aa6264d65e6dd3b", "63819c959bbc91d6", "c4c3a737c5bd48f2", "43c9aad7285431c1"
+    ),
+    # platform-release-pinned-running-proof: release evidence — live digests
+    #   equal the plan and the budgeted replica counts are actually ready.
+    "platform-release-pinned-running-proof": _receipt(
+        "bf2f704af07697f1", "9a7f5995402e41b9", "32d9d05757cb6acc", "e24ef1e4335943b8"
+    ),
+    # platform-release-served-proof: pinned specifically for its refusal
+    #   branch — the PRIVATE staging host must refuse anonymous requests, and
+    #   deleting that check leaves a proof that can never fail open-ness.
+    "platform-release-served-proof": _receipt(
+        "3acf4262cd3ca8e0", "9035098a75c30588", "0ea312525f401d4a", "3b3b43c1f00d5429"
+    ),
 }
 
 ATTENDED_OPERATOR_LOCAL_ROOTS = {
     "_list-member-add-inputs",
     "list-member-add",
     "form-altcha-secret-apply",
+    # Platform staging serving (TIN-3815 / TIN-3817). All ten are
+    # operator-local: no workflow, script, or composite action may invoke
+    # them, and the closure taints anything that tries to wrap one.
+    # `platform-stack-validate` is excluded on purpose so `check-hosted`
+    # stays hosted-runnable.
+    "_platform-release-inputs",
+    "_platform-release-kubeconfig-input",
+    "platform-release-render",
+    "_platform-release-plan-root-contract",
+    "platform-release-plan",
+    "_platform-release-plan-preflight",
+    "platform-release-server-dry-run",
+    "platform-release-apply",
+    "platform-release-pinned-running-proof",
+    "platform-release-served-proof",
 }
 
 # The gftb-site cutover proofs are intentionally operator-local even though they

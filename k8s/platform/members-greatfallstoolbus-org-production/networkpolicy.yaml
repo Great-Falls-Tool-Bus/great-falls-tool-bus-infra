@@ -1,0 +1,180 @@
+# DECLARE-ONLY — MERGING APPLIES NOTHING (TIN-3815 / TIN-3817).
+#
+# The house default-deny family for the PLATFORM namespace, mirroring
+# k8s/web/.../networkpolicy.yaml (tunnel-only public ingress) and the
+# member-db policy doctrine (default-deny plus named allows, selectors bound to
+# the label admission contract).
+#
+# BOTH DIRECTIONS ARE DENIED BY DEFAULT. Unlike the legacy adapter-node web
+# namespace (whose default deny is ingress-only, with additive egress allows
+# pruned at the gftb-site promotion), this namespace starts with a default deny
+# on ingress AND egress: the platform holds member personal data, so anything
+# it may reach is enumerated below — cluster DNS and the member database, full
+# stop. There is deliberately NO Stripe/api.stripe.com egress: the rails slice
+# (TIN-3818) is unlanded, its Secret is unminted, and the egress allow is that
+# slice's follow-up, reviewed together with it.
+#
+# THE MIGRATOR RIDES THESE POLICIES TOO. The pre-rollout migration Job
+# (k8s/member-db/members-greatfallstoolbus-org-production/
+# job-migrator.template.yaml, PR #118) runs in this namespace with
+# part-of=gftb-platform, component=migrator — the egress allows below select
+# the migrator alongside web and worker, which is what lets that Job reach
+# 5432 once this stack's default-deny-egress exists. Sequencing note for the
+# operator: THIS FILE is admitted on its own, BEFORE the first migration —
+# it carries no sentinels and needs no image or tenant, so nothing here
+# blocks admitting it standalone ahead of everything else in this directory.
+# Admitting it first means the migrator never runs in an unpoliced
+# namespace. The rest of this stack's Deployments/Service are admitted
+# later, once the image and tenant are known (runbook Step S). See
+# docs/runbooks/staging-platform-serving.md (Step N, before Step M) — the
+# DB side's ingress policy (#118) and this side's egress policy are the two
+# halves of the same admission.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: members-greatfallstoolbus-org-production
+  labels:
+    app.kubernetes.io/part-of: gftb-platform
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+  namespace: members-greatfallstoolbus-org-production
+  labels:
+    app.kubernetes.io/part-of: gftb-platform
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+---
+# Public edge hop: the in-cluster cloudflared tunnel (non-host-networked pods
+# in the `cloudflared` namespace) forwards solved traffic to the WEB pods on
+# :3000. The worker is not selected and stays unreachable from everywhere.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cloudflared-tunnel-ingress
+  namespace: members-greatfallstoolbus-org-production
+  labels:
+    app.kubernetes.io/name: gftb-platform-web
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: gftb-platform-web
+      app.kubernetes.io/component: web
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cloudflared
+      ports:
+        - protocol: TCP
+          port: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-scrape
+  namespace: members-greatfallstoolbus-org-production
+  labels:
+    app.kubernetes.io/name: gftb-platform-web
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: gftb-platform-web
+      app.kubernetes.io/component: web
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: tinyland-dev-production
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 3000
+---
+# Cluster DNS for every platform component, including the migrator Job.
+# Scoped to the kube-system/kube-dns pods, not an empty `to` (which matches
+# EVERY destination on 53, off-cluster included — a DNS-tunnel exfil channel
+# out of the one namespace that holds member PII). Mirrors #118's
+# allow-postgres-egress in the database namespace (E2, PR #121 review).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-dns
+  namespace: members-greatfallstoolbus-org-production
+  labels:
+    app.kubernetes.io/part-of: gftb-platform
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: gftb-platform
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: ["web", "worker", "migrator"]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# The ONE backend: PostgreSQL 5432 on the gftb-member-db instance pods in the
+# database namespace. This is the platform-side reciprocal of the member-db
+# stack's allow-platform-postgres-ingress (PR #118): that side admits
+# part-of=gftb-platform pods with component in {web, worker, migrator} FROM
+# this namespace; this side lets exactly those pods dial out TO exactly those
+# instance pods. NetworkPolicy egress evaluates the post-DNAT destination, so
+# the target is the instance pod selector (cnpg.io/cluster=gftb-member-db) on
+# the real container port 5432 — the same port the -rw Service fronts.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-member-db
+  namespace: members-greatfallstoolbus-org-production
+  labels:
+    app.kubernetes.io/part-of: gftb-platform
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: gftb-platform
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: ["web", "worker", "migrator"]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: members-greatfallstoolbus-org-db-production
+          podSelector:
+            matchLabels:
+              cnpg.io/cluster: gftb-member-db
+      ports:
+        - protocol: TCP
+          port: 5432
