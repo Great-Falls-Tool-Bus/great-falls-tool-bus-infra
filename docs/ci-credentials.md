@@ -49,7 +49,13 @@ GFTB_MAIL_KUBECONFIG=/path/to/latoolb-us-production.kubeconfig just mail-cr-serv
 GFTB_MAIL_KUBECONFIG=/path/to/latoolb-us-production.kubeconfig just mail-cr-apply
 ```
 
-Secret-free `validate` runs on a GitHub-hosted runner. Self-hosted workload and
+Secret-free `validate` runs on a GitHub-hosted runner. `web-plan.yml` (rung 2,
+`.github/workflows/web-plan.yml`) is also secret-free — it renders the
+committed `k8s/web` tree with `kubectl kustomize` and validates it with
+`scripts/validate-web-stack.sh`, contacting no registry, cluster, or Tofu
+state backend — but runs on the self-hosted `tinyland-nix` class like every
+other apply/drift lane in this repo, not on a GitHub-hosted runner; it binds
+no protected `environment:` because it needs none. Self-hosted workload and
 non-ARC apply lanes remain separately gated. ARC plan/apply always happens on
 the operator machine (see docs/implementation-overlay.md).
 
@@ -71,7 +77,7 @@ hide under the alternate extension.
 
 `just core-checkout` validates checkout action immutability, canonical repository,
 finite overlay/core paths, role pin, non-persistence, read-only workflow
-permission, closed HEAD assertion, all 25 exact `GF_CORE_CI_PATH` devshell
+permission, closed HEAD assertion, all 24 exact `GF_CORE_CI_PATH` devshell
 sources, the pinned-and-hashed OIDC helper URL, and absence of dedicated
 cross-repository credential inputs. `just core-checkout-selftest` proves the
 guard rejects adversarial mutations. The pinned pre-#1208 GloriousFlywheel
