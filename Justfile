@@ -17,7 +17,7 @@ set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 # arc_core_default should export GF_CORE_CI_PATH="path:${gf_core}#ci" (or the
 # ARC equivalent) themselves; _reviewed-arc-core already accepts and verifies
 # that local-path form (see its pinned_ci/local_ci/declared_local_ci check
-# below). Not fixed here -- follow-up.
+# below). Not fixed here -- follow-up TIN-4034.
 gf_core := env_var_or_default("GF_CORE_PATH", "../GloriousFlywheel")
 gf_core_ci := env_var_or_default("GF_CORE_CI_PATH", "github:tinyland-inc/GloriousFlywheel/2281b576bce0e8dd776a047b84e7464f5b508a62#ci")
 gf_core_sha := "2281b576bce0e8dd776a047b84e7464f5b508a62"
