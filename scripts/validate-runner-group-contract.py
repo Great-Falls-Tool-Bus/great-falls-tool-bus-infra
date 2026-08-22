@@ -442,14 +442,30 @@ def main() -> int:
             print(f"  - {finding}", file=sys.stderr)
         return 1
 
+    # Re-derive the observed roster and infra-admission status for the
+    # success message instead of hardcoding the pre-admission constants: this
+    # message previously always reported the two-repository default roster
+    # and "infra repository ... excluded" even after a validated admission
+    # (`infra_repo_admission_ruling` present, id in `selected_repository_ids`),
+    # which would have made a passing run print a false exclusion claim.
+    block = runner_group_block(org_source)
+    observed_ids = selected_repository_ids(block)
+    infra_ruling_present = any(
+        re.fullmatch(rf"    {INFRA_ADMISSION_RULING_FIELD}:\s*[^\s#]+\s*(?:#.*)?", line)
+        for line in block
+    )
+    infra_status = (
+        "admitted" if INFRA_REPOSITORY_ID in observed_ids and infra_ruling_present
+        else "excluded"
+    )
     print(
         "runner-group admission contract passed: group "
         f"{EXPECTED_GROUP_NAME} bound at policy {EXPECTED_POLICY}, visibility "
         f"{EXPECTED_VISIBILITY}, public admission "
         f"{str(RULED_ALLOWS_PUBLIC_REPOSITORIES).lower()} per operator ruling "
         "2026-08-18 (TIN-3902), roster "
-        f"{sorted(EXPECTED_SELECTED_REPOSITORY_IDS)}, "
-        f"infra repository {INFRA_REPOSITORY_ID} excluded"
+        f"{sorted(observed_ids)}, "
+        f"infra repository {INFRA_REPOSITORY_ID} {infra_status}"
     )
     return 0
 
