@@ -33,7 +33,7 @@ NetworkPolicies are a later slice" — `../member-db/README.md`, PR #118).
 | File | Role | Fail-closed posture |
 | --- | --- | --- |
 | `members-greatfallstoolbus-org-production/deployment-web.yaml` | adapter-node member/inventory app (`/usr/local/bin/web`) | image + tenant sentinels; replicas 2 (budget); non-root 1001; read-only rootfs; `/health` probes on :3000 |
-| `members-greatfallstoolbus-org-production/deployment-worker.yaml` | transactional-outbox dispatcher (`/usr/local/bin/worker`) | same sentinels; replicas 1, `Recreate` (budget); no ports, no Service, no ingress; `GFTB_WORKER_ID` from the pod name (downward API) |
+| `members-greatfallstoolbus-org-production/deployment-worker.yaml` | transactional-outbox dispatcher (`/usr/local/bin/worker`) | same sentinels; replicas 1, `Recreate` (budget); no ports, no Service, no ingress, no readinessProbe; `GFTB_WORKER_ID` from the pod name (downward API); conservative exec `livenessProbe` (`worker --help`) — platform main has no dispatch-loop health surface, see the manifest header |
 | `members-greatfallstoolbus-org-production/service-web.yaml` | ClusterIP 80→3000, web only | internal DNS only; never internet-exposed directly |
 | `members-greatfallstoolbus-org-production/networkpolicy.yaml` | default-deny **both directions** + named allows | ingress: cloudflared→web:3000, prometheus; egress: DNS + member-db:5432 only; no Stripe egress until TIN-3818's sitting |
 | `members-greatfallstoolbus-org-production/kustomization.yaml` | kustomize entrypoint | renders cleanly; creates **no** Namespace |

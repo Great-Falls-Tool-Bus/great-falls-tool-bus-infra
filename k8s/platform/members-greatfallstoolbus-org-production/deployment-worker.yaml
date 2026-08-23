@@ -10,6 +10,28 @@
 # Image admission, sentinel discipline, and the render/plan/apply chain are
 # identical to deployment-web.yaml — read its header; it is the same image,
 # selected by a different entrypoint.
+#
+# LIVENESS (TIN-3817 follow-on, port-less-workload lesson from infra PR #192:
+# a workload that binds no port is invisible to any lsof/Service-shaped check,
+# so it needs an EXPLICIT probe or a hung dispatch loop runs forever looking
+# healthy). PLATFORM MAIN CARRIES NO RUNTIME HEALTH SURFACE FOR THIS PROCESS —
+# verified against greatfallstoolbus.org@main src/lib/server/worker.ts and
+# outbox/dispatch.ts: no HTTP listener (by design), no heartbeat file, no
+# last-successful-cycle metric. The one thing platform main DOES publish is
+# scripts/platform-entrypoint.mjs's own doctrine: "`--help` answers for every
+# role and exits 0 before any role-specific work... it is the per-entrypoint
+# liveness proof in S0's acceptance rows, and it must not require a database,
+# a queue, or a network." That is designed as an image-acceptance smoke test,
+# not a running-process probe, so re-running it here is a CONSERVATIVE
+# exec probe with a known gap: it proves the node runtime, the bundled
+# scripts/platform-entrypoint.mjs dispatcher, and build/worker.mjs can still
+# be spawned and exit cleanly — it does NOT prove the already-running dispatch
+# loop (claim/execute/complete-or-retry) is making progress. A worker wedged
+# inside a single handler call (the one path FOR UPDATE SKIP LOCKED + the
+# per-job lease renewal cannot self-heal) would still pass this probe. Flagged
+# to the operator/platform team as a residual: platform-side follow-up is a
+# heartbeat file or last-cycle timestamp the worker touches on every dispatch
+# cycle, checked here with a staleness threshold, once that surface exists.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -136,3 +158,15 @@ spec:
             limits:
               cpu: 500m
               memory: 512Mi
+          # Conservative exec probe (see the header comment): re-invokes the
+          # SAME binary the container's own command runs, by its linked name,
+          # so it is exercised on the real installed image rather than a
+          # second assumed binary. No readinessProbe: the worker takes no
+          # traffic and backs no Service, so there is nothing to gate.
+          livenessProbe:
+            exec:
+              command: ["/usr/local/bin/worker", "--help"]
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3

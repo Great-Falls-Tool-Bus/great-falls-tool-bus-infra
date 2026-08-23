@@ -129,8 +129,16 @@ assert_eq "$(yq -r --arg app "gftb-platform-worker" 'select(.kind == "Deployment
 assert_eq "$(yq -r --arg app "gftb-platform-web" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .ports[] | select(.name == "http") | .containerPort' "${deploy_web}")" "3000" "web containerPort"
 assert_eq "$(yq -r --arg app "gftb-platform-web" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .livenessProbe.httpGet.path' "${deploy_web}")" "/health" "web liveness probe path"
 assert_eq "$(yq -r --arg app "gftb-platform-web" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .readinessProbe.httpGet.path' "${deploy_web}")" "/health" "web readiness probe path"
-# The worker listens on nothing: no ports, no probes, no Service.
+# The worker listens on nothing: no ports, no readinessProbe, no Service. It
+# DOES carry a liveness probe (TIN-3817 follow-on, #192 port-less-workload
+# lesson): platform main publishes no runtime health surface for the dispatch
+# loop, so the probe conservatively re-execs the same entrypoint binary by its
+# linked name with --help (the S0-documented per-entrypoint liveness proof) —
+# see the manifest's own header comment for the gap this does and does not
+# close.
 assert_eq "$(yq -r --arg app "gftb-platform-worker" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .ports // [] | length' "${deploy_worker}")" "0" "worker declares no ports"
+assert_eq "$(yq -r --arg app "gftb-platform-worker" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .readinessProbe // "absent"' "${deploy_worker}")" "absent" "worker declares no readinessProbe (no traffic to gate)"
+assert_eq "$(yq -r --arg app "gftb-platform-worker" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .livenessProbe.exec.command | join(" ")' "${deploy_worker}")" "/usr/local/bin/worker --help" "worker liveness probe (conservative exec re-invocation of its own entrypoint)"
 
 # --- house hardening on both -------------------------------------------------
 for pair in "gftb-platform-web:${deploy_web}" "gftb-platform-worker:${deploy_worker}"; do
@@ -230,4 +238,4 @@ fi
 # --- Full render already happened up front (E1) — this is where every check
 # above got its bytes from; nothing left to do here but declare victory.
 
-echo "platform stack validation passed for gftb-platform-web + gftb-platform-worker in ${stack_ns}: DECLARE-ONLY (sentineled image/tenant, apply is the attended platform-release chain), web 2 replicas :3000 /health + worker 1 replica Recreate (gftb_app connectionLimit 40 budget), runtime-DSN-only credential boundary, default-deny both directions + cloudflared-only ingress + member-db-only egress, staging route fail-closed, no committed secrets"
+echo "platform stack validation passed for gftb-platform-web + gftb-platform-worker in ${stack_ns}: DECLARE-ONLY (sentineled image/tenant, apply is the attended platform-release chain), web 2 replicas :3000 /health probes + worker 1 replica Recreate no ports/exec-liveness-only (gftb_app connectionLimit 40 budget), runtime-DSN-only credential boundary, default-deny both directions + cloudflared-only ingress + member-db-only egress, staging route fail-closed, no committed secrets"
