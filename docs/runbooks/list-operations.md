@@ -467,7 +467,16 @@ Secret (independent rotation/revocation, never `mailman-app`), add-only
 two-list program contract, and the egress pin above. Do not present this lane
 as satisfying TIN-3813's restricted-proxy acceptance line.
 
-### Activation (three attended operator steps)
+### Activation (step 0 + three attended operator steps)
+
+**Step 0 — baseline apply, promptly after merge.** Apply the suspended stack
+(`just listsync-stack-server-dry-run` then `just
+listsync-stack-apply`) before any relaxation. Zero-risk by construction:
+suspended, dry-run on, the Secret absent, and the NetworkPolicies select no
+running pods. Without this, the `k8s-stack-drift` lane reports all four
+objects as drift on every scheduled run until activation (`kubectl diff`
+exits nonzero for objects absent from the cluster) — an always-red gate
+trains its reader to ignore it. This mirrors the stack README's step 0.
 
 The committed defaults are `suspend: true` and `LISTSYNC_DRY_RUN: "true"`.
 Relaxing either is a one-line edit, so the validator refuses it unless
