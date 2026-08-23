@@ -470,7 +470,7 @@ as satisfying TIN-3813's restricted-proxy acceptance line.
 ### Activation (step 0 + three attended operator steps)
 
 **Step 0 — baseline apply, promptly after merge.** Apply the suspended stack
-(`just listsync-stack-server-dry-run` then `GFTB_APPLY_CONFIRM=apply just
+(`just listsync-stack-server-dry-run` then `just
 listsync-stack-apply`) before any relaxation. Zero-risk by construction:
 suspended, dry-run on, the Secret absent, and the NetworkPolicies select no
 running pods. Without this, the `k8s-stack-drift` lane reports all four
