@@ -258,21 +258,21 @@ curl -sS -X POST http://127.0.0.1:8080/api/contact \
 Through Anubis (after exposure), the `/api/contact` POST is ALLOWed by the bot
 policy and reaches the handler **without** a challenge — the site's cross-origin
 `fetch` cannot solve a browser PoW, so allowlisting the path is what makes the
-form work at all (see "Bot policy" above). To confirm the split is live:
+form work at all (see "Bot policy" above). To confirm the split is live, run
+the checked-in live smoke script from an operator shell (never in CI: it
+contacts the real public edge):
 
 ```bash
-# API route: ALLOWed -> reaches the handler (a bare curl works; the handler's
-# honeypot/rate-limit/CORS are the controls here, not Anubis).
-curl -sS -X POST https://forms.latoolb.us/api/contact \
-  -H 'Content-Type: application/json' -H 'Origin: https://greatfallstoolbus.org' \
-  -d '{"name":"Smoke","email":"smoke@example.com","message":"hi","website":""}'
-# expect: {"ok": true}
-
-# Browsing surface: still CHALLENGEd -> a browser-like GET to any other path
-# gets the Anubis interstitial HTML, not the handler's 404 JSON. Row f honored.
-curl -sS -A 'Mozilla/5.0' https://forms.latoolb.us/ | grep -qi 'anubis\|challenge' \
-  && echo "browsing surface challenged (expected)"
+scripts/smoke-form-stack-live.sh
 ```
+
+It asserts both halves of the split: the `/api/contact` POST is ALLOWed and
+returns `{"ok": true}`, and a browser-UA `GET /` still gets the Anubis PoW
+interstitial HTML, not the handler's bare 404 JSON (row f honored). If the
+second check fails, traffic is bypassing Anubis — see the script header for
+the tunnel-route root-cause note (TIN-2420, 2026-08-17 finding: the
+Cloudflare Tunnel route is dashboard-managed and not represented in this
+repo, so this is an operator dashboard fix, not a code change).
 
 Expected result on success: every address subscribed to `keyholders@latoolb.us`
 receives the contact message, `Reply-To` set to the visitor so a keyholder can
