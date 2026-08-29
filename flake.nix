@@ -34,7 +34,7 @@
               pkgs.opentofu
               pkgs.openssl
               pkgs.python3
-              pkgs.yq
+              pkgs.yq-go
               # Toolchain for the declare-only org-tenancy cache-backed Bazel
               # proof (TIN-2364, just flywheel-cache-proof). Cache-first only.
               pkgs.bazelisk
