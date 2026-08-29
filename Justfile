@@ -2530,6 +2530,9 @@ web-release-render: _web-release-candidate-inputs
     set -euo pipefail
     command -v kubectl >/dev/null 2>&1 || { echo "kubectl is required (nix develop provides it)" >&2; exit 1; }
     command -v yq >/dev/null 2>&1 || { echo "yq is required (nix develop provides it)" >&2; exit 1; }
+    command -v jq >/dev/null 2>&1 || { echo "jq is required (nix develop provides it)" >&2; exit 1; }
+    yq_version="$(yq --version 2>&1 || true)"
+    echo "${yq_version}" | grep -Eqi "mikefarah|version v?4\." || { echo "mikefarah yq-go v4 is required; got: ${yq_version:-unavailable}" >&2; exit 1; }
     umask 077
     temp_root="$(python3 -I - "${TMPDIR:-/tmp}" "$(git rev-parse --show-toplevel)" <<'PY'
     import os
@@ -2561,7 +2564,10 @@ web-release-render: _web-release-candidate-inputs
     base="${render_dir}/base.yaml"
     rendered="${render_dir}/rendered.yaml"
     kubectl kustomize {{ web_stack_dir }} > "${base}"
-    yq -y --arg image "${WEB_APPLY_IMAGE}" --arg sha "${WEB_APPLY_SHA}" '
+    # Keep YAML parsing/serialization in mikefarah yq-go and all mutation
+    # semantics in jq; -I=0 produces one JSON document per input document.
+    yq eval-all -o=json -I=0 '.' "${base}" \
+      | jq --arg image "${WEB_APPLY_IMAGE}" --arg sha "${WEB_APPLY_SHA}" '
       if .kind == "NetworkPolicy" and (.metadata.name == "allow-egress-dns" or .metadata.name == "allow-egress-discuss-archive") then
         empty
       elif .kind == "Deployment" and .metadata.name == "greatfallstoolbus-org" and .metadata.namespace == "greatfallstoolbus-org-production" then
@@ -2621,13 +2627,19 @@ web-release-render: _web-release-candidate-inputs
           }
         }
       else . end
-    ' "${base}" > "${rendered}"
+      ' \
+      | yq eval-all -p=json -o=yaml -P '.' - > "${rendered}"
     # The later mutation lane must explicitly delete the two omitted legacy
     # adapter-node egress policies; `kubectl apply` does not prune omissions.
     expected_census=$'Deployment\tgreatfallstoolbus-org\tgreatfallstoolbus-org-production\nNetworkPolicy\tallow-cloudflared-tunnel-ingress\tgreatfallstoolbus-org-production\nNetworkPolicy\tallow-prometheus-scrape\tgreatfallstoolbus-org-production\nNetworkPolicy\tdefault-deny-egress\tgreatfallstoolbus-org-production\nNetworkPolicy\tdefault-deny-ingress\tgreatfallstoolbus-org-production\nService\tgreatfallstoolbus-org\tgreatfallstoolbus-org-production'
-    actual_census="$(yq -r '[.kind, .metadata.name, (.metadata.namespace // "")] | @tsv' "${rendered}" | LC_ALL=C sort)"
+    actual_census="$(
+      yq eval-all -o=json -I=0 '.' "${rendered}" \
+        | jq -r '[.kind, .metadata.name, (.metadata.namespace // "")] | @tsv' \
+        | LC_ALL=C sort
+    )"
     [[ "${actual_census}" == "${expected_census}" ]] || { echo "rendered object census mismatch" >&2; exit 1; }
-    yq -s -e --arg image "${WEB_APPLY_IMAGE}" --arg sha "${WEB_APPLY_SHA}" '
+    yq eval-all -o=json -I=0 '.' "${rendered}" \
+      | jq --slurp -e --arg image "${WEB_APPLY_IMAGE}" --arg sha "${WEB_APPLY_SHA}" '
       [.[] | select(.kind == "Deployment" and .metadata.name == "greatfallstoolbus-org" and .metadata.namespace == "greatfallstoolbus-org-production")] as $deployments
       | [.[] | select(.kind == "Service" and .metadata.name == "greatfallstoolbus-org" and .metadata.namespace == "greatfallstoolbus-org-production")] as $services
       | ($deployments | length) == 1
@@ -2677,13 +2689,15 @@ web-release-render: _web-release-candidate-inputs
         and ($services[0].spec.selector == {"app.kubernetes.io/component": "web", "app.kubernetes.io/name": "greatfallstoolbus-org"})
         and ($services[0].spec.ports == [{"name": "http", "port": 80, "protocol": "TCP", "targetPort": "http"}])
         and ([.[] | select(.kind == "Namespace" or .kind == "Secret" or .kind == "SecretList")] | length) == 0
-    ' "${rendered}" >/dev/null || { echo "rendered static-Caddy workload contract mismatch" >&2; exit 1; }
-    rendered_network_policies_semantic="$(yq -s -c '{items: [.[] | select(.kind == "NetworkPolicy")]}' "${rendered}" | jq -S -c '
+      ' >/dev/null || { echo "rendered static-Caddy workload contract mismatch" >&2; exit 1; }
+    rendered_network_policies_semantic="$(
+      yq eval-all -o=json -I=0 '.' "${rendered}" \
+        | jq --slurp -S -c '
       def canonical_rule:
         (if ((.from? // null) | type) == "array" then .from |= sort_by(tojson) else . end)
         | (if ((.to? // null) | type) == "array" then (if .to == [] then del(.to) else .to |= sort_by(tojson) end) else . end)
         | (if ((.ports? // null) | type) == "array" then .ports |= sort_by(tojson) else . end);
-      [.items[] | {
+      [.[] | select(.kind == "NetworkPolicy") | {
         apiVersion,
         kind,
         metadata: {name: .metadata.name, namespace: .metadata.namespace, labels: .metadata.labels},
@@ -2694,7 +2708,8 @@ web-release-render: _web-release-candidate-inputs
           | (if ((.ingress? // null) | type) == "array" then .ingress |= (map(canonical_rule) | sort_by(tojson)) else . end)
           | (if ((.egress? // null) | type) == "array" then .egress |= (map(canonical_rule) | sort_by(tojson)) else . end))
       }] | sort_by(.metadata.name)
-    ')"
+        '
+    )"
     rendered_network_policies_digest="$(python3 -I -c 'import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest())' "${rendered_network_policies_semantic}")"
     [[ "${rendered_network_policies_digest}" == "301eecb4ad234fdd7258ac7351a5a563e1b53cb250bce6f51a68824854b28220" ]] || { echo "rendered static-Caddy NetworkPolicy contract mismatch" >&2; exit 1; }
     cat "${rendered}"
@@ -2841,8 +2856,11 @@ _web-release-kubeconfig-inputs:
       if jq -e '.status.allowed == true' "${response}" >/dev/null; then printf 'yes\n'; else printf 'no\n'; fi
     }
     config_parse_stderr="${kube_dir}/config-parse.stderr"
-    if ! { env -i PATH="${PATH}" HOME="${kube_dir}/home" yq -c -s 'if length == 1 then .[0] else error("expected exactly one kubeconfig document") end' "${release_kubeconfig}" | env -i PATH="${PATH}" HOME="${kube_dir}/home" jq -e '
-      .["current-context"] as $current
+    # yq-go owns YAML decoding; jq slurps the JSON stream and keeps the
+    # exact-one-document guard fail-closed before any schema assertion.
+    if ! { env -i PATH="${PATH}" HOME="${kube_dir}/home" yq eval-all -o=json -I=0 '.' "${release_kubeconfig}" | env -i PATH="${PATH}" HOME="${kube_dir}/home" jq --slurp -e '
+      if length == 1 then .[0] else error("expected exactly one kubeconfig document") end
+      | .["current-context"] as $current
       | type == "object"
         and ((keys | sort) == (["apiVersion", "clusters", "contexts", "current-context", "kind", "preferences", "users"] | sort))
         and .apiVersion == "v1"
