@@ -39,6 +39,7 @@ NetworkPolicies are a later slice" — `../member-db/README.md`, PR #118).
 | `members-greatfallstoolbus-org-production/kustomization.yaml` | kustomize entrypoint | renders cleanly; creates **no** Namespace |
 | `secrets.contract.yaml` | names-only additions this slice consumes | no values, ever; extends (never restates) `../member-db/secrets.contract.yaml` |
 | `../../tofu/intent/great-falls-tool-bus/staging-platform-route.json` | staging route intent | `applied:false`, `dns_enabled:false`, `route_enabled:false`; Access-gated posture recorded |
+| `../../docs/research/stripe-webhook-public-reachability-2026-08.md` | design note | how `/api/stripe/webhook` stays deliverable once the host-wide Access application above is minted (path-scoped Access bypass, signature verification is the real boundary); not a decision, no manifest change |
 
 **Deliberately absent:** a Namespace object (operator-provisioned out of band,
 as every stack here), any Secret object or value, any CI apply path, any

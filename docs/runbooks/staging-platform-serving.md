@@ -102,7 +102,16 @@ In this order, all dashboard/token-managed (TIN-991; nothing in git):
    `staging.greatfallstoolbus.org` (operator QA identities only, plus a
    service token pair for the served proof). Staging is PRIVATE (TIN-3815);
    Access gates reachability while the application's own auth remains the
-   surface under QA.
+   surface under QA. **At this same step**, once the TIN-3818 Stripe rails
+   land and a webhook endpoint is registered with Stripe: mint a path-scoped
+   Access **bypass** for exactly `/api/stripe/webhook` before registering
+   that URL with Stripe — a hostname-wide Access application would 302/403
+   every Stripe delivery attempt, and Stripe cannot complete an Access login.
+   The app's own `Stripe-Signature` verification (`webhook.ts`) is the actual
+   security boundary for that one path, not network reachability; see
+   `docs/research/stripe-webhook-public-reachability-2026-08.md` for the full
+   design note. Not part of this sitting's scope — recorded here so it is not
+   missed at the sitting that does need it.
 2. Add the tunnel public-hostname route on honey-ingress:
    `staging.greatfallstoolbus.org` →
    `http://gftb-platform-web.members-greatfallstoolbus-org-production.svc.cluster.local:80`.
