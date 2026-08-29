@@ -450,7 +450,7 @@ WEB_RELEASE_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     # owns release mutation and slurp semantics. The public-surface fixtures
     # execute both this renderer and the exact-one kubeconfig guard.
     "web-release-render": _receipt(
-        "e3de859447b88505", "993aeb8fd3a0b0d5", "02009e9d5ba98fef", "6a16fa8a11df0fe9"
+        "bafec28ca138b218", "93c7bb2f1374d48a", "f096847a301b966a", "0ce6033f3a7d039c"
     ),
     "_web-release-kubeconfig-inputs": _receipt(
         "916de1b406d43ca1", "f7a2870af5898faf", "4f51aa497b5876b9", "65f0a9f9b8d0b819"
