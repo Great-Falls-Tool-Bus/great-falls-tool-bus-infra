@@ -2462,9 +2462,11 @@ member-db-stack-server-dry-run: member-db-stack-validate _member-db-kubeconfig-i
 # archiving begins the moment the Cluster is applied, so the backup store and
 # its NetworkPolicy MUST already be live and the bucket MUST already exist —
 # the split below is what actually enforces that ordering. All three recipes
-# below read the SAME rendered bytes `member-db-stack-validate` already
-# asserted (one `kubectl kustomize` call, filtered by kind), never a second,
-# unreviewed render.
+# independently render the reviewed tree after the validation/server-dry-run
+# dependency chain. yq-go decodes and jq asserts exact kind/name/namespace
+# inventory immediately before kubectl. The safety property is fail-closed
+# identity at each render, not an unverifiable byte-identity claim across
+# separate render invocations.
 #
 # Step one: the backup store alone (NetworkPolicy family + rustfs), then wait
 # for it to actually be Ready before anything tries to write to it.
