@@ -40,8 +40,8 @@
 # line-grep on the literal string "app.tinyland.dev/source-sha" would also
 # drop any OTHER line that happens to contain that text anywhere (comments,
 # other keys with a matching substring) -- an unanchored filter. This
-# version parses each file as YAML/JSON (via `yq`, which shells out to
-# `jq`) and deletes the EXACT key `app.tinyland.dev/source-sha` from every
+# version parses each file as YAML/JSON via yq-go, then uses jq for exact
+# object-key deletion of `app.tinyland.dev/source-sha` from every object.
 # object in the document, wherever it appears, using `has()`/`del()` -- an
 # object-key match, never a substring match. When that deletion leaves an
 # `annotations` map empty, the now-empty `annotations` key is deleted too,
@@ -130,20 +130,11 @@ normalize_tree() {
     count=$((count + 1))
     rel="${f#"$src"/}"
     mkdir -p "$(dirname "$dst/$rel")"
-    # `yq -y FILTER file` is the python-yq (kislyuk) calling convention. The
-    # `yq` that actually resolves on PATH here is mikefarah's yq-go (pinned by
-    # GloriousFlywheel core's `ci` devshell, which is what `nix develop
-    # "${GF_CORE_CI_PATH}"` puts in scope in CI -- this repo's OWN flake.nix
-    # separately pins `pkgs.yq` (python-yq), but that shell is never entered
-    # for this job, so it was never what ran here). yq-go has no `-y` flag and
-    # no bare-filter-then-file positional form, so this always failed in CI
-    # (2026-08-29 sweep g1: every k8s-stack-drift run since PR #126 introduced
-    # this script errors here, before ever reaching the actual diff -- a
-    # tooling defect, not evidence of real web-stack drift one way or the
-    # other). Fix: use yq-go only for YAML<->JSON conversion, and run
-    # NORMALIZE_FILTER (unchanged, it's plain jq syntax -- walk/has/del are
-    # all real jq builtins) through actual `jq`, which is present in the same
-    # GF-core ci closure.
+    # Hosted validation is standardized on mikefarah yq-go in both this
+    # repository and GF-core. Use yq-go only for YAML-to-JSON and
+    # JSON-to-YAML conversion; NORMALIZE_FILTER remains jq syntax and
+    # therefore runs through jq. The paired self-test rejects a wrong
+    # yq binary before exercising the five reconciliation cases.
     if ! yq eval -o=json '.' "$f" 2>"$work/yq.err" \
         | jq "${NORMALIZE_FILTER}" 2>>"$work/yq.err" \
         | yq eval -P '.' - > "$dst/$rel" 2>>"$work/yq.err"; then

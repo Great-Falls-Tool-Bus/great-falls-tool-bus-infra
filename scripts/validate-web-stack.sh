@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2016
-# SC2016 is intentional throughout: the `$app` inside every single-quoted yq
-# program is a jq variable bound by `--arg app`, not a shell expansion. Binding
-# it through --arg (rather than interpolating the shell value into the filter)
-# is what keeps a stack name from being able to inject jq syntax.
 set -euo pipefail
+
+# yq NOTE: hosted validation is standardized on mikefarah yq-go v4
+# in both this repository and GF-core. Container selection binds through
+# the exported app variable plus strenv(app); the version preflight below
+# rejects kislyuk/python-yq before any predicate can be skipped.
 
 # ATTENDED-ONLY declare-only guard for the GFTB on-cluster web workload
 # (TIN-2543, ADR 0010; posture updated by TIN-3899). Asserts the invariants so a
@@ -66,6 +66,8 @@ require_file() { test -f "$1" || fail "missing $1"; }
 assert_eq() { [ "$1" = "$2" ] || fail "$3: got '$1', want '$2'"; }
 
 command -v yq >/dev/null 2>&1 || fail "yq is required"
+yq_version="$(yq --version 2>&1 || true)"
+if ! printf "%s" "${yq_version}" | grep -qi "mikefarah" || ! printf "%s" "${yq_version}" | grep -Eqi "version v?4\."; then fail "mikefarah yq-go v4 is required; got: ${yq_version:-unavailable}"; fi
 command -v jq >/dev/null 2>&1 || fail "jq is required (JSON intent assertions)"
 command -v kubectl >/dev/null 2>&1 || fail "kubectl is required for kubectl kustomize"
 
@@ -89,6 +91,7 @@ greatfallstoolbus-org-production)
   fail "unknown web stack namespace '${stack_ns}'; the only admitted GFTB web stack is greatfallstoolbus-org-production"
   ;;
 esac
+export app
 deploy_name="$(yq -r 'select(.kind == "Deployment") | .metadata.name' "${deploy}")"
 assert_eq "${deploy_name}" "${app}" "Deployment name admitted in namespace ${stack_ns}"
 
@@ -106,7 +109,7 @@ assert_eq "${replicas}" "2" "Deployment replicas (ADR 0010 cutover shape)"
 # @sha256: digest, and forbid the retired declare-only PLACEHOLDER marker.
 # Nothing else passes: no tag, no truncated or uppercase digest, no other
 # registry/owner/repository, and no sibling stack's repository.
-web_image="$(yq -r --arg app "${app}" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .image' "${deploy}")"
+web_image="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == strenv(app)) | .image' "${deploy}")"
 case "${web_image}" in
 *PLACEHOLDER*) fail "web image must be a real digest-pinned reference, not the retired PLACEHOLDER: '${web_image}'" ;;
 esac
@@ -120,17 +123,17 @@ if grep -REn "^kind:\s*Namespace" "${dir}" >/dev/null 2>&1; then
 fi
 
 # --- gftb-site serving shape: containerPort 3000 + /health probes -----------
-port="$(yq -r --arg app "${app}" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .ports[] | select(.name == "http") | .containerPort' "${deploy}")"
+port="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == strenv(app)) | .ports[] | select(.name == "http") | .containerPort' "${deploy}")"
 assert_eq "${port}" "3000" "web containerPort (gftb-site static Caddy origin)"
-live_path="$(yq -r --arg app "${app}" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .livenessProbe.httpGet.path' "${deploy}")"
-ready_path="$(yq -r --arg app "${app}" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .readinessProbe.httpGet.path' "${deploy}")"
+live_path="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == strenv(app)) | .livenessProbe.httpGet.path' "${deploy}")"
+ready_path="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == strenv(app)) | .readinessProbe.httpGet.path' "${deploy}")"
 assert_eq "${live_path}" "/health" "liveness probe path"
 assert_eq "${ready_path}" "/health" "readiness probe path"
 
 # --- runAsNonRoot + hardening ------------------------------------------------
 nonroot="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.securityContext.runAsNonRoot' "${deploy}")"
 assert_eq "${nonroot}" "true" "web runAsNonRoot"
-rorootfs="$(yq -r --arg app "${app}" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .securityContext.readOnlyRootFilesystem' "${deploy}")"
+rorootfs="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == strenv(app)) | .securityContext.readOnlyRootFilesystem' "${deploy}")"
 assert_eq "${rorootfs}" "true" "web readOnlyRootFilesystem"
 
 # --- Service: ClusterIP 80 -> 3000 -------------------------------------------

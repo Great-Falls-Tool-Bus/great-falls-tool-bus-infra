@@ -446,11 +446,14 @@ WEB_RELEASE_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     "web-release-candidate-proof": _receipt(
         "6347e0f7e92498e9", "c6fdfd7c5d80b0ef", "06e4818e333f3cac", "c5ace4f7652a2273"
     ),
+    # Updated 2026-08-29: yq-go now owns only YAML/JSON conversion; jq
+    # owns release mutation and slurp semantics. The public-surface fixtures
+    # execute both this renderer and the exact-one kubeconfig guard.
     "web-release-render": _receipt(
-        "513bc0ad22178c9d", "b30a8177165af253", "68571a990e279382", "f5929829bd04e386"
+        "bafec28ca138b218", "93c7bb2f1374d48a", "f096847a301b966a", "0ce6033f3a7d039c"
     ),
     "_web-release-kubeconfig-inputs": _receipt(
-        "a2601a6824409840", "45f4b6df270eb1db", "fe2386345de59807", "2e9d451a53f33f47"
+        "916de1b406d43ca1", "f7a2870af5898faf", "4f51aa497b5876b9", "65f0a9f9b8d0b819"
     ),
     "web-release-pinned-running-proof": _receipt(
         "bb9f757c5e1a3dcf", "c48e67ad1aa40b11", "0f25466fc6db04e7", "159d31d0968b28ab"
@@ -602,8 +605,10 @@ WEB_RELEASE_VALIDATION_SCRIPT = Path("scripts/validate-web-stack.sh")
 # denylist to an allowlist; validate-web-stack.sh's own bytes changed only in
 # that comment, not in behavior), so this pinned digest changed once more in
 # the same PR (same recompute command as above).
+# Updated 2026-08-29: the yq-go preflight now requires both the mikefarah
+# vendor marker and a v4 version marker; this receipt binds that exact fix.
 WEB_RELEASE_VALIDATION_SCRIPT_SHA256 = _receipt(
-    "72a7fbc8d123013e", "84ef7f8799c1cccc", "37130a09b73229f1", "959af85964ccbcec"
+    "c260f829e1531513", "3c4fa03db9443b1d", "55cf9d7e5fa02b78", "a6a56635fbab64c8"
 )
 
 FLAKE_RELEASE_PACKAGES = ("crane", "curl")

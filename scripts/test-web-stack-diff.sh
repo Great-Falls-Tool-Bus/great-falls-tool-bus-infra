@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Self-test for web-stack-diff.sh (Justfile web-stack-diff-selftest, folded
-# into `just check`). This is the fixture the reconciliation-safety review
+# into `just check-hosted`). This is the fixture the reconciliation-safety review
 # of infra PR #135 asked for (E3): the script's own header has demanded
 # since round 2 that it "MUST be exercised with two directories in any test,
 # never two bare files, or a regression here reads as passing again" -- until
@@ -21,11 +21,9 @@
 #   5. a similarly-named key (x-app.tinyland.dev/source-sha-legacy) changes
 #      -> rc=1 (the NORMALIZE_FILTER's anchored key match must not eat it)
 #
-# Requires REAL yq-go (mikefarah) and jq on PATH -- the same tooling
-# GF-core's `ci` devshell provides. Do not run this under this repo's own
-# flake.nix devshell, which pins python-yq (kislyuk): that would validate
-# the wrong binary and could pass while CI stays broken (see the script's
-# own CALLING CONVENTION header for why that distinction is load-bearing).
+# Requires real yq-go (mikefarah) and jq on PATH. The repo flake pins both,
+# matching the remote validation toolchain. The preflight below still fails
+# closed if PATH resolves a different yq implementation.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -33,7 +31,8 @@ DIFF_SCRIPT="${REPO_ROOT}/scripts/web-stack-diff.sh"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
-if ! yq --version 2>&1 | grep -qi 'mikefarah\|version v4\|version 4\.'; then
+yq_version="$(yq --version 2>&1 || true)"
+if ! printf "%s" "${yq_version}" | grep -qi 'mikefarah' || ! printf "%s" "${yq_version}" | grep -Eqi 'version v?4\.'; then
   echo "web-stack-diff-selftest: SKIP -- PATH yq is not yq-go (mikefarah); got: $(yq --version 2>&1 | head -1)" >&2
   echo "web-stack-diff-selftest: this self-test requires the same yq-go binary CI's GF-core devshell provides" >&2
   exit 1
