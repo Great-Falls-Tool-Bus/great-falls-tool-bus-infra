@@ -17,13 +17,13 @@
 # on 5432 (k8s/member-db PR #118), and the one the pre-rollout migration Job
 # template already targets.
 #
-# WHY THE IMAGE IS A PLACEHOLDER AND NOT A DIGEST PIN. The three-entrypoint
-# platform image does not exist yet: S0 (greatfallstoolbus.org PR #171) and the
-# S1-S3 stack above it are open but unlanded, so there is no digest an honest
-# review could pin here. This follows the member-db migrator-Job template
-# precedent exactly: the committed bytes carry the sentinel, the validator
-# FAILS if a real digest is smuggled into the tree, and the reviewed image
-# arrives at dispatch as PLATFORM_APPLY_IMAGE, held by the input guard to
+# WHY THE IMAGE IS A PLACEHOLDER AND NOT A DIGEST PIN. Main now publishes the
+# three-entrypoint image, but this declare-only carrier deliberately does not
+# bake a release choice into git. The exact publisher-emitted digest for the
+# reviewed source SHA arrives only through PLATFORM_APPLY_IMAGE in the attended
+# plan; a mutable tag or later registry re-lookup is not authority. The
+# committed bytes therefore retain the sentinel, and the validator FAILS if a
+# real digest is smuggled into the tree. The input guard holds the image to
 # ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:<64 lowercase hex>
 # (the pre-TIN-3815-rename identity; the guard also admits the gftb-platform
 # slug so the ADR 0014 §1.3 rename cannot silently expire it). Once the rename
@@ -121,10 +121,11 @@ spec:
           # still carry the sentinel. See the header comment.
           image: PLACEHOLDER-PLATFORM-IMAGE
           imagePullPolicy: IfNotPresent
-          # One immutable image, three entrypoints (spec §6). The image links
-          # the dispatcher at /usr/local/bin/{web,worker,migrator}
-          # (gftb-platform ContainerFile); this is the `web` one.
-          command: ["/usr/local/bin/web"]
+          # The published nix2container image's immutable config already sets
+          # Entrypoint=[dumb-init,--] and Cmd=[/bin/web]. Leave both Kubernetes
+          # command and args unset so this Deployment runs that reviewed
+          # default; the ContainerFile's /usr/local/bin links are only its
+          # separate local-image mirror.
           ports:
             - name: http
               containerPort: 3000

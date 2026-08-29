@@ -79,9 +79,11 @@ spec:
           # deployment-web.yaml; the validator asserts it is intact.
           image: PLACEHOLDER-PLATFORM-IMAGE
           imagePullPolicy: IfNotPresent
-          # One immutable image, three entrypoints (spec §6); this is the
-          # `worker` one. No ports: the worker listens on nothing.
-          command: ["/usr/local/bin/worker"]
+          # Preserve the image's reviewed Entrypoint=[dumb-init,--] and
+          # override only its default Cmd. PATH=/bin resolves this positional
+          # role to the published /bin/worker wrapper. No `command:` override;
+          # no ports, because the worker listens on nothing.
+          args: ["worker"]
           env:
             - name: NODE_ENV
               value: production

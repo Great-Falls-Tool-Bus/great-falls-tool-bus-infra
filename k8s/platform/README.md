@@ -32,8 +32,8 @@ NetworkPolicies are a later slice" — `../member-db/README.md`, PR #118).
 
 | File | Role | Fail-closed posture |
 | --- | --- | --- |
-| `members-greatfallstoolbus-org-production/deployment-web.yaml` | adapter-node member/inventory app (`/usr/local/bin/web`) | image + tenant sentinels; replicas 2 (budget); non-root 1001; read-only rootfs; `/health` probes on :3000 |
-| `members-greatfallstoolbus-org-production/deployment-worker.yaml` | transactional-outbox dispatcher (`/usr/local/bin/worker`) | same sentinels; replicas 1, `Recreate` (budget); no ports, no Service, no ingress; `GFTB_WORKER_ID` from the pod name (downward API) |
+| `members-greatfallstoolbus-org-production/deployment-web.yaml` | adapter-node member/inventory app (image-default `/bin/web`; no Kubernetes command/args override) | image + tenant sentinels; replicas 2 (budget); non-root 1001; read-only rootfs; `/health` probes on :3000 |
+| `members-greatfallstoolbus-org-production/deployment-worker.yaml` | transactional-outbox dispatcher (image `Cmd` overridden only by `args: ["worker"]`; no `command:` override) | same sentinels; replicas 1, `Recreate` (budget); no ports, no Service, no ingress; `GFTB_WORKER_ID` from the pod name (downward API) |
 | `members-greatfallstoolbus-org-production/service-web.yaml` | ClusterIP 80→3000, web only | internal DNS only; never internet-exposed directly |
 | `members-greatfallstoolbus-org-production/networkpolicy.yaml` | default-deny **both directions** + named allows | ingress: cloudflared→web:3000, prometheus; egress: DNS + member-db:5432 only; no Stripe egress until TIN-3818's sitting |
 | `members-greatfallstoolbus-org-production/kustomization.yaml` | kustomize entrypoint | renders cleanly; creates **no** Namespace |
@@ -73,23 +73,30 @@ budget change reviewed against `../member-db/.../cluster.yaml` first.
 
 ## Dependencies (why nothing here can be applied yet)
 
-1. **The platform image does not exist.** S0 (`greatfallstoolbus.org` PR
-   #171) and the S1–S3 stack above it are open but unlanded; nothing publishes
-   the three-entrypoint image yet.
-2. **The database does not exist.** member-db PR #118 is draft, blocked on
-   the operator object-store ruling (WAL archiving needs the
-   `gftb-member-db-backups` bucket ruling). Its merge + attended apply, the
-   runtime-role Secret (its runbook step C2), and this slice's derived
-   `gftb-member-db-runtime-dsn` (runbook step C1 here) all precede first
-   serve. **Nothing in this directory duplicates or unblocks #118** — the
-   cluster, roles, backups, and migration Job template stay its.
-3. **The rename gates have not passed** (ADR 0014 §1.3–1.5): the image
+1. **Use the publisher receipt, never a registry re-lookup.** S0–S3 are
+   landed and main publishes the three-entrypoint image. The eligible release
+   input is the immutable digest artifact emitted by the publisher workflow
+   for the exact source SHA (PR #216's carrier); until that receipt is
+   recorded, no digest is eligible for this stack.
+2. **The database remains an attended prerequisite.** member-db PR #118 is
+   still draft. Its object-store ruling is closed; its reviewed merge,
+   operator-only bring-up, `continuousArchiving=True`, completed backup,
+   runtime-role Secret, and this slice's derived
+   `gftb-member-db-runtime-dsn` all precede first serve. The migration Job
+   applies schema only and does not create the tenant row. **Nothing in this
+   directory duplicates or unblocks #118** — the cluster, roles, backups, and
+   migration Job template stay its.
+3. **The tenant identity is not ratified.** The migration does not seed one,
+   and this PR deliberately invents no UUID, slug, display name, or initial
+   owner. A reviewed tenant-bootstrap carrier must establish those values
+   before `GFTB_TENANT_ID` can enter a release plan.
+4. **The rename gates have not passed** (ADR 0014 §1.3–1.5): the image
    admission here accepts the pre-rename `greatfallstoolbus.org` slug today
    and the post-rename `gftb-platform` slug for the day the gates pass;
    narrowing to the single surviving name is the recorded follow-up.
-4. **CI substrate:** hosted validation currently rides the runner posture
-   being migrated under TIN-3914 (no GitHub-hosted runners ruling,
-   2026-08-19); `check-hosted` is green locally either way.
+5. **CI is validation-only and remote.** `check-hosted` validates the
+   declare-only carrier; it never renders with credentials, mutates a
+   cluster, or substitutes for the attended release proofs.
 
 ## Attended chain (mirrors the web-release discipline)
 

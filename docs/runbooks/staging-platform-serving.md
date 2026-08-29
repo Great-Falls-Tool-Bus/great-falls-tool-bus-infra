@@ -9,14 +9,15 @@ its authority table) and, for the database half,
 
 ## Step 0 — preconditions (all four, in this order)
 
-1. **App images exist.** S0–S3 (greatfallstoolbus.org PRs #171/#172/#175/#173)
-   are landed and `container-ghcr.yml` has published a three-entrypoint image
-   for the exact main SHA you intend to serve. Until the ADR 0014 §1.3 rename
-   gates pass, the publisher is `ghcr.io/great-falls-tool-bus/greatfallstoolbus.org`.
-2. **Database exists.** PR #118 is merged, its object-store ruling is
-   resolved, and its bring-up runbook has run through step B4 (cluster Ready,
-   `continuousArchiving=True`, one completed Backup) plus step C2 (the
-   `gftb-member-db-runtime` Secret minted).
+1. **Publisher receipt exists.** App S0–S3 are landed, and the exact main
+   workflow run has emitted its immutable digest artifact through PR #216's
+   publisher carrier. Record that artifact's source SHA and digest; do not
+   reconstruct either from a mutable tag or a later registry lookup. Until the
+   ADR 0014 §1.3 rename gates pass, the publisher is
+   `ghcr.io/great-falls-tool-bus/greatfallstoolbus.org`.
+2. **Database exists.** PR #118 is merged and its attended bring-up has run
+   through step B4 (cluster Ready, `continuousArchiving=True`, one completed
+   Backup) plus step C2 (the `gftb-member-db-runtime` Secret minted).
 3. **Namespace + SA.** `members-greatfallstoolbus-org-production` exists
    (operator-provisioned out of band; no stack here creates it) and a
    namespace-scoped `platform-apply` SA kubeconfig is minted with get/list/
@@ -64,13 +65,22 @@ just member-db-migrate-server-dry-run
 GFTB_APPLY_CONFIRM=apply GFTB_MEMBER_DB_MIGRATE_CONFIRM=member-db-migrate just member-db-migrate-apply
 ```
 
-Record the Job log tail as release evidence. Note the tenant row: the first
-migration/seed establishes the one configured tenant; its UUID is the
-`GFTB_TENANT_ID` input below. Treat that UUID as config-review material (a
-wrong-but-real tenant id passes RLS and serves the wrong tenant — app half
-`worker.ts` header), and after the first successful serve, commit it into the
-two Deployments in place of `PLACEHOLDER-GFTB-TENANT-ID` as the reviewed
-declarative record.
+Record the Job log tail as release evidence. The migration applies schema
+only: it does **not** create or seed a tenant row.
+
+## Step T — establish the one reviewed tenant
+
+This PR has no authority to invent the production tenant identity. Before
+Step S, a separate reviewed tenant-bootstrap carrier must establish and receipt
+the exact tenant UUID, slug, display name, and initial owner/keyholder grant.
+The tenant UUID becomes `GFTB_TENANT_ID`; a wrong-but-real UUID passes the RLS
+shape while selecting the wrong tenant. If that carrier is absent, stop here
+and mark platform serving BLOCKED—do not insert an ad hoc row during the apply
+sitting.
+
+After the first successful serve, replace
+`PLACEHOLDER-GFTB-TENANT-ID` in both Deployments through a reviewed PR so Git
+records the same UUID used by the release plan.
 
 ## Step S — plan, dry-run, apply, prove
 
@@ -89,10 +99,10 @@ The plan records the rendered bytes, their sha256, the image, the tenant, and
 the carrier commit under `.k8s-plans/` (operator-private, never committed);
 the preflight refuses a stale plan, a changed carrier, or bytes that no longer
 re-render identically; the apply dry-runs and applies exactly the recorded
-bytes and waits for both rollouts. Expected worker behavior before any real
-job kinds exist: Running, idle, `EMPTY_REGISTRY` (S7/S9 register handlers
-later). A worker in CrashLoopBackOff exiting 78 means DATABASE_URL or
-GFTB_TENANT_ID is wrong — that visibility is by design.
+bytes and waits for both rollouts. Expected worker behavior is Running and idle when no eligible jobs exist.
+`EMPTY_REGISTRY` is not an acceptable current-image state: S7/S9 handlers are
+already registered. A worker in CrashLoopBackOff exiting 78 means DATABASE_URL
+or GFTB_TENANT_ID is wrong — that visibility is by design.
 
 ## Step E — edge (separate authority, still operator-gated)
 

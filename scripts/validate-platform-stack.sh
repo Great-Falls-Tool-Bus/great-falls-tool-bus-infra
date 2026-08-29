@@ -12,10 +12,10 @@ set -euo pipefail
 # never needs a secret.
 #
 # THE COMMITTED BYTES ARE SENTINELED, NOT PINNED. Unlike the legacy web stack
-# (validate-web-stack.sh requires a real digest pin there), no three-entrypoint
-# platform image exists until the S0-S3 app stack lands, so this stack follows
-# the member-db migrator-Job template precedent: the committed Deployments MUST
-# carry PLACEHOLDER-PLATFORM-IMAGE and PLACEHOLDER-GFTB-TENANT-ID, and the
+# (validate-web-stack.sh requires a real digest pin there), this declare-only
+# carrier does not bake a release choice into git even though main now
+# publishes the three-entrypoint image. The committed Deployments MUST carry
+# PLACEHOLDER-PLATFORM-IMAGE and PLACEHOLDER-GFTB-TENANT-ID, and the
 # real values arrive only through the attended platform-release chain, whose
 # input guards hold the image to
 # ghcr.io/great-falls-tool-bus/{greatfallstoolbus.org,gftb-platform}@sha256:<64 hex>
@@ -121,9 +121,15 @@ if grep -REn "@sha256:[0-9a-f]{64}" "${dir}" >/dev/null 2>&1; then
   fail "a real image digest is committed in ${dir}; the platform image arrives only as PLATFORM_APPLY_IMAGE through the attended chain"
 fi
 
-# --- entrypoints: one image, the right process boundary per Deployment -------
-assert_eq "$(yq -r --arg app "gftb-platform-web" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .command | join(" ")' "${deploy_web}")" "/usr/local/bin/web" "web entrypoint"
-assert_eq "$(yq -r --arg app "gftb-platform-worker" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .command | join(" ")' "${deploy_worker}")" "/usr/local/bin/worker" "worker entrypoint"
+# --- entrypoints: preserve OCI Entrypoint; override only worker Cmd -----------
+# Published nix2container config: Entrypoint=[dumb-init,--], Cmd=[/bin/web],
+# PATH=/bin. Kubernetes `command` would replace the reviewed Entrypoint, so it
+# is forbidden for both workloads. Web inherits Cmd unchanged; worker replaces
+# only Cmd with one positional role name, resolving to /bin/worker through PATH.
+assert_eq "$(yq -r --arg app "gftb-platform-web" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | (.command // []) | length' "${deploy_web}")" "0" "web must preserve image Entrypoint"
+assert_eq "$(yq -r --arg app "gftb-platform-web" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | (.args // []) | length' "${deploy_web}")" "0" "web must inherit image Cmd /bin/web"
+assert_eq "$(yq -r --arg app "gftb-platform-worker" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | (.command // []) | length' "${deploy_worker}")" "0" "worker must preserve image Entrypoint"
+assert_eq "$(yq -r --arg app "gftb-platform-worker" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | (.args // []) | join(" ")' "${deploy_worker}")" "worker" "worker must override only image Cmd"
 
 # --- adapter-node serving shape (web only): :3000 + /health probes -----------
 assert_eq "$(yq -r --arg app "gftb-platform-web" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .ports[] | select(.name == "http") | .containerPort' "${deploy_web}")" "3000" "web containerPort"
