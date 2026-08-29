@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Self-test for web-stack-diff.sh (Justfile web-stack-diff-selftest, folded
-# into `just check`). This is the fixture the reconciliation-safety review
+# into `just check-hosted`). This is the fixture the reconciliation-safety review
 # of infra PR #135 asked for (E3): the script's own header has demanded
 # since round 2 that it "MUST be exercised with two directories in any test,
 # never two bare files, or a regression here reads as passing again" -- until

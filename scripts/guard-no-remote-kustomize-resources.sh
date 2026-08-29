@@ -88,6 +88,16 @@ def pairs(fname; arr): (arr // [])[]? | [fname, (. // "")] ;
 ) | @tsv
 '
 
+# yq-go owns YAML decoding only; JQ_FILTER contains jq function syntax and
+# therefore executes in jq. With pipefail enabled, either decoder/parser
+# failing makes the captured command substitution fail before any reference
+# can be treated as safe.
+extract_kustomization_references() {
+  local kfile="$1"
+  yq eval-all -o=json -I=0 '.' "${kfile}" \
+    | jq -r "${JQ_FILTER}"
+}
+
 # is_safe_local_path <kustomization-dir> <candidate-entry>
 # Strips an optional `key=` generator-file prefix, resolves the candidate
 # with a symlink-safe realpath, and requires it to both EXIST and be
@@ -186,7 +196,7 @@ PY
 # nothing checked.
 check_kustomization_dir() {
   local root="$1"
-  local kfile kdir field value
+  local kfile kdir field value references
   local matched=0
   while IFS= read -r -d '' kfile; do
     matched=$((matched + 1))
@@ -196,13 +206,17 @@ check_kustomization_dir() {
     # exists instead of assuming any given coreutil is on PATH.
     kdir="${kfile%/*}"
     [ "${kdir}" != "${kfile}" ] || kdir="."
+    if ! references="$(extract_kustomization_references "${kfile}")"; then
+      echo "ERROR: ${kfile}: failed to extract kustomization references with yq-go -> jq; refusing before render" >&2
+      return 1
+    fi
     while IFS=$'\t' read -r field value; do
       [ -n "${field}" ] || continue
       if ! is_safe_local_path "${kdir}" "${value}"; then
         echo "ERROR: ${kfile}: '${field}' entry '${value}' does not resolve to an existing local path under ${kdir} -- refusing before render (kubectl kustomize would otherwise attempt to fetch or read it)" >&2
         return 1
       fi
-    done < <(yq -r "${JQ_FILTER}" "${kfile}" 2>/dev/null)
+    done <<<"${references}"
   done < <(find_kustomization_files "${root}")
   if [ "${matched}" -eq 0 ]; then
     echo "ERROR: no kustomization file (kustomization.yaml, kustomization.yml, or Kustomization) found under ${root} -- refusing rather than silently passing an empty walk" >&2
@@ -211,9 +225,16 @@ check_kustomization_dir() {
   return 0
 }
 
+require_tools() {
+  command -v yq >/dev/null 2>&1 || { echo "ERROR: yq-go is required" >&2; return 1; }
+  command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required" >&2; return 1; }
+  command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 is required" >&2; return 1; }
+}
+
 self_test() {
   local failures=0
-  local tmp
+  local tmp extractor_failure_output
+  require_tools || return 1
   tmp="$(mktemp -d)"
   trap 'rm -rf "${tmp}"' RETURN
 
@@ -333,6 +354,31 @@ YAML
   echo "not a kustomization file" > "${tmp}/red-empty-walk/README.md"
   run_case "empty walk: no kustomization file present at all" "${tmp}/red-empty-walk" 1
 
+  # RED 8: extractor failure must be an explicit guard failure. The fixture is
+  # otherwise valid, so a success here would prove the old process-substitution
+  # bug had returned: parser stderr/status disappeared and an empty reference
+  # stream was treated as safe before the caller's render.
+  mkdir -p "${tmp}/red-extractor-failure"
+  cat > "${tmp}/red-extractor-failure/kustomization.yaml" <<'YAML'
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+YAML
+  echo "kind: Deployment" > "${tmp}/red-extractor-failure/deployment.yaml"
+  extractor_failure_output="${tmp}/extractor-failure.out"
+  if (JQ_FILTER='def deliberately_invalid('; check_kustomization_dir "${tmp}/red-extractor-failure") >"${extractor_failure_output}" 2>&1; then
+    echo "SELF-TEST FAILED: extractor parse failure returned success" >&2
+    cat "${extractor_failure_output}" >&2
+    failures=$((failures + 1))
+  elif ! grep -Fq "failed to extract kustomization references with yq-go -> jq; refusing before render" "${extractor_failure_output}"; then
+    echo "SELF-TEST FAILED: extractor parse failure lacked the fail-closed diagnostic" >&2
+    cat "${extractor_failure_output}" >&2
+    failures=$((failures + 1))
+  else
+    echo "self-test ok: extractor parse failure refuses before render (exit 1 as expected)"
+  fi
+
   # GREEN: a legitimate extensionless `Kustomization`, safe local entries --
   # proves the third filename is recognized in both directions, not just
   # rejected when malicious.
@@ -366,7 +412,7 @@ YAML
   run_case "the real committed web stack tree" "k8s/web/greatfallstoolbus-org-production" 0
 
   if [ "${failures}" -eq 0 ]; then
-    echo "guard-no-remote-kustomize-resources self-test passed (11 cases)"
+    echo "guard-no-remote-kustomize-resources self-test passed (12 cases)"
     return 0
   fi
   echo "guard-no-remote-kustomize-resources self-test FAILED (${failures} case(s))" >&2
@@ -380,7 +426,6 @@ fi
 
 dir="${1:?usage: guard-no-remote-kustomize-resources.sh <kustomization-directory> | --self-test}"
 test -d "${dir}" || { echo "ERROR: not a directory: ${dir}" >&2; exit 1; }
-command -v yq >/dev/null 2>&1 || { echo "ERROR: yq is required" >&2; exit 1; }
-command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 is required" >&2; exit 1; }
+require_tools || exit 1
 
 check_kustomization_dir "${dir}"
