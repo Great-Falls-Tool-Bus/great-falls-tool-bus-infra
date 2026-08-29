@@ -16,6 +16,20 @@ name: Flywheel org-tenancy cache proof
 # Endpoint authority is fleet-runtime env, never in this YAML: nix-setup exports
 # BAZEL_REMOTE_CACHE from cluster DNS, and GF_REAPI_TOKEN_EXCHANGE_ENDPOINT comes
 # from the fleet profile.
+# The Validate Overlay covers pull requests; this private-runner proof runs
+# only on trusted pushes or manual dispatches.
+#
+# TIN-4015 (2026-08-22): GloriousFlywheel core went private. The unauthenticated
+# raw.githubusercontent.com fetch of flywheel-github-oidc-profile.sh 404s the
+# moment it actually gets a runner (run 32586919278). This job's own `if:` gate
+# already restricts it to push/workflow_dispatch -- pull_request never reaches
+# this job, on a fork or otherwise -- so a credentialed checkout here never
+# exposes GF_CORE_DEPLOY_KEY to PR-authored content. The pinned OIDC helper is
+# now read from a credentialed checkout at its own ARC/OIDC role pin
+# (GF_OIDC_PROFILE_REF, deliberately independent of the implementation
+# GF_CORE_REF pin other workflows use -- see config/organization.yaml's `core:`
+# block) instead of curled unauthenticated; the sha256 content check is kept as
+# defense-in-depth on top of the checkout's own HEAD assertion.
 
 on:
   pull_request:
@@ -41,9 +55,13 @@ concurrency:
   group: flywheel-cache-proof-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  GF_OIDC_PROFILE_REF: 11ace397282ff89aeb1dfeb4a32fcbed3200c2ff
+
 jobs:
   cache-proof:
     name: flywheel-cache-proof (org-great-falls-tool-bus)
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: tinyland-nix
     timeout-minutes: 15
     env:
@@ -54,6 +72,24 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
+
+      - name: Checkout pinned GloriousFlywheel OIDC profile source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: tinyland-inc/GloriousFlywheel
+          ref: ${{ env.GF_OIDC_PROFILE_REF }}
+          path: GloriousFlywheel-oidc-profile
+          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
+          persist-credentials: false
+
+      - name: Verify GloriousFlywheel OIDC profile checkout
+        run: |
+          set -euo pipefail
+          actual="$(git -C GloriousFlywheel-oidc-profile rev-parse --verify HEAD)"
+          if [ "${actual}" != "${GF_OIDC_PROFILE_REF}" ]; then
+            echo "::error::GloriousFlywheel OIDC profile checkout mismatch: expected ${GF_OIDC_PROFILE_REF}, got ${actual}"
+            exit 1
+          fi
 
       # Endpoint-free cache attach. nix-setup derives BAZEL_REMOTE_CACHE from
       # cluster DNS reachability (it invents no endpoint) and adds Nix to PATH.
@@ -76,19 +112,21 @@ jobs:
       # PATH. The cache-proof driver locates flywheel-github-oidc-profile via
       # command -v, so this step is what enables the OIDC exchange on the
       # runner. A hash mismatch fails this step and, now that the lane is
-      # enforcing, fails CI.
+      # enforcing, fails CI. The file is copied from the credentialed checkout
+      # above (TIN-4015) rather than curled unauthenticated from
+      # raw.githubusercontent.com -- GloriousFlywheel is private now, so an
+      # unauthenticated fetch 404s.
       - name: Install fleet OIDC front door (pinned)
         shell: bash
         env:
-          GF_OIDC_PROFILE_REF: df510574d17b85e7f15470caf3574fcabc4768f1
           GF_OIDC_PROFILE_SHA256: 0aa1bb2b1814c28d6162fc91d5cb3201ecaa13775e94ab3571db776d5dcc3ba8
         run: |
           set -euo pipefail
           tools_dir="${RUNNER_TEMP}/gf-tools"
           dest="${tools_dir}/flywheel-github-oidc-profile"
-          url="https://raw.githubusercontent.com/tinyland-inc/GloriousFlywheel/${GF_OIDC_PROFILE_REF}/scripts/flywheel-github-oidc-profile.sh"
+          src="GloriousFlywheel-oidc-profile/scripts/flywheel-github-oidc-profile.sh"
           mkdir -p "${tools_dir}"
-          curl --fail --silent --show-error --location "${url}" --output "${dest}"
+          cp "${src}" "${dest}"
           actual="$(sha256sum "${dest}" | awk '{ print $1 }')"
           if [ "${actual}" != "${GF_OIDC_PROFILE_SHA256}" ]; then
             echo "::error::flywheel-github-oidc-profile sha256 mismatch: expected ${GF_OIDC_PROFILE_SHA256}, got ${actual}"

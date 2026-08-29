@@ -1,0 +1,62 @@
+# DECLARE-ONLY — NOT APPLIED (TIN-4062 m1: platform mail transport
+# provisioning). This is ONE additive egress NetworkPolicy: it grants no
+# ingress, replaces no existing policy, and cannot be applied on its own
+# (its namespace, members-greatfallstoolbus-org-production, does not exist
+# yet — infra PR #121 is what creates it, and #121 is unmerged as of
+# 2026-08-29). See secrets.contract.yaml in this same directory for why this
+# lives here instead of inside k8s/platform/, and for the fold-into-#121
+# follow-up both files share.
+#
+# WHY THIS SHAPE. #121's k8s/platform/members-.../networkpolicy.yaml starts
+# the platform namespace at default-deny on BOTH directions (unlike the
+# legacy web namespace, which is ingress-only default-deny) because the
+# platform holds member personal data: "anything it may reach is enumerated
+# below — cluster DNS and the member database, full stop" (#121's own
+# networkpolicy.yaml header). That header also names the one deliberate
+# absence this PR fills: "There is deliberately NO Stripe/api.stripe.com
+# egress: the rails slice (TIN-3818) is unlanded... reviewed together with
+# it." Mail egress is the same shape of deliberate absence, closed the same
+# way: named, reviewed, and added the moment the consuming feature (the
+# TIN-4062 mail leg, app PR #208) exists — never widened to 0.0.0.0/0 and
+# never granted to the whole gftb-platform selector, only to the one
+# component that sends mail.
+#
+# DESTINATION. postfix.tinyland-dev-production.svc.cluster.local:587
+# (STARTTLS + SASL) is HOST-NETWORKED (hostIP 192.168.70.10 on honey), so a
+# podSelector/namespaceSelector can never match it — the same constraint
+# k8s/list/latoolb-us-production/networkpolicy.yaml's mailman-core egress
+# rule documents for the identical relay. Egress targets the raw host LAN
+# IP (destination is not SNAT'd on egress, unlike the ingress leg); /32 is
+# the tightest correct form and is copied verbatim from that proven rule,
+# not re-derived. house netpol idiom followed: default-deny is a separate
+# object (#121's), this file is purely an additive named allow, matching
+# both #121's own allow-egress-dns / allow-egress-member-db shape and the
+# mailman-core policy's own egress-to-relay rule.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-mail-relay
+  namespace: members-greatfallstoolbus-org-production
+  labels:
+    app.kubernetes.io/part-of: gftb-platform
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  # Scoped to the worker only — the outbox dispatcher is the sole mail
+  # sender (src/lib/server/worker.ts / src/lib/server/mail/delivery.ts in
+  # the app repo). The web pod is never selected here and stays unable to
+  # reach the relay even if it were ever handed the Secret by mistake; the
+  # migrator is excluded for the same reason it never gets the mail Secret
+  # (secrets.contract.yaml never_consumed_by).
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: gftb-platform
+      app.kubernetes.io/component: worker
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 192.168.70.10/32
+      ports:
+        - protocol: TCP
+          port: 587

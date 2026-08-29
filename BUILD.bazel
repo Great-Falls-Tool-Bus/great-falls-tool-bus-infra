@@ -20,7 +20,6 @@ CORE_CHECKOUT_CONTRACT_SOURCES = [
     "config/organization.yaml",
     "docs/ci-credentials.md",
     "docs/implementation-overlay.md",
-    "docs/onboarding-runbook.md",
     "docs/runbooks/oncluster-web-cutover.md",
 ] + WORKFLOW_SOURCES
 
@@ -35,6 +34,32 @@ sh_test(
     srcs = ["scripts/validate-core-checkout.py"],
     args = ["--self-test"],
     data = CORE_CHECKOUT_CONTRACT_SOURCES,
+)
+
+RUNNER_GROUP_CONTRACT_SOURCES = [
+    "config/organization.yaml",
+    "tofu/stacks/arc-runners/great-falls-tool-bus.tfvars",
+]
+
+sh_test(
+    name = "runner_group_contract_test",
+    srcs = ["scripts/validate-runner-group-contract.py"],
+    data = RUNNER_GROUP_CONTRACT_SOURCES,
+)
+
+sh_test(
+    name = "runner_group_contract_selftest",
+    srcs = ["scripts/validate-runner-group-contract.py"],
+    args = ["--self-test"],
+    data = RUNNER_GROUP_CONTRACT_SOURCES,
+)
+
+test_suite(
+    name = "runner_group_contract_tests",
+    tests = [
+        ":runner_group_contract_selftest",
+        ":runner_group_contract_test",
+    ],
 )
 
 test_suite(

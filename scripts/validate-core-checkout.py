@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the finite public GloriousFlywheel source-checkout contract."""
+"""Validate the finite GloriousFlywheel source-declaration contract."""
 
 from __future__ import annotations
 
@@ -28,14 +28,13 @@ CORE_MODULE = "attic-iac"
 CORE_FLAKE_PREFIX = f"github:{CORE_REPOSITORY}/"
 CHECKOUT_ACTION = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10"
 IMPLEMENTATION_CORE_PIN = "2281b576bce0e8dd776a047b84e7464f5b508a62"
-ARC_CORE_PIN = "df510574d17b85e7f15470caf3574fcabc4768f1"
+ARC_CORE_PIN = "11ace397282ff89aeb1dfeb4a32fcbed3200c2ff"
 OIDC_PROFILE_PIN = ARC_CORE_PIN
 OIDC_PROFILE_SHA256 = "0aa1bb2b1814c28d6162fc91d5cb3201ecaa13775e94ab3571db776d5dcc3ba8"
 EXACT_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 EXPECTED_WORKFLOWS = {
     "archive-stack.yml",
-    "deploy-arc-runners.yml",
     "edge-drift.yml",
     "edge-plan.yml",
     "flywheel-cache-proof.yml",
@@ -45,32 +44,27 @@ EXPECTED_WORKFLOWS = {
     "mail-crs.yml",
     "validate.yml",
     "web-crs.yml",
-    "web-stack.yml",
+    "web-plan.yml",
 }
 
-# One entry per workflow that checks out the public reusable core. Values are
+# One entry per workflow that declares the reusable core checkout. Values are
 # exact job-level checkout counts, not a loose minimum.
 EXPECTED_CORE_CHECKOUTS = {
     "archive-stack.yml": 2,
-    "deploy-arc-runners.yml": 1,
     "edge-drift.yml": 1,
     "edge-plan.yml": 1,
     "form-crs.yml": 2,
     "k8s-stack-drift.yml": 2,
     "list-crs.yml": 2,
     "mail-crs.yml": 2,
-    "validate.yml": 1,
     "web-crs.yml": 1,
-    "web-stack.yml": 1,
 }
 
-# Preserve the reviewed executable authority for each role. Public-checkout
+# Preserve the reviewed executable authority for each role. Checkout
 # hardening must not silently import a newer core implementation into unrelated
 # apply, drift, or mail lanes.
 EXPECTED_CORE_PINS = {
-    workflow: (
-        ARC_CORE_PIN if workflow == "deploy-arc-runners.yml" else IMPLEMENTATION_CORE_PIN
-    )
+    workflow: IMPLEMENTATION_CORE_PIN
     for workflow in EXPECTED_CORE_CHECKOUTS
 }
 
@@ -78,32 +72,30 @@ EXPECTED_CORE_PINS = {
 # not persist the source repository's per-run GITHUB_TOKEN into Git config.
 EXPECTED_ACTION_CHECKOUTS = {
     "archive-stack.yml": 4,
-    "deploy-arc-runners.yml": 2,
     "edge-drift.yml": 2,
     "edge-plan.yml": 2,
-    "flywheel-cache-proof.yml": 1,
+    "flywheel-cache-proof.yml": 2,
     "form-crs.yml": 4,
     "k8s-stack-drift.yml": 4,
     "list-crs.yml": 4,
     "mail-crs.yml": 4,
-    "validate.yml": 2,
+    "validate.yml": 1,
     "web-crs.yml": 2,
-    "web-stack.yml": 2,
+    "web-plan.yml": 1,
 }
 
 EXPECTED_CORE_CI_PATH_EXPORTS = {
     "archive-stack.yml": 3,
-    "deploy-arc-runners.yml": 4,
     "edge-drift.yml": 1,
     "edge-plan.yml": 3,
     "flywheel-cache-proof.yml": 0,
     "form-crs.yml": 3,
-    "k8s-stack-drift.yml": 5,
+    "k8s-stack-drift.yml": 7,
     "list-crs.yml": 3,
     "mail-crs.yml": 3,
-    "validate.yml": 1,
+    "validate.yml": 0,
     "web-crs.yml": 1,
-    "web-stack.yml": 3,
+    "web-plan.yml": 0,
 }
 
 EXPECTED_PERMISSIONS = {
@@ -116,21 +108,45 @@ EXPECTED_PERMISSIONS = {
 }
 
 CONDITIONAL_CHECKOUTS = {
-    "deploy-arc-runners.yml": "if: steps.secrets.outputs.arc-deploy-secrets-present == 'true'",
     "edge-drift.yml": "if: steps.secrets.outputs.edge-deploy-secrets-present == 'true'",
     "edge-plan.yml": "if: steps.secrets.outputs.edge-deploy-secrets-present == 'true'",
     "k8s-stack-drift.yml": "if: steps.secrets.outputs.kubeconfig-present == 'true'",
 }
 
-RETIRED_CORE_CREDENTIALS = ("GF_CORE_DEPLOY_KEY", "GF_CORE_READ_TOKEN")
+# GF_CORE_READ_TOKEN stays retired: TIN-4015 reinstated the deploy-key half of
+# the pre-91ed60ea credential ladder (see CORE_DEPLOY_KEY_EXPR below), not the
+# token half. GF_CORE_DEPLOY_KEY itself is deliberately NOT in this list any
+# more -- see the history note above CORE_DEPLOY_KEY_EXPR.
+RETIRED_CORE_CREDENTIALS = ("GF_CORE_READ_TOKEN",)
 AUTHORITY_DOCS = (
     Path("README.md"),
     Path("docs/ci-credentials.md"),
     Path("docs/implementation-overlay.md"),
-    Path("docs/onboarding-runbook.md"),
     Path("docs/runbooks/oncluster-web-cutover.md"),
     Path("bazel/flywheel-proof/MODULE.bazel"),
 )
+# History: commit 91ed60ea (2026-07-20) retired GF_CORE_DEPLOY_KEY when
+# GloriousFlywheel was public, added it to RETIRED_CORE_CREDENTIALS, and wrote
+# "do not silently restore a deploy-key/PAT ladder ... and do not reuse the
+# org-scoped ARC registration App" into docs/ci-credentials.md on the
+# assumption a future private-repo transition would use a dedicated,
+# per-overlay contents:read GitHub App installation token instead. TIN-4015
+# (2026-08-22, operator-ruled in the Linear issue text: "credential properly
+# (deploy key pattern)") supersedes that assumption: GloriousFlywheel went
+# private again the same day roster admission gave every self-hosted workflow
+# here an actual runner, and no dedicated, per-overlay contents:read App
+# installation on tinyland-inc/GloriousFlywheel exists (a GFTB GitHub App does
+# exist -- config/organization.yaml's github_app_secret_name,
+# docs/implementation-overlay.md's "ARC GitHub App Secret" -- but it is the
+# org-scoped ARC registration App, and 91ed60ea's prohibition on reusing it
+# for this still holds; nothing here does). The `GF_CORE_DEPLOY_KEY`
+# repository secret was never deleted (minted 2026-07-14, predates its own
+# retirement), so TIN-4015 reuses it rather than standing up new credential
+# infrastructure.
+# Every core-repository checkout below (both the GF_CORE_REF family and the
+# OIDC-profile-ref checkout) must bind exactly this expression -- a read-only
+# deploy key scoped to source checkout only, never an ARC/apply credential.
+CORE_DEPLOY_KEY_EXPR = "${{ secrets.GF_CORE_DEPLOY_KEY }}"
 VERIFY_SCRIPT = (
     "set -euo pipefail",
     'actual="$(git -C GloriousFlywheel rev-parse --verify HEAD)"',
@@ -139,14 +155,34 @@ VERIFY_SCRIPT = (
     "  exit 1",
     "fi",
 )
+HOSTED_SELFTEST_WORKFLOW = Path(".github/workflows/validate.yml")
+CORE_SELFTEST_WORKFLOW = Path(".github/workflows/archive-stack.yml")
+OIDC_SELFTEST_WORKFLOW = Path(".github/workflows/flywheel-cache-proof.yml")
+# TIN-4015: the OIDC helper script is now read from a credentialed checkout of
+# GloriousFlywheel at its own ARC/OIDC role pin (GF_OIDC_PROFILE_REF), not
+# curled unauthenticated from raw.githubusercontent.com (private repos 404 an
+# unauthenticated raw fetch). The checkout dir name is deliberately distinct
+# from the GF_CORE_REF family's "GloriousFlywheel" path so this checkout is
+# excluded from the generic core_indexes census below and validated on its own
+# terms (different pin, different name, same credential).
+OIDC_PROFILE_CHECKOUT_PATH = "GloriousFlywheel-oidc-profile"
+OIDC_PROFILE_CHECKOUT_STEP_NAME = "Checkout pinned GloriousFlywheel OIDC profile source"
+OIDC_PROFILE_VERIFY_STEP_NAME = "Verify GloriousFlywheel OIDC profile checkout"
+OIDC_PROFILE_VERIFY_SCRIPT = (
+    "set -euo pipefail",
+    f'actual="$(git -C {OIDC_PROFILE_CHECKOUT_PATH} rev-parse --verify HEAD)"',
+    'if [ "${actual}" != "${GF_OIDC_PROFILE_REF}" ]; then',
+    '  echo "::error::GloriousFlywheel OIDC profile checkout mismatch: expected ${GF_OIDC_PROFILE_REF}, got ${actual}"',
+    "  exit 1",
+    "fi",
+)
 OIDC_INSTALL_SCRIPT = (
     "set -euo pipefail",
     'tools_dir="${RUNNER_TEMP}/gf-tools"',
     'dest="${tools_dir}/flywheel-github-oidc-profile"',
-    'url="https://raw.githubusercontent.com/tinyland-inc/GloriousFlywheel/'
-    '${GF_OIDC_PROFILE_REF}/scripts/flywheel-github-oidc-profile.sh"',
+    'src="GloriousFlywheel-oidc-profile/scripts/flywheel-github-oidc-profile.sh"',
     'mkdir -p "${tools_dir}"',
-    'curl --fail --silent --show-error --location "${url}" --output "${dest}"',
+    'cp "${src}" "${dest}"',
     'actual="$(sha256sum "${dest}" | awk \'{ print $1 }\')"',
     'if [ "${actual}" != "${GF_OIDC_PROFILE_SHA256}" ]; then',
     '  echo "::error::flywheel-github-oidc-profile sha256 mismatch: expected '
@@ -351,9 +387,30 @@ def justfile_pin(source: str) -> str:
     )
     if match is None:
         raise ContractError(
-            "Justfile gf_core_ci default must be the canonical exact public #ci flake"
+            "Justfile gf_core_ci default must be the canonical exact #ci flake reference"
         )
     return _exact_sha(match.group(1), "Justfile gf_core_ci commit")
+
+
+def justfile_arc_pin(source: str) -> str:
+    sha_definition = _one(
+        re.findall(r'(?m)^arc_core_sha\s*:=\s*"([0-9a-f]{40})"\s*$', source),
+        "Justfile arc_core_sha authority",
+    )
+    ci_definition = _one(
+        re.findall(
+            r'(?m)^arc_core_ci_default\s*:=\s*"'
+            + re.escape(CORE_FLAKE_PREFIX)
+            + r'([0-9a-f]{40})#ci"\s*$',
+            source,
+        ),
+        "Justfile arc_core_ci_default authority",
+    )
+    sha = _exact_sha(sha_definition, "Justfile ARC core commit")
+    ci_sha = _exact_sha(ci_definition, "Justfile ARC core #ci commit")
+    if sha != ci_sha:
+        raise ContractError("Justfile ARC checkout and #ci pins must match")
+    return sha
 
 
 def _workflow_census_findings(sources: dict[str, str]) -> list[str]:
@@ -420,17 +477,29 @@ def _checkout_findings(sources: dict[str, str]) -> list[str]:
                 f"{workflow}: expected {expected_ci_paths} GF_CORE_CI_PATH definition(s)"
             )
         canonical_ci_path_lines = re.findall(
-            r'(?m)^[ \t]+export GF_CORE_CI_PATH="github:tinyland-inc/'
-            r'GloriousFlywheel/\$\{GF_CORE_REF\}#ci"[ \t]*$',
+            r'(?m)^[ \t]+export GF_CORE_CI_PATH="path:\$\{GF_CORE_PATH\}#ci"[ \t]*$',
             source,
         )
         if len(canonical_ci_path_lines) != expected_ci_paths:
             findings.append(
-                f"{workflow}: every GF_CORE_CI_PATH must bind the exact workflow GF_CORE_REF"
+                f"{workflow}: every GF_CORE_CI_PATH must bind the local "
+                'path:${GF_CORE_PATH}#ci devshell (TIN-4015: GloriousFlywheel is '
+                "private; a github: flake ref 404s even after the checkout is "
+                "credentialed)"
             )
-        if source.count(CORE_FLAKE_PREFIX) != expected_ci_paths:
+        core_path_definitions = re.findall(
+            r"(?m)^[ \t]+export GF_CORE_PATH=\.\./GloriousFlywheel[ \t]*$",
+            source,
+        )
+        if len(core_path_definitions) != expected_ci_paths:
             findings.append(
-                f"{workflow}: has an unowned GloriousFlywheel flake source"
+                f"{workflow}: expected {expected_ci_paths} GF_CORE_PATH export(s), "
+                "one immediately backing each GF_CORE_CI_PATH"
+            )
+        if CORE_FLAKE_PREFIX in source:
+            findings.append(
+                f"{workflow}: must not reference the retired github: GloriousFlywheel "
+                "flake source (TIN-4015)"
             )
 
         steps = workflow_steps(source)
@@ -461,16 +530,41 @@ def _checkout_findings(sources: dict[str, str]) -> list[str]:
                 findings.append(
                     f"{location}: checkout must set persist-credentials: false exactly once"
                 )
-            if re.search(
-                r"(?mi)^\s+['\"]?(?:token|ssh-key)['\"]?\s*:", step.text
-            ):
-                findings.append(f"{location}: checkout has an explicit credential input")
             if _step_condition(step) != expected_condition:
                 findings.append(f"{location}: checkout condition must preserve lane gating")
 
             repositories = _with_values(step, "repository")
             if repositories == [CORE_REPOSITORY]:
+                # Core-repository checkouts (the GF_CORE_REF family and the
+                # flywheel-cache-proof OIDC-profile-ref checkout) carry a
+                # mandatory, exact ssh-key credential bound to
+                # GF_CORE_DEPLOY_KEY (TIN-4015) -- validated exactly once, in
+                # their own dedicated blocks below. The overlay checkout's
+                # "no credential at all" rule two lines down does not apply to
+                # them. But an off-census path (neither the GF_CORE_REF
+                # family's "GloriousFlywheel" nor flywheel-cache-proof's
+                # "GloriousFlywheel-oidc-profile") must not be allowed to
+                # silently `continue` past every check below -- an
+                # off-census core checkout escapes both this rule AND the
+                # dedicated core-checkout census (core_indexes is itself
+                # path-scoped), which is exactly how it could otherwise carry
+                # an arbitrary credential and ref undetected.
+                allowed = (
+                    {OIDC_PROFILE_CHECKOUT_PATH}
+                    if workflow == "flywheel-cache-proof.yml"
+                    else {"GloriousFlywheel"}
+                )
+                if set(_with_values(step, "path")) != allowed:
+                    findings.append(
+                        f"{location}: core-repository checkout path must be "
+                        f"{sorted(allowed)[0]} -- an off-census core checkout "
+                        "escapes every credential, pin, and HEAD-assertion check"
+                    )
                 continue
+            if re.search(
+                r"(?mi)^\s+['\"]?(?:token|ssh-key)['\"]?\s*:", step.text
+            ):
+                findings.append(f"{location}: checkout has an explicit credential input")
             if repositories:
                 findings.append(f"{location}: overlay checkout cannot select another repository")
             if step.name != "Checkout overlay":
@@ -486,26 +580,33 @@ def _checkout_findings(sources: dict[str, str]) -> list[str]:
             index
             for index, step in enumerate(steps)
             if _with_values(step, "repository") == [CORE_REPOSITORY]
+            and _with_values(step, "path") == ["GloriousFlywheel"]
         ]
         if core_indexes:
             observed_core_workflows.add(workflow)
         expected_core_count = EXPECTED_CORE_CHECKOUTS.get(workflow, 0)
         if len(core_indexes) != expected_core_count:
             findings.append(
-                f"{workflow}: expected {expected_core_count} public core checkout(s), found {len(core_indexes)}"
+                f"{workflow}: expected {expected_core_count} core checkout declaration(s), found {len(core_indexes)}"
             )
 
         for index in core_indexes:
             step = steps[index]
             location = f"{workflow}:{step.line}"
-            if step.name != "Checkout public GloriousFlywheel core":
-                findings.append(f"{location}: core checkout name must state public authority")
+            if step.name != "Checkout pinned GloriousFlywheel core":
+                findings.append(f"{location}: core checkout name must state pinned source")
             if _with_values(step, "repository") != [CORE_REPOSITORY]:
                 findings.append(f"{location}: core repository must be {CORE_REPOSITORY}")
             if _with_values(step, "ref") != ["${{ env.GF_CORE_REF }}"]:
                 findings.append(f"{location}: core ref must be env.GF_CORE_REF")
             if _with_values(step, "path") != ["GloriousFlywheel"]:
                 findings.append(f"{location}: core checkout path must be GloriousFlywheel")
+            if _with_values(step, "ssh-key") != [CORE_DEPLOY_KEY_EXPR]:
+                findings.append(
+                    f"{location}: core checkout must bind the GF_CORE_DEPLOY_KEY deploy key"
+                )
+            if _with_values(step, "token"):
+                findings.append(f"{location}: core checkout must not use a token credential")
             if _with_values(step, "persist-credentials") != ["false"]:
                 findings.append(f"{location}: core checkout must not persist credentials")
             if index + 1 >= len(steps):
@@ -588,6 +689,15 @@ def validate(root: Path) -> list[str]:
         except ContractError as exc:
             findings.append(str(exc))
 
+    try:
+        observed_arc_pin = justfile_arc_pin(_read(root, Path("Justfile"), "Justfile"))
+        if observed_arc_pin != ARC_CORE_PIN:
+            findings.append(
+                f"Justfile: ARC authority must preserve role pin {ARC_CORE_PIN}"
+            )
+    except ContractError as exc:
+        findings.append(str(exc))
+
     proof = sources.get("flywheel-cache-proof.yml", "")
     oidc_refs = re.findall(
         r"(?m)^[ \t]+GF_OIDC_PROFILE_REF[ \t]*:[ \t]*([^\s#]+)[ \t]*$",
@@ -615,22 +725,69 @@ def validate(root: Path) -> list[str]:
         findings.append(
             "flywheel-cache-proof.yml must preserve the content hash for the pinned OIDC helper"
         )
-    canonical_oidc_url = (
-        'url="https://raw.githubusercontent.com/tinyland-inc/GloriousFlywheel/'
-        '${GF_OIDC_PROFILE_REF}/scripts/flywheel-github-oidc-profile.sh"'
-    )
-    raw_oidc_urls = re.findall(
-        r'(?m)^\s+url="https://raw\.githubusercontent\.com/tinyland-inc/'
-        r'GloriousFlywheel/[^\n]+$',
-        proof,
-    )
-    if len(raw_oidc_urls) != 1 or canonical_oidc_url not in raw_oidc_urls[0]:
+    # TIN-4015: GloriousFlywheel is private now, so an unauthenticated raw
+    # fetch of its content always 404s. The OIDC helper is read from the
+    # credentialed checkout below instead -- assert the raw fetch is gone, not
+    # that it is exact.
+    if re.search(
+        r"raw\.githubusercontent\.com/tinyland-inc/GloriousFlywheel", proof
+    ):
         findings.append(
-            "flywheel-cache-proof.yml must fetch the OIDC helper through its exact pinned ref"
+            "flywheel-cache-proof.yml must not fetch GloriousFlywheel content via "
+            "raw.githubusercontent.com (TIN-4015: private repo, use the credentialed "
+            "checkout)"
         )
+    proof_steps = workflow_steps(proof)
+    oidc_checkout_steps = [
+        step for step in proof_steps if step.name == OIDC_PROFILE_CHECKOUT_STEP_NAME
+    ]
+    if len(oidc_checkout_steps) != 1:
+        findings.append(
+            "flywheel-cache-proof.yml must contain one pinned OIDC profile source checkout"
+        )
+    else:
+        step = oidc_checkout_steps[0]
+        location = f"flywheel-cache-proof.yml:{step.line}"
+        if _checkout_use(step) != [CHECKOUT_ACTION]:
+            findings.append(f"{location}: OIDC profile checkout action must pin {CHECKOUT_ACTION}")
+        if _with_values(step, "repository") != [CORE_REPOSITORY]:
+            findings.append(f"{location}: OIDC profile checkout repository must be {CORE_REPOSITORY}")
+        if _with_values(step, "ref") != ["${{ env.GF_OIDC_PROFILE_REF }}"]:
+            findings.append(f"{location}: OIDC profile checkout ref must be env.GF_OIDC_PROFILE_REF")
+        if _with_values(step, "path") != [OIDC_PROFILE_CHECKOUT_PATH]:
+            findings.append(
+                f"{location}: OIDC profile checkout path must be {OIDC_PROFILE_CHECKOUT_PATH}"
+            )
+        if _with_values(step, "ssh-key") != [CORE_DEPLOY_KEY_EXPR]:
+            findings.append(
+                f"{location}: OIDC profile checkout must bind the GF_CORE_DEPLOY_KEY deploy key"
+            )
+        if _with_values(step, "token"):
+            findings.append(f"{location}: OIDC profile checkout must not use a token credential")
+        if _with_values(step, "persist-credentials") != ["false"]:
+            findings.append(f"{location}: OIDC profile checkout must not persist credentials")
+
+        step_index = proof_steps.index(step)
+        if step_index + 1 >= len(proof_steps):
+            findings.append(f"{location}: OIDC profile checkout lacks a following HEAD assertion")
+        else:
+            assertion = proof_steps[step_index + 1]
+            assertion_location = f"flywheel-cache-proof.yml:{assertion.line}"
+            if assertion.name != OIDC_PROFILE_VERIFY_STEP_NAME:
+                findings.append(
+                    f"{location}: the immediately following step must verify OIDC profile HEAD"
+                )
+            else:
+                if _step_run_script(assertion) != OIDC_PROFILE_VERIFY_SCRIPT:
+                    findings.append(
+                        f"{assertion_location}: HEAD assertion must use the closed canonical script"
+                    )
+                if re.search(r"(?m)^\s+continue-on-error\s*:", assertion.text):
+                    findings.append(f"{assertion_location}: HEAD assertion cannot fail soft")
+
     oidc_install_steps = [
         step
-        for step in workflow_steps(proof)
+        for step in proof_steps
         if step.name == "Install fleet OIDC front door (pinned)"
     ]
     if len(oidc_install_steps) != 1:
@@ -639,7 +796,7 @@ def validate(root: Path) -> list[str]:
         )
     elif _step_run_script(oidc_install_steps[0]) != OIDC_INSTALL_SCRIPT:
         findings.append(
-            "flywheel-cache-proof.yml must preserve the closed OIDC fetch-and-hash script"
+            "flywheel-cache-proof.yml must preserve the closed OIDC copy-and-hash script"
         )
 
     for relative in AUTHORITY_DOCS:
@@ -651,8 +808,6 @@ def validate(root: Path) -> list[str]:
         for credential in RETIRED_CORE_CREDENTIALS:
             if credential in source:
                 findings.append(f"{relative}: references retired {credential}")
-        if re.search(r"private\s+(?:GloriousFlywheel|core repo)", source, re.IGNORECASE):
-            findings.append(f"{relative}: claims the public core source is private")
 
     return findings
 
@@ -674,94 +829,131 @@ def _write_fixture(destination: Path, source_root: Path) -> None:
 def self_test(root: Path) -> None:
     mutations: dict[str, tuple[Path, str, str]] = {
         "floating workflow pin": (
-            Path(".github/workflows/validate.yml"),
+            CORE_SELFTEST_WORKFLOW,
             f"GF_CORE_REF: {IMPLEMENTATION_CORE_PIN}",
             "GF_CORE_REF: main",
         ),
         "job-level core ref override": (
-            Path(".github/workflows/validate.yml"),
+            CORE_SELFTEST_WORKFLOW,
             "    steps:\n",
             f"    env:\n      GF_CORE_REF: {'e' * 40}\n    steps:\n",
         ),
         "floating checkout action": (
-            Path(".github/workflows/validate.yml"),
+            HOSTED_SELFTEST_WORKFLOW,
             CHECKOUT_ACTION,
             "actions/checkout@v6",
         ),
         "credential persistence": (
-            Path(".github/workflows/validate.yml"),
+            HOSTED_SELFTEST_WORKFLOW,
             "persist-credentials: false",
             "persist-credentials: true",
         ),
         "wrong core path": (
-            Path(".github/workflows/validate.yml"),
+            CORE_SELFTEST_WORKFLOW,
             "path: GloriousFlywheel",
             "path: core",
         ),
         "explicit checkout token": (
-            Path(".github/workflows/validate.yml"),
+            CORE_SELFTEST_WORKFLOW,
             "          path: GloriousFlywheel\n",
             "          path: GloriousFlywheel\n          token: ${{ github.token }}\n",
         ),
-        "explicit checkout SSH key": (
-            Path(".github/workflows/validate.yml"),
-            "          path: GloriousFlywheel\n",
-            "          path: GloriousFlywheel\n          ssh-key: ${{ secrets.SOME_KEY }}\n",
+        "wrong core checkout SSH key": (
+            CORE_SELFTEST_WORKFLOW,
+            "          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}\n",
+            "          ssh-key: ${{ secrets.SOME_KEY }}\n",
+        ),
+        "missing core checkout SSH key": (
+            CORE_SELFTEST_WORKFLOW,
+            "          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}\n",
+            "",
+        ),
+        "missing OIDC profile checkout SSH key": (
+            Path(".github/workflows/flywheel-cache-proof.yml"),
+            "          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}\n",
+            "",
+        ),
+        "off-census core checkout": (
+            # B1 (PR #130 review, comment 5382527702): repointing an ordinary
+            # "Checkout overlay" step at the core repository with a path
+            # outside the two known census paths used to `continue` past both
+            # the overlay credential rule AND the (then path-scoped)
+            # core_indexes census, escaping every credential/pin/HEAD-assertion
+            # check with 0 findings. This mutation is that exact shape.
+            CORE_SELFTEST_WORKFLOW,
+            "          path: overlay\n          persist-credentials: false\n",
+            "          repository: tinyland-inc/GloriousFlywheel\n"
+            "          ref: main\n"
+            "          path: pwn\n"
+            "          token: ${{ secrets.SOME_OTHER_SECRET }}\n"
+            "          persist-credentials: false\n",
         ),
         "overlay checkout token": (
-            Path(".github/workflows/validate.yml"),
+            HOSTED_SELFTEST_WORKFLOW,
             "          path: overlay\n",
             "          path: overlay\n          token: ${{ secrets.SITE_CI_READ_TOKEN }}\n",
         ),
         "spaced checkout credential key": (
-            Path(".github/workflows/validate.yml"),
+            CORE_SELFTEST_WORKFLOW,
             "          path: GloriousFlywheel\n",
             "          path: GloriousFlywheel\n          token : ${{ secrets.NEW_GF_PAT }}\n",
         ),
         "wrong overlay path": (
-            Path(".github/workflows/validate.yml"),
+            HOSTED_SELFTEST_WORKFLOW,
             "          path: overlay\n",
             "          path: wrong-overlay\n",
         ),
         "duplicate core ref": (
-            Path(".github/workflows/validate.yml"),
+            CORE_SELFTEST_WORKFLOW,
             "          ref: ${{ env.GF_CORE_REF }}\n",
             "          ref: ${{ env.GF_CORE_REF }}\n          ref: main\n",
         ),
         "quoted hidden checkout": (
-            Path(".github/workflows/validate.yml"),
+            HOSTED_SELFTEST_WORKFLOW,
             "    steps:\n",
             "    steps:\n      - name: Hidden checkout\n        uses: 'actions/checkout@v6'\n",
         ),
         "shell core clone": (
-            Path(".github/workflows/validate.yml"),
+            HOSTED_SELFTEST_WORKFLOW,
             "    steps:\n",
             "    steps:\n      - name: Clone core\n        run: git clone https://github.com/tinyland-inc/GloriousFlywheel\n",
         ),
         "remote core action": (
-            Path(".github/workflows/validate.yml"),
+            HOSTED_SELFTEST_WORKFLOW,
             "    steps:\n",
             "    steps:\n      - name: Remote core action\n        uses: tinyland-inc/GloriousFlywheel/.github/actions/nix-job@main\n",
         ),
         "floating core devshell": (
-            Path(".github/workflows/validate.yml"),
+            CORE_SELFTEST_WORKFLOW,
+            'export GF_CORE_CI_PATH="path:${GF_CORE_PATH}#ci"',
+            'export GF_CORE_CI_PATH="path:../GloriousFlywheel-other#ci"',
+        ),
+        "resurrected github flake source": (
+            CORE_SELFTEST_WORKFLOW,
+            'export GF_CORE_CI_PATH="path:${GF_CORE_PATH}#ci"',
             'export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"',
-            'export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/main#ci"',
         ),
         "write contents permission": (
-            Path(".github/workflows/validate.yml"),
+            HOSTED_SELFTEST_WORKFLOW,
             "  contents: read",
             "  contents: write",
         ),
         "expanded workflow token permissions": (
-            Path(".github/workflows/validate.yml"),
+            HOSTED_SELFTEST_WORKFLOW,
             "  contents: read\n",
             "  contents: read\n  actions: write\n",
         ),
-        "floating OIDC helper URL": (
+        "reintroduced raw OIDC helper URL": (
             Path(".github/workflows/flywheel-cache-proof.yml"),
-            "GloriousFlywheel/${GF_OIDC_PROFILE_REF}/scripts/flywheel-github-oidc-profile.sh",
-            "GloriousFlywheel/main/scripts/flywheel-github-oidc-profile.sh",
+            "    steps:\n",
+            "    steps:\n      - name: Sneaky raw fetch\n        run: curl -sSL "
+            "https://raw.githubusercontent.com/tinyland-inc/GloriousFlywheel/main/"
+            "scripts/x.sh\n",
+        ),
+        "OIDC profile checkout wrong ref": (
+            Path(".github/workflows/flywheel-cache-proof.yml"),
+            "          ref: ${{ env.GF_OIDC_PROFILE_REF }}\n",
+            "          ref: main\n",
         ),
         "mismatched OIDC helper hash": (
             Path(".github/workflows/flywheel-cache-proof.yml"),
@@ -774,17 +966,17 @@ def self_test(root: Path) -> None:
             "if false; then",
         ),
         "legacy core credential": (
-            Path(".github/workflows/validate.yml"),
+            CORE_SELFTEST_WORKFLOW,
             "env:\n",
             "env:\n  GF_CORE_READ_TOKEN: ${{ secrets.GF_CORE_READ_TOKEN }}\n",
         ),
         "missing HEAD assertion": (
-            Path(".github/workflows/validate.yml"),
+            CORE_SELFTEST_WORKFLOW,
             "      - name: Verify GloriousFlywheel core checkout",
             "      - name: Do not verify GloriousFlywheel core checkout",
         ),
         "mutated HEAD assertion": (
-            Path(".github/workflows/validate.yml"),
+            CORE_SELFTEST_WORKFLOW,
             "rev-parse --verify HEAD",
             "rev-parse --verify HEAD || true",
         ),
@@ -799,7 +991,7 @@ def self_test(root: Path) -> None:
             "      - name: Checkout overlay\n        if: always()",
         ),
         "fail-soft HEAD assertion": (
-            Path(".github/workflows/validate.yml"),
+            CORE_SELFTEST_WORKFLOW,
             "      - name: Verify GloriousFlywheel core checkout\n        run: |",
             "      - name: Verify GloriousFlywheel core checkout\n        continue-on-error: true\n        run: |",
         ),
@@ -819,9 +1011,9 @@ def self_test(root: Path) -> None:
             f"pinned_commit: {'b' * 40}",
         ),
         "mismatched ARC role pin": (
-            Path(".github/workflows/deploy-arc-runners.yml"),
-            f"GF_CORE_REF: {ARC_CORE_PIN}",
-            f"GF_CORE_REF: {'c' * 40}",
+            Path("Justfile"),
+            f'arc_core_sha := "{ARC_CORE_PIN}"',
+            f'arc_core_sha := "{"c" * 40}"',
         ),
         "mismatched OIDC profile pin": (
             Path(".github/workflows/flywheel-cache-proof.yml"),
@@ -875,11 +1067,12 @@ def main() -> int:
     print(
         "core-checkout contract passed: "
         f"{len(EXPECTED_CORE_CHECKOUTS)} workflow consumers, "
-        f"{sum(EXPECTED_CORE_CHECKOUTS.values())} public exact-SHA checkouts, "
+        f"{sum(EXPECTED_CORE_CHECKOUTS.values())} exact-SHA checkout declarations, "
         f"{sum(EXPECTED_CORE_CI_PATH_EXPORTS.values())} pinned #ci devshell sources, "
         f"implementation pin {IMPLEMENTATION_CORE_PIN}, "
         f"ARC/OIDC role pin {ARC_CORE_PIN}; "
-        "no dedicated cross-repo checkout credential"
+        "every core-repository checkout binds the read-only GF_CORE_DEPLOY_KEY "
+        "deploy key (TIN-4015)"
     )
     return 0
 
