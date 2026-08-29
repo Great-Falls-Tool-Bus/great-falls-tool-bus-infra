@@ -10,9 +10,10 @@
 # pruned at the gftb-site promotion), this namespace starts with a default deny
 # on ingress AND egress: the platform holds member personal data, so anything
 # it may reach is enumerated below — cluster DNS and the member database, full
-# stop. There is deliberately NO Stripe/api.stripe.com egress: the rails slice
-# (TIN-3818) is unlanded, its Secret is unminted, and the egress allow is that
-# slice's follow-up, reviewed together with it.
+# stop. There is deliberately NO Stripe/api.stripe.com egress. The TIN-3818
+# behavior is landed, but its test-mode Secret is unminted and provider reach is
+# a separate runtime-activation review; this declare-only serving PR cannot
+# open it as a side effect.
 #
 # THE MIGRATOR RIDES THESE POLICIES TOO. The pre-rollout migration Job
 # (k8s/member-db/members-greatfallstoolbus-org-production/

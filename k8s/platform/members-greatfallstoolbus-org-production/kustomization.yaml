@@ -8,9 +8,9 @@ namespace: members-greatfallstoolbus-org-production
 # intent, plus the namespace's default-deny NetworkPolicy family.
 # `kubectl kustomize` MUST render this cleanly (`just platform-stack-validate`
 # renders it). The committed Deployments carry the PLACEHOLDER-PLATFORM-IMAGE
-# sentinel — no platform image exists until the S0-S3 app stack lands — so the
-# tree cannot be applied as-is even by accident: the reviewed digest arrives
-# only through the attended platform-release chain, which renders, records,
+# sentinel even though main now publishes the image: the exact reviewed digest
+# arrives only through the attended platform-release chain, so the tree cannot
+# be applied as-is by accident. That chain renders, records,
 # dry-runs, and applies the same bytes. This stack creates no Namespace and
 # ships no Secret; the pre-rollout migration Job template that shares this
 # namespace belongs to k8s/member-db (PR #118) and is deliberately NOT a

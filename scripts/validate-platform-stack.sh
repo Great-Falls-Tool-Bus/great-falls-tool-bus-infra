@@ -126,10 +126,12 @@ fi
 # PATH=/bin. Kubernetes `command` would replace the reviewed Entrypoint, so it
 # is forbidden for both workloads. Web inherits Cmd unchanged; worker replaces
 # only Cmd with one positional role name, resolving to /bin/worker through PATH.
-assert_eq "$(yq -r --arg app "gftb-platform-web" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | (.command // []) | length' "${deploy_web}")" "0" "web must preserve image Entrypoint"
-assert_eq "$(yq -r --arg app "gftb-platform-web" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | (.args // []) | length' "${deploy_web}")" "0" "web must inherit image Cmd /bin/web"
-assert_eq "$(yq -r --arg app "gftb-platform-worker" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | (.command // []) | length' "${deploy_worker}")" "0" "worker must preserve image Entrypoint"
-assert_eq "$(yq -r --arg app "gftb-platform-worker" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | (.args // []) | join(" ")' "${deploy_worker}")" "worker" "worker must override only image Cmd"
+# Key absence is load-bearing: an explicitly empty override is not accepted as
+# equivalent to inheriting the image contract.
+assert_eq "$(yq -r --arg app "gftb-platform-web" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | has("command")' "${deploy_web}")" "false" "web command key must be absent"
+assert_eq "$(yq -r --arg app "gftb-platform-web" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | has("args")' "${deploy_web}")" "false" "web args key must be absent"
+assert_eq "$(yq -r --arg app "gftb-platform-worker" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | has("command")' "${deploy_worker}")" "false" "worker command key must be absent"
+assert_eq "$(yq -c --arg app "gftb-platform-worker" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .args' "${deploy_worker}")" '["worker"]' "worker args must select exactly one role"
 
 # --- adapter-node serving shape (web only): :3000 + /health probes -----------
 assert_eq "$(yq -r --arg app "gftb-platform-web" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .ports[] | select(.name == "http") | .containerPort' "${deploy_web}")" "3000" "web containerPort"
@@ -164,7 +166,7 @@ fi
 # GFTB_WORKER_ID: per-replica identity from the downward API, worker only.
 assert_eq "$(yq -r --arg app "gftb-platform-worker" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .env[] | select(.name == "GFTB_WORKER_ID") | .valueFrom.fieldRef.fieldPath' "${deploy_worker}")" "metadata.name" "worker GFTB_WORKER_ID fieldRef (per-replica pod name)"
 # STRIPE_*: every reference is an OPTIONAL secretKeyRef on the test-mode
-# Secret; a committed value (or a required ref before TIN-3818 lands) fails.
+# Secret; a committed value or a required ref before runtime activation fails.
 for pair in "gftb-platform-web:${deploy_web}" "gftb-platform-worker:${deploy_worker}"; do
   app="${pair%%:*}"
   manifest="${pair#*:}"

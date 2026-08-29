@@ -161,10 +161,11 @@ spec:
             # STRIPE TEST-MODE RUNTIME REFERENCES (TIN-3817 hand-off; slices
             # §3 — technically incapable of a live call: the app half refuses
             # keys that are not sk_test_/pk_test_/whsec_). Names only, values
-            # never in git; `optional: true` because the rails slice
-            # (TIN-3818) is unlanded and the Secret is minted at the operator
-            # sitting that enables it. NetworkPolicy egress to Stripe stays
-            # CLOSED until that slice lands — these are references, not reach.
+            # never in git. The TIN-3818 behavior is landed; `optional: true`
+            # keeps the workload schedulable while the test-mode Secret remains
+            # unminted. NetworkPolicy egress to Stripe stays CLOSED until a
+            # separate operator-reviewed runtime activation — these references
+            # alone grant no provider reach.
             - name: STRIPE_SECRET_KEY
               valueFrom:
                 secretKeyRef:
