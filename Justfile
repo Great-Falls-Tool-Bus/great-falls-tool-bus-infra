@@ -2231,11 +2231,11 @@ grafana-dashboards-validate:
 # a replicas patch.
 #
 # SEQUENCING. Usable but HELD on named dependencies (see k8s/platform/README.md):
-# the S0-S3 app stack (no platform image exists yet), member-db PR #118
-# merge+apply plus its object-store ruling (no database, no runtime DSN Secret
-# without it), and the pre-rollout migration (that PR's member-db-migrate-apply)
-# before first serve. docs/runbooks/staging-platform-serving.md is the ordered
-# attended path.
+# the exact publisher-emitted digest receipt for the chosen main SHA; member-db
+# PR #118's reviewed merge, operator apply, backup proof and runtime DSN; the
+# pre-rollout migration; and a separately reviewed tenant-bootstrap carrier.
+# The app slices and image already exist, and #118's object-store ruling is
+# closed. docs/runbooks/staging-platform-serving.md is the ordered attended path.
 
 platform_stack_dir := "k8s/platform/members-greatfallstoolbus-org-production"
 platform_ns := "members-greatfallstoolbus-org-production"
