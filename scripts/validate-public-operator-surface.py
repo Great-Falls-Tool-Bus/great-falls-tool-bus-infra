@@ -403,8 +403,8 @@ ATTENDED_RECIPE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
         "_platform-release-plan-preflight",
     ),
     "platform-release-pinned-running-proof": (
-        "_platform-release-inputs",
         "_platform-release-kubeconfig-input",
+        "_platform-release-plan-preflight",
     ),
     "platform-release-served-proof": (),
 }
@@ -426,37 +426,32 @@ ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     # Each value is sha256(executable_recipe_text(body)) — prose edits are
     # free, an executable line is not. What each pin is protecting:
     #
-    # _platform-release-inputs: holds the serving image to an exact @sha256
-    #   digest on one of the two admitted platform repositories (the pre- and
-    #   post-TIN-3815-rename slugs), refuses the declare-only PLACEHOLDERs,
-    #   and holds the integrity-critical tenant id to UUID shape. Widening the
-    #   repository alternation or dropping the tenant guard must be reviewed
-    #   in here.
+    # _platform-release-inputs: tenant UUID is the sole mutable release
+    #   datum. Image authority is Git-owned, not a runtime input.
     "_platform-release-inputs": _receipt(
-        "a5c5252b6e7ca149", "a4a2272b17a587ef", "81e0e5a789fd637c", "8cc64accd78858f9"
+        "b9558e0ee5338357", "56f695910503f2a4", "b0745c705387502f", "c771cff534ce728e"
     ),
     # _platform-release-kubeconfig-input: the custody bar between an ambient
     #   kubeconfig context and the member-data namespace.
     "_platform-release-kubeconfig-input": _receipt(
         "d4691ca921dc2f69", "135e09433d755159", "4e20bbc9d2b88201", "2b99a7893381ca9d"
     ),
-    # platform-release-render: the single renderer; refuses to run when the
-    #   committed sentinels have vanished, so a digest smuggled into git can
-    #   never be laundered through the render.
+    # platform-release-render: substitutes exactly two tenant sentinels
+    #   while leaving Git-owned image bytes untouched.
     "platform-release-render": _receipt(
-        "ac0e346fd4c310ed", "be3a37563440c7e5", "c46700314a985730", "48ab005b9938fdc4"
+        "6ec0b2665372d3e5", "00a58bec5d06dc50", "d821c2287bb4373f", "a9285f30057f4a96"
     ),
     "_platform-release-plan-root-contract": _receipt(
         "ebf3de9991e622a2", "5b1be15f906593dc", "cb30d87b74d2ace1", "751b3178509f188b"
     ),
     "platform-release-plan": _receipt(
-        "557dfe42211a9660", "a5f199fba23f6dc8", "46b02550c1ddc8cc", "1c149e0179f23152"
+        "f1717f9cbb6b4757", "0b956a2f618fa842", "4a73586e27b0ad4f", "83b738ae2531a95d"
     ),
     # _platform-release-plan-preflight: what makes the apply byte-exact — the
     #   recorded bytes must hash to their receipt AND re-render identically
     #   from the current carrier before anything touches the wire.
     "_platform-release-plan-preflight": _receipt(
-        "4d82810bb93b522f", "2043db77d8ff14c6", "83444a6678e6eca1", "e2f6c1b9532a4617"
+        "95b87762848e2b9f", "974ff9b58cfd682c", "3e7d556c6d49ca01", "90394854bd9e8adb"
     ),
     "platform-release-server-dry-run": _receipt(
         "0af1efe9cb262f4a", "0c0e5ec8516fcbd4", "58ee551d6cf8ec9a", "e625ddd244b185fc"
@@ -467,10 +462,10 @@ ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     "platform-release-apply": _receipt(
         "6aa6264d65e6dd3b", "63819c959bbc91d6", "c4c3a737c5bd48f2", "43c9aad7285431c1"
     ),
-    # platform-release-pinned-running-proof: release evidence — live digests
-    #   equal the plan and the budgeted replica counts are actually ready.
+    # platform-release-pinned-running-proof: live digests equal the
+    #   Git-derived byte-receipted plan; budgeted replicas are ready.
     "platform-release-pinned-running-proof": _receipt(
-        "bf2f704af07697f1", "9a7f5995402e41b9", "32d9d05757cb6acc", "e24ef1e4335943b8"
+        "7124069e9216909c", "01362550dce01db6", "9c8d66a048b62ffd", "88b192b31b0ade4f"
     ),
     # platform-release-served-proof: pinned specifically for its refusal
     #   branch — the PRIVATE staging host must refuse anonymous requests, and

@@ -7,15 +7,13 @@ namespace: members-greatfallstoolbus-org-production
 # ClusterIP Service behind the fail-closed staging.greatfallstoolbus.org route
 # intent, plus the namespace's default-deny NetworkPolicy family.
 # `kubectl kustomize` MUST render this cleanly (`just platform-stack-validate`
-# renders it). The committed Deployments carry the PLACEHOLDER-PLATFORM-IMAGE
-# sentinel even though main now publishes the image: the exact reviewed digest
-# arrives only through the attended platform-release chain, so the tree cannot
-# be applied as-is by accident. That chain renders, records,
-# dry-runs, and applies the same bytes. This stack creates no Namespace and
-# ships no Secret; the pre-rollout migration Job template that shares this
-# namespace belongs to k8s/member-db (PR #118) and is deliberately NOT a
-# resource here (it is one-shot, generateName, created per release — not
-# reconciled stack state). See ../README.md.
+# renders it). Git owns the exact immutable image receipt in both Deployments:
+# ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:10f853938dc6823afe8c9bdc54943587f963d22117aafd17247350b2b5712b35
+# The attended release chain accepts only the reviewed tenant UUID, records the
+# rendered bytes, dry-runs them, and applies those same bytes. This stack creates
+# no Namespace and ships no Secret; the pre-rollout migration Job template that
+# shares this namespace belongs to k8s/member-db (PR #118), is one-shot
+# `generateName` state, and is not reconciled here.
 
 resources:
   - deployment-web.yaml

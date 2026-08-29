@@ -8,9 +8,9 @@
 # database or tenant is unconfigured/unreachable/nonexistent, so a misconfigured worker is
 # a VISIBLE CrashLoopBackOff, never a healthy-looking idle pod.
 #
-# Image admission, sentinel discipline, and the render/plan/apply chain are
-# identical to deployment-web.yaml — read its header; it is the same image,
-# selected by a different entrypoint.
+# Image authority is identical to deployment-web.yaml: Git pins the exact
+# publisher receipt ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:10f853938dc6823afe8c9bdc54943587f963d22117aafd17247350b2b5712b35; the release chain accepts no image input. This
+# workload selects only the worker role while preserving the image Entrypoint.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -76,9 +76,8 @@ spec:
                     values: ["bumble", "sting"]
       containers:
         - name: gftb-platform-worker
-          # OPERATOR-SUPPLIED AT DISPATCH — same sentinel discipline as
-          # deployment-web.yaml; the validator asserts it is intact.
-          image: PLACEHOLDER-PLATFORM-IMAGE
+          # Same Git-owned immutable publisher receipt as the web Deployment.
+          image: ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:10f853938dc6823afe8c9bdc54943587f963d22117aafd17247350b2b5712b35
           imagePullPolicy: IfNotPresent
           # Preserve the image's reviewed Entrypoint=[dumb-init,--] and
           # override only its default Cmd. PATH=/bin resolves this positional

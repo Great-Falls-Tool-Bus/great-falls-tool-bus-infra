@@ -1,241 +1,157 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2016
-# SC2016 is intentional throughout: `$app` inside single-quoted yq programs is
-# a jq variable bound by `--arg app`, not a shell expansion — the same
-# injection posture as validate-web-stack.sh.
 set -euo pipefail
-
-# DECLARE-ONLY guard for the GFTB platform staging serving stack (TIN-3815 /
-# TIN-3817). Asserts the invariants so a regression that would open the public
-# path, smuggle a real image or tenant id into the tree, or cross the two
-# database credentials fails CI before any apply. Never contacts a cluster;
-# never needs a secret.
-#
-# THE COMMITTED BYTES ARE SENTINELED, NOT PINNED. Unlike the legacy web stack
-# (validate-web-stack.sh requires a real digest pin there), this declare-only
-# carrier does not bake a release choice into git even though main now
-# publishes the three-entrypoint image. The committed Deployments MUST carry
-# PLACEHOLDER-PLATFORM-IMAGE and PLACEHOLDER-GFTB-TENANT-ID, and the
-# real values arrive only through the attended platform-release chain, whose
-# input guards hold the image to
-# ghcr.io/great-falls-tool-bus/{greatfallstoolbus.org,gftb-platform}@sha256:<64 hex>
-# (pre-/post-TIN-3815-rename identities) and the tenant to a UUID. A real
-# digest or UUID committed here FAILS, so nothing can bypass those guards.
-#
-# THE CREDENTIAL BOUNDARY IS ENFORCED HERE. web and worker consume ONLY
-# gftb-member-db-runtime-dsn (DML-only gftb_app); the owner DSN
-# gftb-member-db-migrator-dsn belongs to the pre-rollout migration Job
-# (k8s/member-db, PR #118) and its NAME may not appear anywhere in this stack.
 
 dir="${1:?usage: validate-platform-stack.sh <manifest-dir>}"
 platform_root="$(cd "${dir}/.." && pwd)"
-deploy_web="${dir}/deployment-web.yaml"
-deploy_worker="${dir}/deployment-worker.yaml"
-svc="${dir}/service-web.yaml"
-netpol="${dir}/networkpolicy.yaml"
-kustomization="${dir}/kustomization.yaml"
 route_intent="${platform_root}/../../tofu/intent/great-falls-tool-bus/staging-platform-route.json"
 secrets_contract="${platform_root}/secrets.contract.yaml"
-
-image_sentinel="PLACEHOLDER-PLATFORM-IMAGE"
-tenant_sentinel="PLACEHOLDER-GFTB-TENANT-ID"
 runtime_dsn_secret="gftb-member-db-runtime-dsn"
 migrator_dsn_secret="gftb-member-db-migrator-dsn"
 stripe_secret="gftb-platform-stripe-testmode"
+tenant_sentinel="PLACEHOLDER-GFTB-TENANT-ID"
+expected_image="ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:10f853938dc6823afe8c9bdc54943587f963d22117aafd17247350b2b5712b35"
+stack_ns="members-greatfallstoolbus-org-production"
 
-fail() {
-  echo "ERROR: $*" >&2
-  exit 1
-}
-require_file() { test -f "$1" || fail "missing $1"; }
+fail() { echo "ERROR: $*" >&2; exit 1; }
 assert_eq() { [ "$1" = "$2" ] || fail "$3: got '$1', want '$2'"; }
+require_file() { test -f "$1" || fail "missing $1"; }
 
 command -v yq >/dev/null 2>&1 || fail "yq is required"
-command -v jq >/dev/null 2>&1 || fail "jq is required (JSON intent assertions)"
+command -v jq >/dev/null 2>&1 || fail "jq is required"
 command -v kubectl >/dev/null 2>&1 || fail "kubectl is required for kubectl kustomize"
+yq_version="$(yq --version 2>&1 || true)"
+printf '%s' "${yq_version}" | grep -qi mikefarah &&
+  printf '%s' "${yq_version}" | grep -Eqi 'version v?4\.' ||
+  fail "mikefarah yq-go v4 is required; got: ${yq_version:-unavailable}"
 
-for f in "${deploy_web}" "${deploy_worker}" "${svc}" "${netpol}" \
-  "${kustomization}" "${route_intent}" "${secrets_contract}"; do
-  require_file "${f}"
+for name in deployment-web.yaml deployment-worker.yaml service-web.yaml networkpolicy.yaml kustomization.yaml; do
+  require_file "${dir}/${name}"
 done
+require_file "${route_intent}"
+require_file "${secrets_contract}"
 
-# --- render ONCE, up front. Every assertion below that cares what actually
-# gets applied reads THIS file, never the source YAML directly — kustomize
-# (namespace overrides, resource list, label injection) sits between the two,
-# and a regression there (a dropped `resources:` line, a `namespace:` flip)
-# can leave every source-file assertion green while the applied bytes are
-# wrong. `kubectl kustomize` only parses the local tree; it never touches a
-# cluster. (E1, PR #121 review.)
-rendered_file="$(mktemp)"
-trap 'rm -f "${rendered_file}"' EXIT
-kubectl kustomize "${dir}" > "${rendered_file}"
+rendered_yaml="$(mktemp)"
+rendered_json="$(mktemp)"
+trap 'rm -f "${rendered_yaml}" "${rendered_json}"' EXIT
+kubectl kustomize "${dir}" > "${rendered_yaml}"
+test -s "${rendered_yaml}" || fail "kubectl kustomize produced no manifest"
+yq eval-all -o=json -I=0 '.' "${rendered_yaml}" | jq --slurp '.' > "${rendered_json}"
+jq -e 'type == "array" and length > 0 and all(.[]; type == "object")' "${rendered_json}" >/dev/null ||
+  fail "rendered YAML did not decode into a non-empty JSON object array"
 
-# --- stack identity: one admitted namespace, two admitted workloads ----------
-stack_ns="$(yq -r 'select(.kind == "Deployment") | .metadata.namespace' "${deploy_web}")"
-case "${stack_ns}" in
-members-greatfallstoolbus-org-production) ;;
-*)
-  fail "unknown platform stack namespace '${stack_ns}'; the only admitted GFTB platform namespace is members-greatfallstoolbus-org-production (the one k8s/member-db admits on 5432)"
-  ;;
-esac
+expected_inventory="$(cat <<'EOF'
+Deployment/gftb-platform-web
+Deployment/gftb-platform-worker
+NetworkPolicy/allow-cloudflared-tunnel-ingress
+NetworkPolicy/allow-egress-dns
+NetworkPolicy/allow-egress-member-db
+NetworkPolicy/allow-prometheus-scrape
+NetworkPolicy/default-deny-egress
+NetworkPolicy/default-deny-ingress
+Service/gftb-platform-web
+EOF
+)"
+actual_inventory="$(jq -r '.[] | "\(.kind)/\(.metadata.name)"' "${rendered_json}" | LC_ALL=C sort)"
+assert_eq "${actual_inventory}" "${expected_inventory}" "exact rendered inventory"
+bad_ns="$(jq -r --arg ns "${stack_ns}" '.[] | select((.metadata.namespace // "") != $ns) | "\(.kind)/\(.metadata.name)"' "${rendered_json}")"
+[ -z "${bad_ns}" ] || fail "rendered object(s) outside ${stack_ns}: ${bad_ns}"
 
-# --- rendered-bytes assertions: namespace on every object + exact inventory --
-bad_ns="$(yq -r --arg ns "${stack_ns}" 'select(.metadata.namespace != $ns) | "\(.kind)/\(.metadata.name)=\(.metadata.namespace)"' "${rendered_file}")"
-[ -z "${bad_ns}" ] || fail "rendered object(s) outside namespace ${stack_ns}: ${bad_ns}"
-assert_eq "$(yq -r 'select(.kind == "Deployment") | .kind' "${rendered_file}" | wc -l | tr -d ' ')" "2" "rendered Deployment count"
-assert_eq "$(yq -r 'select(.kind == "Service") | .kind' "${rendered_file}" | wc -l | tr -d ' ')" "1" "rendered Service count"
-assert_eq "$(yq -r 'select(.kind == "NetworkPolicy") | .kind' "${rendered_file}" | wc -l | tr -d ' ')" "6" "rendered NetworkPolicy count"
-assert_eq "$(yq -r 'select(.kind == "Namespace") | .kind' "${rendered_file}" | wc -l | tr -d ' ')" "0" "rendered Namespace count (declare-only)"
-assert_eq "$(yq -r 'select(.kind == "Secret") | .kind' "${rendered_file}" | wc -l | tr -d ' ')" "0" "rendered Secret count (no committed Secrets)"
-assert_eq "$(yq -r 'select(.kind == "Deployment") | .metadata.name' "${deploy_web}")" "gftb-platform-web" "web Deployment name"
-assert_eq "$(yq -r 'select(.kind == "Deployment") | .metadata.namespace' "${deploy_worker}")" "${stack_ns}" "worker Deployment namespace"
-assert_eq "$(yq -r 'select(.kind == "Deployment") | .metadata.name' "${deploy_worker}")" "gftb-platform-worker" "worker Deployment name"
+jq -e --arg image "${expected_image}" --arg tenant "${tenant_sentinel}" '
+  def object($kind; $name):
+    [.[] | select(.kind == $kind and .metadata.name == $name)] as $found
+    | if ($found | length) == 1 then $found[0] else error("object identity is not exact") end;
+  object("Deployment"; "gftb-platform-web") as $web
+  | object("Deployment"; "gftb-platform-worker") as $worker
+  | $web.spec.template.spec.containers as $wc
+  | $worker.spec.template.spec.containers as $kc
+  | ($wc | length) == 1 and ($kc | length) == 1
+  and $wc[0].name == "gftb-platform-web"
+  and $kc[0].name == "gftb-platform-worker"
+  and $wc[0].image == $image and $kc[0].image == $image
+  and ($wc[0] | has("command") | not) and ($wc[0] | has("args") | not)
+  and ($kc[0] | has("command") | not) and $kc[0].args == ["worker"]
+  and $web.spec.replicas == 2
+  and $web.spec.strategy.type == "RollingUpdate"
+  and $web.spec.strategy.rollingUpdate.maxUnavailable == 0
+  and $web.spec.strategy.rollingUpdate.maxSurge == 1
+  and $worker.spec.replicas == 1
+  and $worker.spec.strategy == {"type":"Recreate"}
+  and $web.spec.template.metadata.labels["app.kubernetes.io/part-of"] == "gftb-platform"
+  and $worker.spec.template.metadata.labels["app.kubernetes.io/part-of"] == "gftb-platform"
+  and $web.spec.template.metadata.labels["app.kubernetes.io/component"] == "web"
+  and $worker.spec.template.metadata.labels["app.kubernetes.io/component"] == "worker"
+  and $wc[0].ports == [{"name":"http","containerPort":3000,"protocol":"TCP"}]
+  and $wc[0].livenessProbe.httpGet == {"path":"/health","port":"http"}
+  and $wc[0].readinessProbe.httpGet == {"path":"/health","port":"http"}
+  and (($kc[0].ports // []) | length) == 0
+  and $web.spec.template.spec.automountServiceAccountToken == false
+  and $worker.spec.template.spec.automountServiceAccountToken == false
+  and $web.spec.template.spec.securityContext.runAsNonRoot == true
+  and $worker.spec.template.spec.securityContext.runAsNonRoot == true
+  and $wc[0].securityContext.readOnlyRootFilesystem == true
+  and $kc[0].securityContext.readOnlyRootFilesystem == true
+  and ([$wc[0].env[] | select(.name == "GFTB_TENANT_ID") | .value] == [$tenant])
+  and ([$kc[0].env[] | select(.name == "GFTB_TENANT_ID") | .value] == [$tenant])
+' "${rendered_json}" >/dev/null || fail "rendered Deployment image/entrypoint/tenant/strategy/replica contract mismatch"
 
-# --- the label admission contract (member-db ingress + this stack's egress) --
-for manifest in "${deploy_web}" "${deploy_worker}"; do
-  part_of="$(yq -r 'select(.kind == "Deployment") | .spec.template.metadata.labels["app.kubernetes.io/part-of"]' "${manifest}")"
-  assert_eq "${part_of}" "gftb-platform" "pod label part-of in $(basename "${manifest}")"
-done
-assert_eq "$(yq -r 'select(.kind == "Deployment") | .spec.template.metadata.labels["app.kubernetes.io/component"]' "${deploy_web}")" "web" "web pod component label"
-assert_eq "$(yq -r 'select(.kind == "Deployment") | .spec.template.metadata.labels["app.kubernetes.io/component"]' "${deploy_worker}")" "worker" "worker pod component label"
+jq -e --arg runtime "${runtime_dsn_secret}" --arg stripe "${stripe_secret}" '
+  [.[] | select(.kind == "Deployment") | .spec.template.spec.containers[]] as $containers
+  | ($containers | length) == 2
+  and all($containers[];
+    ([.env[] | select(.name == "DATABASE_URL") | .valueFrom.secretKeyRef] == [{"name":$runtime,"key":"dsn"}])
+    and all(.env[] | select(.name | startswith("STRIPE_"));
+      .valueFrom.secretKeyRef.name == $stripe and .valueFrom.secretKeyRef.optional == true))
+  and ([.[] | select(.kind == "Deployment" and .metadata.name == "gftb-platform-worker")
+        | .spec.template.spec.containers[0].env[] | select(.name == "GFTB_WORKER_ID")
+        | .valueFrom.fieldRef.fieldPath] == ["metadata.name"])
+' "${rendered_json}" >/dev/null || fail "runtime DSN / worker identity / optional Stripe contract mismatch"
 
-# --- replicas and rollout shape ARE the connection budget --------------------
-# gftb_app connectionLimit is 40 (k8s/member-db cluster.yaml, PR #118); pg.Pool
-# defaults to max 10 per process. web 2x10 + web surge 1x10 + worker 1x10 = 40.
-assert_eq "$(yq -r 'select(.kind == "Deployment") | .spec.replicas' "${deploy_web}")" "2" "web replicas (connection budget)"
-assert_eq "$(yq -r 'select(.kind == "Deployment") | .spec.replicas' "${deploy_worker}")" "1" "worker replicas (connection budget)"
-assert_eq "$(yq -r 'select(.kind == "Deployment") | .spec.strategy.rollingUpdate.maxSurge' "${deploy_web}")" "1" "web maxSurge (connection budget)"
-assert_eq "$(yq -r 'select(.kind == "Deployment") | .spec.strategy.rollingUpdate.maxUnavailable' "${deploy_web}")" "0" "web maxUnavailable"
-assert_eq "$(yq -r 'select(.kind == "Deployment") | .spec.strategy.type' "${deploy_worker}")" "Recreate" "worker strategy (never two worker pools at once)"
+jq -e '
+  def object($kind; $name):
+    [.[] | select(.kind == $kind and .metadata.name == $name)] as $found
+    | if ($found | length) == 1 then $found[0] else error("object identity is not exact") end;
+  object("Service"; "gftb-platform-web") as $svc
+  | $svc.spec.type == "ClusterIP"
+  and $svc.spec.selector["app.kubernetes.io/component"] == "web"
+  and $svc.spec.ports == [{"name":"http","port":80,"protocol":"TCP","targetPort":"http"}]
+' "${rendered_json}" >/dev/null || fail "rendered Service contract mismatch"
 
-# --- sentinel discipline: no real image or tenant id in the tree -------------
-for pair in "gftb-platform-web:${deploy_web}" "gftb-platform-worker:${deploy_worker}"; do
-  app="${pair%%:*}"
-  manifest="${pair#*:}"
-  image="$(yq -r --arg app "${app}" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .image' "${manifest}")"
-  assert_eq "${image}" "${image_sentinel}" "committed image sentinel in $(basename "${manifest}")"
-  tenant="$(yq -r --arg app "${app}" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .env[] | select(.name == "GFTB_TENANT_ID") | .value' "${manifest}")"
-  assert_eq "${tenant}" "${tenant_sentinel}" "committed tenant sentinel in $(basename "${manifest}")"
-done
-if grep -REn "@sha256:[0-9a-f]{64}" "${dir}" >/dev/null 2>&1; then
-  fail "a real image digest is committed in ${dir}; the platform image arrives only as PLATFORM_APPLY_IMAGE through the attended chain"
-fi
+jq -e '
+  def policy($name):
+    [.[] | select(.kind == "NetworkPolicy" and .metadata.name == $name)] as $found
+    | if ($found | length) == 1 then $found[0] else error("policy identity is not exact") end;
+  (policy("default-deny-ingress").spec.podSelector == {})
+  and (policy("default-deny-egress").spec.podSelector == {})
+  and (policy("allow-cloudflared-tunnel-ingress").spec.podSelector.matchLabels["app.kubernetes.io/component"] == "web")
+  and (policy("allow-cloudflared-tunnel-ingress").spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"] == "cloudflared")
+  and (policy("allow-cloudflared-tunnel-ingress").spec.ingress[0].ports[0].port == 3000)
+  and (policy("allow-egress-dns").spec.egress[0].to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"] == "kube-system")
+  and (policy("allow-egress-dns").spec.egress[0].to[0].podSelector.matchLabels["k8s-app"] == "kube-dns")
+  and (policy("allow-egress-member-db").spec.egress[0].to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"] == "members-greatfallstoolbus-org-db-production")
+  and (policy("allow-egress-member-db").spec.egress[0].to[0].podSelector.matchLabels["cnpg.io/cluster"] == "gftb-member-db")
+  and (policy("allow-egress-member-db").spec.egress[0].ports[0].port == 5432)
+  and ([policy("allow-egress-member-db").spec.podSelector.matchExpressions[]
+        | select(.key == "app.kubernetes.io/component") | .values] == [["web","worker","migrator"]])
+  and ([.[] | select(.kind == "NetworkPolicy") | .spec.egress[]?.to[]?
+        | select(has("ipBlock"))] | length == 0)
+  and ([.[] | select(.kind == "NetworkPolicy") | .metadata.name as $name
+        | .spec.egress[]? | select(((.to // []) | length) == 0) | $name] | length == 0)
+' "${rendered_json}" >/dev/null || fail "NetworkPolicy contract mismatch, ipBlock present, or empty egress to"
 
-# --- entrypoints: preserve OCI Entrypoint; override only worker Cmd -----------
-# Published nix2container config: Entrypoint=[dumb-init,--], Cmd=[/bin/web],
-# PATH=/bin. Kubernetes `command` would replace the reviewed Entrypoint, so it
-# is forbidden for both workloads. Web inherits Cmd unchanged; worker replaces
-# only Cmd with one positional role name, resolving to /bin/worker through PATH.
-# Key absence is load-bearing: an explicitly empty override is not accepted as
-# equivalent to inheriting the image contract.
-assert_eq "$(yq -r --arg app "gftb-platform-web" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | has("command")' "${deploy_web}")" "false" "web command key must be absent"
-assert_eq "$(yq -r --arg app "gftb-platform-web" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | has("args")' "${deploy_web}")" "false" "web args key must be absent"
-assert_eq "$(yq -r --arg app "gftb-platform-worker" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | has("command")' "${deploy_worker}")" "false" "worker command key must be absent"
-assert_eq "$(yq -c --arg app "gftb-platform-worker" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .args' "${deploy_worker}")" '["worker"]' "worker args must select exactly one role"
-
-# --- adapter-node serving shape (web only): :3000 + /health probes -----------
-assert_eq "$(yq -r --arg app "gftb-platform-web" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .ports[] | select(.name == "http") | .containerPort' "${deploy_web}")" "3000" "web containerPort"
-assert_eq "$(yq -r --arg app "gftb-platform-web" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .livenessProbe.httpGet.path' "${deploy_web}")" "/health" "web liveness probe path"
-assert_eq "$(yq -r --arg app "gftb-platform-web" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .readinessProbe.httpGet.path' "${deploy_web}")" "/health" "web readiness probe path"
-# The worker listens on nothing: no ports, no probes, no Service.
-assert_eq "$(yq -r --arg app "gftb-platform-worker" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .ports // [] | length' "${deploy_worker}")" "0" "worker declares no ports"
-
-# --- house hardening on both -------------------------------------------------
-for pair in "gftb-platform-web:${deploy_web}" "gftb-platform-worker:${deploy_worker}"; do
-  app="${pair%%:*}"
-  manifest="${pair#*:}"
-  assert_eq "$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.securityContext.runAsNonRoot' "${manifest}")" "true" "runAsNonRoot in $(basename "${manifest}")"
-  assert_eq "$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.automountServiceAccountToken' "${manifest}")" "false" "automountServiceAccountToken in $(basename "${manifest}")"
-  assert_eq "$(yq -r --arg app "${app}" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .securityContext.readOnlyRootFilesystem' "${manifest}")" "true" "readOnlyRootFilesystem in $(basename "${manifest}")"
-done
-
-# --- the TIN-3817 env contract -----------------------------------------------
-# DATABASE_URL: the DML-only runtime DSN, by name, on BOTH — and the owner DSN
-# name may not appear anywhere in this stack (two never-crossed Secrets).
-for pair in "gftb-platform-web:${deploy_web}" "gftb-platform-worker:${deploy_worker}"; do
-  app="${pair%%:*}"
-  manifest="${pair#*:}"
-  dsn_ref="$(yq -r --arg app "${app}" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .env[] | select(.name == "DATABASE_URL") | .valueFrom.secretKeyRef | "\(.name)/\(.key)"' "${manifest}")"
-  assert_eq "${dsn_ref}" "${runtime_dsn_secret}/dsn" "DATABASE_URL secret reference in $(basename "${manifest}")"
-done
-# (Comment lines may NAME the owner DSN to document the boundary; an
-# executable reference to it may not exist.)
 if grep -REn "${migrator_dsn_secret}" "${dir}" 2>/dev/null | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' >/dev/null; then
-  fail "the owner/DDL DSN ${migrator_dsn_secret} is referenced by the serving stack; it belongs to the pre-rollout migration Job alone (k8s/member-db)"
+  fail "owner/DDL DSN is executable in serving stack"
 fi
-# GFTB_WORKER_ID: per-replica identity from the downward API, worker only.
-assert_eq "$(yq -r --arg app "gftb-platform-worker" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .env[] | select(.name == "GFTB_WORKER_ID") | .valueFrom.fieldRef.fieldPath' "${deploy_worker}")" "metadata.name" "worker GFTB_WORKER_ID fieldRef (per-replica pod name)"
-# STRIPE_*: every reference is an OPTIONAL secretKeyRef on the test-mode
-# Secret; a committed value or a required ref before runtime activation fails.
-for pair in "gftb-platform-web:${deploy_web}" "gftb-platform-worker:${deploy_worker}"; do
-  app="${pair%%:*}"
-  manifest="${pair#*:}"
-  bad_stripe="$(yq -r --arg app "${app}" --arg secret "${stripe_secret}" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .env[] | select(.name | startswith("STRIPE_")) | select((.valueFrom.secretKeyRef.name != $secret) or (.valueFrom.secretKeyRef.optional != true)) | .name' "${manifest}")"
-  [ -z "${bad_stripe}" ] || fail "STRIPE_* env in $(basename "${manifest}") must be optional secretKeyRefs on ${stripe_secret}: ${bad_stripe}"
-done
-if grep -REn "sk_live_|sk_test_[A-Za-z0-9]|pk_test_[A-Za-z0-9]|whsec_[A-Za-z0-9]" "${platform_root}" >/dev/null 2>&1; then
-  fail "possible committed Stripe key material under ${platform_root}; names only, ever"
+if grep -REn '^kind:[[:space:]]*(Namespace|Secret)[[:space:]]*$' "${dir}" "${secrets_contract}" >/dev/null 2>&1; then
+  fail "platform carrier must create neither Namespace nor Secret"
 fi
+if grep -REn 'AGE-SECRET-KEY-1|BEGIN [A-Z ]*PRIVATE KEY|cfat_[A-Za-z0-9_-]{8,}|sk_live_|sk_test_[A-Za-z0-9]|pk_test_[A-Za-z0-9]|whsec_[A-Za-z0-9]' "${platform_root}" >/dev/null 2>&1; then
+  fail "possible committed key material under ${platform_root}"
+fi
+jq -e '
+  .applied == false and .dns_enabled == false and .route_enabled == false
+  and .planned_route.dns_record.enabled == false
+  and .planned_route.hostname == "staging.greatfallstoolbus.org"
+  and ([.. | strings | select(test("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.cfargotunnel\.com"))] | length == 0)
+' "${route_intent}" >/dev/null || fail "staging route intent must remain exact and fail-closed"
 
-# --- Service: ClusterIP 80 -> 3000, web only ---------------------------------
-assert_eq "$(yq -r 'select(.kind == "Service") | .spec.type' "${svc}")" "ClusterIP" "Service type"
-assert_eq "$(yq -r 'select(.kind == "Service") | .spec.ports[] | select(.name == "http") | .port' "${svc}")" "80" "Service port"
-assert_eq "$(yq -r 'select(.kind == "Service") | .spec.ports[] | select(.name == "http") | .targetPort' "${svc}")" "http" "Service targetPort (named -> 3000)"
-assert_eq "$(yq -r 'select(.kind == "Service") | .spec.selector["app.kubernetes.io/component"]' "${svc}")" "web" "Service selects the web component only"
-
-# --- NetworkPolicy doctrine: default-deny BOTH ways + named allows -----------
-# (E1: read from the RENDERED stream, not the source file — the source file
-# still parses and matches even if kustomization.yaml stops listing it.)
-assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "default-deny-ingress") | .metadata.name' "${rendered_file}")" "default-deny-ingress" "default-deny-ingress present"
-assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "default-deny-egress") | .metadata.name' "${rendered_file}")" "default-deny-egress" "default-deny-egress present"
-for name in default-deny-ingress default-deny-egress; do
-  sel="$(yq -r --arg name "${name}" 'select(.kind == "NetworkPolicy" and .metadata.name == $name) | .spec.podSelector | length' "${rendered_file}")"
-  assert_eq "${sel}" "0" "${name} selects every pod (empty podSelector)"
-done
-assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-cloudflared-tunnel-ingress") | .spec.ingress[].from[].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]' "${rendered_file}")" "cloudflared" "public ingress source (cloudflared tunnel namespace)"
-assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-cloudflared-tunnel-ingress") | .spec.ingress[].ports[].port' "${rendered_file}")" "3000" "public ingress port"
-assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-cloudflared-tunnel-ingress") | .spec.podSelector.matchLabels["app.kubernetes.io/component"]' "${rendered_file}")" "web" "public ingress reaches the web component only"
-# DNS egress leg: scoped to cluster DNS (kube-system/kube-dns), never "to
-# everywhere" (E2, PR #121 review — mirrors #118's allow-postgres-egress).
-assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-egress-dns") | .spec.egress[].to[].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]' "${rendered_file}")" "kube-system" "DNS egress namespace (cluster DNS only, not every destination)"
-assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-egress-dns") | .spec.egress[].to[].podSelector.matchLabels["k8s-app"]' "${rendered_file}")" "kube-dns" "DNS egress pod selector (cluster DNS only, not every destination)"
-# The database egress leg: exactly the member-db instance pods, on 5432, from
-# the same three components the DB side admits (PR #118's reciprocal).
-assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-egress-member-db") | .spec.egress[].to[].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]' "${rendered_file}")" "members-greatfallstoolbus-org-db-production" "database egress namespace"
-assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-egress-member-db") | .spec.egress[].to[].podSelector.matchLabels["cnpg.io/cluster"]' "${rendered_file}")" "gftb-member-db" "database egress instance selector"
-assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-egress-member-db") | .spec.egress[].ports[].port' "${rendered_file}")" "5432" "database egress port"
-assert_eq "$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-egress-member-db") | .spec.podSelector.matchExpressions[] | select(.key == "app.kubernetes.io/component") | .values | join(",")' "${rendered_file}")" "web,worker,migrator" "database egress covers web, worker, AND the migrator Job"
-if yq -r 'select(.kind == "NetworkPolicy") | .spec.egress[]?.to[]? | select(has("ipBlock")) | .ipBlock.cidr' "${rendered_file}" | grep -q "0.0.0.0/0"; then
-  fail "platform egress must not include 0.0.0.0/0 (Stripe egress is the TIN-3818 sitting's reviewed follow-up, not a broad allow)"
-fi
-# An empty/missing `to` matches EVERY destination — the same failure mode as
-# 0.0.0.0/0, and one the ipBlock-only guard above does not catch (E2, PR #121
-# review).
-empty_to_rule="$(yq -r 'select(.kind == "NetworkPolicy") | .metadata.name as $n | .spec.egress[]? | select((.to // []) | length == 0) | $n' "${rendered_file}")"
-[ -z "${empty_to_rule}" ] || fail "platform egress rule(s) in ${empty_to_rule} have an empty/missing 'to' (matches every destination, same failure mode as 0.0.0.0/0)"
-
-# --- FAIL-CLOSED axes: no Namespace, no Secret, no key material --------------
-if grep -REn "^kind:[[:space:]]*Namespace[[:space:]]*$" "${dir}" >/dev/null 2>&1; then
-  fail "declare-only stack must NOT create the target namespace"
-fi
-if grep -REn "^kind:[[:space:]]*Secret[[:space:]]*$" "${dir}" "${secrets_contract}" >/dev/null 2>&1; then
-  fail "the declare-only platform stack must not ship a Secret object"
-fi
-if grep -REn "AGE-SECRET-KEY-1|BEGIN [A-Z ]*PRIVATE KEY|cfat_[A-Za-z0-9_-]{8,}" "${platform_root}" >/dev/null 2>&1; then
-  fail "possible committed key material under ${platform_root}; this stack carries none"
-fi
-
-# --- FAIL-CLOSED route intent: staging host, every flag false ----------------
-assert_eq "$(jq -r '.applied' "${route_intent}")" "false" "staging route intent applied"
-assert_eq "$(jq -r '.dns_enabled' "${route_intent}")" "false" "staging route intent dns_enabled"
-assert_eq "$(jq -r '.route_enabled' "${route_intent}")" "false" "staging route intent route_enabled"
-assert_eq "$(jq -r '.planned_route.dns_record.enabled' "${route_intent}")" "false" "staging route intent dns_record.enabled"
-assert_eq "$(jq -r '.planned_route.hostname' "${route_intent}")" "staging.greatfallstoolbus.org" "staging route hostname (slices doc hosts row; TIN-3815)"
-if jq -r '.. | strings' "${route_intent}" | grep -Eq "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.cfargotunnel\.com"; then
-  fail "staging route intent must NOT inline a live <uuid>.cfargotunnel.com target (dashboard/token-managed)"
-fi
-
-# --- Full render already happened up front (E1) — this is where every check
-# above got its bytes from; nothing left to do here but declare victory.
-
-echo "platform stack validation passed for gftb-platform-web + gftb-platform-worker in ${stack_ns}: DECLARE-ONLY (sentineled image/tenant, apply is the attended platform-release chain), web 2 replicas :3000 /health + worker 1 replica Recreate (gftb_app connectionLimit 40 budget), runtime-DSN-only credential boundary, default-deny both directions + cloudflared-only ingress + member-db-only egress, staging route fail-closed, no committed secrets"
+echo "platform stack validation passed: exact Git-owned image; web inherits OCI command/args; worker args=[worker]; tenant sole input; exact inventory/budget; runtime DSN; no egress ipBlock; route fail-closed"

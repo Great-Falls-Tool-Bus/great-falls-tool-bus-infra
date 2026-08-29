@@ -17,18 +17,11 @@
 # on 5432 (k8s/member-db PR #118), and the one the pre-rollout migration Job
 # template already targets.
 #
-# WHY THE IMAGE IS A PLACEHOLDER AND NOT A DIGEST PIN. Main now publishes the
-# three-entrypoint image, but this declare-only carrier deliberately does not
-# bake a release choice into git. The exact publisher-emitted digest for the
-# reviewed source SHA arrives only through PLATFORM_APPLY_IMAGE in the attended
-# plan; a mutable tag or later registry re-lookup is not authority. The
-# committed bytes therefore retain the sentinel, and the validator FAILS if a
-# real digest is smuggled into the tree. The input guard holds the image to
-# ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:<64 lowercase hex>
-# (the pre-TIN-3815-rename identity; the guard also admits the gftb-platform
-# slug so the ADR 0014 §1.3 rename cannot silently expire it). Once the rename
-# gates pass — private CI, package pull, and rollback proved under the new
-# identity — narrow the guard to the single surviving name.
+# IMAGE AUTHORITY IS GIT-OWNED. Both serving Deployments pin the same
+# immutable publisher receipt; runtime input may not choose another repository,
+# tag, or digest. Receipt: source af60fcd7539a4beff6f24e1a95eb11160df7c166; workflow run 33279762284
+# attempt 1; artifact greatfallstoolbus-org-image-af60fcd7539a4beff6f24e1a95eb11160df7c166-33279762284-1 (id 9722715788);
+# image ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:10f853938dc6823afe8c9bdc54943587f963d22117aafd17247350b2b5712b35. Rollback is a reviewed Git re-pin to a previous receipt.
 #
 # MERGING APPLIES NOTHING: no CI invokes any platform-release recipe, this
 # stack ships no Namespace and no Secret, and the staging tunnel route intent
@@ -115,11 +108,9 @@ spec:
                     app.kubernetes.io/component: web
       containers:
         - name: gftb-platform-web
-          # OPERATOR-SUPPLIED AT DISPATCH. `just platform-release-render`
-          # replaces this exact literal with PLATFORM_APPLY_IMAGE;
-          # scripts/validate-platform-stack.sh asserts the committed bytes
-          # still carry the sentinel. See the header comment.
-          image: PLACEHOLDER-PLATFORM-IMAGE
+          # Git-owned immutable publisher receipt; the release renderer never
+          # accepts an image input or rewrites this field.
+          image: ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:10f853938dc6823afe8c9bdc54943587f963d22117aafd17247350b2b5712b35
           imagePullPolicy: IfNotPresent
           # The published nix2container image's immutable config already sets
           # Entrypoint=[dumb-init,--] and Cmd=[/bin/web]. Leave both Kubernetes
