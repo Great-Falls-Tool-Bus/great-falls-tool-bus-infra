@@ -18,10 +18,11 @@ output "alias_zone_name_servers" {
   value       = data.cloudflare_zone.alias.name_servers
 }
 
-output "access_application_aud" {
-  description = "Access application AUD tag for the gated apex (verification input for the TIN-2378 curl matrix)."
-  value       = cloudflare_zero_trust_access_application.web_apex.aud
-}
+# output "access_application_aud" RETIRED 2026-08-30 alongside
+# cloudflare_zero_trust_access_application.web_apex (TIN-2421): the apex no
+# longer has an Access application in front of it, so there is no AUD to
+# emit. Rollback (revert this PR + re-apply) recreates the resource with a
+# fresh AUD, so a restored output would not match the pre-flip value anyway.
 
 output "google_sso_idp_id" {
   description = "Cloudflare Access IdP id for the Google Workspace provider, or null when var.enable_google_sso is false. Operational reference only; apex/www intentionally retain OTP alongside Google."
