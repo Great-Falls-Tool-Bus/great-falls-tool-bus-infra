@@ -149,18 +149,13 @@ spec:
         - name: greatfallstoolbus-org
           # Digest-pinned production image: the promoted gftb-site static
           # origin (ADR 0010 §5 cutover shape; TIN-3899 promotion). Candidate
-          # d22c0ca8 (gftb-site main, PR #35 merge), generation 37, pinned via
-          # the attended web-release-* ceremony 2026-08-21 ~03:10 EDT
-          # (TIN-3959 cache-headers release; program board receipt "GEN 37
-          # CEREMONY COMPLETE"). Digest verified against the GHCR registry
-          # itself: `crane digest` / manifest HEAD on tag
-          # sha-d22c0ca8f4683e5d93a554872b78d0a4a81e0028 resolves to exactly
-          # this sha256, matching the short-form digest recorded in the
-          # ceremony receipt and the 2026-08-21 truthing
-          # (devenv-gitops-truth-20260821.md). The cluster read-only proof
-          # kubeconfig (~/.gftb/web-release-proofs.kubeconfig) had an expired
-          # 2h SA token at the time of this fix, so this is a registry-verified
-          # pin, not a fresh `kubectl get deploy` read — see the PR body.
+          # 8191f063f7f411e3dac4c0070645326caf16e326 (signed gftb-site
+          # main, PR #39 merge), generation 38. The immutable candidate
+          # was published by GitHub Actions run 33258464937 on 2026-08-29;
+          # public GHCR manifest resolution of tag sha-8191f063f7f411e3dac4c0070645326caf16e326
+          # returned exactly the digest pinned below. This commit records
+          # reviewed desired release truth; PINNED/RUNNING/SERVED remain
+          # separate post-apply evidence and are not claimed here.
           #
           # No command/env override: gftb-site's own image bakes
           # Entrypoint=[dumb-init --] Cmd=[caddy run --config
@@ -170,7 +165,7 @@ spec:
           # build/index.js in this image. `web-release-render` (Justfile)
           # deletes command/args/env/envFrom/volumeMounts unconditionally on
           # every render for exactly this reason.
-          image: ghcr.io/great-falls-tool-bus/gftb-site@sha256:e95c9588a320a92986ccbeff630c2837b0f3be08a9100ef505225f55194746d3
+          image: ghcr.io/great-falls-tool-bus/gftb-site@sha256:22b5725016b84518054343d51b648e61ed6300496fcc9b80bc0ccb4a853ad0f4
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
