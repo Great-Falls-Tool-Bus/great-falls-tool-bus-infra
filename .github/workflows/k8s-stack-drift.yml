@@ -332,10 +332,8 @@ jobs:
         # Runs BEFORE the kubeconfig even exists -- this needs no cluster
         # access, only the same GF-core `ci` devshell (real yq-go + jq) the
         # real diff step below uses. Fixture proof that the yq-go/jq rewrite
-        # (sweep g1) actually works; gates here rather than in `just check`
-        # because this repo's OWN flake.nix devshell pins python-yq, not
-        # yq-go -- folding this into check-hosted would silently validate
-        # the wrong binary (the exact defect class this PR fixes).
+        # (sweep g1) actually works. `just check-hosted` runs the same fixture;
+        # this drift-lane copy is defense in depth beside the real comparison.
         if: steps.secrets.outputs.kubeconfig-present == 'true'
         uses: ./GloriousFlywheel/.github/actions/nix-job
         with:
