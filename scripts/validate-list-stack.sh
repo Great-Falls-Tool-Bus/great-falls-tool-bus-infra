@@ -258,7 +258,7 @@ awk '
   /^---$/ { in_account = 0 }
   /^kind: MailAccount$/ { in_account = 1 }
   in_account && !replaced && $0 == "    - root@lists.latoolb.us" {
-    print "    - other@lists.latoolb.us"
+    print "    - other" sprintf("%c", 64) "lists.latoolb.us"
     replaced = 1
     next
   }
