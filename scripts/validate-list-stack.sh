@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Hosted and operator validation standardizes on mikefarah yq-go v4. YAML is
+# decoded with yq-go and queried as JSON with jq so the two CLIs never share a
+# dialect and a conversion failure cannot be mistaken for a missing field.
+
 # Offline validation of the GFTB Mailman 3 list stack (TIN-2380). Asserts the
 # load-bearing invariants of the blahaj tenant-list-engine SMTP relay contract
 # v0 so a regression in the manifests fails CI before any apply. Never contacts
@@ -24,7 +28,13 @@ require_file() {
 }
 
 field() {
-  yq -r "$1" "$2"
+  local expression="$1"
+  local source_file="$2"
+  local decoded
+
+  decoded="$(yq eval-all -o=json -I=0 '.' "${source_file}")" ||
+    fail "yq-go could not decode ${source_file}"
+  printf '%s\n' "${decoded}" | jq -r "${expression}"
 }
 
 assert_eq() {
@@ -149,6 +159,12 @@ expect_rendered_submission_contract_rejection() {
 }
 
 command -v yq >/dev/null 2>&1 || fail "yq is required"
+yq_version="$(yq --version 2>&1 || true)"
+if ! printf '%s' "${yq_version}" | grep -qi 'mikefarah' ||
+  ! printf '%s' "${yq_version}" | grep -Eqi 'version v?4\.'; then
+  fail "mikefarah yq-go v4 is required; got: ${yq_version:-unavailable}"
+fi
+command -v jq >/dev/null 2>&1 || fail "jq is required"
 command -v kubectl >/dev/null 2>&1 || fail "kubectl is required for kubectl kustomize"
 
 require_file "${account_file}"
@@ -160,8 +176,41 @@ require_file "${core_deploy}"
 
 # Render once up front. Every invariant that grants or binds authenticated
 # submission is checked against this exact decoded apply payload.
-contract_tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/gftb-list-contract.XXXXXX")"
-trap 'rm -rf "${contract_tmpdir}"' EXIT
+contract_tmp_base="${TMPDIR:-/tmp}"
+case "${contract_tmp_base}" in
+  "" | /) fail "unsafe temporary-directory base" ;;
+  /*) ;;
+  *) fail "temporary-directory base must be absolute: ${contract_tmp_base}" ;;
+esac
+contract_tmp_root="$(mktemp -d "${contract_tmp_base%/}/gftb-list-contract-root.XXXXXX")"
+[ -n "${contract_tmp_root}" ] && [ -d "${contract_tmp_root}" ] ||
+  fail "could not create the validator temporary root"
+contract_tmpdir="${contract_tmp_root}/work"
+mkdir -m 700 -- "${contract_tmpdir}"
+
+cleanup_contract_tmpdir() {
+  local root="${contract_tmp_root:-}"
+  local target="${contract_tmpdir:-}"
+
+  [ -n "${root}" ] && [ -n "${target}" ] ||
+    fail "refusing empty validator cleanup target"
+  [ "${target}" = "${root}/work" ] ||
+    fail "refusing validator cleanup outside its private root"
+  case "${root}" in
+    "${contract_tmp_base%/}/gftb-list-contract-root."*) ;;
+    *) fail "refusing unexpected validator cleanup root: ${root}" ;;
+  esac
+  [ -O "${root}" ] ||
+    fail "refusing validator cleanup root not owned by the current user"
+  [ ! -L "${root}" ] && [ ! -L "${target}" ] ||
+    fail "refusing symlinked validator cleanup path"
+
+  if [ -d "${target}" ]; then
+    rm -rf -- "${target}"
+  fi
+  rmdir -- "${root}"
+}
+trap cleanup_contract_tmpdir EXIT
 rendered_stack="${contract_tmpdir}/rendered.yaml"
 kubectl kustomize "${dir}" >"${rendered_stack}"
 assert_rendered_submission_contract "${rendered_stack}" "list stack"
