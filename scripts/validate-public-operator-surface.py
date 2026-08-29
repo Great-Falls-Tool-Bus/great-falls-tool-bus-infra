@@ -603,7 +603,7 @@ WEB_RELEASE_VALIDATION_SCRIPT = Path("scripts/validate-web-stack.sh")
 # that comment, not in behavior), so this pinned digest changed once more in
 # the same PR (same recompute command as above).
 WEB_RELEASE_VALIDATION_SCRIPT_SHA256 = _receipt(
-    "72a7fbc8d123013e", "84ef7f8799c1cccc", "37130a09b73229f1", "959af85964ccbcec"
+    "a94018e40c8c11ad", "70a1e75249fdb3a8", "1a6c4059a0e865b", "40fe7fa7b3b631a4d"
 )
 
 FLAKE_RELEASE_PACKAGES = ("crane", "curl")

@@ -51,6 +51,7 @@ check-hosted:
     just archive-stack-validate
     just guard-no-remote-kustomize-resources-selftest
     just web-stack-validate
+    just web-stack-diff-selftest
     just grafana-dashboards-validate
     just arc-fmt-check
     just edge-zones-fmt-check
@@ -4092,9 +4093,8 @@ web-stack-drift-check: _web-apply-kubeconfig-only
 # it "MUST be exercised with two directories in any test, never two bare
 # files, or a regression here reads as passing again." This runs the five
 # fixture cases that proved the yq-go/jq rewrite (sweep g1, 2026-08-29)
-# actually works, folded into `just check` so the next calling-convention
-# change can't ship blind. Requires real yq-go + jq on PATH (this repo's own
-# flake.nix devshell pins python-yq, the wrong binary for this test -- run
-# it from GF-core's `ci` devshell, or `nix shell nixpkgs#yq-go nixpkgs#jq`).
+# actually works, folded into `just check-hosted` so the next calling-convention
+# change cannot ship blind. Requires real yq-go + jq on PATH; flake.nix pins
+# both for the repo devshell and remote validation.
 web-stack-diff-selftest:
     ./scripts/test-web-stack-diff.sh

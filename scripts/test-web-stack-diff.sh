@@ -21,11 +21,9 @@
 #   5. a similarly-named key (x-app.tinyland.dev/source-sha-legacy) changes
 #      -> rc=1 (the NORMALIZE_FILTER's anchored key match must not eat it)
 #
-# Requires REAL yq-go (mikefarah) and jq on PATH -- the same tooling
-# GF-core's `ci` devshell provides. Do not run this under this repo's own
-# flake.nix devshell, which pins python-yq (kislyuk): that would validate
-# the wrong binary and could pass while CI stays broken (see the script's
-# own CALLING CONVENTION header for why that distinction is load-bearing).
+# Requires real yq-go (mikefarah) and jq on PATH. The repo flake pins both,
+# matching the remote validation toolchain. The preflight below still fails
+# closed if PATH resolves a different yq implementation.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
