@@ -54,6 +54,7 @@ check-hosted:
     just web-stack-diff-selftest
     just grafana-dashboards-validate
     just member-db-stack-validate
+    just member-db-stack-selftest
     just arc-fmt-check
     just edge-zones-fmt-check
     just edge-zones-validate
@@ -2440,29 +2441,17 @@ member_db_restore_cluster_template := "k8s/member-db/members-greatfallstoolbus-o
 member-db-stack-validate:
     bash scripts/validate-member-db-stack.sh {{ member_db_stack_dir }}
 
-# Operator-supplied inputs, env-delivered, never baked into the tree.
+# Executable negative controls for the yq-go decode -> jq validation boundary.
+# Each fixture is isolated below one mktemp root and must fail with the expected
+# diagnostic; no cluster, registry, or other external service is contacted.
+member-db-stack-selftest:
+    bash scripts/test-member-db-stack.sh
+
+# Operator-supplied input, env-delivered, never baked into the tree.
 #   MEMBER_DB_APPLY_KUBECONFIG  path to the namespace-scoped SA kubeconfig
 _member-db-kubeconfig-input:
     test -n "${MEMBER_DB_APPLY_KUBECONFIG:-}" || { echo "Set MEMBER_DB_APPLY_KUBECONFIG to the member-db apply kubeconfig path" >&2; exit 2; }
     test -f "${MEMBER_DB_APPLY_KUBECONFIG}"
-
-#   MEMBER_DB_MIGRATOR_IMAGE    the operator-resolved platform image digest
-# The shape is held exactly, not loosely: a tag would let the migration that
-# writes the member schema come from an image nobody reviewed, and the committed
-# template's PLACEHOLDER is refused outright so the declare-only sentinel can
-# never reach a cluster.
-#
-# TWO REPOSITORY NAMES, ON PURPOSE. TIN-3815 renames the platform repository to
-# gftb-platform, but that rename has NOT happened: greatfallstoolbus.org PR #171
-# (S0) still publishes ghcr.io/great-falls-tool-bus/greatfallstoolbus.org.
-# Accepting only the post-rename slug would block the operator today; accepting
-# only the pre-rename one would silently expire the day the rename lands. Both
-# are admitted, and nothing else is — the digest requirement is unchanged.
-# Narrow this to the single surviving name once TIN-3815 completes.
-_member-db-migrator-image-input:
-    test -n "${MEMBER_DB_MIGRATOR_IMAGE:-}" || { echo "Set MEMBER_DB_MIGRATOR_IMAGE to the operator-resolved platform image digest" >&2; exit 2; }
-    case "${MEMBER_DB_MIGRATOR_IMAGE}" in *PLACEHOLDER*) echo "refusing the declare-only PLACEHOLDER image; supply the real operator-resolved digest" >&2; exit 2 ;; esac
-    printf '%s' "${MEMBER_DB_MIGRATOR_IMAGE}" | grep -Eq '^ghcr\.io/great-falls-tool-bus/(greatfallstoolbus\.org|gftb-platform)@sha256:[0-9a-f]{64}$' || { echo "MEMBER_DB_MIGRATOR_IMAGE must be ghcr.io/great-falls-tool-bus/{greatfallstoolbus.org,gftb-platform}@sha256:<64 lowercase hex>" >&2; exit 2; }
 
 # Server-side dry-run of the database stack against the live API. No mutation.
 member-db-stack-server-dry-run: member-db-stack-validate _member-db-kubeconfig-input
@@ -2485,10 +2474,46 @@ member-db-backup-store-apply: member-db-stack-server-dry-run _reviewed-clean-mai
     kc="${MEMBER_DB_APPLY_KUBECONFIG}"
     ns="{{ member_db_ns }}"
     rendered="$(mktemp)"
-    trap 'rm -f "${rendered}"' EXIT
+    apply_list="$(mktemp)"
+    trap 'rm -f "${rendered}" "${apply_list}"' EXIT
     kubectl kustomize {{ member_db_stack_dir }} > "${rendered}"
-    yq 'select(.kind == "NetworkPolicy" or .kind == "Service" or .kind == "StatefulSet" or .kind == "PersistentVolumeClaim")' "${rendered}" \
-      | kubectl --kubeconfig "${kc}" --namespace "${ns}" apply -f -
+    # yq-go is only the YAML decoder. jq owns selection and proves the exact
+    # inventory before one byte reaches kubectl; decoder/filter failure cannot
+    # be hidden by the downstream apply because pipefail is set.
+    if ! yq eval-all -o=json -I=0 '.' "${rendered}" \
+      | jq -e -c -s --arg ns "${ns}" '
+          [ .[] | select(
+              .kind == "NetworkPolicy"
+              or .kind == "Service"
+              or .kind == "StatefulSet"
+              or .kind == "PersistentVolumeClaim"
+            ) ] as $objects
+          | [ $objects[] | (.kind + "/" + .metadata.name) ] | sort as $ids
+          | if (
+              ($objects | length) == 11
+              and all($objects[]; .metadata.namespace == $ns)
+              and $ids == [
+                "NetworkPolicy/allow-cnpg-operator-ingress",
+                "NetworkPolicy/allow-cnpg-to-backup-store-ingress",
+                "NetworkPolicy/allow-intra-cluster",
+                "NetworkPolicy/allow-platform-postgres-ingress",
+                "NetworkPolicy/allow-postgres-egress",
+                "NetworkPolicy/allow-prometheus-scrape",
+                "NetworkPolicy/backup-store-egress-dns-only",
+                "NetworkPolicy/default-deny-ingress",
+                "PersistentVolumeClaim/gftb-member-db-backup-store-data",
+                "Service/gftb-member-db-backup-store",
+                "StatefulSet/gftb-member-db-backup-store"
+              ]
+            )
+            then {apiVersion: "v1", kind: "List", items: $objects}
+            else error("member-db backup-store apply inventory/identity mismatch")
+            end
+        ' > "${apply_list}"; then
+      echo "member-db backup-store apply render decode/filter failed closed" >&2
+      exit 1
+    fi
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" apply -f "${apply_list}"
     kubectl --kubeconfig "${kc}" --namespace "${ns}" rollout status statefulset/{{ member_db_backup_store }} --timeout=300s
 
 # Step two: create the gftb-member-db-backups bucket inside the now-live
@@ -2513,10 +2538,29 @@ member-db-cluster-apply: member-db-backup-bucket-create _reviewed-clean-main _op
     kc="${MEMBER_DB_APPLY_KUBECONFIG}"
     ns="{{ member_db_ns }}"
     rendered="$(mktemp)"
-    trap 'rm -f "${rendered}"' EXIT
+    apply_list="$(mktemp)"
+    trap 'rm -f "${rendered}" "${apply_list}"' EXIT
     kubectl kustomize {{ member_db_stack_dir }} > "${rendered}"
-    yq 'select(.kind == "Cluster" or .kind == "ScheduledBackup")' "${rendered}" \
-      | kubectl --kubeconfig "${kc}" --namespace "${ns}" apply -f -
+    if ! yq eval-all -o=json -I=0 '.' "${rendered}" \
+      | jq -e -c -s --arg ns "${ns}" '
+          [ .[] | select(.kind == "Cluster" or .kind == "ScheduledBackup") ] as $objects
+          | [ $objects[] | (.kind + "/" + .metadata.name) ] | sort as $ids
+          | if (
+              ($objects | length) == 2
+              and all($objects[]; .metadata.namespace == $ns)
+              and $ids == [
+                "Cluster/gftb-member-db",
+                "ScheduledBackup/gftb-member-db-base"
+              ]
+            )
+            then {apiVersion: "v1", kind: "List", items: $objects}
+            else error("member-db cluster apply inventory/identity mismatch")
+            end
+        ' > "${apply_list}"; then
+      echo "member-db cluster apply render decode/filter failed closed" >&2
+      exit 1
+    fi
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" apply -f "${apply_list}"
     kubectl --kubeconfig "${kc}" --namespace "${ns}" wait cluster/{{ member_db_cluster }} --for=condition=Ready --timeout=600s
 
 # Convenience alias: the full ordered chain, one command. `just` dedupes the
@@ -2585,17 +2629,14 @@ member-db-restore-rehearsal-teardown: _member-db-kubeconfig-input
     echo "rehearsal Cluster removed. Released PVs left behind (openebs-bumble-postgresql-retain, reclaimPolicy Retain):"
     kubectl --kubeconfig "${kc}" get pv -o jsonpath='{range .items[?(@.status.phase=="Released")]}{.metadata.name}{"\t"}{.spec.claimRef.namespace}{"/"}{.spec.claimRef.name}{"\n"}{end}'
 
-# Render the migration Job from the reviewed template with the operator-resolved
-# digest substituted. Pure text, no cluster contact. The apply path and the
-# server dry-run both go through THIS recipe, so the bytes that were dry-run are
-# the same bytes that get created.
-member-db-migrate-render: _member-db-migrator-image-input
-    #!/usr/bin/env bash
-    set -euo pipefail
-    python3 -I -c 'import pathlib, sys; t = pathlib.Path(sys.argv[1]).read_text(); m = "PLACEHOLDER-MEMBER-DB-MIGRATOR-IMAGE"; sys.exit("migration Job template no longer carries the reviewed image placeholder") if m not in t else None; sys.stdout.write(t.replace(m, sys.argv[2]))' "{{ member_db_migrator_template }}" "${MEMBER_DB_MIGRATOR_IMAGE}"
+# Render the exact reviewed migration Job carrier. Pure text, no cluster contact.
+# The image is Git-pinned in the template, so there is no runtime image input or
+# authority seam. The apply path and server dry-run both consume these bytes.
+member-db-migrate-render: member-db-stack-validate
+    @cat "{{ member_db_migrator_template }}"
 
 # Server-side dry-run of the rendered migration Job. No mutation.
-member-db-migrate-server-dry-run: _member-db-migrator-image-input _member-db-kubeconfig-input
+member-db-migrate-server-dry-run: member-db-stack-validate _member-db-kubeconfig-input
     #!/usr/bin/env bash
     set -euo pipefail
     just member-db-migrate-render | kubectl --kubeconfig "${MEMBER_DB_APPLY_KUBECONFIG}" --namespace {{ member_db_platform_ns }} create --dry-run=server -f -

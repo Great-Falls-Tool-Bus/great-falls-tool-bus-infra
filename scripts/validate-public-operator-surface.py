@@ -400,7 +400,6 @@ ATTENDED_RECIPE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     # cluster, and adding it would taint check-hosted through the attended
     # closure.
     "_member-db-kubeconfig-input": (),
-    "_member-db-migrator-image-input": (),
     "member-db-stack-server-dry-run": (
         "member-db-stack-validate",
         "_member-db-kubeconfig-input",
@@ -441,9 +440,9 @@ ATTENDED_RECIPE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
         "_operator-apply-confirm",
     ),
     "member-db-restore-rehearsal-teardown": ("_member-db-kubeconfig-input",),
-    "member-db-migrate-render": ("_member-db-migrator-image-input",),
+    "member-db-migrate-render": ("member-db-stack-validate",),
     "member-db-migrate-server-dry-run": (
-        "_member-db-migrator-image-input",
+        "member-db-stack-validate",
         "_member-db-kubeconfig-input",
     ),
     "member-db-migrate-apply": (
@@ -477,15 +476,6 @@ ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     "_member-db-kubeconfig-input": _receipt(
         "9483ae823d52184a", "46f524549c47efcf", "fa8bb4ecd56a2783", "88cb783d8b2d5fd4"
     ),
-    # _member-db-migrator-image-input: holds the migration image to an exact
-    #   @sha256 digest on one of the two admitted platform repositories (the
-    #   pre- and post-TIN-3815 slugs) and refuses the declare-only PLACEHOLDER.
-    #   Weakening this regex to accept a tag, or widening the alternation to a
-    #   third repository, would let the code that writes the member schema come
-    #   from an unreviewed image — so both edits have to be reviewed in here.
-    "_member-db-migrator-image-input": _receipt(
-        "dcec8e7bab2a4e62", "a154a8809aec678f", "576357caeb6a2c5c", "8f3b3cd09ad71d89"
-    ),
     # member-db-stack-server-dry-run: proves the stack against the live API
     #   without mutating. Pinned so `--dry-run=server` can never quietly become
     #   a real apply through an edit to this recipe.
@@ -493,10 +483,10 @@ ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "ada3b0ad80a553f7", "c3354a3daf8efa05", "7b10b346707eefd2", "24c9c27cd4ed7cc0"
     ),
     # member-db-backup-store-apply: step one of the ordered apply (B-4).
-    #   Pinned so the rollout-status wait cannot be dropped and the kind
-    #   filter cannot silently widen to include the Cluster.
+    #   yq-go decodes and jq emits only the exact namespaced backup-store
+    #   inventory. Pinned so fail-closed filtering and the rollout wait stay.
     "member-db-backup-store-apply": _receipt(
-        "9c1fe2c0c99baabc", "2c3d9c367e800593", "63b956fb70ce6fcb", "50c504ab884d2864"
+        "a10cdbb22aca25d8", "25f274fd0077dac1", "df419f0c2cfc14c8", "a9f2b8719bdd91b0"
     ),
     # member-db-backup-bucket-create: step two (B-3). Pinned so the
     #   wait-for-complete and log capture stay part of the recipe.
@@ -504,10 +494,10 @@ ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "b36dd145a9be9183", "c4e7bdb1c29886e6", "ffb923186923a4cd", "7ebf7aa35d831094"
     ),
     # member-db-cluster-apply: step three — the database bring-up mutation.
-    #   Pinned so the wait on Ready cannot be dropped and the kind filter
-    #   cannot silently widen to include the backup store.
+    #   yq-go decodes and jq emits exactly the Cluster + ScheduledBackup.
+    #   Pinned so fail-closed filtering and the Ready wait stay.
     "member-db-cluster-apply": _receipt(
-        "e0938b6d423115cb", "3175e20e4afab385", "20ec7101580b4c32", "9f4d48dfad9a4685"
+        "d8cc3b0c530e6726", "ca0e781e2b85bd47", "0e9e918c5dbee321", "00b7ebae62e836a7"
     ),
     # member-db-stack-apply: now a thin alias over the ordered chain. Pinned
     #   so the alias cannot quietly grow its own parallel apply path.
@@ -538,12 +528,10 @@ ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     "member-db-restore-rehearsal-teardown": _receipt(
         "351a1db08e4e649a", "ab5c5f27475d4675", "8ac09460d67e910d", "a60048448b59b59e"
     ),
-    # member-db-migrate-render: the single renderer. Both the dry-run and the
-    #   apply go through it, so the reviewed bytes and the created bytes are the
-    #   same bytes — the same property WEB_RELEASE_CRITICAL_RECIPE_DIGESTS
-    #   protects for web-release-render.
+    # member-db-migrate-render: emits the exact Git-pinned Job carrier. Both the
+    #   dry-run and apply go through it; no runtime image input can alter bytes.
     "member-db-migrate-render": _receipt(
-        "7da383bd13727092", "bd602560440eb122", "b82cf090d67449da", "e402c80cda5a79f7"
+        "6df5406b1a6a238e", "fed406bccbcad01d", "7a904a4c201b11aa", "69c4b613e4e36b6d"
     ),
     "member-db-migrate-server-dry-run": _receipt(
         "d6c529ad3029b41b", "412d186951b31caa", "ddf72afb4b694931", "fd73e747de111861"
@@ -566,7 +554,6 @@ ATTENDED_OPERATOR_LOCAL_ROOTS = {
     # taints anything that tries to wrap one. `member-db-stack-validate` is
     # excluded on purpose so `check-hosted` stays hosted-runnable.
     "_member-db-kubeconfig-input",
-    "_member-db-migrator-image-input",
     "member-db-stack-server-dry-run",
     "member-db-backup-store-apply",
     "member-db-backup-bucket-create",

@@ -1,24 +1,23 @@
 # DECLARE-ONLY TEMPLATE — MERGING APPLIES NOTHING (TIN-3817 acceptance row 2).
 #
-# The pre-rollout migration Job. Spec S6: "Checked-in generated SQL migrations
-# run once in a pre-rollout Job under an advisory lock. Pods never migrate on
-# startup." This file is the infra half of that sentence; the advisory lock, the
-# immutable filename+hash ledger, and the fail-closed behaviour on changed
-# history are the app half's `/bin/migrator` entrypoint (S1, gftb-platform).
+# The pre-rollout migration Job. Spec S6: checked-in generated SQL migrations
+# run once in a pre-rollout Job under an advisory lock; pods never migrate on
+# startup. The platform half is merged and published:
+#
+#   source SHA: af60fcd7539a4beff6f24e1a95eb11160df7c166
+#   workflow:   greatfallstoolbus.org Actions run 33279762284, attempt 1
+#   artifact:   greatfallstoolbus-org-image-af60fcd7539a4beff6f24e1a95eb11160df7c166-33279762284-1
+#   image:      ghcr.io/great-falls-tool-bus/greatfallstoolbus.org
+#               @sha256:10f853938dc6823afe8c9bdc54943587f963d22117aafd17247350b2b5712b35
+#
+# This carrier pins that published artifact in Git. Merged/published and
+# Git-pinned do NOT mean applied, running, or served. Only the attended apply
+# and post-apply readback can establish those later states.
 #
 # WHY THIS IS A TEMPLATE AND NOT A STACK MEMBER
 #
-#   1. It carries no image. S1's app half is open but unlanded
-#      (greatfallstoolbus.org PR #172, stacked on S0 PR #171), so no platform
-#      image carrying /bin/migrator has been published yet. The image arrives at
-#      dispatch as MEMBER_DB_MIGRATOR_IMAGE, exactly the way WEB_APPLY_IMAGE
-#      arrives for the web carrier, and the member-db-migrate-render recipe
-#      substitutes the PLACEHOLDER below. Its input guard admits both
-#      ghcr.io/great-falls-tool-bus/greatfallstoolbus.org (today) and
-#      .../gftb-platform (after the TIN-3815 rename), digest-pinned either way.
-#      scripts/validate-member-db-stack.sh asserts the committed bytes still
-#      carry the placeholder, so a real digest can never be smuggled into the
-#      tree and applied without passing the operator input guard.
+#   1. The reviewed image is part of this immutable release carrier. There is
+#      no runtime image input, placeholder, tag, or post-rename alternate.
 #   2. It is one-shot, not stack state. Re-applying a completed Job is a
 #      no-op-or-conflict rather than a reconcile, which is why it uses
 #      generateName and is created fresh per release instead of being kustomized
@@ -40,6 +39,10 @@ metadata:
   # house release doctrine refuses.
   generateName: gftb-member-db-migrate-
   namespace: members-greatfallstoolbus-org-production
+  annotations:
+    app.tinyland.dev/source-sha: af60fcd7539a4beff6f24e1a95eb11160df7c166
+    app.tinyland.dev/publisher-run: "33279762284"
+    app.tinyland.dev/publisher-attempt: "1"
   labels:
     app.kubernetes.io/name: gftb-platform-migrator
     app.kubernetes.io/component: migrator
@@ -62,6 +65,8 @@ spec:
   ttlSecondsAfterFinished: 86400
   template:
     metadata:
+      annotations:
+        app.tinyland.dev/source-sha: af60fcd7539a4beff6f24e1a95eb11160df7c166
       labels:
         # THE ADMISSION CONTRACT. These three labels are what
         # ../members-greatfallstoolbus-org-db-production/networkpolicy.yaml
@@ -85,12 +90,10 @@ spec:
           type: RuntimeDefault
       containers:
         - name: migrator
-          # OPERATOR-SUPPLIED AT DISPATCH. `just member-db-migrate-render`
-          # replaces this exact literal with MEMBER_DB_MIGRATOR_IMAGE, which the
-          # input guard holds to
-          # ghcr.io/great-falls-tool-bus/gftb-platform@sha256:<64 lowercase hex>
-          # and refuses if it still contains PLACEHOLDER.
-          image: PLACEHOLDER-MEMBER-DB-MIGRATOR-IMAGE
+          # Exact publisher carrier above. Changing this image requires a new
+          # platform source SHA, publisher receipt, reviewed Git pin, and the
+          # same remote validation/review gates as this change.
+          image: ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:10f853938dc6823afe8c9bdc54943587f963d22117aafd17247350b2b5712b35
           imagePullPolicy: IfNotPresent
           # One immutable image, three entrypoints (spec S6). This is the
           # migrator one; `web` and `worker` are Deployments elsewhere.

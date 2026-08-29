@@ -10,34 +10,33 @@ the ratified member lifecycle, runs the first pre-rollout migration, and proves
 the RPO ≤ 1h / RTO ≤ 4h acceptance row with a real restore. Every step is
 **attended**. Nothing in CI applies any of it.
 
-> **Current state (2026-08-21): DECLARED, NOT APPLIED.** No `Cluster` object
-> exists anywhere on the estate. No namespace has been created. No credential
-> has been minted. Steps N through R below have not been run. The object-store
-> ruling (step B1) IS closed — see below — so the remaining pre-apply blocker
-> is the app half landing (S1 below) plus, at Phase 4, merging this PR itself
-> (step S precondition, B-6).
+> **Carrier state (2026-08-29): MERGED APP + PUBLISHED IMAGE + GIT PIN,
+> NOT APPLIED.** Platform source
+> `af60fcd7539a4beff6f24e1a95eb11160df7c166` is merged. Publisher workflow
+> run `33279762284`, attempt 1, produced artifact
+> `greatfallstoolbus-org-image-af60fcd7539a4beff6f24e1a95eb11160df7c166-33279762284-1`
+> and image
+> `ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:10f853938dc6823afe8c9bdc54943587f963d22117aafd17247350b2b5712b35`.
+> This PR pins that image in the one-shot Job. Merged, published, and Git-pinned
+> do not mean applied, running, or served. This change performed no live
+> readback, so the operator must establish current cluster state at the apply
+> sitting rather than inherit an old “none exists” claim.
 
-## Read this before starting: what is actually blocked
+## Read this before starting: what remains before apply
 
-One blocker gates half of this runbook; the object-store question is decided.
+The earlier app-image blocker is closed by the exact publisher receipt above.
+The object-store ruling is also closed: GFTB uses its dedicated rustfs carrier,
+not an estate-owned tcfs bucket. What remains is operational and attended:
 
-1. **The app half of slice S1 is open but unlanded.**
-   `Great-Falls-Tool-Bus/greatfallstoolbus.org` **PR #172** (draft, stacked on
-   S0 PR #171) carries the `/bin/migrator` entrypoint, the advisory lock, and
-   the migration-hash ledger. Until it lands and publishes an image,
-   **steps M1-M3 cannot run.** Steps N through B4 (the database itself) do not
-   depend on it.
-
-   The role names here are aligned to that PR's checked-in SQL —
-   `gftb_migrator` (owner/DDL) and `gftb_app` (DML-only). If PR #172 renames
-   either before landing, `cluster.yaml` and
-   `scripts/validate-member-db-stack.sh` move with it.
-2. **The object-store ruling in step B1 is CLOSED (2026-08-20).** GFTB gets
-   its own dedicated rustfs, not an estate-owned tcfs bucket. `cluster.yaml`
-   and `rustfs.yaml` already carry the ruling; step B1 below is the record of
-   it, not an open question. What remains before step S is executing B2 (the
-   bucket-create step) in order (step B, below) and, separately, B-6's
-   merge-before-Phase-4 precondition.
+1. Merge this PR through its required validation and review gates. The mutating
+   recipes require clean, current, verified `main`; a PR branch cannot apply.
+2. At the sitting, read current operator/namespace/cluster state, establish the
+   two namespaces and operator-custody credentials if absent, then follow the
+   ordered S → M → R chain. This document does not claim those live objects are
+   absent or present.
+3. Preserve the exact Git-pinned image. There is no runtime image override or
+   alternate repository authority. A different image requires a new app source,
+   publisher receipt, reviewed Git pin, and the same validation/review gates.
 
 ## Step O — CloudNativePG operator conformance (read-only)
 
@@ -50,15 +49,11 @@ kubectl --context honey -n cnpg-system get deploy cnpg-cloudnative-pg \
   -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
 ```
 
-Expected, as observed 2026-08-19:
-
-| Check | Expected |
-| --- | --- |
-| CRDs | `backups`, `clusters`, `poolers`, `scheduledbackups` `.postgresql.cnpg.io` |
-| Served version | `v1` |
-| Operator image | `ghcr.io/cloudnative-pg/cloudnative-pg:1.22.0` |
-| Chart | `cloudnative-pg-0.20.0` |
-| Existing `Cluster` objects | none |
+The 2026-08-19 read showed the four CNPG CRDs served at `v1`, operator
+image `ghcr.io/cloudnative-pg/cloudnative-pg:1.22.0`, and chart
+`cloudnative-pg-0.20.0`. Treat those as historical receipts, not current
+live truth. Record the values returned at this sitting, including every existing
+`Cluster` object; do not use this runbook to infer an empty estate.
 
 **O2 — only if the operator is ever absent.** The install is a **substrate**
 change, not a GFTB one: the release is declared in `blahaj`
@@ -196,12 +191,11 @@ Check all four, and record them as release evidence:
 
 **S3 — prove the role separation.** Connect as `gftb_app` and confirm
 `CREATE TABLE` is rejected and `INSERT` on a migrator-created table is accepted.
-This is the infra-side half of S1's acceptance row; PR #172 proves the same
-thing in `just test-integration` against a real PostgreSQL. Note that its
-fixture asserts `gftb_app` has **no** login, which is true in a bare
-testcontainer and deliberately not true here — this cluster is what issues the
-login credential, and `0002` tolerates it (it fails only on `SUPERUSER` or
-`BYPASSRLS`).
+This is the infra-side half of S1's acceptance row. The merged app carrier at
+`af60fcd7539a4beff6f24e1a95eb11160df7c166` holds the corresponding
+PostgreSQL integration proof and refuses a runtime role with `SUPERUSER` or
+`BYPASSRLS`. This cluster supplies the managed LOGIN credential by Secret
+name; no password or tenant identity is declared here.
 
 ## Step B4 — backup verification (the RPO/RTO evidence)
 
@@ -218,7 +212,7 @@ one on demand so the first one happens while you are watching, rather than at
 the next six-hourly boundary. Record the elapsed time; it is the input to the
 RTO budget in step R.
 
-## Step M — first migration (BLOCKED until the app half lands)
+## Step M — first migration (exact Git-pinned publisher carrier)
 
 **M1 — the narrow credential, platform-side.** Derive the
 `gftb-member-db-migrator-dsn` Secret in the **platform** namespace from the
@@ -230,17 +224,15 @@ re-deriving this Secret.
 **M2 — render and dry-run.**
 
 ```bash
-# TIN-3815's repository rename has not happened yet, so today this is the
-# greatfallstoolbus.org slug; the guard admits the gftb-platform slug too.
-export MEMBER_DB_MIGRATOR_IMAGE=ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:<64 hex>
-just member-db-migrate-render            # inspect the exact bytes
+just member-db-migrate-render            # inspect the exact Git-pinned bytes
 just member-db-migrate-server-dry-run
 ```
 
-The input guard refuses a tag and refuses the declare-only `PLACEHOLDER`. It
-admits exactly two repositories — `greatfallstoolbus.org` (today) and
-`gftb-platform` (after TIN-3815) — and nothing else. The render is the single
-source of the bytes: the dry-run and the apply both go through it.
+The render has no image input. It emits the reviewed Job template containing
+the exact publisher image and source identity recorded above. The validator
+refuses a tag, foreign repository, wrong digest/source receipt, `command:`
+override, non-`["migrator"]` args, or any credential other than
+`gftb-member-db-migrator-dsn`. The dry-run and apply consume the same render.
 
 **M3 — run it.**
 
@@ -259,6 +251,11 @@ read the logs, do not re-run blindly.
 Expected on a re-run: the migrator takes its advisory lock, finds every applied
 filename+hash unchanged, and exits clean. **A re-run that reports work to do is
 a red flag**, not a convenience: it means the ledger disagrees with the tree.
+
+The migration creates and protects schema; it does **not** seed a tenant,
+keyholder, owner/member identity, application decision, or activation. Those
+domain transitions remain in the reviewed member lifecycle. Do not insert an
+initial tenant row by hand as part of database bring-up.
 
 ## Step R — restore rehearsal (the RTO ≤ 4h proof, B-5)
 
@@ -318,7 +315,7 @@ object-store endpoint changes. Any of the three invalidates the timing.
 | Failure | Recovery |
 | --- | --- |
 | Stack apply produces a bad `Cluster` | Revert the manifest change, re-run `just member-db-stack-server-dry-run`, then `member-db-stack-apply`. CNPG reconciles in place. |
-| Migration fails | The Job is `backoffLimit: 0` and stays failed. Migrations are forward-only by contract (spec §6): fix forward in the app repo and run M3 again with a new digest. Do not hand-edit the database. |
+| Migration fails | The Job is `backoffLimit: 0` and stays failed. Migrations are forward-only by contract (spec §6): fix forward in the app repo, publish a new exact artifact, land its reviewed Git pin here, then run M3 again. Do not hand-edit the database or inject an image at runtime. |
 | Migration succeeded but the release is bad | Re-pin the previous platform image for web/worker. The schema stays; forward-only means the previous image must tolerate the newer schema, which is why additive migrations are the app-side rule. |
 | Data loss | Step R, for real. That is what the rehearsal was for. |
 | Object store lost | WAL archiving fails and `continuousArchiving` goes `False`. The database keeps serving; RPO degrades immediately. Treat as an incident: restore the endpoint before the WAL volume fills. |
