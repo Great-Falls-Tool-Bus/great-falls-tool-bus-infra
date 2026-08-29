@@ -31,7 +31,8 @@ DIFF_SCRIPT="${REPO_ROOT}/scripts/web-stack-diff.sh"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
-if ! yq --version 2>&1 | grep -qi 'mikefarah\|version v4\|version 4\.'; then
+yq_version="$(yq --version 2>&1 || true)"
+if ! printf "%s" "${yq_version}" | grep -qi 'mikefarah' || ! printf "%s" "${yq_version}" | grep -Eqi 'version v?4\.'; then
   echo "web-stack-diff-selftest: SKIP -- PATH yq is not yq-go (mikefarah); got: $(yq --version 2>&1 | head -1)" >&2
   echo "web-stack-diff-selftest: this self-test requires the same yq-go binary CI's GF-core devshell provides" >&2
   exit 1

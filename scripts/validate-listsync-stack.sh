@@ -34,7 +34,7 @@ assert_eq() {
 
 command -v yq >/dev/null 2>&1 || fail "yq is required"
 yq_version="$(yq --version 2>&1 || true)"
-echo "${yq_version}" | grep -Eqi "mikefarah|version v?4\." || fail "mikefarah yq-go v4 is required; got: ${yq_version:-unavailable}"
+if ! printf "%s" "${yq_version}" | grep -qi "mikefarah" || ! printf "%s" "${yq_version}" | grep -Eqi "version v?4\."; then fail "mikefarah yq-go v4 is required; got: ${yq_version:-unavailable}"; fi
 command -v kubectl >/dev/null 2>&1 || fail "kubectl is required for kubectl kustomize"
 
 require_file "${cm_file}"

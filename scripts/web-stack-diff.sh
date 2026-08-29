@@ -40,8 +40,8 @@
 # line-grep on the literal string "app.tinyland.dev/source-sha" would also
 # drop any OTHER line that happens to contain that text anywhere (comments,
 # other keys with a matching substring) -- an unanchored filter. This
-# version parses each file as YAML/JSON (via `yq`, which shells out to
-# `jq`) and deletes the EXACT key `app.tinyland.dev/source-sha` from every
+# version parses each file as YAML/JSON via yq-go, then uses jq for exact
+# object-key deletion of `app.tinyland.dev/source-sha` from every object.
 # object in the document, wherever it appears, using `has()`/`del()` -- an
 # object-key match, never a substring match. When that deletion leaves an
 # `annotations` map empty, the now-empty `annotations` key is deleted too,

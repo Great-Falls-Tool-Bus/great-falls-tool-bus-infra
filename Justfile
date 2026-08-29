@@ -2532,7 +2532,7 @@ web-release-render: _web-release-candidate-inputs
     command -v yq >/dev/null 2>&1 || { echo "yq is required (nix develop provides it)" >&2; exit 1; }
     command -v jq >/dev/null 2>&1 || { echo "jq is required (nix develop provides it)" >&2; exit 1; }
     yq_version="$(yq --version 2>&1 || true)"
-    echo "${yq_version}" | grep -Eqi "mikefarah|version v?4\." || { echo "mikefarah yq-go v4 is required; got: ${yq_version:-unavailable}" >&2; exit 1; }
+    if ! printf "%s" "${yq_version}" | grep -qi "mikefarah" || ! printf "%s" "${yq_version}" | grep -Eqi "version v?4\."; then echo "mikefarah yq-go v4 is required; got: ${yq_version:-unavailable}" >&2; exit 1; fi
     umask 077
     temp_root="$(python3 -I - "${TMPDIR:-/tmp}" "$(git rev-parse --show-toplevel)" <<'PY'
     import os
