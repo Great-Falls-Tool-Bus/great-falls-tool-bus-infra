@@ -192,7 +192,15 @@ jobs:
             nix develop "${GF_CORE_CI_PATH}" -c just mail-cr-drift-check
 
       - name: Drift check -- list stack
-        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        # always(): each stack here is independently zero-diff (see header);
+        # one stack's real drift (e.g. mail CRs, above) must not blind this
+        # job to every stack after it. Before this fix, list/form/archive/
+        # list-sync had NEVER executed in ANY run of this workflow since
+        # #126 introduced the current job shape (2026-08-29 sweep g1: 100%
+        # of the runs sampled show mail CRs failing first and every
+        # subsequent step `-` skipped) -- a structural blind spot, not
+        # evidence those stacks are actually zero-diff.
+        if: always() && steps.secrets.outputs.kubeconfig-present == 'true'
         uses: ./GloriousFlywheel/.github/actions/nix-job
         with:
           push-cache: "false"
@@ -204,7 +212,7 @@ jobs:
             nix develop "${GF_CORE_CI_PATH}" -c just list-stack-drift-check
 
       - name: Drift check -- form stack
-        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        if: always() && steps.secrets.outputs.kubeconfig-present == 'true'
         uses: ./GloriousFlywheel/.github/actions/nix-job
         with:
           push-cache: "false"
@@ -216,7 +224,7 @@ jobs:
             nix develop "${GF_CORE_CI_PATH}" -c just form-stack-drift-check
 
       - name: Drift check -- archive stack
-        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        if: always() && steps.secrets.outputs.kubeconfig-present == 'true'
         uses: ./GloriousFlywheel/.github/actions/nix-job
         with:
           push-cache: "false"
@@ -228,7 +236,7 @@ jobs:
             nix develop "${GF_CORE_CI_PATH}" -c just archive-stack-drift-check
 
       - name: Drift check -- list-sync stack (TIN-3813)
-        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        if: always() && steps.secrets.outputs.kubeconfig-present == 'true'
         uses: ./GloriousFlywheel/.github/actions/nix-job
         with:
           push-cache: "false"

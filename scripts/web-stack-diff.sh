@@ -90,6 +90,7 @@ for d in "$local_dir" "$live_dir"; do
 done
 
 command -v yq >/dev/null 2>&1 || fail "yq is required"
+command -v jq >/dev/null 2>&1 || fail "jq is required"
 
 # NORMALIZE_FILTER deletes exactly the app.tinyland.dev/source-sha key from
 # every object in the document (anchored key match via has()/del(), never a
@@ -129,7 +130,23 @@ normalize_tree() {
     count=$((count + 1))
     rel="${f#"$src"/}"
     mkdir -p "$(dirname "$dst/$rel")"
-    if ! yq -y "${NORMALIZE_FILTER}" "$f" > "$dst/$rel" 2>"$work/yq.err"; then
+    # `yq -y FILTER file` is the python-yq (kislyuk) calling convention. The
+    # `yq` that actually resolves on PATH here is mikefarah's yq-go (pinned by
+    # GloriousFlywheel core's `ci` devshell, which is what `nix develop
+    # "${GF_CORE_CI_PATH}"` puts in scope in CI -- this repo's OWN flake.nix
+    # separately pins `pkgs.yq` (python-yq), but that shell is never entered
+    # for this job, so it was never what ran here). yq-go has no `-y` flag and
+    # no bare-filter-then-file positional form, so this always failed in CI
+    # (2026-08-29 sweep g1: every k8s-stack-drift run since PR #126 introduced
+    # this script errors here, before ever reaching the actual diff -- a
+    # tooling defect, not evidence of real web-stack drift one way or the
+    # other). Fix: use yq-go only for YAML<->JSON conversion, and run
+    # NORMALIZE_FILTER (unchanged, it's plain jq syntax -- walk/has/del are
+    # all real jq builtins) through actual `jq`, which is present in the same
+    # GF-core ci closure.
+    if ! yq eval -o=json '.' "$f" 2>"$work/yq.err" \
+        | jq "${NORMALIZE_FILTER}" 2>>"$work/yq.err" \
+        | yq eval -P '.' - > "$dst/$rel" 2>>"$work/yq.err"; then
       echo "web-stack-diff.sh: failed to normalize $f as YAML:" >&2
       cat "$work/yq.err" >&2 2>/dev/null || true
       rm -f "$filelist"
