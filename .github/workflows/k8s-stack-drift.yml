@@ -62,9 +62,15 @@ name: K8s Stack Drift (zero-diff where applicable)
 #     is its only remaining consumer since TIN-3899 retired web-stack.yml)
 #   * MAIL_APPLY_KUBECONFIG_B64 / GFTB_MAIL_KUBECONFIG_B64, protected `mail`
 #     environment (mail-crs.yml / list-crs.yml / form-crs.yml / archive-stack.yml)
-# `kubectl diff` needs only read (get/list) RBAC on the stack's own resources --
-# a strict subset of what the apply-scoped kubeconfig already grants, so no new
-# permission is requested either. Runs on the same self-hosted `tinyland-nix`
+# `kubectl diff` performs a SERVER-SIDE DRY-RUN APPLY under the hood (it needs
+# patch/create verbs, not just read/list) -- this is NOT a strict subset of
+# read-only RBAC, contrary to what this header previously claimed
+# (reconciliation-safety review, R1). It is a strict subset of what the
+# apply-scoped kubeconfig already grants (that kubeconfig can apply for real),
+# so no new permission is requested here, and mail CRs above correctly surface
+# rc=1 rather than a 403 -- but do not use this workflow as a template for
+# minting a narrower, read-only kubeconfig; `kubectl diff` will not run under
+# one. Runs on the same self-hosted `tinyland-nix`
 # runner (on-cluster/tailnet reachable) every other apply/validate workflow in
 # this repo uses. Like edge-drift.yml, this fails SOFT (skip, not red) when an
 # environment secret is absent -- the runbook mints these late.
@@ -153,6 +159,7 @@ jobs:
           persist-credentials: false
 
       - name: Verify GloriousFlywheel core checkout
+        id: verify-core
         if: steps.secrets.outputs.kubeconfig-present == 'true'
         run: |
           set -euo pipefail
@@ -192,7 +199,25 @@ jobs:
             nix develop "${GF_CORE_CI_PATH}" -c just mail-cr-drift-check
 
       - name: Drift check -- list stack
-        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        # !cancelled() (round 2, reconciliation-safety review E2): each stack
+        # here is independently zero-diff (see header); one stack's real
+        # drift (e.g. mail CRs, above) must not blind this job to every stack
+        # after it. Before this fix, list/form/archive/list-sync had NEVER
+        # executed in ANY run of this workflow since #126 introduced the
+        # current job shape (2026-08-29 sweep g1: 100% of the runs sampled
+        # show mail CRs failing first and every subsequent step `-` skipped)
+        # -- a structural blind spot, not evidence those stacks are actually
+        # zero-diff. `always()` was rejected: it also un-gates on job
+        # cancellation and on the 20-minute timeout, AND it would still run
+        # these steps if "Verify GloriousFlywheel core checkout" itself
+        # failed (an unpinned/mismatched core tree) -- exactly the pin gate
+        # this job depends on to refuse comparing against the wrong core.
+        # `!cancelled()` gives the blind-spot fix without un-gating on
+        # cancellation; `steps.verify-core.outcome == 'success'` keeps the
+        # pin gate load-bearing. The kubeconfig path still fails closed
+        # either way (`_k8s-drift-check`'s `test -f` errors if materialization
+        # failed).
+        if: ${{ !cancelled() && steps.secrets.outputs.kubeconfig-present == 'true' && steps.verify-core.outcome == 'success' }}
         uses: ./GloriousFlywheel/.github/actions/nix-job
         with:
           push-cache: "false"
@@ -204,7 +229,7 @@ jobs:
             nix develop "${GF_CORE_CI_PATH}" -c just list-stack-drift-check
 
       - name: Drift check -- form stack
-        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        if: ${{ !cancelled() && steps.secrets.outputs.kubeconfig-present == 'true' && steps.verify-core.outcome == 'success' }}
         uses: ./GloriousFlywheel/.github/actions/nix-job
         with:
           push-cache: "false"
@@ -216,7 +241,7 @@ jobs:
             nix develop "${GF_CORE_CI_PATH}" -c just form-stack-drift-check
 
       - name: Drift check -- archive stack
-        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        if: ${{ !cancelled() && steps.secrets.outputs.kubeconfig-present == 'true' && steps.verify-core.outcome == 'success' }}
         uses: ./GloriousFlywheel/.github/actions/nix-job
         with:
           push-cache: "false"
@@ -228,7 +253,7 @@ jobs:
             nix develop "${GF_CORE_CI_PATH}" -c just archive-stack-drift-check
 
       - name: Drift check -- list-sync stack (TIN-3813)
-        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        if: ${{ !cancelled() && steps.secrets.outputs.kubeconfig-present == 'true' && steps.verify-core.outcome == 'success' }}
         uses: ./GloriousFlywheel/.github/actions/nix-job
         with:
           push-cache: "false"
@@ -302,6 +327,25 @@ jobs:
             echo "::error::GloriousFlywheel checkout mismatch: expected ${GF_CORE_REF}, got ${actual}"
             exit 1
           fi
+
+      - name: Self-test web-stack-diff.sh (reconciliation-safety review E3)
+        # Runs BEFORE the kubeconfig even exists -- this needs no cluster
+        # access, only the same GF-core `ci` devshell (real yq-go + jq) the
+        # real diff step below uses. Fixture proof that the yq-go/jq rewrite
+        # (sweep g1) actually works; gates here rather than in `just check`
+        # because this repo's OWN flake.nix devshell pins python-yq, not
+        # yq-go -- folding this into check-hosted would silently validate
+        # the wrong binary (the exact defect class this PR fixes).
+        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            export GF_CORE_PATH=../GloriousFlywheel
+            export GF_CORE_CI_PATH="path:${GF_CORE_PATH}#ci"
+            nix develop "${GF_CORE_CI_PATH}" -c just web-stack-diff-selftest
 
       - name: Materialize web-apply kubeconfig
         if: steps.secrets.outputs.kubeconfig-present == 'true'

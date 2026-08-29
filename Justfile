@@ -4085,3 +4085,16 @@ web-stack-drift-check: _web-apply-kubeconfig-only
     repo_root="$(git rev-parse --show-toplevel)"
     export KUBECTL_EXTERNAL_DIFF="${repo_root}/scripts/web-stack-diff.sh"
     just _k8s-drift-check "${WEB_APPLY_KUBECONFIG}" {{ web_stack_ns }} {{ web_stack_dir }} web-stack
+
+# Reconciliation-safety review (PR #135, E3): scripts/web-stack-diff.sh had
+# ZERO tests (`git grep web-stack-diff` returned only Justfile wiring and
+# doc comments) even though its own header has demanded since round 2 that
+# it "MUST be exercised with two directories in any test, never two bare
+# files, or a regression here reads as passing again." This runs the five
+# fixture cases that proved the yq-go/jq rewrite (sweep g1, 2026-08-29)
+# actually works, folded into `just check` so the next calling-convention
+# change can't ship blind. Requires real yq-go + jq on PATH (this repo's own
+# flake.nix devshell pins python-yq, the wrong binary for this test -- run
+# it from GF-core's `ci` devshell, or `nix shell nixpkgs#yq-go nixpkgs#jq`).
+web-stack-diff-selftest:
+    ./scripts/test-web-stack-diff.sh
