@@ -605,8 +605,10 @@ WEB_RELEASE_VALIDATION_SCRIPT = Path("scripts/validate-web-stack.sh")
 # denylist to an allowlist; validate-web-stack.sh's own bytes changed only in
 # that comment, not in behavior), so this pinned digest changed once more in
 # the same PR (same recompute command as above).
+# Updated 2026-08-29: the yq-go preflight now requires both the mikefarah
+# vendor marker and a v4 version marker; this receipt binds that exact fix.
 WEB_RELEASE_VALIDATION_SCRIPT_SHA256 = _receipt(
-    "a94018e40c8c11ad", "70a1e75249fdb3a8", "1a6c4059a0e865b", "40fe7fa7b3b631a4d"
+    "c260f829e1531513", "3c4fa03db9443b1d", "55cf9d7e5fa02b78", "a6a56635fbab64c8"
 )
 
 FLAKE_RELEASE_PACKAGES = ("crane", "curl")
