@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: latoolb-us-production
+
+# TIN-3813 lane: add-only keyholders -> discuss membership reconciler.
+# Enforces members(keyholders@latoolb.us) ⊆ members(discuss@latoolb.us)
+# going forward (decisions/0014 ruling 5 pairing). DECLARED SUSPENDED with
+# dry-run default-on and gated on the operator-minted mailman-listsync-rest
+# Secret; merging changes nothing on its own, and live rollout runs through
+# the attended `just listsync-stack-apply` recipe plus the three-step
+# activation sequence in docs/runbooks/list-operations.md section 8.
+
+resources:
+  - configmap-listsync.yaml
+  - cronjob-listsync.yaml
+  - networkpolicy.yaml
+
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/managed-by: great-falls-tool-bus-infra
+      app.kubernetes.io/part-of: great-falls-tool-bus
+      app.tinyland.dev/tenant: great-falls-tool-bus

@@ -126,11 +126,14 @@ HOSTED_WORKFLOW_JUST_ALLOWLIST = {
     "list-stack-drift-check",
     "list-stack-server-dry-run",
     "list-stack-validate",
+    "listsync-stack-drift-check",
     "mail-cr-apply",
     "mail-cr-drift-check",
     "mail-cr-server-dry-run",
     "mail-cr-validate",
+    "web-stack-diff-selftest",
     "web-stack-drift-check",
+    "web-stack-render",
     "web-stack-validate",
 }
 
@@ -556,11 +559,14 @@ WEB_RELEASE_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     "web-release-candidate-proof": _receipt(
         "6347e0f7e92498e9", "c6fdfd7c5d80b0ef", "06e4818e333f3cac", "c5ace4f7652a2273"
     ),
+    # Updated 2026-08-29: yq-go now owns only YAML/JSON conversion; jq
+    # owns release mutation and slurp semantics. The public-surface fixtures
+    # execute both this renderer and the exact-one kubeconfig guard.
     "web-release-render": _receipt(
-        "513bc0ad22178c9d", "b30a8177165af253", "68571a990e279382", "f5929829bd04e386"
+        "bafec28ca138b218", "93c7bb2f1374d48a", "f096847a301b966a", "0ce6033f3a7d039c"
     ),
     "_web-release-kubeconfig-inputs": _receipt(
-        "a2601a6824409840", "45f4b6df270eb1db", "fe2386345de59807", "2e9d451a53f33f47"
+        "916de1b406d43ca1", "f7a2870af5898faf", "4f51aa497b5876b9", "65f0a9f9b8d0b819"
     ),
     "web-release-pinned-running-proof": _receipt(
         "bb9f757c5e1a3dcf", "c48e67ad1aa40b11", "0f25466fc6db04e7", "159d31d0968b28ab"
@@ -697,8 +703,25 @@ WEB_RELEASE_VALIDATION_CALLEE_DIGEST = _receipt(
     "482232ea1b2f080a", "aa86db3e695197c5", "61eb9b3fd8ca4210", "8643ac9e3e3ce0d2"
 )
 WEB_RELEASE_VALIDATION_SCRIPT = Path("scripts/validate-web-stack.sh")
+# Updated 2026-08-21 (rung 1 tree honesty): scripts/validate-web-stack.sh now
+# admits ghcr.io/great-falls-tool-bus/gftb-site instead of the retired legacy
+# greatfallstoolbus.org adapter-node repository, so its bytes and this pinned
+# digest both changed together in the same PR (`shasum -a 256
+# scripts/validate-web-stack.sh`).
+# Updated again 2026-08-21 (rung 2 round 3, PR #127 comment 5377613179):
+# validate-web-stack.sh now calls scripts/guard-no-remote-kustomize-resources.sh
+# before its own `kubectl kustomize` call, so its bytes and this pinned digest
+# changed together in the same PR (same recompute command as above).
+# Updated a third time 2026-08-22 (rung 2 round 4, PR #127 comments
+# 5380010266 + 5380172269): the guard call site's comment text changed to
+# describe the allowlist design (the guard script itself moved from a
+# denylist to an allowlist; validate-web-stack.sh's own bytes changed only in
+# that comment, not in behavior), so this pinned digest changed once more in
+# the same PR (same recompute command as above).
+# Updated 2026-08-29: the yq-go preflight now requires both the mikefarah
+# vendor marker and a v4 version marker; this receipt binds that exact fix.
 WEB_RELEASE_VALIDATION_SCRIPT_SHA256 = _receipt(
-    "c590e9770a4b133e", "9988ce74e3d837cf", "a3307f05a177b286", "d09d6675199c9a01"
+    "c260f829e1531513", "3c4fa03db9443b1d", "55cf9d7e5fa02b78", "a6a56635fbab64c8"
 )
 
 FLAKE_RELEASE_PACKAGES = ("crane", "curl")

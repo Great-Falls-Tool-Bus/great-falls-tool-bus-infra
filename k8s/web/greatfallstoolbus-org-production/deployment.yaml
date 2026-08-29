@@ -1,10 +1,28 @@
 # DECLARE-ONLY (dispatch-gated) — NOTHING APPLIES ON MERGE (TIN-2543, ADR 0010).
 #
-# GFTB on-cluster web serving workload, mirroring the proven MassageIthaca
-# full-on-cluster pattern (SvelteKit adapter-node -> OCI image on GHCR -> K8s
-# Deployment behind a ClusterIP Service -> in-cluster cloudflared tunnel edge;
-# see blahaj:tofu/stacks/massageithaca/main.tf and this repo's
+# GFTB on-cluster web serving workload: the promoted gftb-site static origin
+# (SvelteKit adapter-static build -> Caddy on an OCI image on GHCR -> K8s
+# Deployment behind a ClusterIP Service -> in-cluster cloudflared tunnel edge),
+# mirroring the proven MassageIthaca full-on-cluster pattern (see
+# blahaj:tofu/stacks/massageithaca/main.tf and this repo's
 # docs/decisions/0001-pr-gated-ephemeral-preview-deploys.md).
+#
+# TREE HONESTY (rung 1, 2026-08-21; ratification basis: operator interview
+# 2026-08-21, session register L71 Q2 rungs 1+2). Until this fix, this file
+# named a DIFFERENT GHCR repository (ghcr.io/great-falls-tool-bus/
+# greatfallstoolbus.org, the pre-split legacy adapter-node image) than the one
+# production has actually served since the gftb-site promotion
+# (ghcr.io/great-falls-tool-bus/gftb-site). That divergence was documented here
+# and in Justfile/k8s-stack-drift.yml as PERMANENT and by-design — it is not:
+# it was an artifact of the legacy carrier's declarative record never being
+# updated at promotion time. The invariant going forward is: THIS FILE PINS
+# WHAT IS ACTUALLY SERVED, and an operator updates the pin here as part of
+# each release ceremony (see Justfile `web-release-plan` / `web-release-apply`,
+# and the generation-37 pin receipt on the program board, TIN-3959). This is a
+# declarative-record fix only — the `web-release-*` ceremony (Justfile) still
+# renders and applies the live Deployment from operator-supplied
+# WEB_APPLY_IMAGE/WEB_APPLY_SHA, attended, behind `_operator-apply-confirm`;
+# nothing here changes that path, moves any authority, or causes an apply.
 #
 # ADR 0010 rules on-prem the production host and moves this stack from a parked
 # fail-closed skeleton to the EXECUTING cutover (ADR 0010 §5 step 3: scale the
@@ -25,12 +43,14 @@
 #   4. No Secret ships here (the GHCR pull secret is operator-provisioned in the
 #      namespace, never committed).
 #
-# The attended `just web-stack-apply` carrier still `kubectl set image` / patches
-# replicas from the operator-supplied inputs, so a SERVED digest was historically
-# whatever the operator resolved at runbook P2. After the gftb-site promotion the
-# live Deployment runs the static origin instead, and no automated path re-pins
-# this one. The pin below is the declarative record of the adapter-node main
-# image, nothing more.
+# The pod-template fields below (securityContext, no command/env override) match
+# the exact contract Justfile's `web-release-render` asserts on the rendered
+# workload byte-for-byte (see the `jq -e` contract in that recipe), so the
+# checked-in base and the ceremony's render step now describe the same shape —
+# the ceremony still supplies (and this file cannot fix in advance) the
+# per-release image digest, source-sha annotation, and the
+# default-deny-egress NetworkPolicy it synthesizes at render time (tracked as a
+# residual; see the PR body / ../README.md).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -64,12 +84,18 @@ spec:
         app.kubernetes.io/part-of: great-falls-tool-bus
     spec:
       terminationGracePeriodSeconds: 15
-      # Pod-level hardening mirrors MI (non-root uid/gid 1001 under adapter-node).
+      # Pod-level hardening. runAsUser/runAsGroup/fsGroup 65532 is gftb-site's
+      # own image default (flake.nix `config.User = "65532:65532"`; the
+      # distroless/nonroot convention) and is exactly what Justfile
+      # `web-release-render` sets on every rendered release, so this is not an
+      # independent choice — it is the value the ceremony has always used.
+      automountServiceAccountToken: false
+      enableServiceLinks: false
       securityContext:
         runAsNonRoot: true
-        runAsUser: 1001
-        runAsGroup: 1001
-        fsGroup: 1001
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
       # Node placement. Nothing schedules on merge (apply is dispatch-gated); at
@@ -121,26 +147,30 @@ spec:
                     app.kubernetes.io/component: web
       containers:
         - name: greatfallstoolbus-org
-          # Digest-pinned production image (ADR 0010 §5). Built from
-          # greatfallstoolbus.org main @ 1112a93 (PR #111: /health probe +
-          # PUBLIC_ARCHIVE_LIVE baked into the node image) by container-ghcr.yml
-          # run 28762450649 — this image serves /health for the probes below and
-          # surfaces /discuss archive-live. Still a DECLARATIVE record: the
-          # attended carrier's `kubectl set image` would override it with the
-          # operator-resolved digest (runbook P2), and the promoted gftb-site
-          # origin already does. No CI path re-pins it.
-          image: ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:31cace27c5cd3e51ad4411100c83fb9019f74c9885535a916be5e5f333c929c3
+          # Digest-pinned production image: the promoted gftb-site static
+          # origin (ADR 0010 §5 cutover shape; TIN-3899 promotion). Candidate
+          # 8191f063f7f411e3dac4c0070645326caf16e326 (signed gftb-site
+          # main, PR #39 merge), generation 38. The immutable candidate
+          # was published by GitHub Actions run 33258464937 on 2026-08-29;
+          # public GHCR manifest resolution of tag sha-8191f063f7f411e3dac4c0070645326caf16e326
+          # returned exactly the digest pinned below. This commit records
+          # reviewed desired release truth; PINNED/RUNNING/SERVED remain
+          # separate post-apply evidence and are not claimed here.
+          #
+          # No command/env override: gftb-site's own image bakes
+          # Entrypoint=[dumb-init --] Cmd=[caddy run --config
+          # /etc/caddy/Caddyfile --adapter caddyfile] and needs no runtime env
+          # (the Caddyfile hardcodes :3000 and the /health, /healthz responders
+          # used by the probes below). This is not adapter-node; there is no
+          # build/index.js in this image. `web-release-render` (Justfile)
+          # deletes command/args/env/envFrom/volumeMounts unconditionally on
+          # every render for exactly this reason.
+          image: ghcr.io/great-falls-tool-bus/gftb-site@sha256:22b5725016b84518054343d51b648e61ed6300496fcc9b80bc0ccb4a853ad0f4
           imagePullPolicy: IfNotPresent
-          command: ["node", "build/index.js"]
           ports:
             - name: http
               containerPort: 3000
               protocol: TCP
-          env:
-            - name: NODE_ENV
-              value: production
-            - name: PORT
-              value: "3000"
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

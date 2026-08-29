@@ -52,7 +52,9 @@ Consequences:
   survives pod restarts (state is on the retained PVCs).
 - There is no GitOps reconciliation of list settings. The ratified baseline in
   section 5 is the written source of truth; if the database drifts from it, an
-  operator must PATCH it back by hand.
+  operator must PATCH it back by hand. (One narrow, declared exception exists
+  for ROSTERS, not settings: the add-only keyholders ⊆ discuss reconciler,
+  section 8, which only ever adds discuss@ memberships.)
 - Back up by protecting the `mailman-postgres-data` PVC, not by trusting Git.
 
 ## 2. Admin access pattern
@@ -409,3 +411,90 @@ controller does not yet converge it automatically.
   pod-IP-bound listener; use `kubectl exec` (section 2).
 - **Do not expect list settings in Git.** They live in Postgres; restore drift
   from the section 5 baseline, not from `kubectl apply`.
+
+## 8. keyholders ⊆ discuss auto-add reconciler (TIN-3813 lane)
+
+Declared in `k8s/list-sync/latoolb-us-production/` (offline-validated by
+`just listsync-stack-validate`; attended rollout via
+`just listsync-stack-server-dry-run` and `just listsync-stack-apply` with the
+same protected mail-environment kubeconfig as the other stacks).
+
+### What it enforces, and what it can never do
+
+The `mailman-listsync` CronJob enforces exactly one invariant going forward:
+
+> every `role=member` of `keyholders@latoolb.us` is also a member of
+> `discuss@latoolb.us`
+
+This is the ratified private/public pairing (meta `decisions/0014` ruling 5:
+keyholders@ stays an owner-curated private archive, discuss@ stays the public
+community archive). Keyholder admission is still the attended
+`just list-member-add` lane (consent readback included) — the reconciler only
+back-fills the discuss@ half of an admission, it admits nobody.
+
+Hard properties, each asserted offline by `scripts/validate-listsync-stack.sh`:
+
+- **Add-only.** The program's HTTP method allowlist is GET/POST; there is no
+  removal or settings path to misfire. It can only grow discuss@, never shrink
+  anything.
+- **Two pinned lists.** `keyholders.latoolb.us` → `discuss.latoolb.us` is
+  baked into the script as constants and cross-checked against the declared
+  env; any mismatch refuses before I/O.
+- **Idempotent and retryable.** Reconciliation is a set difference; HTTP 409
+  is success; transient failures retry with backoff in-run, and the next
+  scheduled run is the outer retry loop.
+- **Dead-lettered.** Any unresolved failure exits non-zero, so the Job is
+  retained as Failed (`failedJobsHistoryLimit`) with structured JSON receipt
+  lines (`listsync.*` events) in the pod log for Loki. Inspect with
+  `kubectl -n latoolb-us-production get jobs` and `kubectl logs job/<name>`.
+- **Redacted receipts.** Subscriber addresses are logged redacted (first
+  character + domain), per the TIN-3813 receipt-redaction line and the
+  TIN-3437 off-list acknowledgement precedent.
+- **Narrow identity.** `automountServiceAccountToken: false` (no cluster
+  credential), NetworkPolicy egress pinned to DNS + `mailman-core:8001`, no
+  ingress at all.
+
+### Credential scoping — the declared gap
+
+GNU Mailman core 3.3.10 has a **single global REST identity**
+(`[webservice] admin_user`/`admin_pass`; verified in-pod 2026-08-20). It has no
+per-list or role-scoped REST users, and the restricted Mailman proxy TIN-3813
+requires (add/remove/readback on only the exact approved lists) does not exist
+in this stack yet — that remains open under TIN-3813. Until it lands, the
+credential the operator mints into `mailman-listsync-rest` is necessarily
+engine-global, and the narrowing is compensating, not cryptographic: dedicated
+Secret (independent rotation/revocation, never `mailman-app`), add-only
+two-list program contract, and the egress pin above. Do not present this lane
+as satisfying TIN-3813's restricted-proxy acceptance line.
+
+### Activation (step 0 + three attended operator steps)
+
+**Step 0 — baseline apply, promptly after merge.** Apply the suspended stack
+(`just listsync-stack-server-dry-run` then `just
+listsync-stack-apply`) before any relaxation. Zero-risk by construction:
+suspended, dry-run on, the Secret absent, and the NetworkPolicies select no
+running pods. Without this, the `k8s-stack-drift` lane reports all four
+objects as drift on every scheduled run until activation (`kubectl diff`
+exits nonzero for objects absent from the cluster) — an always-red gate
+trains its reader to ignore it. This mirrors the stack README's step 0.
+
+The committed defaults are `suspend: true` and `LISTSYNC_DRY_RUN: "true"`.
+Relaxing either is a one-line edit, so the validator refuses it unless
+`k8s/list-sync/latoolb-us-production/operator-activation.yaml` records a dated
+operator ruling (`suspend:`, `dry_run:`, `ruling: "YYYY-MM-DD <operator>:
+..."`) — the same shape as the ARC runner-group admission ruling. Agents do
+not author that file.
+
+1. **Mint the Secret** `mailman-listsync-rest` (key `MAILMAN_REST_PASSWORD`)
+   in `latoolb-us-production`. Until then every Job fails at container start:
+   the gate is closed.
+2. **Enable dry-run observation:** set `suspend: false`, record the ruling,
+   merge, run the attended apply recipe. Runs are read-only and emit
+   `listsync.observed`/`listsync.dry-run` receipts.
+3. **Enable mutation:** after reviewing dry-run receipts, set
+   `LISTSYNC_DRY_RUN` to `"false"`, extend the ruling, merge, apply.
+
+Baseline at declaration time (read-only readback 2026-08-20): both rosters
+7/7 with an empty drift set — every keyholders@ member already on discuss@ —
+so the reconciler's first real runs are expected to report
+`missing: 0` / `listsync.converged`.

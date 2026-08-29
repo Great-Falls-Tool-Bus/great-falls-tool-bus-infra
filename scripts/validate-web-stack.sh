@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2016
-# SC2016 is intentional throughout: the `$app` inside every single-quoted yq
-# program is a jq variable bound by `--arg app`, not a shell expansion. Binding
-# it through --arg (rather than interpolating the shell value into the filter)
-# is what keeps a stack name from being able to inject jq syntax.
 set -euo pipefail
+
+# yq NOTE: hosted validation is standardized on mikefarah yq-go v4
+# in both this repository and GF-core. Container selection binds through
+# the exported app variable plus strenv(app); the version preflight below
+# rejects kislyuk/python-yq before any predicate can be skipped.
 
 # ATTENDED-ONLY declare-only guard for the GFTB on-cluster web workload
 # (TIN-2543, ADR 0010; posture updated by TIN-3899). Asserts the invariants so a
@@ -29,16 +29,24 @@ set -euo pipefail
 # IMAGE ADMISSION IS BOUND TO THE STACK UNDER VALIDATION. The admitted container
 # repository is looked up from the Deployment's OWN target namespace, never from
 # a flat list that every stack shares. greatfallstoolbus-org-production admits
-# exactly ghcr.io/great-falls-tool-bus/greatfallstoolbus.org and nothing else, so
-# substituting any other repository -- including the gftb-site static-origin
-# candidate -- into this stack FAILS here rather than silently widening the
-# guard. A namespace with no entry in the table fails closed.
+# exactly ghcr.io/great-falls-tool-bus/gftb-site and nothing else, so
+# substituting any other repository -- including the retired legacy
+# greatfallstoolbus.org adapter-node image -- into this stack FAILS here rather
+# than silently widening the guard. A namespace with no entry in the table
+# fails closed.
 #
-# The gftb-site candidate is admitted on a different axis entirely: it is never
-# committed to a manifest, it arrives as WEB_APPLY_IMAGE, and Justfile's
-# _web-release-candidate-inputs holds it to the exact
-# ghcr.io/great-falls-tool-bus/gftb-site@sha256:<64 hex> shape before
-# web-release-render ever emits it.
+# TREE HONESTY (rung 1, 2026-08-21). This admission used to name
+# ghcr.io/great-falls-tool-bus/greatfallstoolbus.org -- the pre-split legacy
+# adapter-node image -- and explicitly refused the gftb-site repository the
+# gftb-site promotion had already made the ONLY thing actually served. That
+# was itself part of the dishonesty this fix retires: the admitted repo now
+# matches what the declarative record in deployment.yaml pins, and what the
+# attended web-release-* ceremony (Justfile) actually promotes onto this
+# Deployment. The gftb-site candidate is STILL held, independently, to the
+# exact ghcr.io/great-falls-tool-bus/gftb-site@sha256:<64 hex> shape by
+# Justfile's _web-release-candidate-inputs before web-release-render ever
+# emits it -- this admission and that one are now the same repository by
+# design, not two axes that must be kept apart.
 
 dir="${1:?usage: validate-web-stack.sh <manifest-dir>}"
 web_root="$(cd "${dir}/.." && pwd)"
@@ -58,6 +66,8 @@ require_file() { test -f "$1" || fail "missing $1"; }
 assert_eq() { [ "$1" = "$2" ] || fail "$3: got '$1', want '$2'"; }
 
 command -v yq >/dev/null 2>&1 || fail "yq is required"
+yq_version="$(yq --version 2>&1 || true)"
+if ! printf "%s" "${yq_version}" | grep -qi "mikefarah" || ! printf "%s" "${yq_version}" | grep -Eqi "version v?4\."; then fail "mikefarah yq-go v4 is required; got: ${yq_version:-unavailable}"; fi
 command -v jq >/dev/null 2>&1 || fail "jq is required (JSON intent assertions)"
 command -v kubectl >/dev/null 2>&1 || fail "kubectl is required for kubectl kustomize"
 
@@ -75,12 +85,13 @@ stack_ns="$(yq -r 'select(.kind == "Deployment") | .metadata.namespace' "${deplo
 case "${stack_ns}" in
 greatfallstoolbus-org-production)
   app="greatfallstoolbus-org"
-  admitted_image_repo="ghcr.io/great-falls-tool-bus/greatfallstoolbus.org"
+  admitted_image_repo="ghcr.io/great-falls-tool-bus/gftb-site"
   ;;
 *)
   fail "unknown web stack namespace '${stack_ns}'; the only admitted GFTB web stack is greatfallstoolbus-org-production"
   ;;
 esac
+export app
 deploy_name="$(yq -r 'select(.kind == "Deployment") | .metadata.name' "${deploy}")"
 assert_eq "${deploy_name}" "${app}" "Deployment name admitted in namespace ${stack_ns}"
 
@@ -92,13 +103,13 @@ assert_eq "${replicas}" "2" "Deployment replicas (ADR 0010 cutover shape)"
 
 # --- axis 2: web image is a digest-pinned production reference ----------------
 # ADR 0010 makes on-prem the host; the manifest carries the real digest-pinned
-# image as the declarative record (the attended `just web-stack-apply` carrier
-# overrides it with the operator-resolved digest). Require THIS STACK's admitted
-# GHCR repository
-# pinned by a full 64-hex @sha256: digest, and forbid the retired declare-only
-# PLACEHOLDER marker. Nothing else passes: no tag, no truncated or uppercase
-# digest, no other registry/owner/repository, and no sibling stack's repository.
-web_image="$(yq -r --arg app "${app}" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .image' "${deploy}")"
+# image as the declarative record of what is actually served (updated by an
+# operator at each web-release-* ceremony's pin step, not auto-reconciled).
+# Require THIS STACK's admitted GHCR repository pinned by a full 64-hex
+# @sha256: digest, and forbid the retired declare-only PLACEHOLDER marker.
+# Nothing else passes: no tag, no truncated or uppercase digest, no other
+# registry/owner/repository, and no sibling stack's repository.
+web_image="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == strenv(app)) | .image' "${deploy}")"
 case "${web_image}" in
 *PLACEHOLDER*) fail "web image must be a real digest-pinned reference, not the retired PLACEHOLDER: '${web_image}'" ;;
 esac
@@ -111,18 +122,18 @@ if grep -REn "^kind:\s*Namespace" "${dir}" >/dev/null 2>&1; then
   fail "declare-only stack must NOT create the target namespace"
 fi
 
-# --- adapter-node serving shape: containerPort 3000 + /health probes ---------
-port="$(yq -r --arg app "${app}" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .ports[] | select(.name == "http") | .containerPort' "${deploy}")"
-assert_eq "${port}" "3000" "web containerPort (adapter-node)"
-live_path="$(yq -r --arg app "${app}" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .livenessProbe.httpGet.path' "${deploy}")"
-ready_path="$(yq -r --arg app "${app}" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .readinessProbe.httpGet.path' "${deploy}")"
+# --- gftb-site serving shape: containerPort 3000 + /health probes -----------
+port="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == strenv(app)) | .ports[] | select(.name == "http") | .containerPort' "${deploy}")"
+assert_eq "${port}" "3000" "web containerPort (gftb-site static Caddy origin)"
+live_path="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == strenv(app)) | .livenessProbe.httpGet.path' "${deploy}")"
+ready_path="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == strenv(app)) | .readinessProbe.httpGet.path' "${deploy}")"
 assert_eq "${live_path}" "/health" "liveness probe path"
 assert_eq "${ready_path}" "/health" "readiness probe path"
 
 # --- runAsNonRoot + hardening ------------------------------------------------
 nonroot="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.securityContext.runAsNonRoot' "${deploy}")"
 assert_eq "${nonroot}" "true" "web runAsNonRoot"
-rorootfs="$(yq -r --arg app "${app}" 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == $app) | .securityContext.readOnlyRootFilesystem' "${deploy}")"
+rorootfs="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == strenv(app)) | .securityContext.readOnlyRootFilesystem' "${deploy}")"
 assert_eq "${rorootfs}" "true" "web readOnlyRootFilesystem"
 
 # --- Service: ClusterIP 80 -> 3000 -------------------------------------------
@@ -168,6 +179,14 @@ if grep -REn "AGE-SECRET-KEY-1|BEGIN [A-Z ]*PRIVATE KEY|cfat_[A-Za-z0-9_-]{8,}" 
 fi
 
 # --- Full render must succeed (parse-only; never applies) --------------------
+# guard-no-remote-kustomize-resources.sh (round 4, adversarial review PR #127
+# comments 5380010266 + 5380172269): kubectl kustomize fetches remote
+# references over the network with no flag required, in more forms and more
+# fields than a denylist can enumerate -- it is an ALLOWLIST (see the script
+# header): every reference-carrying field is accepted only if it resolves to
+# a real, contained local path. Refuse before this render, and before
+# web-stack-render's own separate render, ever runs.
+bash scripts/guard-no-remote-kustomize-resources.sh "${dir}"
 kubectl kustomize "${dir}" >/dev/null
 
-echo "web stack validation passed for ${app} in ${stack_ns}: ATTENDED-ONLY declare-only (replicas 2, image pinned to ${admitted_image_repo}@sha256:<64 hex>, no namespace, no workflow apply path -- the repository_dispatch CD carrier is retired and apply is attended-operator-only behind the promotion interlock), adapter-node ClusterIP 80->3000 with /health probes, default-deny + cloudflared-only public ingress, route+reaper fail-closed, no committed secrets"
+echo "web stack validation passed for ${app} in ${stack_ns}: ATTENDED-ONLY declare-only (replicas 2, image pinned to ${admitted_image_repo}@sha256:<64 hex>, no namespace, no workflow apply path -- the repository_dispatch CD carrier is retired and apply is attended-operator-only behind the promotion interlock), gftb-site static-origin ClusterIP 80->3000 with /health probes, default-deny + cloudflared-only public ingress, route+reaper fail-closed, no committed secrets"

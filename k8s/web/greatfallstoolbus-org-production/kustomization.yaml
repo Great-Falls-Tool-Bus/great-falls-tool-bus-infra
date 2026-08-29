@@ -3,8 +3,9 @@ kind: Kustomization
 namespace: greatfallstoolbus-org-production
 
 # DISPATCH-GATED declare-only — MERGING APPLIES NOTHING (TIN-2541, ADR 0010).
-# GFTB on-cluster web serving stack (SvelteKit adapter-node -> ClusterIP ->
-# cloudflared tunnel), mirroring the MI full-on-cluster pattern.
+# GFTB on-cluster web serving stack (the promoted gftb-site static Caddy
+# origin -> ClusterIP -> cloudflared tunnel), mirroring the MI full-on-cluster
+# pattern.
 # `kubectl kustomize` MUST render this cleanly (the CI/`just check` guard renders
 # it). The Deployment carries the real cutover shape — replicas: 2 and a
 # digest-pinned image — so the safety is that nothing applies it, not an inert
