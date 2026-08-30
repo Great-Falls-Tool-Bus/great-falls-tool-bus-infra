@@ -44,9 +44,9 @@ metadata:
     app.tinyland.dev/publisher-run: "33279762284"
     app.tinyland.dev/publisher-attempt: "1"
   labels:
-    app.kubernetes.io/name: gftb-platform-migrator
+    app.kubernetes.io/name: gftb-member-db-migrator
     app.kubernetes.io/component: migrator
-    app.kubernetes.io/part-of: gftb-platform
+    app.kubernetes.io/part-of: great-falls-tool-bus
     app.kubernetes.io/managed-by: great-falls-tool-bus-infra
     app.tinyland.dev/tenant: great-falls-tool-bus
     app.tinyland.dev/lifecycle: declare-only
@@ -72,13 +72,19 @@ spec:
         # ../members-greatfallstoolbus-org-db-production/networkpolicy.yaml
         # admits on 5432. Changing them here without changing the policy there
         # produces a migration that cannot reach the database.
-        app.kubernetes.io/name: gftb-platform-migrator
+        app.kubernetes.io/name: gftb-member-db-migrator
         app.kubernetes.io/component: migrator
-        app.kubernetes.io/part-of: gftb-platform
+        app.kubernetes.io/part-of: great-falls-tool-bus
     spec:
       restartPolicy: Never
       terminationGracePeriodSeconds: 30
       automountServiceAccountToken: false
+      # Names-only pull authority for the exact Git-pinned GHCR carrier. The
+      # package was observed anonymously pullable during review; this reference
+      # makes no privacy claim and keeps the Job pullable after the separately
+      # authorized visibility correction.
+      imagePullSecrets:
+        - name: ghcr-pull
       # House hardening (ADR 0008 §3: non-root uid/gid 1001), same as the web
       # workload.
       securityContext:

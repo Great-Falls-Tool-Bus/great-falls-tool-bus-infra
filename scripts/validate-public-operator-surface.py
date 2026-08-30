@@ -394,12 +394,22 @@ ATTENDED_RECIPE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     # GFTB member database substrate (TIN-3817, Member v0 slice S1 infra half).
     # These belong in the ATTENDED lane rather than the hosted lane for the same
     # reason list-member-add and form-altcha-secret-apply do: every one of them
-    # consumes an operator-custody kubeconfig, and two of them mutate live state
-    # holding member personal data. `member-db-stack-validate` is deliberately
+    # consumes an operator-custody kubeconfig. Six recipes mutate live state:
+    # backup-store apply, bucket create, cluster apply, restore apply, restore
+    # teardown, and migration apply. `member-db-stack-validate` is deliberately
     # NOT here — it is the offline guard `check-hosted` runs, it never contacts a
     # cluster, and adding it would taint check-hosted through the attended
     # closure.
     "_member-db-kubeconfig-input": (),
+    "_member-db-backup-root-prerequisite": (
+        "_member-db-kubeconfig-input",
+    ),
+    "_member-db-cluster-prerequisites": (
+        "_member-db-backup-root-prerequisite",
+    ),
+    "_member-db-platform-image-pull-prerequisite": (
+        "_member-db-kubeconfig-input",
+    ),
     "member-db-stack-server-dry-run": (
         "member-db-stack-validate",
         "_member-db-kubeconfig-input",
@@ -415,6 +425,7 @@ ATTENDED_RECIPE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     # them and the apply.
     "member-db-backup-store-apply": (
         "member-db-stack-server-dry-run",
+        "_member-db-backup-root-prerequisite",
         "_reviewed-clean-main",
         "_operator-apply-confirm",
     ),
@@ -425,6 +436,7 @@ ATTENDED_RECIPE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     ),
     "member-db-cluster-apply": (
         "member-db-backup-bucket-create",
+        "_member-db-cluster-prerequisites",
         "_reviewed-clean-main",
         "_operator-apply-confirm",
     ),
@@ -436,14 +448,20 @@ ATTENDED_RECIPE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     # Restore rehearsal (B-5): the RTO<=4h acceptance row's only proof path.
     "member-db-restore-rehearsal-apply": (
         "member-db-backup-verify",
+        "_member-db-cluster-prerequisites",
         "_reviewed-clean-main",
         "_operator-apply-confirm",
     ),
-    "member-db-restore-rehearsal-teardown": ("_member-db-kubeconfig-input",),
+    "member-db-restore-rehearsal-teardown": (
+        "_member-db-kubeconfig-input",
+        "_reviewed-clean-main",
+        "_operator-apply-confirm",
+    ),
     "member-db-migrate-render": ("member-db-stack-validate",),
     "member-db-migrate-server-dry-run": (
         "member-db-stack-validate",
         "_member-db-kubeconfig-input",
+        "_member-db-platform-image-pull-prerequisite",
     ),
     "member-db-migrate-apply": (
         "member-db-migrate-server-dry-run",
@@ -476,6 +494,17 @@ ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     "_member-db-kubeconfig-input": _receipt(
         "9483ae823d52184a", "46f524549c47efcf", "fa8bb4ecd56a2783", "88cb783d8b2d5fd4"
     ),
+    # Exact live prerequisites: root identity only, distinct bucket-scoped
+    # authority/current API readback, and namespace-local GHCR pull authority.
+    "_member-db-backup-root-prerequisite": _receipt(
+        "7684e57c5a3da818", "fd8d350d27527737", "fca8c2c14f53f4d0", "329f91ee42dd5f72"
+    ),
+    "_member-db-cluster-prerequisites": _receipt(
+        "9fc4eba3b0851646", "ef38c17cf6588198", "5fc9197096f1b86e", "abb06dfabdfffdf0"
+    ),
+    "_member-db-platform-image-pull-prerequisite": _receipt(
+        "673466b3b6c2508b", "af108488925dfb5f", "8c5ebb4fd9fe63a5", "e3d3b33fe3a14206"
+    ),
     # member-db-stack-server-dry-run: proves the stack against the live API
     #   without mutating. Pinned so `--dry-run=server` can never quietly become
     #   a real apply through an edit to this recipe.
@@ -486,7 +515,7 @@ ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     #   yq-go decodes and jq emits only the exact namespaced backup-store
     #   inventory. Pinned so fail-closed filtering and the rollout wait stay.
     "member-db-backup-store-apply": _receipt(
-        "a10cdbb22aca25d8", "25f274fd0077dac1", "df419f0c2cfc14c8", "a9f2b8719bdd91b0"
+        "9d63f0904479eacb", "5be1c8fe6e5dc0b5", "6c3a3d493f79c857", "3382ec2ec9d7f16e"
     ),
     # member-db-backup-bucket-create: step two (B-3). Pinned so the
     #   wait-for-complete and log capture stay part of the recipe.
@@ -554,6 +583,9 @@ ATTENDED_OPERATOR_LOCAL_ROOTS = {
     # taints anything that tries to wrap one. `member-db-stack-validate` is
     # excluded on purpose so `check-hosted` stays hosted-runnable.
     "_member-db-kubeconfig-input",
+    "_member-db-backup-root-prerequisite",
+    "_member-db-cluster-prerequisites",
+    "_member-db-platform-image-pull-prerequisite",
     "member-db-stack-server-dry-run",
     "member-db-backup-store-apply",
     "member-db-backup-bucket-create",

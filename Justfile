@@ -2416,16 +2416,18 @@ grafana-dashboards-validate:
 # cluster in members-greatfallstoolbus-org-db-production, plus the pre-rollout
 # migration Job that runs platform-side with the narrow owner credential.
 #
-# MERGING APPLIES NOTHING. Only `member-db-stack-validate` is hosted (it is in
-# `check-hosted` and never contacts a cluster). Every other recipe below needs an
-# operator-custody kubeconfig that hosted CI does not hold, and the two mutating
-# ones additionally pass through `_reviewed-clean-main` + `_operator-apply-confirm`.
-# No workflow in this repository invokes any of them.
+# MERGING APPLIES NOTHING. Validation and its self-test run directly in hosted
+# CI and are also registered as finite Bazel targets; neither contacts a cluster.
+# Operator-local recipes consume an operator-custody kubeconfig. The six
+# mutating recipes — backup-store apply, bucket create, cluster apply, restore
+# apply, restore teardown, and migration apply — all pass through
+# `_reviewed-clean-main` + `_operator-apply-confirm`; migration apply also has
+# its specific confirmation. No workflow invokes an operator-local recipe.
 #
-# SEQUENCING. These recipes are usable but HELD: the migration Job's image is
-# ghcr.io/great-falls-tool-bus/gftb-platform, which does not exist until slice
-# S1's app half lands. The cluster half can be brought up first; the migration
-# half cannot. docs/runbooks/member-db-bringup.md is the ordered attended path.
+# The exact merged publisher carrier is Git-pinned below. Published/Git-pinned
+# does not mean applied, running, served, or private. The attended path also
+# fails closed on the names-only GHCR pull Secret, current API-egress receipt,
+# and distinct least-privilege object-store client credential.
 
 member_db_stack_dir := "k8s/member-db/members-greatfallstoolbus-org-db-production"
 member_db_ns := "members-greatfallstoolbus-org-db-production"
@@ -2445,13 +2447,104 @@ member-db-stack-validate:
 # Each fixture is isolated below one mktemp root and must fail with the expected
 # diagnostic; no cluster, registry, or other external service is contacted.
 member-db-stack-selftest:
-    bash scripts/test-member-db-stack.sh
+    bash scripts/validate-member-db-stack.sh --self-test
+
+# Finite Bazel graph entrypoint. Direct hosted execution above remains the
+# current coverage; this target is not flywheel-eligible and carries no RBE claim.
+member-db-stack-bazel:
+    bazelisk test --lockfile_mode=off //:member_db_contract_tests
 
 # Operator-supplied input, env-delivered, never baked into the tree.
 #   MEMBER_DB_APPLY_KUBECONFIG  path to the namespace-scoped SA kubeconfig
 _member-db-kubeconfig-input:
     test -n "${MEMBER_DB_APPLY_KUBECONFIG:-}" || { echo "Set MEMBER_DB_APPLY_KUBECONFIG to the member-db apply kubeconfig path" >&2; exit 2; }
     test -f "${MEMBER_DB_APPLY_KUBECONFIG}"
+
+# Root is server-bootstrap authority only; values are never printed.
+_member-db-backup-root-prerequisite: _member-db-kubeconfig-input
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kc="${MEMBER_DB_APPLY_KUBECONFIG}"
+    ns="{{ member_db_ns }}"
+    name="gftb-member-db-backup-store-root"
+    secret_type="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get secret "${name}" -o jsonpath='{.type}')"
+    [[ "${secret_type}" == "Opaque" ]] || { echo "${name} must be type Opaque" >&2; exit 2; }
+    keys="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get secret "${name}" -o json | jq -r '.data | keys[]' | LC_ALL=C sort)"
+    [[ "${keys}" == $'RUSTFS_ACCESS_KEY\nRUSTFS_SECRET_KEY' ]] || { echo "${name} must carry exactly RUSTFS_ACCESS_KEY and RUSTFS_SECRET_KEY" >&2; exit 2; }
+    echo "member-db backup-store root prerequisite passed by name/type/key inventory (values not printed)"
+
+# The CNPG client credential is separately pre-provisioned and least-privilege.
+# Its non-secret proof annotations bind bucket scope; root-key reuse is rejected.
+# The checked-in API /32s align with historical blahaj
+# 72b6c2d9c43894214f09c0f3f96586f8e0025337, never with inherited live truth.
+_member-db-cluster-prerequisites: _member-db-backup-root-prerequisite
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${MEMBER_DB_API_EGRESS_SOURCE_SHA:?Set MEMBER_DB_API_EGRESS_SOURCE_SHA to the 40-hex canonical declaration source SHA reviewed with this current readback}"
+    [[ "${MEMBER_DB_API_EGRESS_SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]] || { echo "MEMBER_DB_API_EGRESS_SOURCE_SHA must be 40 lowercase hex" >&2; exit 2; }
+    kc="${MEMBER_DB_APPLY_KUBECONFIG}"
+    ns="{{ member_db_ns }}"
+    scoped="gftb-member-db-backup-s3"
+    root="gftb-member-db-backup-store-root"
+    scoped_type="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get secret "${scoped}" -o jsonpath='{.type}')"
+    [[ "${scoped_type}" == "Opaque" ]] || { echo "${scoped} must be type Opaque" >&2; exit 2; }
+    scoped_keys="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get secret "${scoped}" -o json | jq -r '.data | keys[]' | LC_ALL=C sort)"
+    [[ "${scoped_keys}" == $'ACCESS_KEY_ID\nACCESS_SECRET_KEY' ]] || { echo "${scoped} must carry exactly ACCESS_KEY_ID and ACCESS_SECRET_KEY" >&2; exit 2; }
+    scope="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get secret "${scoped}" -o json | jq -r '.metadata.annotations["app.tinyland.dev/object-store-scope"] // empty')"
+    authority="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get secret "${scoped}" -o json | jq -r '.metadata.annotations["app.tinyland.dev/object-store-authority"] // empty')"
+    proof="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get secret "${scoped}" -o json | jq -r '.metadata.annotations["app.tinyland.dev/object-store-proof"] // empty')"
+    [[ "${scope}" == "bucket:gftb-member-db-backups" ]] || { echo "${scoped} lacks exact bucket-scope annotation" >&2; exit 2; }
+    [[ "${authority}" == "object-read-write-no-admin" ]] || { echo "${scoped} lacks exact non-admin authority annotation" >&2; exit 2; }
+    [[ -n "${proof}" ]] || { echo "${scoped} lacks a nonempty object-store proof receipt annotation" >&2; exit 2; }
+    root_access="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get secret "${root}" -o jsonpath='{.data.RUSTFS_ACCESS_KEY}')"
+    root_secret="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get secret "${root}" -o jsonpath='{.data.RUSTFS_SECRET_KEY}')"
+    scoped_access="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get secret "${scoped}" -o jsonpath='{.data.ACCESS_KEY_ID}')"
+    scoped_secret="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get secret "${scoped}" -o jsonpath='{.data.ACCESS_SECRET_KEY}')"
+    [[ -n "${root_access}" && -n "${root_secret}" && -n "${scoped_access}" && -n "${scoped_secret}" ]] || { echo "object-store credentials must have nonempty data" >&2; exit 2; }
+    [[ "${root_access}" != "${scoped_access}" && "${root_secret}" != "${scoped_secret}" ]] || { echo "bucket-scoped CNPG credential must be distinct from rustfs root authority" >&2; exit 2; }
+    unset root_access root_secret scoped_access scoped_secret
+    if ! expected_api_cidrs="$(yq eval-all -o=json -I=0 '.' {{ member_db_stack_dir }}/networkpolicy.yaml | jq -e -c -s '
+      [
+        .[]
+        | select(.kind == "NetworkPolicy")
+        | select(.metadata.name == "allow-postgres-egress" or .metadata.name == "allow-restore-postgres-egress")
+        | .spec.egress[]
+        | select(any(.ports[]?; .protocol == "TCP" and .port == 6443))
+        | .to[]?
+        | select(has("ipBlock"))
+        | .ipBlock.cidr
+      ] | unique | sort
+    ')"; then
+      echo "member-db API egress manifest decode/filter failed closed" >&2
+      exit 1
+    fi
+    if ! current_api_cidrs="$(kubectl --kubeconfig "${kc}" --namespace default get endpoints kubernetes -o json | jq -e -c '
+      [.subsets[]?.addresses[]?.ip + "/32"]
+      | unique | sort
+      | if length == 3 and all(.[]; test("^([0-9]{1,3}\\.){3}[0-9]{1,3}/32$"))
+        then .
+        else error("current kubernetes endpoints must resolve to exactly three /32 CIDRs")
+        end
+    ')"; then
+      echo "current kubernetes API endpoint readback failed closed" >&2
+      exit 2
+    fi
+    [[ "${current_api_cidrs}" == "${expected_api_cidrs}" ]] || { echo "checked-in member-db API /32s do not match the current attested set" >&2; exit 2; }
+    echo "member-db cluster prerequisites passed for current API source ${MEMBER_DB_API_EGRESS_SOURCE_SHA}; Secret values not printed"
+
+# Only gftb-site is authorized public. The app package was observed anonymous;
+# this carrier makes no privacy claim and mutates no visibility.
+_member-db-platform-image-pull-prerequisite: _member-db-kubeconfig-input
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kc="${MEMBER_DB_APPLY_KUBECONFIG}"
+    ns="{{ member_db_platform_ns }}"
+    name="ghcr-pull"
+    secret_type="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get secret "${name}" -o jsonpath='{.type}')"
+    [[ "${secret_type}" == "kubernetes.io/dockerconfigjson" ]] || { echo "${name} must be type kubernetes.io/dockerconfigjson in ${ns}" >&2; exit 2; }
+    keys="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get secret "${name}" -o json | jq -r '.data | keys[]' | LC_ALL=C sort)"
+    [[ "${keys}" == ".dockerconfigjson" ]] || { echo "${name} must carry exactly .dockerconfigjson" >&2; exit 2; }
+    echo "member-db platform image-pull prerequisite passed by name/type/key inventory (value not printed)"
 
 # Server-side dry-run of the database stack against the live API. No mutation.
 member-db-stack-server-dry-run: member-db-stack-validate _member-db-kubeconfig-input
@@ -2470,7 +2563,7 @@ member-db-stack-server-dry-run: member-db-stack-validate _member-db-kubeconfig-i
 #
 # Step one: the backup store alone (NetworkPolicy family + rustfs), then wait
 # for it to actually be Ready before anything tries to write to it.
-member-db-backup-store-apply: member-db-stack-server-dry-run _reviewed-clean-main _operator-apply-confirm
+member-db-backup-store-apply: member-db-stack-server-dry-run _member-db-backup-root-prerequisite _reviewed-clean-main _operator-apply-confirm
     #!/usr/bin/env bash
     set -euo pipefail
     kc="${MEMBER_DB_APPLY_KUBECONFIG}"
@@ -2492,7 +2585,7 @@ member-db-backup-store-apply: member-db-stack-server-dry-run _reviewed-clean-mai
             ) ] as $objects
           | [ $objects[] | (.kind + "/" + .metadata.name) ] | sort as $ids
           | if (
-              ($objects | length) == 11
+              ($objects | length) == 12
               and all($objects[]; .metadata.namespace == $ns)
               and $ids == [
                 "NetworkPolicy/allow-cnpg-operator-ingress",
@@ -2501,6 +2594,7 @@ member-db-backup-store-apply: member-db-stack-server-dry-run _reviewed-clean-mai
                 "NetworkPolicy/allow-platform-postgres-ingress",
                 "NetworkPolicy/allow-postgres-egress",
                 "NetworkPolicy/allow-prometheus-scrape",
+                "NetworkPolicy/allow-restore-postgres-egress",
                 "NetworkPolicy/backup-store-egress-dns-only",
                 "NetworkPolicy/default-deny-ingress",
                 "PersistentVolumeClaim/gftb-member-db-backup-store-data",
@@ -2534,7 +2628,7 @@ member-db-backup-bucket-create: member-db-backup-store-apply _reviewed-clean-mai
 # archive_command has somewhere to land its first WAL segment. The namespace
 # must already exist: the SA is namespace-scoped and cannot create it, and
 # the stack ships no Namespace object.
-member-db-cluster-apply: member-db-backup-bucket-create _reviewed-clean-main _operator-apply-confirm
+member-db-cluster-apply: member-db-backup-bucket-create _member-db-cluster-prerequisites _reviewed-clean-main _operator-apply-confirm
     #!/usr/bin/env bash
     set -euo pipefail
     kc="${MEMBER_DB_APPLY_KUBECONFIG}"
@@ -2566,8 +2660,10 @@ member-db-cluster-apply: member-db-backup-bucket-create _reviewed-clean-main _op
     kubectl --kubeconfig "${kc}" --namespace "${ns}" wait cluster/{{ member_db_cluster }} --for=condition=Ready --timeout=600s
 
 # Convenience alias: the full ordered chain, one command. `just` dedupes the
-# shared prerequisite chain, so this runs backup-store-apply, then
-# bucket-create, then cluster-apply, in that order, exactly once each.
+# shared prerequisite chain, so this runs backup-store-apply, bucket-create,
+# the current/scoped cluster prerequisites, then cluster-apply. On first
+# bootstrap, run the store/bucket stages separately, provision the distinct
+# bucket-scoped client credential, then run cluster-apply.
 member-db-stack-apply: member-db-cluster-apply
     @true
 
@@ -2600,13 +2696,13 @@ member-db-backup-verify: _member-db-kubeconfig-input
 # --- Restore rehearsal (runbook step R; the RTO<=4h acceptance row's only
 # proof path). B-5, PR #118 review round: this was previously prose with no
 # command, and the NetworkPolicies as shipped forbade it outright. Now that
-# allow-cnpg-operator-ingress and allow-cnpg-to-backup-store-ingress both
-# admit gftb-member-db-restore alongside the primary, this actually runs.
+# allow-cnpg-operator-ingress, allow-cnpg-to-backup-store-ingress, and the
+# separate closed allow-restore-postgres-egress policy cover the rehearsal.
 
 # Create the rehearsal Cluster and wait for it to report Ready. Note the
 # start time yourself before running this — the recipe does not, because the
 # RTO clock includes the object pull, which starts the instant this applies.
-member-db-restore-rehearsal-apply: member-db-backup-verify _reviewed-clean-main _operator-apply-confirm
+member-db-restore-rehearsal-apply: member-db-backup-verify _member-db-cluster-prerequisites _reviewed-clean-main _operator-apply-confirm
     #!/usr/bin/env bash
     set -euo pipefail
     kc="${MEMBER_DB_APPLY_KUBECONFIG}"
@@ -2622,7 +2718,7 @@ member-db-restore-rehearsal-apply: member-db-backup-verify _reviewed-clean-main 
 # asked for — leave with nothing orphaned unaccounted for). Prints the
 # Released PVs this rehearsal leaves behind so the operator can see and
 # reclaim them rather than discovering them later.
-member-db-restore-rehearsal-teardown: _member-db-kubeconfig-input
+member-db-restore-rehearsal-teardown: _member-db-kubeconfig-input _reviewed-clean-main _operator-apply-confirm
     #!/usr/bin/env bash
     set -euo pipefail
     kc="${MEMBER_DB_APPLY_KUBECONFIG}"
@@ -2638,7 +2734,7 @@ member-db-migrate-render: member-db-stack-validate
     @cat "{{ member_db_migrator_template }}"
 
 # Server-side dry-run of the rendered migration Job. No mutation.
-member-db-migrate-server-dry-run: member-db-stack-validate _member-db-kubeconfig-input
+member-db-migrate-server-dry-run: member-db-stack-validate _member-db-kubeconfig-input _member-db-platform-image-pull-prerequisite
     #!/usr/bin/env bash
     set -euo pipefail
     just member-db-migrate-render | kubectl --kubeconfig "${MEMBER_DB_APPLY_KUBECONFIG}" --namespace {{ member_db_platform_ns }} create --dry-run=server -f -

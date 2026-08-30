@@ -13,17 +13,14 @@
 # greatfallstoolbus-org-production was for the web stack, and
 # scripts/validate-member-db-stack.sh enforces the absence.
 #
-# OPERATOR SUBSTRATE, CONSUMED BY NAMED INTERFACE, NOT RE-HOMED. The
-# cloudnative-pg operator is ALREADY LIVE on honey and is estate-owned, not
-# GFTB-owned: Deployment cnpg-cloudnative-pg in namespace cnpg-system, image
-# ghcr.io/cloudnative-pg/cloudnative-pg:1.22.0, chart cloudnative-pg-0.20.0,
-# CRDs postgresql.cnpg.io/v1 installed 2026-04-23. Its declaration lives in the
-# substrate (blahaj deploy/honey/rke2-cnpg.yaml, an RKE2 HelmChart adopted
-# 2026-05-05), and AGENTS.md's no-re-homing doctrine says a consumer overlay
-# consumes it rather than importing it. This overlay therefore declares NO
-# operator install; docs/runbooks/member-db-bringup.md step O records the
-# read-only conformance check and the attended install path IF a future estate
-# ever lacks the operator.
+# OPERATOR SUBSTRATE, CONSUMED BY NAMED INTERFACE, NOT RE-HOMED. The reviewed
+# substrate declaration is tinyland-inc/blahaj
+# deploy/honey/rke2-cnpg.yaml at
+# 72b6c2d9c43894214f09c0f3f96586f8e0025337. Earlier observations recorded
+# operator/chart versions, but they are historical receipts, not current live
+# truth. This overlay declares NO operator install; runbook step O requires a
+# current readback at the attended sitting and routes any missing-operator
+# repair through the substrate repository.
 #
 # NO SECRET VALUES. Every credential below is a NAME. The owner/migration
 # credential is CNPG-generated (Secret `gftb-member-db-app`, never in git); the
@@ -223,11 +220,10 @@ spec:
       memory: 2Gi
 
   monitoring:
-    # The Prometheus Operator CRDs are NOT installed on honey
-    # (podmonitors.monitoring.coreos.com is absent, checked read-only
-    # 2026-08-19), so requesting a PodMonitor would make this Cluster
-    # unappliable. Metrics are still exported on :9187 and the NetworkPolicy
-    # admits the estate Prometheus to scrape them directly.
+    # Keep this carrier independent of Prometheus Operator CRDs. A 2026-08-19
+    # read found PodMonitor absent, but that is historical rather than current
+    # authority; runbook step O records the sitting's current CRD readback.
+    # Metrics remain exported on :9187 for the explicitly admitted scraper.
     enablePodMonitor: false
 
   backup:
@@ -259,7 +255,10 @@ spec:
       # stops.
       endpointURL: http://gftb-member-db-backup-store.members-greatfallstoolbus-org-db-production.svc.cluster.local:9000
       s3Credentials:
-        # NAMES ONLY. Operator-minted in-cluster (runbook step B2).
+        # NAMES ONLY. Pre-provisioned, bucket-scoped, non-admin authority
+        # (runbook step B2 and secrets.contract.yaml). The attended apply
+        # prerequisite rejects the rustfs root credential and requires the
+        # scoped Secret's proof annotations before this Cluster can apply.
         accessKeyId:
           name: gftb-member-db-backup-s3
           key: ACCESS_KEY_ID

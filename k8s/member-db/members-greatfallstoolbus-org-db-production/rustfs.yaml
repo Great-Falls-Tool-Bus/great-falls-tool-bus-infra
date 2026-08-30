@@ -10,14 +10,12 @@
 # Instead GFTB gets its own single-node rustfs, inside this repo's own apply
 # plane, admitting nothing but the CNPG cluster it backs up.
 #
-# SHAPE SOURCE. No `tofu-state-rustfs` StatefulSet is declared as IaC
-# anywhere in blahaj today — like `attic-rustfs-openebs` before its
-# 2026-08-16 transcription, it exists live and is referenced only in prose
-# and in `deploy/nix-cache/tofu-state-rustfs-backup-cronjob.yaml` (a CronJob
-# that treats it as an opaque backend at
-# `http://tofu-state-rustfs.nix-cache.svc:9000`). The closest declared rustfs
-# idiom this repo can cite is `blahaj deploy/nix-cache/attic-rustfs-openebs.yaml`
-# (transcribed live state, 2026-08-16): same image family, same non-root
+# SHAPE SOURCE. The reviewed blahaj snapshot cited by this carrier has no
+# declarative `tofu-state-rustfs` StatefulSet; older prose and a backup CronJob
+# referenced that opaque endpoint, which is historical evidence rather than a
+# current-live claim. The closest reviewed declared rustfs idiom is
+# `blahaj deploy/nix-cache/attic-rustfs-openebs.yaml` (2026-08-16 snapshot):
+# same image family, same non-root
 # security posture, same `prepare-data-dir` initContainer pattern for a
 # local-path-backed volume. This file mirrors that shape and converts it from
 # a Deployment (with a standalone PVC, RWO ZFS-backed) to a StatefulSet (with
@@ -186,10 +184,10 @@ spec:
           env:
             - name: RUSTFS_BROWSER
               value: "off"
-          # NAME ONLY. Values are operator-minted (runbook step B2) and must
-          # match gftb-member-db-backup-s3's ACCESS_KEY_ID/ACCESS_SECRET_KEY —
-          # see secrets.contract.yaml for why these are one credential under
-          # two Secret/key-naming conventions, not two independent ones.
+          # NAME ONLY. This is the rustfs server-bootstrap/admin credential.
+          # It is deliberately distinct from the bucket-scoped
+          # gftb-member-db-backup-s3 client credential and is excluded from
+          # backup/restore acceptance authority (runbook step B2).
           envFrom:
             - secretRef:
                 name: gftb-member-db-backup-store-root

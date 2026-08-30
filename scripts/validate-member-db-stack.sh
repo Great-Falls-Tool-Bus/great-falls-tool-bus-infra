@@ -24,7 +24,82 @@ set -euo pipefail
 # cluster that does not meet the contract. So each one is asserted here rather
 # than described in a runbook.
 
-dir="${1:?usage: validate-member-db-stack.sh <db-manifest-dir>}"
+run_self_test() {
+  local script_dir repo_root source_root validator temp_root fixtures
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  repo_root="$(cd "${script_dir}/.." && pwd)"
+  source_root="${repo_root}/k8s/member-db"
+  validator="${MEMBER_DB_VALIDATOR:-${BASH_SOURCE[0]}}"
+  test -d "${source_root}" || fail "missing ${source_root}"
+  test -f "${validator}" || fail "missing validator ${validator}"
+
+  temp_root="$(mktemp -d)"
+  fixtures="${temp_root}/fixtures"
+  mkdir -m 700 "${fixtures}"
+  cleanup_self_test() {
+    case "${fixtures}" in
+      "${temp_root}"/fixtures) rm -rf -- "${fixtures}" ;;
+      *) echo "refusing unsafe self-test cleanup target: ${fixtures}" >&2; return 1 ;;
+    esac
+    rmdir -- "${temp_root}"
+  }
+  trap cleanup_self_test EXIT
+
+  mutate_once() {
+    local path="$1" old="$2" new="$3"
+    python3 -I - "${path}" "${old}" "${new}" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+old = sys.argv[2]
+new = sys.argv[3]
+text = path.read_text()
+count = text.count(old)
+if count != 1:
+    raise SystemExit(f"{path}: mutation anchor count {count}, want 1")
+path.write_text(text.replace(old, new))
+PY
+  }
+
+  expect_failure() {
+    local name="$1" relative_path="$2" old="$3" new="$4" diagnostic="$5"
+    local fixture="${fixtures}/${name}" log="${fixtures}/${name}.log"
+    mkdir -m 700 "${fixture}"
+    cp -R "${source_root}/." "${fixture}/"
+    mutate_once "${fixture}/${relative_path}" "${old}" "${new}"
+    if bash "${validator}" "${fixture}/members-greatfallstoolbus-org-db-production" >"${log}" 2>&1; then
+      echo "negative control ${name} unexpectedly passed" >&2
+      exit 1
+    fi
+    if ! grep -Fq -- "${diagnostic}" "${log}"; then
+      echo "negative control ${name} failed without expected diagnostic: ${diagnostic}" >&2
+      sed -n '1,120p' "${log}" >&2
+      exit 1
+    fi
+    echo "negative control passed: ${name}"
+  }
+
+  local job="members-greatfallstoolbus-org-production/job-migrator.template.yaml"
+  expect_failure image-tag "${job}"     'ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:10f853938dc6823afe8c9bdc54943587f963d22117aafd17247350b2b5712b35'     'ghcr.io/great-falls-tool-bus/greatfallstoolbus.org:sha-af60fcd7539a4beff6f24e1a95eb11160df7c166'     'migration Job image must be the exact greatfallstoolbus.org publisher repository pinned by @sha256:<64 lowercase hex>'
+  expect_failure foreign-image "${job}"     'ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:10f853938dc6823afe8c9bdc54943587f963d22117aafd17247350b2b5712b35'     'ghcr.io/not-great-falls-tool-bus/greatfallstoolbus.org@sha256:10f853938dc6823afe8c9bdc54943587f963d22117aafd17247350b2b5712b35'     'migration Job image must be the exact greatfallstoolbus.org publisher repository pinned by @sha256:<64 lowercase hex>'
+  expect_failure wrong-source "${job}"     $'  annotations:\n    app.tinyland.dev/source-sha: af60fcd7539a4beff6f24e1a95eb11160df7c166'     $'  annotations:\n    app.tinyland.dev/source-sha: 0000000000000000000000000000000000000000'     'migration Job source identity'
+  expect_failure command-override "${job}"     '          imagePullPolicy: IfNotPresent'     $'          imagePullPolicy: IfNotPresent\n          command: ["migrator"]'     'migration Job command (must be absent'
+  expect_failure wrong-args "${job}"     '          args: ["migrator"]'     '          args: ["worker"]'     'migration Job entrypoint'
+  expect_failure runtime-dsn "${job}"     '                  name: gftb-member-db-migrator-dsn'     '                  name: gftb-member-db-runtime'     'migration Job secret references (only the narrow migration credential)'
+  expect_failure pull-secret "${job}"     '        - name: ghcr-pull'     '        - name: ghcr-pull-broken'     'migration Job imagePullSecrets'
+  expect_failure restore-egress-selector     'members-greatfallstoolbus-org-db-production/networkpolicy.yaml'     $'  name: allow-restore-postgres-egress\n  namespace: members-greatfallstoolbus-org-db-production\n  labels:\n    app.kubernetes.io/name: gftb-member-db-restore\n    app.tinyland.dev/lifecycle: declare-only\nspec:\n  podSelector:\n    matchLabels:\n      cnpg.io/cluster: gftb-member-db-restore'     $'  name: allow-restore-postgres-egress\n  namespace: members-greatfallstoolbus-org-db-production\n  labels:\n    app.kubernetes.io/name: gftb-member-db-restore\n    app.tinyland.dev/lifecycle: declare-only\nspec:\n  podSelector:\n    matchLabels:\n      cnpg.io/cluster: gftb-member-db-restore-broken'     'allow-restore-postgres-egress podSelector'
+  expect_failure root-as-scoped-authority     'secrets.contract.yaml'     'app.tinyland.dev/object-store-authority: object-read-write-no-admin'     'app.tinyland.dev/object-store-authority: server-root-admin'     'bucket-scoped backup Secret authority annotation contract'
+  expect_failure invalid-yaml "${job}"     'apiVersion: batch/v1'     'apiVersion: ['     'YAML decode or jq query failed'
+  echo "member-db validator negative controls passed"
+}
+
+if [[ "${1:-}" == "--self-test" ]]; then
+  run_self_test
+  exit 0
+fi
+
+dir="${1:?usage: validate-member-db-stack.sh <db-manifest-dir> | --self-test}"
 member_root="$(cd "${dir}/.." && pwd)"
 platform_dir="${member_root}/members-greatfallstoolbus-org-production"
 
@@ -58,6 +133,11 @@ readonly WANT_OWNER_ROLE="gftb_migrator"
 readonly WANT_RUNTIME_ROLE="gftb_app"
 readonly WANT_RUNTIME_SECRET="gftb-member-db-runtime"
 readonly WANT_MIGRATOR_SECRET="gftb-member-db-migrator-dsn"
+readonly WANT_PLATFORM_PART_OF="great-falls-tool-bus"
+readonly WANT_MIGRATOR_NAME="gftb-member-db-migrator"
+readonly WANT_IMAGE_PULL_SECRET="ghcr-pull"
+readonly WANT_BACKUP_SECRET="gftb-member-db-backup-s3"
+readonly WANT_BUCKET="gftb-member-db-backups"
 readonly WANT_STORAGE_CLASS="openebs-bumble-postgresql-retain"
 readonly WANT_MIGRATOR_ARGS='["migrator"]'
 readonly WANT_MIGRATOR_CONTAINERS='["migrator"]'
@@ -228,6 +308,30 @@ s3_credential_keys="$(yaml_query -r 'select(.kind == "Cluster") | .spec.backup.b
 if grep -Ex "value|stringValue" <<<"${s3_credential_keys}" >/dev/null 2>&1; then
   fail "s3Credentials must reference Secret keys by name only; an inline value is present"
 fi
+s3_credential_names="$(yaml_query -c 'select(.kind == "Cluster") | [.spec.backup.barmanObjectStore.s3Credentials.accessKeyId.name, .spec.backup.barmanObjectStore.s3Credentials.secretAccessKey.name] | unique' "${rendered}")"
+assert_eq "${s3_credential_names}" "[\"${WANT_BACKUP_SECRET}\"]" "primary backup credential must be the pre-provisioned bucket-scoped Secret, never rustfs root"
+
+backup_contract_type="$(yaml_query -r --arg n "${WANT_BACKUP_SECRET}" '.spec.secrets[] | select(.name == $n) | .type' "${secrets_contract}")"
+assert_eq "${backup_contract_type}" "Opaque" "bucket-scoped backup Secret type contract"
+backup_contract_keys="$(yaml_query -c --arg n "${WANT_BACKUP_SECRET}" '.spec.secrets[] | select(.name == $n) | .keys | sort' "${secrets_contract}")"
+assert_eq "${backup_contract_keys}" '["ACCESS_KEY_ID","ACCESS_SECRET_KEY"]' "bucket-scoped backup Secret key contract"
+backup_contract_bucket="$(yaml_query -r --arg n "${WANT_BACKUP_SECRET}" '.spec.secrets[] | select(.name == $n) | .scope.bucket' "${secrets_contract}")"
+assert_eq "${backup_contract_bucket}" "${WANT_BUCKET}" "bucket-scoped backup Secret bucket contract"
+backup_contract_authority="$(yaml_query -r --arg n "${WANT_BACKUP_SECRET}" '.spec.secrets[] | select(.name == $n) | .required_annotations["app.tinyland.dev/object-store-authority"]' "${secrets_contract}")"
+assert_eq "${backup_contract_authority}" "object-read-write-no-admin" "bucket-scoped backup Secret authority annotation contract"
+backup_contract_scope="$(yaml_query -r --arg n "${WANT_BACKUP_SECRET}" '.spec.secrets[] | select(.name == $n) | .required_annotations["app.tinyland.dev/object-store-scope"]' "${secrets_contract}")"
+assert_eq "${backup_contract_scope}" "bucket:${WANT_BUCKET}" "bucket-scoped backup Secret scope annotation contract"
+root_excluded="$(yaml_query -r --arg n "${WANT_RUSTFS_ROOT_SECRET}" '.spec.secrets[] | select(.name == $n) | .scope.excluded_from_backup_acceptance_authority' "${secrets_contract}")"
+assert_eq "${root_excluded}" "true" "rustfs root must be excluded from backup acceptance authority"
+if [ "${WANT_BACKUP_SECRET}" = "${WANT_RUSTFS_ROOT_SECRET}" ]; then
+  fail "bucket-scoped backup Secret and rustfs root Secret must be different names"
+fi
+pull_contract_ns="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .namespace' "${secrets_contract}")"
+assert_eq "${pull_contract_ns}" "${WANT_PLATFORM_NS}" "GHCR pull Secret namespace contract"
+pull_contract_type="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .type' "${secrets_contract}")"
+assert_eq "${pull_contract_type}" "kubernetes.io/dockerconfigjson" "GHCR pull Secret type contract"
+pull_contract_keys="$(yaml_query -c --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .keys' "${secrets_contract}")"
+assert_eq "${pull_contract_keys}" '[".dockerconfigjson"]' "GHCR pull Secret key contract"
 
 # --- axis 6: the two-role separation (acceptance row 2) ----------------------
 database="$(yaml_query -r 'select(.kind == "Cluster") | .spec.bootstrap.initdb.database' "${rendered}")"
@@ -317,7 +421,7 @@ admit_components="$(yaml_query -c 'select(.kind == "NetworkPolicy" and .metadata
 assert_eq "${admit_components}" '["migrator","web","worker"]' \
   "PostgreSQL ingress admits exactly the platform web/worker/migrator components"
 admit_partof="$(yaml_query -r 'select(.kind == "NetworkPolicy" and .metadata.name == "allow-platform-postgres-ingress") | .spec.ingress[].from[].podSelector.matchLabels["app.kubernetes.io/part-of"]' "${rendered}")"
-assert_eq "${admit_partof}" "gftb-platform" "PostgreSQL ingress part-of selector"
+assert_eq "${admit_partof}" "${WANT_PLATFORM_PART_OF}" "PostgreSQL ingress part-of selector"
 
 # No blanket allows in either direction, and no bare port-only egress rule (a
 # rule with no `to:` admits every destination on that port, including off-estate).
@@ -330,6 +434,43 @@ if grep -q bare <<<"${bare_egress}"; then
   fail "member-db egress rules must name their destination; a rule with no 'to:' admits every destination on that port"
 fi
 
+# Primary and restore egress are separate, exact, closed policies. Keeping them
+# separate prevents an In[primary,restore] selector from opening cross-cluster
+# traffic during the rehearsal.
+assert_closed_pg_egress() {
+  local policy="$1" cluster_label="$2"
+  local selector policy_types rule_count to_count
+  selector="$(yaml_query -c --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | .spec.podSelector' "${rendered}")"
+  assert_eq "${selector}" "{\"matchLabels\":{\"cnpg.io/cluster\":\"${cluster_label}\"}}" "${policy} podSelector"
+  policy_types="$(yaml_query -c --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | .spec.policyTypes | sort' "${rendered}")"
+  assert_eq "${policy_types}" '["Egress"]' "${policy} policyTypes"
+  rule_count="$(yaml_query -r --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | [.spec.egress[]] | length' "${rendered}")"
+  assert_eq "${rule_count}" "4" "${policy} exact egress rule count"
+  to_count="$(yaml_query -r --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | [.spec.egress[].to[]] | length' "${rendered}")"
+  assert_eq "${to_count}" "6" "${policy} exact destination count"
+  local dns_ns dns_pod dns_ports api_cidrs api_ports store_names store_ports peer_names peer_ports
+  dns_ns="$(yaml_query -c --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | [.spec.egress[].to[] | select((.namespaceSelector.matchLabels["kubernetes.io/metadata.name"] // "") == "kube-system") | .namespaceSelector.matchLabels["kubernetes.io/metadata.name"]]' "${rendered}")"
+  assert_eq "${dns_ns}" '["kube-system"]' "${policy} DNS namespace destination"
+  dns_pod="$(yaml_query -c --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | [.spec.egress[].to[] | select((.podSelector.matchLabels["k8s-app"] // "") == "kube-dns") | .podSelector.matchLabels["k8s-app"]]' "${rendered}")"
+  assert_eq "${dns_pod}" '["kube-dns"]' "${policy} DNS pod destination"
+  dns_ports="$(yaml_query -c --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | [.spec.egress[] | select(any(.to[]?; (.podSelector.matchLabels["k8s-app"] // "") == "kube-dns")) | .ports[] | (.protocol + ":" + (.port|tostring))] | sort' "${rendered}")"
+  assert_eq "${dns_ports}" '["TCP:53","UDP:53"]' "${policy} DNS ports"
+  api_cidrs="$(yaml_query -c --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | [.spec.egress[] | select(any(.ports[]?; .protocol == "TCP" and .port == 6443)) | .to[] | .ipBlock.cidr] | sort' "${rendered}")"
+  assert_eq "${api_cidrs}" '["192.168.70.10/32","192.168.70.11/32","192.168.70.12/32"]' "${policy} Kubernetes API /32 set"
+  api_ports="$(yaml_query -c --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | [.spec.egress[] | select(any(.ports[]?; .port == 6443)) | .ports[] | (.protocol + ":" + (.port|tostring))] | sort' "${rendered}")"
+  assert_eq "${api_ports}" '["TCP:6443"]' "${policy} Kubernetes API port"
+  store_names="$(yaml_query -c --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | [.spec.egress[].to[] | select((.podSelector.matchLabels["app.kubernetes.io/name"] // "") == "gftb-member-db-backup-store") | .podSelector.matchLabels["app.kubernetes.io/name"]]' "${rendered}")"
+  assert_eq "${store_names}" '["gftb-member-db-backup-store"]' "${policy} backup-store destination"
+  store_ports="$(yaml_query -c --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | [.spec.egress[] | select(any(.to[]?; (.podSelector.matchLabels["app.kubernetes.io/name"] // "") == "gftb-member-db-backup-store")) | .ports[] | (.protocol + ":" + (.port|tostring))] | sort' "${rendered}")"
+  assert_eq "${store_ports}" '["TCP:9000"]' "${policy} backup-store port"
+  peer_names="$(yaml_query -c --arg p "${policy}" --arg c "${cluster_label}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | [.spec.egress[].to[] | select((.podSelector.matchLabels["cnpg.io/cluster"] // "") == $c) | .podSelector.matchLabels["cnpg.io/cluster"]]' "${rendered}")"
+  assert_eq "${peer_names}" "[\"${cluster_label}\"]" "${policy} same-cluster peer destination"
+  peer_ports="$(yaml_query -c --arg p "${policy}" --arg c "${cluster_label}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | [.spec.egress[] | select(any(.to[]?; (.podSelector.matchLabels["cnpg.io/cluster"] // "") == $c)) | .ports[] | (.protocol + ":" + (.port|tostring))] | sort' "${rendered}")"
+  assert_eq "${peer_ports}" '["TCP:5432","TCP:8000"]' "${policy} same-cluster CNPG peer ports"
+}
+assert_closed_pg_egress "allow-postgres-egress" "${WANT_CLUSTER}"
+assert_closed_pg_egress "allow-restore-postgres-egress" "${WANT_RESTORE_CLUSTER}"
+
 # --- render inventory: exact object count and kind, by name (B-7) -----------
 # This is what makes the three attacks the review proved (dropping
 # `- networkpolicy.yaml`, `- rustfs.yaml`, or `- scheduledbackup.yaml` from
@@ -339,13 +480,14 @@ fi
 # from it. Named, not just counted, so a rename inside the admitted set is
 # caught too.
 netpol_names="$(yaml_query -r 'select(.kind == "NetworkPolicy") | .metadata.name' "${rendered}" | sort)"
-assert_eq "$(wc -l <<<"${netpol_names}" | tr -d ' ')" "8" "rendered NetworkPolicy count"
+assert_eq "$(wc -l <<<"${netpol_names}" | tr -d ' ')" "9" "rendered NetworkPolicy count"
 assert_eq "${netpol_names}" "$(sort <<<'allow-cnpg-operator-ingress
 allow-cnpg-to-backup-store-ingress
 allow-intra-cluster
 allow-platform-postgres-ingress
 allow-postgres-egress
 allow-prometheus-scrape
+allow-restore-postgres-egress
 backup-store-egress-dns-only
 default-deny-ingress')" "rendered NetworkPolicy names"
 assert_eq "$(yaml_query -r 'select(.kind == "Cluster") | .kind' "${rendered}" | wc -l | tr -d ' ')" "1" "rendered Cluster count"
@@ -391,6 +533,12 @@ assert_eq "${job_fixed_name}" "absent" "migration Job must not carry a fixed met
 # input, tag, placeholder, alternate repository, or rename-shaped authority.
 job_containers="$(yaml_query -c '[.spec.template.spec.containers[].name] | sort' "${job_template}")"
 assert_eq "${job_containers}" "${WANT_MIGRATOR_CONTAINERS}" "migration Job container identity"
+job_pull_secrets="$(yaml_query -c '[.spec.template.spec.imagePullSecrets[]?.name] | sort | unique' "${job_template}")"
+assert_eq "${job_pull_secrets}" "[\"${WANT_IMAGE_PULL_SECRET}\"]" "migration Job imagePullSecrets (exact namespace-local GHCR pull Secret)"
+job_name_label="$(yaml_query -r '.metadata.labels["app.kubernetes.io/name"]' "${job_template}")"
+pod_name_label="$(yaml_query -r '.spec.template.metadata.labels["app.kubernetes.io/name"]' "${job_template}")"
+assert_eq "${job_name_label}" "${WANT_MIGRATOR_NAME}" "migration Job canonical app name label"
+assert_eq "${pod_name_label}" "${WANT_MIGRATOR_NAME}" "migration pod canonical app name label"
 job_image="$(yaml_query -r '.spec.template.spec.containers[] | select(.name == "migrator") | .image' "${job_template}")"
 if [[ ! "${job_image}" =~ ^ghcr\.io/great-falls-tool-bus/greatfallstoolbus\.org@sha256:[0-9a-f]{64}$ ]]; then
   fail "migration Job image must be the exact greatfallstoolbus.org publisher repository pinned by @sha256:<64 lowercase hex>; got '${job_image}'"

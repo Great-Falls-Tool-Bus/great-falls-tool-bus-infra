@@ -69,3 +69,48 @@ test_suite(
         ":core_checkout_contract_test",
     ],
 )
+
+MEMBER_DB_CONTRACT_SOURCES = [
+    "k8s/member-db/README.md",
+    "k8s/member-db/secrets.contract.yaml",
+    "k8s/member-db/members-greatfallstoolbus-org-db-production/bucket-create.template.yaml",
+    "k8s/member-db/members-greatfallstoolbus-org-db-production/cluster.yaml",
+    "k8s/member-db/members-greatfallstoolbus-org-db-production/kustomization.yaml",
+    "k8s/member-db/members-greatfallstoolbus-org-db-production/networkpolicy.yaml",
+    "k8s/member-db/members-greatfallstoolbus-org-db-production/restore-cluster.template.yaml",
+    "k8s/member-db/members-greatfallstoolbus-org-db-production/rustfs.yaml",
+    "k8s/member-db/members-greatfallstoolbus-org-db-production/scheduledbackup.yaml",
+    "k8s/member-db/members-greatfallstoolbus-org-production/job-migrator.template.yaml",
+]
+
+# Finite graph registration for the same validator check-hosted invokes
+# directly. The repo's Nix devshell supplies yq-go, jq, kubectl, bash, and
+# python3; no proved Flywheel target class exists for this contract test, so it
+# intentionally carries no flywheel-eligible tag and makes no cache/RBE claim.
+sh_test(
+    name = "member_db_contract_test",
+    srcs = ["scripts/validate-member-db-stack.sh"],
+    args = ["k8s/member-db/members-greatfallstoolbus-org-db-production"],
+    data = MEMBER_DB_CONTRACT_SOURCES,
+    tags = ["requires-nix-devshell"],
+)
+
+sh_test(
+    name = "member_db_contract_selftest",
+    srcs = ["scripts/validate-member-db-stack.sh"],
+    args = ["--self-test"],
+    data = MEMBER_DB_CONTRACT_SOURCES,
+    env = {
+        "MEMBER_DB_VALIDATOR": "$(location scripts/validate-member-db-stack.sh)",
+    },
+    tags = ["requires-nix-devshell"],
+    tools = ["scripts/validate-member-db-stack.sh"],
+)
+
+test_suite(
+    name = "member_db_contract_tests",
+    tests = [
+        ":member_db_contract_selftest",
+        ":member_db_contract_test",
+    ],
+)

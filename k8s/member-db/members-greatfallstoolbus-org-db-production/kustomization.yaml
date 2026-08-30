@@ -11,11 +11,12 @@ namespace: members-greatfallstoolbus-org-db-production
 # renders it as its last gate, and `just check-hosted` runs that validator.
 #
 # The migration Job is deliberately NOT a member of this kustomization. It runs
-# in the PLATFORM namespace, not here, it carries an operator-supplied image
-# that does not exist until S1's app half lands, and it is a one-shot
-# pre-rollout Job rather than stack state. It lives at
+# in the PLATFORM namespace, not here, and it is a one-shot pre-rollout Job
+# rather than stack state. Its reviewed template pins the exact published
+# greatfallstoolbus.org image and source receipt in Git; no dispatch-time image
+# input exists. It lives at
 # ../members-greatfallstoolbus-org-production/job-migrator.template.yaml and is
-# rendered by `just member-db-migrate-render`.
+# rendered independently by `just member-db-migrate-render`.
 #
 # No Namespace object: the member-db namespace is provisioned out of band, the
 # same posture the web stack holds, and the validator enforces the absence.

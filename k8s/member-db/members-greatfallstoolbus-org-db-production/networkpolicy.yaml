@@ -2,27 +2,14 @@
 #
 # Default-deny posture for the member database namespace, mirroring the house
 # doctrine already proven by k8s/web/.../networkpolicy.yaml (default-deny plus
-# named allows, never an ipBlock 0.0.0.0/0) and the GloriousFlywheel reference
-# database policy (docs/k8s-reference/base/network-policy.yaml).
+# named allows, never an ipBlock 0.0.0.0/0).
 #
-# THE ADMISSION LIST IS THE POINT. Port 5432 is admitted from exactly three
-# workloads in exactly one namespace: the `web`, `worker`, and `migrator`
-# components of the GFTB platform in
-# members-greatfallstoolbus-org-production. Nothing else in the estate reaches
-# the member database — not the site pod, not the list/mail stacks, not another
-# tenant. The three components are selected by a single matchExpressions `In`
-# clause rather than three separate rules so the admitted set is one legible
-# line that cannot drift apart across copies.
-#
-# FAIL-CLOSED NOTE ON THE APP HALF. Those platform pods do not exist yet: S1's
-# app half (gftb-platform) has not landed. That is deliberate and it is why this
-# PR is DRAFT-HELD. A policy that names labels no pod carries yet denies
-# everything, which is the correct state until the platform pods appear wearing
-# the labels asserted here. The label contract below IS the hand-off: the app
-# half must ship pods labelled
-#   app.kubernetes.io/part-of: gftb-platform
-#   app.kubernetes.io/component: web | worker | migrator
-# or the database will refuse them.
+# Port 5432 is admitted from exactly three platform components in exactly one
+# namespace: web, worker, and migrator pods carrying the canonical
+# app.kubernetes.io/part-of: great-falls-tool-bus label. The exact migrator
+# publisher carrier is merged and Git-pinned; this file makes no claim that any
+# of those workloads is currently applied, running, or served. Until a matching
+# pod exists, the closed selector admits nothing.
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -57,7 +44,7 @@ spec:
               kubernetes.io/metadata.name: members-greatfallstoolbus-org-production
           podSelector:
             matchLabels:
-              app.kubernetes.io/part-of: gftb-platform
+              app.kubernetes.io/part-of: great-falls-tool-bus
             matchExpressions:
               - key: app.kubernetes.io/component
                 operator: In
@@ -172,11 +159,14 @@ spec:
 # the API server; if egress is restricted and the API is not admitted, the pod
 # never reports ready and the cluster hangs at bootstrap with no obvious cause.
 # The house reference policy (GloriousFlywheel
-# docs/k8s-reference/base/network-policy.yaml) omits this leg — it is a
-# reference doc with no applied proof behind it, and applying it as written
-# would fail exactly this way. The three /32s below are the live `kubernetes`
-# Endpoints on honey (192.168.70.10/.11/.12:6443, read-only check 2026-08-19),
-# the same on-prem /24 the web Deployment's placement comment already names.
+# docs/k8s-reference/base/network-policy.yaml) omits this leg. The three /32s
+# below align with the reviewed backend-address snapshot in
+# tinyland-inc/blahaj@72b6c2d9c43894214f09c0f3f96586f8e0025337,
+# config/rke2-endpoint-backing.json (.10/.11/.12). That commit is a historical
+# declaration, not current authority: every attended cluster/restore apply
+# fails closed until MEMBER_DB_API_EGRESS_CIDRS_CURRENT and
+# MEMBER_DB_API_EGRESS_SOURCE_SHA attest the current canonical declaration or
+# current readback and exactly match these bytes.
 #
 # There is deliberately NO 0.0.0.0/0 and no bare `- ports:` rule: the backup
 # leg is scoped to the in-namespace rustfs pod, not to "anything on 9000".
@@ -240,6 +230,64 @@ spec:
         - podSelector:
             matchLabels:
               cnpg.io/cluster: gftb-member-db
+      ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 8000
+---
+# Restore rehearsal egress. This is a separate closed policy rather than an
+# In[primary,restore] selector: each cluster may reach only its own peers, so
+# the rehearsal cannot open a primary<->restore path. Destinations mirror the
+# reviewed primary pattern exactly: DNS, the current-gated API /32 set, the
+# in-namespace backup store, and same-cluster CNPG peer traffic.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-restore-postgres-egress
+  namespace: members-greatfallstoolbus-org-db-production
+  labels:
+    app.kubernetes.io/name: gftb-member-db-restore
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: gftb-member-db-restore
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 192.168.70.10/32
+        - ipBlock:
+            cidr: 192.168.70.11/32
+        - ipBlock:
+            cidr: 192.168.70.12/32
+      ports:
+        - protocol: TCP
+          port: 6443
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: gftb-member-db-backup-store
+      ports:
+        - protocol: TCP
+          port: 9000
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: gftb-member-db-restore
       ports:
         - protocol: TCP
           port: 5432

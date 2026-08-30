@@ -40,8 +40,8 @@ not an estate-owned tcfs bucket. What remains is operational and attended:
 
 ## Step O — CloudNativePG operator conformance (read-only)
 
-The operator is **already live and estate-owned**. Confirm it, do not install
-it:
+The operator is estate-owned, but this carrier does not inherit a current-live
+claim. Read it now; do not install from this repository:
 
 ```bash
 kubectl --context honey get crd | grep cnpg
@@ -104,25 +104,30 @@ permanent record, not a gate.
 > backups survive its loss; sting is the ruled exception host. A courtesy
 > note belongs on the blahaj side before/at the apply sitting.
 
-**B2 — bucket and credential. Mint BOTH Secrets BEFORE step S — only the
-bucket creation is step-S-ordered.** `rustfs.yaml`'s `envFrom` is
-`optional: false`: if the Secrets are unminted when step S applies the
-store, the pod sits in `CreateContainerConfigError` and the 300s rollout
-wait fails (loud, fast, recoverable — but avoidable). Mint the
-`gftb-member-db-backup-s3` Secret AND the
-`gftb-member-db-backup-store-root` Secret in the database namespace —
-**identically**: same `ACCESS_KEY_ID`/`ACCESS_SECRET_KEY` value pair under
-the two different key-naming conventions each side needs
-(`k8s/member-db/secrets.contract.yaml` explains why this is one credential,
-not two). Values never leave the cluster.
+**B2 — root, bucket, then distinct scoped client authority.** Before the
+backup-store apply, provision only
+`gftb-member-db-backup-store-root` (type `Opaque`, exact
+`RUSTFS_ACCESS_KEY` / `RUSTFS_SECRET_KEY` keys). It is rustfs
+server-bootstrap/admin authority and is never accepted as CNPG backup authority.
 
-The bucket itself is created by `just member-db-backup-bucket-create`
-(B-3) — a one-shot Job carrying the `cnpg.io/cluster: gftb-member-db` label
-so the existing NetworkPolicy admits it into the store, rather than a helper
-pod the policy would deny. It is step two of the ordered chain in step S
-below; you do not run it standalone.
+Apply the store and run `member-db-backup-bucket-create`. That Job uses the
+root Secret only to create `gftb-member-db-backups`; it does not create an IAM
+identity or the CNPG client Secret.
 
-## Step C — credentials
+Before cluster or restore apply, independently provision
+`gftb-member-db-backup-s3` as a distinct, least-privilege bucket-scoped
+credential with exact keys `ACCESS_KEY_ID` / `ACCESS_SECRET_KEY`. The current
+RustFS policy-provisioning command and proof carrier are not invented here: the
+operator must supply the reviewed ceremony. The Secret must carry:
+
+- `app.tinyland.dev/object-store-scope=bucket:gftb-member-db-backups`
+- `app.tinyland.dev/object-store-authority=object-read-write-no-admin`
+- a nonempty `app.tinyland.dev/object-store-proof` receipt
+
+`_member-db-cluster-prerequisites` rejects missing/wrong keys, annotations,
+empty proof, or reuse of the root key pair.
+
+## Step C — credentials## Step C — credentials
 
 **C1 — the owner credential is not yours to make.** CNPG generates
 `gftb-member-db-app` at bootstrap with the `gftb_migrator` password. No
@@ -133,10 +138,17 @@ database namespace, type `kubernetes.io/basic-auth`, `username:
 gftb_app`. `managed.roles` binds the role to it. This is the DML-only
 credential the platform's web and worker Deployments will consume.
 
+**C3 — provision the namespace-local GHCR pull Secret.** Create `ghcr-pull`
+in the platform namespace, type `kubernetes.io/dockerconfigjson`, with only
+`.dockerconfigjson`. The migrator Job references that name. The app package
+was observed anonymously pullable during review; only gftb-site is authorized
+public. This PR changes no visibility and makes no private-state claim.
+
 ## Step S — apply the database stack (ORDERED, B-4)
 
-**Precondition (B-6): this PR must be MERGED before this step runs.** Every
-mutating recipe below passes through `_reviewed-clean-main`, which requires
+**Precondition (B-6): this PR must be MERGED before this step runs.** All six mutating recipes (backup-store apply, bucket creation, cluster apply,
+restore apply, restore teardown, and migration apply) pass through
+`_reviewed-clean-main`, which requires
 the current branch to be `main`, a clean worktree, and `HEAD` to equal the
 verified `origin/main` tip — so none of them can run from this PR's branch,
 only after it lands. `member-db-stack-server-dry-run` (used by
@@ -148,15 +160,27 @@ requirement, so Phase 3's read-only proof works from the branch today; Phase
 just member-db-stack-validate
 export MEMBER_DB_APPLY_KUBECONFIG=/path/to/member-db-apply.kubeconfig
 just member-db-stack-server-dry-run
-GFTB_APPLY_CONFIRM=apply just member-db-stack-apply
+
+# Stage 1: root Secret already provisioned.
+GFTB_APPLY_CONFIRM=apply just member-db-backup-store-apply
+GFTB_APPLY_CONFIRM=apply just member-db-backup-bucket-create
+
+# Provision and prove the distinct bucket-scoped client credential (B2), then:
+export MEMBER_DB_API_EGRESS_SOURCE_SHA=<current-reviewed-blahaj-sha>
+GFTB_APPLY_CONFIRM=apply just member-db-cluster-apply
 ```
 
-`member-db-stack-apply` is a thin alias over three ordered steps — run it
+Every cluster/restore mutation reads the current `default/kubernetes`
+Endpoints and fails unless its exact three /32s equal the reviewed manifest; the
+source SHA records the canonical declaration reviewed with that readback. The
+historical `blahaj@72b6c2d9...` snapshot is alignment evidence only.
+
+`member-db-stack-apply` is a thin alias`member-db-stack-apply` is a thin alias over three ordered steps — run it
 directly, or run the three yourself to watch each one land:
 
 1. `member-db-backup-store-apply` — applies ONLY the NetworkPolicy family and
-   rustfs (StatefulSet/Service/PVC), filtered from the SAME rendered
-   `kubectl kustomize` bytes `member-db-stack-validate` already asserted, and
+   rustfs (StatefulSet/Service/PVC), filtered from an independently re-rendered
+   `kubectl kustomize` stream after the validator passes, and
    waits for the StatefulSet to report Ready. `cluster.yaml`'s own comment
    says the backup store must be live before the Cluster is, because WAL
    archiving starts the moment the Cluster is applied — this step is what
@@ -232,7 +256,9 @@ The render has no image input. It emits the reviewed Job template containing
 the exact publisher image and source identity recorded above. The validator
 refuses a tag, foreign repository, wrong digest/source receipt, `command:`
 override, non-`["migrator"]` args, or any credential other than
-`gftb-member-db-migrator-dsn`. The dry-run and apply consume the same render.
+`gftb-member-db-migrator-dsn`. The dry-run and apply each independently render the same Git-pinned template;
+identity is validated each time, but byte identity across invocations is not
+claimed.
 
 **M3 — run it.**
 
@@ -268,8 +294,10 @@ gftb-member-db` — a label the rehearsal cluster's pods (which carry
 `cnpg.io/cluster: gftb-member-db-restore`) do not have. The operator could
 never reach the restore instance manager, and the restore pods could never
 read the backups they exist to restore, so the rehearsal cluster never
-reported `Ready`. Both policies now admit `gftb-member-db-restore` too, by
-name, alongside the primary.
+reported `Ready`. Those two ingress policies now admit `gftb-member-db-restore` by name, and
+`allow-restore-postgres-egress` separately admits only DNS, the current-gated
+API /32s, the backup store, and restore-cluster peers. Keeping restore egress
+separate prevents primary↔restore cross-admission.
 
 1. Note the start time.
 2. Create the rehearsal `Cluster`
@@ -293,7 +321,7 @@ name, alongside the primary.
 5. Remove the rehearsal cluster:
 
    ```bash
-   just member-db-restore-rehearsal-teardown
+   GFTB_APPLY_CONFIRM=apply just member-db-restore-rehearsal-teardown
    ```
 
    `openebs-bumble-postgresql-retain` means the two PVCs' underlying PVs go

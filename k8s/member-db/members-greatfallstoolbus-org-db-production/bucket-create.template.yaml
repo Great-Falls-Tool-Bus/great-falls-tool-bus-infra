@@ -20,16 +20,16 @@
 #
 # IMAGE. quay.io/minio/mc, digest reused verbatim from the estate's own
 # already-vetted pin: blahaj scripts/ci-ensure-rustfs-bucket.sh
-# (TOFU_RUSTFS_BUCKET_MC_IMAGE default) is the SAME job — ensure a bucket
-# exists on a rustfs instance from in-cluster CI — run today against a
-# different rustfs (tofu-state-rustfs). `mc` is MinIO Client, S3-API
+# (TOFU_RUSTFS_BUCKET_MC_IMAGE default) records the same bounded job shape —
+# ensure a bucket exists on a rustfs instance from in-cluster CI — as historical
+# reviewed provenance, not a current-live assertion about another rustfs. `mc` is MinIO Client, S3-API
 # compatible, and this reuses that shape rather than inventing a new one.
 #
-# CREDENTIAL. envFrom gftb-member-db-backup-store-root — the SAME Secret
-# rustfs.yaml's own container consumes, never gftb-member-db-backup-s3.
-# secrets.contract.yaml records these as one credential under two
-# Secret/key-naming conventions; this Job needs the rustfs-side key names
-# (RUSTFS_ACCESS_KEY / RUSTFS_SECRET_KEY).
+# CREDENTIAL. envFrom gftb-member-db-backup-store-root — the rustfs
+# server-bootstrap/admin Secret, never gftb-member-db-backup-s3. This Job uses
+# that authority only to create the named bucket. It does NOT provision,
+# configure, or prove the distinct bucket-scoped client credential; that is a
+# fail-closed operator prerequisite before the CNPG Cluster can apply.
 #
 # NOT A KUSTOMIZATION MEMBER. One-shot dispatch artifact, same reasoning as
 # ../members-greatfallstoolbus-org-production/job-migrator.template.yaml:
@@ -99,8 +99,9 @@ spec:
             # cross-checks the two.
             - name: RUSTFS_BUCKET
               value: gftb-member-db-backups
-          # NAME ONLY. Values are the same operator-minted pair rustfs.yaml
-          # consumes (runbook step B2) — never a value in git.
+          # NAME ONLY. This is the operator-minted rustfs root pair used only
+          # for server bootstrap and bucket creation (runbook step B2), never
+          # the CNPG backup/restore client credential and never a value in git.
           envFrom:
             - secretRef:
                 name: gftb-member-db-backup-store-root

@@ -30,7 +30,7 @@ TIN-3817's acceptance rows.
 | --- | --- | --- |
 | `members-greatfallstoolbus-org-db-production/cluster.yaml` | CNPG `Cluster` `gftb-member-db`: PostgreSQL 16.15 digest-pinned, 1 instance, separate WAL volume, WAL archiving, owner + DML-only roles | database |
 | `members-greatfallstoolbus-org-db-production/scheduledbackup.yaml` | Six-hourly base backup (the RTO control) | database |
-| `members-greatfallstoolbus-org-db-production/networkpolicy.yaml` | Default-deny plus seven named allows | database |
+| `members-greatfallstoolbus-org-db-production/networkpolicy.yaml` | Default-deny plus eight named allows, including separate closed restore egress | database |
 | `members-greatfallstoolbus-org-db-production/rustfs.yaml` | GFTB-owned rustfs StatefulSet+Service+PVC backing WAL/base-backup storage (B1 ruling, 2026-08-20) | database |
 | `members-greatfallstoolbus-org-db-production/bucket-create.template.yaml` | One-shot Job that mints the `gftb-member-db-backups` bucket inside rustfs (B-3) | database |
 | `members-greatfallstoolbus-org-db-production/restore-cluster.template.yaml` | Restore-rehearsal `Cluster` template — the RTO<=4h acceptance row's proof path (B-5) | database |
@@ -42,7 +42,7 @@ platform's service account has no reach over `Cluster`, `Backup`, or the
 CNPG-generated Secrets, and so the admission list in the NetworkPolicy is a
 real boundary rather than an intra-namespace convention.
 
-## The operator already exists — this overlay does not install it
+## Operator substrate: historical declaration, current readback required
 
 A read-only observation on 2026-08-19 found `cnpg-cloudnative-pg` in
 `cnpg-system`, image `ghcr.io/cloudnative-pg/cloudnative-pg:1.22.0`, chart
@@ -71,9 +71,10 @@ substrate PR plus an operator apply, never something this repository applies.
   which never contacts a cluster. Every mutating recipe is operator-local,
   needs an operator-custody kubeconfig, and passes through
   `_operator-apply-confirm`.
-- **No platform-namespace stack.** The web/worker Deployments, their Service,
-  and that namespace's own NetworkPolicies are a later slice. Only the migration
-  Job template is here, because the migration is a database concern.
+- **No platform-namespace serving stack in this carrier.** Web/worker and their
+  policies live in their separate reviewed carrier. This slice owns only the
+  exact Git-pinned migration Job template and its names-only `ghcr-pull`
+  reference.
 
 ## How the acceptance rows are actually held
 
@@ -100,7 +101,7 @@ Checked against the merged app carrier
 | Image | exact `greatfallstoolbus.org@sha256` pin in the Job | publisher receipt above identifies source and artifact |
 
 The database NetworkPolicy admits platform pods only when
-`app.kubernetes.io/part-of: gftb-platform` and component is one of
+`app.kubernetes.io/part-of: great-falls-tool-bus` and component is one of
 `web`, `worker`, or `migrator`. This Job carries the exact migrator
 identity. Web/worker labels belong to their separate reviewed release carrier;
 nothing in this database slice creates those workloads.
@@ -119,7 +120,11 @@ MEMBER_DB_APPLY_KUBECONFIG=/path/to/member-db-apply.kubeconfig just member-db-st
 ```
 
 The migration render takes no image input: its publisher image and source
-identity are part of the reviewed Git carrier.
+identity are part of the reviewed Git carrier. It also references
+`ghcr-pull`, a namespace-local `kubernetes.io/dockerconfigjson` Secret by
+name. Only gftb-site is authorized public; the app package was observed
+anonymously pullable during review, and this carrier changes no visibility or
+claims a private state.
 
 Bring-up, first migration, backup verification, and the restore rehearsal are
 all attended: `docs/runbooks/member-db-bringup.md`.
