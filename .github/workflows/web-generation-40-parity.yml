@@ -303,7 +303,25 @@ jobs:
             slices_sha256="$(printf '%s' "${slices}" | canonical_sha256)"
             policies_sha256="$(printf '%s' "${policies}" | canonical_sha256)"
             service_spec_sha256="$(jq -S -c '.spec' <<<"${service}" | sha256sum | awk '{print $1}')"
-            jq -n               --argjson deployment "${deployment}"               --argjson replicaSets "${replica_sets}"               --argjson pods "${pods}"               --argjson endpointSlices "${slices}"               --argjson networkPolicies "${policies}"               --arg deploymentSha256 "${deployment_sha256}"               --arg replicaSetsSha256 "${replica_sets_sha256}"               --arg podsSha256 "${pods_sha256}"               --arg serviceSha256 "${service_sha256}"               --arg endpointSlicesSha256 "${slices_sha256}"               --arg networkPoliciesSha256 "${policies_sha256}"               --arg serviceSpecSha256 "${service_spec_sha256}"               --arg activeUid "${active_uid}"               --arg revision "${revision}"               --arg image "${image}"               --arg source "${source}"               --arg digest "${image##*@}"               '{
+            jq -n \
+              --argjson deployment "${deployment}" \
+              --argjson replicaSets "${replica_sets}" \
+              --argjson pods "${pods}" \
+              --argjson endpointSlices "${slices}" \
+              --argjson networkPolicies "${policies}" \
+              --arg deploymentSha256 "${deployment_sha256}" \
+              --arg replicaSetsSha256 "${replica_sets_sha256}" \
+              --arg podsSha256 "${pods_sha256}" \
+              --arg serviceSha256 "${service_sha256}" \
+              --arg endpointSlicesSha256 "${slices_sha256}" \
+              --arg networkPoliciesSha256 "${policies_sha256}" \
+              --arg serviceSpecSha256 "${service_spec_sha256}" \
+              --arg activeUid "${active_uid}" \
+              --arg revision "${revision}" \
+              --arg image "${image}" \
+              --arg source "${source}" \
+              --arg digest "${image##*@}" \
+              '{
                 fullSnapshotSha256: {
                   deployment: $deploymentSha256,
                   replicaSets: $replicaSetsSha256,
@@ -471,7 +489,10 @@ jobs:
         run: |
           set -euo pipefail
           test -n "${RUNNER_TEMP}"
-          for name in             gftb-web-generation-40.kubeconfig             gftb-web-generation-40-receipt.json             pre.json post.json rollback.json access.json access.headers access.body; do
+          for name in \
+            gftb-web-generation-40.kubeconfig \
+            gftb-web-generation-40-receipt.json \
+            pre.json post.json rollback.json access.json access.headers access.body; do
             target="${RUNNER_TEMP}/${name}"
             [[ "${target}" == "${RUNNER_TEMP}/"* ]]
             test ! -L "${target}"
