@@ -22,6 +22,7 @@
           default = pkgs.mkShell {
             packages = [
               pkgs.actionlint
+              pkgs.coreutils
               pkgs.crane
               pkgs.curl
               pkgs.git
