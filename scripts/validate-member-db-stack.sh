@@ -93,6 +93,8 @@ PY
   expect_failure pull-secret-manual-provisioner     'secrets.contract.yaml'     '      apply_prerequisite: _member-db-platform-image-pull-prerequisite'     $'      apply_prerequisite: _member-db-platform-image-pull-prerequisite\n      provisioned_by: operator via kubectl'     'GHCR pull Secret manual provisioning fields (must be absent)'
   expect_failure pull-secret-projection-contract     'secrets.contract.yaml'     '        contract: RegistryPullProjection/v1'     '        contract: RegistryPullProjection/v0'     'GHCR pull Secret RegistryPullProjection contract'
   expect_failure pull-secret-controller     'secrets.contract.yaml'     '        controller: sole-governed-owner-overlay'     '        controller: tenant-local'     'GHCR pull Secret controller authority contract'
+  expect_failure pull-secret-payload-source     'secrets.contract.yaml'     '        credential_payload_source: governed-controller-only'     '        credential_payload_source: per-tenant-sops-or-manual'     'GHCR pull Secret credential payload source contract'
+  expect_failure pull-secret-unexpected-projection-key     'secrets.contract.yaml'     '        operator_created_secret_permitted: false'     $'        operator_created_secret_permitted: false\n        per_tenant_sops_or_manual_payload_permitted: true'     'GHCR pull Secret RegistryPullProjection closed schema'
   expect_failure pull-secret-mutable     'secrets.contract.yaml'     '        immutable: true'     '        immutable: false'     'GHCR pull Secret immutable intent contract'
   expect_failure pull-secret-unprotected-subordinate     'secrets.contract.yaml'     '        protected_subordinate_execution: true'     '        protected_subordinate_execution: false'     'GHCR pull Secret protected subordinate execution contract'
   expect_failure pull-secret-overwrite     'secrets.contract.yaml'     '        create_if_absent: true'     '        create_if_absent: false'     'GHCR pull Secret create-if-absent contract'
@@ -149,6 +151,7 @@ readonly WANT_MIGRATOR_NAME="gftb-member-db-migrator"
 readonly WANT_IMAGE_PULL_SECRET="ghcr-pull"
 readonly WANT_PULL_PROJECTION_CONTRACT="RegistryPullProjection/v1"
 readonly WANT_PULL_PROJECTION_CONTROLLER="sole-governed-owner-overlay"
+readonly WANT_PULL_PROJECTION_PAYLOAD_SOURCE="governed-controller-only"
 readonly WANT_BACKUP_SECRET="gftb-member-db-backup-s3"
 readonly WANT_BUCKET="gftb-member-db-backups"
 readonly WANT_STORAGE_CLASS="openebs-bumble-postgresql-retain"
@@ -349,10 +352,14 @@ pull_contract_keys="$(yaml_query -c --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.s
 assert_eq "${pull_contract_keys}" '[".dockerconfigjson"]' "GHCR pull Secret key contract"
 pull_contract_manual_fields="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | (has("origin") or has("provisioned_by"))' "${secrets_contract}")"
 assert_eq "${pull_contract_manual_fields}" "false" "GHCR pull Secret manual provisioning fields (must be absent)"
+pull_contract_projection_keys="$(yaml_query -c --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .projection | keys | sort' "${secrets_contract}")"
+assert_eq "${pull_contract_projection_keys}" '["contract","controller","controller_live","create_if_absent","credential_payload_source","immutable","interim_authority_permitted","operator_created_secret_permitted","protected_subordinate_execution"]' "GHCR pull Secret RegistryPullProjection closed schema"
 pull_contract_projection="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .projection.contract' "${secrets_contract}")"
 assert_eq "${pull_contract_projection}" "${WANT_PULL_PROJECTION_CONTRACT}" "GHCR pull Secret RegistryPullProjection contract"
 pull_contract_controller="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .projection.controller' "${secrets_contract}")"
 assert_eq "${pull_contract_controller}" "${WANT_PULL_PROJECTION_CONTROLLER}" "GHCR pull Secret controller authority contract"
+pull_contract_payload_source="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .projection.credential_payload_source' "${secrets_contract}")"
+assert_eq "${pull_contract_payload_source}" "${WANT_PULL_PROJECTION_PAYLOAD_SOURCE}" "GHCR pull Secret credential payload source contract"
 pull_contract_immutable="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .projection.immutable' "${secrets_contract}")"
 assert_eq "${pull_contract_immutable}" "true" "GHCR pull Secret immutable intent contract"
 pull_contract_protected_subordinate="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .projection.protected_subordinate_execution' "${secrets_contract}")"
