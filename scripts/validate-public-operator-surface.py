@@ -73,15 +73,24 @@ RETIRED_WEB_CD_WORKFLOW = Path(".github/workflows/web-stack.yml")
 # desired-state tuple stays frozen until the permanent GF-I09 receiver has
 # proved canonical update -> revert -> re-forward and removes this bridge.
 WEB_GENERATION40_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-40-parity.yml")
-WEB_GENERATION40_BRIDGE_SHA256 = "df3020153289f0e30db5e6c5d70cd31408c77d698cbbcab8a054a8e1efb4a471"
+WEB_GENERATION40_BRIDGE_SHA256 = "331997fb633abb11e3890c9c357515af216aea055426ec2c7b183ab83d3d4c29"
 WEB_GENERATION40_BRIDGE_RECIPES = frozenset(
-    {"web-release-plan", "web-release-server-dry-run", "web-release-apply"}
+    {"web-release-candidate-proof", "web-release-plan", "web-release-server-dry-run", "web-release-apply"}
 )
 WEB_GENERATION40_TARGET_SOURCE = "06e8b2c390b9c057fd084540e1e5710411a76a93"
 WEB_GENERATION40_TARGET_IMAGE = "ghcr.io/great-falls-tool-bus/gftb-site@sha256:0295c226bd0bc78c0fe392b8955971ffbbd4fb9a0684939558d4c3d170a35dee"
 WEB_GENERATION40_DEPLOYMENT = Path("k8s/web/greatfallstoolbus-org-production/deployment.yaml")
-WEB_GENERATION40_TRANSIENT_VALIDATE = Path(".github/workflows/validate.yml")
-WEB_GENERATION40_TRANSIENT_VALIDATE_SHA256 = "7fb96c404fbaee4ec0e46734b4a624120609993f810ef8db847ceeca7c927e3d"
+WEB_GENERATION40_FROZEN_INPUT_SHA256 = {
+    Path("Justfile"): "4359302dbd693ddef560d191dee91deaedad4a5f220b5e6cc93b388963eb8532",
+    Path("flake.lock"): "33150ce2f846aef01539145f74a8eb1a04d45df5d960494ce188111a80e170e3",
+    Path("flake.nix"): "2ce7fb715b668877707baa147ca2d8c8dfa9be5f1307460fbae25d36b32c815e",
+    Path("k8s/web/greatfallstoolbus-org-production/deployment.yaml"): "bed8d1204f7d72d427985f0f0088fef878bf539fa97c8ad4e2551ab969f69528",
+    Path("k8s/web/greatfallstoolbus-org-production/kustomization.yaml"): "8ef176b50c24ac3de40b72c4958eab5cc2a849d3a212c09e7b6c75fa0b57d9af",
+    Path("k8s/web/greatfallstoolbus-org-production/networkpolicy.yaml"): "de5cb3b7ce2bc4edb4565d2d8f2d542a20fbd036f0cb9ce23d914565549023cd",
+    Path("k8s/web/greatfallstoolbus-org-production/service.yaml"): "527a87425fc3a90a2a72d2adb59e1bfa7596d03e7f579a610ccfe841a48459d2",
+    Path("scripts/guard-no-remote-kustomize-resources.sh"): "aacf50ada42c322a8e12eee0af40d55d77598f5468b73c1df574a8b50cc3be17",
+    Path("scripts/validate-web-stack.sh"): "c260f829e15315133c4fa03db9443b1d55cf9d7e5fa02b78a6a56635fbab64c8",
+}
 WORKFLOW_REPOSITORY_DISPATCH = re.compile(r"^\s*repository_dispatch\s*:")
 JUST_COMMAND_START = re.compile(r"\bjust\b")
 JUST_OPTIONS_WITH_VALUES = {
@@ -152,6 +161,7 @@ HOSTED_WORKFLOW_JUST_ALLOWLIST = {
     # Exact, byte-pinned TIN-4227 bridge only. scan_workflows subtracts these
     # from the operator-local set for that one path; every other workflow still
     # receives workflow-arc-operator-recipe for the same calls.
+    "web-release-candidate-proof",
     "web-release-plan",
     "web-release-server-dry-run",
     "web-release-apply",
@@ -1862,6 +1872,11 @@ def scan_web_generation40_bridge_contract(
                 "Until GF-I09 replaces the bridge, the web desired state must remain the exact generation-40 target; unrelated infra changes may proceed.",
             )
         )
+    for path, expected_digest in WEB_GENERATION40_FROZEN_INPUT_SHA256.items():
+        candidate = REPO / path
+        observed_digest = hashlib.sha256(candidate.read_bytes()).hexdigest() if candidate.is_file() else "missing"
+        if observed_digest != expected_digest:
+            findings.append(Finding("web-generation40-render-input-freeze", path, 1, "The temporary bridge admits only the exact reviewed render and recipe inputs until receiver-first GF-I09 cutover."))
     return findings
 
 
@@ -1931,11 +1946,6 @@ def scan_workflows() -> list[Finding]:
         scoped_forbidden = forbidden_recipes
         if rel == WEB_GENERATION40_BRIDGE_WORKFLOW:
             scoped_forbidden = forbidden_recipes - set(WEB_GENERATION40_BRIDGE_RECIPES)
-        elif rel == WEB_GENERATION40_TRANSIENT_VALIDATE:
-            observed_validate_digest = hashlib.sha256(workflow_text.encode("utf-8")).hexdigest()
-            if observed_validate_digest != WEB_GENERATION40_TRANSIENT_VALIDATE_SHA256:
-                findings.append(Finding("web-generation40-transient-validate-bytes", rel, 1, "Transient offline render proof changed outside its reviewed receipt."))
-            scoped_forbidden = forbidden_recipes - {"web-release-plan"}
         findings.extend(
             scan_workflow_text(
                 workflow_text,
