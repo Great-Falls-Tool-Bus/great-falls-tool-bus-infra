@@ -39,7 +39,7 @@ and np("allow-egress-member-db";{"podSelector":cs,"policyTypes":["Egress"],"egre
 JQ
 check(){ jq -e --arg image "${image}" --arg tenant "${tenant}" --arg ns "${ns}" -f "${contract}" "$1">/dev/null; }
 check "${json}"||fail "exact stack contract mismatch"
-reject(){ jq "$2" "${json}">"${mut}"; if check "${mut}";then fail "negative accepted: $1";fi; }
+reject(){ jq -e "$2" "${json}">"${mut}"||fail "negative fixture invalid: $1"; jq -e --slurp '.[0] != .[1]' "${json}" "${mut}">/dev/null||fail "negative fixture made no change: $1"; if check "${mut}";then fail "negative accepted: $1";fi; }
 reject source 'map(if .metadata.name=="allow-cloudflared-tunnel-ingress" then .spec.ingress[0].from=[] else . end)'
 reject extra-ingress 'map(if .metadata.name=="allow-cloudflared-tunnel-ingress" then .spec.ingress+=[.spec.ingress[0]] else . end)'
 reject prometheus-source 'map(if .metadata.name=="allow-prometheus-scrape" then .spec.ingress[0].from=[{}] else . end)'
@@ -47,13 +47,14 @@ reject prometheus-port 'map(if .metadata.name=="allow-prometheus-scrape" then .s
 reject ipblock 'map(if .metadata.name=="allow-egress-member-db" then .spec.egress[0].to=[{"ipBlock":{"cidr":"0.0.0.0/0"}}] else . end)'
 reject missing-to 'map(if .metadata.name=="allow-egress-dns" then .spec.egress[0].to=[] else . end)'
 reject policytypes 'map(if .metadata.name=="default-deny-ingress" then .spec.policyTypes=["Ingress","Egress"] else . end)'
-reject stripe 'map(if .metadata.name=="gftb-platform-web" then .spec.template.spec.containers[0].env|=map(select(.name!="STRIPE_SECRET_KEY")) else . end)'
+# Service/gftb-platform-web shares the Deployment name; kind-scope before traversing env.
+reject stripe 'map(if .kind=="Deployment" and .metadata.name=="gftb-platform-web" then .spec.template.spec.containers[0].env|=map(select(.name!="STRIPE_SECRET_KEY")) else . end)'
 reject envfrom 'map(if .metadata.name=="gftb-platform-worker" then .spec.template.spec.containers[0].envFrom=[{}] else . end)'
 reject extra-credential 'map(if .metadata.name=="gftb-platform-web" then .spec.template.spec.containers[0].env+=[{"name":"EXTRA_TOKEN","value":"x"}] else . end)'
 reject sidecar 'map(if .metadata.name=="gftb-platform-web" then .spec.template.spec.containers += [.spec.template.spec.containers[0]] else . end)'
 reject privilege 'map(if .metadata.name=="gftb-platform-worker" then .spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation=true else . end)'
 reject pull 'map(if .metadata.name=="gftb-platform-web" then del(.spec.template.spec.imagePullSecrets) else . end)'
 grep -REn "gftb-member-db-migrator-dsn" "${dir}" 2>/dev/null|grep -vE '^[^:]+:[0-9]+:[[:space:]]*#'>/dev/null && fail "migrator DSN executable"||true
-grep -Fq "PR #118's" "${secrets}"&&grep -Fq "gftb-site was authorized public" "${secrets}"||fail "pull/visibility SSOT missing"
+grep -Fq "PR #118's" "${secrets}"&&grep -Fq "sole names-only ghcr-pull" "${secrets}"&&grep -Fq "controller is not" "${secrets}"&&grep -Fq "no out-of-band kubectl" "${secrets}"&&grep -Fq "absence refuses" "${secrets}"||fail "pull projection SSOT missing"
 jq -e '.applied==false and .dns_enabled==false and .route_enabled==false and .planned_route.dns_record.enabled==false and .planned_route.hostname=="staging.greatfallstoolbus.org"' "${route}">/dev/null||fail "route intent open"
 echo "platform stack validation passed"
