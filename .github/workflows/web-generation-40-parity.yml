@@ -147,8 +147,12 @@ jobs:
                 chmod 600 ".k8s-plans/web-release.${suffix}"
               done
               export WEB_APPLY_IMAGE="${ROLLBACK_IMAGE}" WEB_APPLY_SHA="${ROLLBACK_SOURCE_SHA}"
-              if nix develop . --command just web-release-server-dry-run && nix develop . --command just web-release-apply; then
-                rollback_status=succeeded
+              if nix develop . --command just web-release-server-dry-run; then
+                if nix develop . --command just web-release-apply; then
+                  rollback_status=succeeded
+                else
+                  rollback_status=failed
+                fi
               else
                 rollback_status=failed
               fi
