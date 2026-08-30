@@ -14,7 +14,7 @@
 # scripts/validate-member-db-stack.sh enforces the absence.
 #
 # OPERATOR SUBSTRATE, CONSUMED BY NAMED INTERFACE, NOT RE-HOMED. The reviewed
-# substrate declaration is tinyland-inc/blahaj
+# substrate declaration is in the blahaj substrate repository,
 # deploy/honey/rke2-cnpg.yaml at
 # 72b6c2d9c43894214f09c0f3f96586f8e0025337. Earlier observations recorded
 # operator/chart versions, but they are historical receipts, not current live

@@ -161,7 +161,7 @@ spec:
 # The house reference policy (GloriousFlywheel
 # docs/k8s-reference/base/network-policy.yaml) omits this leg. The three /32s
 # below align with the reviewed backend-address snapshot in
-# tinyland-inc/blahaj@72b6c2d9c43894214f09c0f3f96586f8e0025337,
+# the blahaj substrate repository at 72b6c2d9c43894214f09c0f3f96586f8e0025337,
 # config/rke2-endpoint-backing.json (.10/.11/.12). That commit is a historical
 # declaration, not current authority: the separately receipted
 # _member-db-current-api-egress-prerequisite reads default/kubernetes live,
