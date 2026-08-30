@@ -115,7 +115,45 @@ runner-group-contract-selftest:
     python3 -B scripts/validate-runner-group-contract.py --self-test
 
 workflow-lint:
-    actionlint -ignore 'label "tinyland-nix" is unknown' -ignore 'SC2155'
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
+    set +x
+    set -euo pipefail
+    export LC_ALL=C
+    command -v actionlint >/dev/null 2>&1 || {
+      echo "actionlint is required (nix develop provides it)" >&2
+      exit 1
+    }
+    command -v timeout >/dev/null 2>&1 || {
+      echo "GNU timeout is required (nix develop provides coreutils)" >&2
+      exit 1
+    }
+    shopt -s nullglob dotglob
+    workflows=(.github/workflows/*.yml .github/workflows/*.yaml)
+    ((${#workflows[@]} > 0)) || {
+      echo "no GitHub Actions workflow files found" >&2
+      exit 1
+    }
+    for workflow in "${workflows[@]}"; do
+      [[ -f "${workflow}" && ! -L "${workflow}" ]] || {
+        echo "workflow input must be a regular non-symlink file: ${workflow}" >&2
+        exit 1
+      }
+      printf "actionlint: %s\n" "${workflow}"
+      lint_rc=0
+      timeout --signal=TERM --kill-after=5s 30s \
+        actionlint -ignore "label \"tinyland-nix\" is unknown" -ignore "SC2155" "${workflow}" || lint_rc=$?
+      case "${lint_rc}" in
+        0) ;;
+        124|137)
+          printf "::error file=%s,title=actionlint timeout::actionlint exceeded 30 seconds for %s\n" "${workflow}" "${workflow}" >&2
+          exit 1
+          ;;
+        *)
+          printf "::error file=%s,title=actionlint failed::actionlint exited %s for %s\n" "${workflow}" "${lint_rc}" "${workflow}" >&2
+          exit "${lint_rc}"
+          ;;
+      esac
+    done
 
 # Generate changelog (git-cliff)
 changelog:
