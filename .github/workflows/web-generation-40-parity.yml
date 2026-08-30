@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  REVIEWED_BASE_SHA: ca6f2ecb4cbb151112d46b93f1c57b0c3393c629
+  REVIEWED_BASE_SHA: 37f1b97bd92fc728c1d90472041d871d6b8e29ee
   TARGET_SOURCE_SHA: 06e8b2c390b9c057fd084540e1e5710411a76a93
   TARGET_IMAGE: ghcr.io/great-falls-tool-bus/gftb-site@sha256:0295c226bd0bc78c0fe392b8955971ffbbd4fb9a0684939558d4c3d170a35dee
   TARGET_RENDER_SHA256: 2244dedfa372c52fb32a891c8e6c6e547ef4bdbc64aa948a259fd495746c29bf
@@ -80,7 +80,7 @@ jobs:
             and (.parents | length) == 1
             and .parents[0].sha == $base
           ' <<<"${commit}" >/dev/null
-          pr="$(api "repos/${GITHUB_REPOSITORY}/pulls/141")"
+          pr="$(api "repos/${GITHUB_REPOSITORY}/pulls/142")"
           pr_head="$(jq -er '.head.sha' <<<"${pr}")"
           jq -e --arg carrier "${GITHUB_SHA}" --arg base "${REVIEWED_BASE_SHA}" '
             .merged == true and .merge_commit_sha == $carrier
@@ -88,7 +88,7 @@ jobs:
           ' <<<"${pr}" >/dev/null
           test "$(api "repos/${GITHUB_REPOSITORY}/git/commits/${GITHUB_SHA}" --jq .tree.sha)" = "$(api "repos/${GITHUB_REPOSITORY}/git/commits/${pr_head}" --jq .tree.sha)"
           api "repos/${GITHUB_REPOSITORY}/commits/${pr_head}" --jq '.commit.verification | select(.verified == true and .reason == "valid")' >/dev/null
-          mapfile -t changed < <(api "repos/${GITHUB_REPOSITORY}/pulls/141/files" --paginate --jq '.[].filename' | LC_ALL=C sort)
+          mapfile -t changed < <(api "repos/${GITHUB_REPOSITORY}/pulls/142/files" --paginate --jq '.[].filename' | LC_ALL=C sort)
           expected=(.github/workflows/web-generation-40-parity.yml scripts/validate-public-operator-surface.py)
           [[ "${changed[*]}" == "${expected[*]}" ]]
 
@@ -293,7 +293,63 @@ jobs:
             ' <<<"${policies}")"
             test "$(printf '%s' "${policy_semantic}" | sha256sum | awk '{print $1}')" = 301eecb4ad234fdd7258ac7351a5a563e1b53cb250bce6f51a68824854b28220
             jq -e '[.items[].metadata.name] | sort == ["allow-cloudflared-tunnel-ingress","allow-prometheus-scrape","default-deny-egress","default-deny-ingress"]' <<<"${policies}" >/dev/null
-            jq -n --argjson deployment "${deployment}" --argjson replicaSets "${replica_sets}" --argjson pods "${pods}" --argjson service "${service}" --argjson endpointSlices "${slices}" --argjson networkPolicies "${policies}" '{deployment:$deployment,replicaSets:($replicaSets.items|sort_by(.metadata.uid)),pods:($pods.items|sort_by(.metadata.uid)),service:$service,endpointSlices:($endpointSlices.items|sort_by(.metadata.uid)),networkPolicies:($networkPolicies.items|sort_by(.metadata.name))}' > "${out}"
+            # Full API objects stay runner-local for assertions. Only canonical
+            # hashes and bounded, address-free projections enter the receipt.
+            canonical_sha256() { jq -S -c . | sha256sum | awk '{print $1}'; }
+            deployment_sha256="$(printf '%s' "${deployment}" | canonical_sha256)"
+            replica_sets_sha256="$(printf '%s' "${replica_sets}" | canonical_sha256)"
+            pods_sha256="$(printf '%s' "${pods}" | canonical_sha256)"
+            service_sha256="$(printf '%s' "${service}" | canonical_sha256)"
+            slices_sha256="$(printf '%s' "${slices}" | canonical_sha256)"
+            policies_sha256="$(printf '%s' "${policies}" | canonical_sha256)"
+            service_spec_sha256="$(jq -S -c '.spec' <<<"${service}" | sha256sum | awk '{print $1}')"
+            jq -n               --argjson deployment "${deployment}"               --argjson replicaSets "${replica_sets}"               --argjson pods "${pods}"               --argjson endpointSlices "${slices}"               --argjson networkPolicies "${policies}"               --arg deploymentSha256 "${deployment_sha256}"               --arg replicaSetsSha256 "${replica_sets_sha256}"               --arg podsSha256 "${pods_sha256}"               --arg serviceSha256 "${service_sha256}"               --arg endpointSlicesSha256 "${slices_sha256}"               --arg networkPoliciesSha256 "${policies_sha256}"               --arg serviceSpecSha256 "${service_spec_sha256}"               --arg activeUid "${active_uid}"               --arg revision "${revision}"               --arg image "${image}"               --arg source "${source}"               --arg digest "${image##*@}"               '{
+                fullSnapshotSha256: {
+                  deployment: $deploymentSha256,
+                  replicaSets: $replicaSetsSha256,
+                  pods: $podsSha256,
+                  service: $serviceSha256,
+                  endpointSlices: $endpointSlicesSha256,
+                  networkPolicies: $networkPoliciesSha256
+                },
+                deployment: {
+                  name: $deployment.metadata.name,
+                  generation: $deployment.metadata.generation,
+                  observedGeneration: $deployment.status.observedGeneration,
+                  revision: $revision,
+                  desiredReplicas: $deployment.spec.replicas,
+                  updatedReplicas: ($deployment.status.updatedReplicas // 0),
+                  readyReplicas: ($deployment.status.readyReplicas // 0),
+                  availableReplicas: ($deployment.status.availableReplicas // 0),
+                  image: $image,
+                  sourceSha: $source
+                },
+                replicaSets: {
+                  ownedCount: ([$replicaSets.items[] | select(any(.metadata.ownerReferences[]?; .controller == true and .uid == $deployment.metadata.uid))] | length),
+                  activeCount: ([$replicaSets.items[] | select(.metadata.uid == $activeUid)] | length),
+                  activeRevision: $revision
+                },
+                pods: {
+                  activeOwnedCount: ([$pods.items[] | select(.metadata.deletionTimestamp == null) | select(any(.metadata.ownerReferences[]?; .controller == true and .uid == $activeUid))] | length),
+                  runningReadyCount: ([$pods.items[] | select(.metadata.deletionTimestamp == null) | select(any(.metadata.ownerReferences[]?; .controller == true and .uid == $activeUid)) | select(.status.phase == "Running" and any(.status.conditions[]?; .type == "Ready" and .status == "True"))] | length),
+                  digestMatchCount: ([$pods.items[] | select(.metadata.deletionTimestamp == null) | select(any(.metadata.ownerReferences[]?; .controller == true and .uid == $activeUid)) | select(.status.containerStatuses[0].imageID | endswith("@" + $digest))] | length)
+                },
+                service: {
+                  name: "greatfallstoolbus-org",
+                  specSha256: $serviceSpecSha256
+                },
+                endpointSlices: {
+                  sliceCount: ($endpointSlices.items | length),
+                  endpointCount: ([$endpointSlices.items[].endpoints[]?] | length),
+                  readyEndpointCount: ([$endpointSlices.items[].endpoints[]? | select(.conditions.ready == true and ((.conditions.terminating // false) == false))] | length),
+                  targetPodCount: ([$endpointSlices.items[].endpoints[]?.targetRef.uid] | unique | length),
+                  portTuples: ([$endpointSlices.items[].ports[]? | {name:(.name // null),port,protocol:(.protocol // "TCP")}] | unique | sort_by([.name,.port,.protocol]))
+                },
+                networkPolicies: {
+                  names: ([$networkPolicies.items[].metadata.name] | sort),
+                  semanticSha256: "301eecb4ad234fdd7258ac7351a5a563e1b53cb250bce6f51a68824854b28220"
+                }
+              }' > "${out}"
           )
           access_proof() (
             set -euo pipefail
@@ -304,7 +360,8 @@ jobs:
             test "${#locations[@]}" = 1
             location="${locations[0]}"
             [[ "${location}" == https://sulliwood.cloudflareaccess.com/cdn-cgi/access/login/greatfallstoolbus.org?* ]]
-            jq -n --arg status "${status}" --arg location "${location}" '{status:($status|tonumber),location:$location,intercepted:true}' > "${RUNNER_TEMP}/access.json"
+            location_sha256="$(printf '%s' "${location}" | sha256sum | awk '{print $1}')"
+            jq -n --arg status "${status}" --arg locationSha256 "${location_sha256}" '{status:($status|tonumber),locationSha256:$locationSha256,intercepted:true}' > "${RUNNER_TEMP}/access.json"
           )
           write_receipt() {
             local pre_json post_json rollback_json access_json
@@ -312,7 +369,7 @@ jobs:
             post_json="$(cat "${RUNNER_TEMP}/post.json" 2>/dev/null || printf '{}')"
             rollback_json="$(cat "${RUNNER_TEMP}/rollback.json" 2>/dev/null || printf '{}')"
             access_json="$(cat "${RUNNER_TEMP}/access.json" 2>/dev/null || printf '{"intercepted":false}')"
-            jq -n --arg carrier "${GITHUB_SHA}" --arg base "${REVIEWED_BASE_SHA}" --arg prHead "${PR_HEAD_SHA}" --arg classification "${classification}" --arg apply "${apply_status}" --arg rollbackStatus "${rollback_status}" --arg proof "${proof_status}" --argjson spent "${SPENT}" --argjson forwardAttempted "${forward_attempted}" --argjson rollbackAttempted "${rollback_attempted}" --argjson pre "${pre_json}" --argjson post "${post_json}" --argjson rollback "${rollback_json}" --argjson access "${access_json}" '{schema:"gftb-web-generation-40-parity/v2",authority:{reviewedBaseSha:$base,carrierMainSha:$carrier,pr:{number:141,headSha:$prHead,mergeMethod:"squash"},meta:{mainSha:"45dc15a1cfa8607f58b2614c2bf5225c022b3f63",adrBlob:"ed0fd327b75cbca7cc60fa343f6399c576772d35"},ruleset:{id:20930684,requiredStatus:"validate",strict:true,signatures:true}},run:{id:env.GITHUB_RUN_ID,attempt:(env.GITHUB_RUN_ATTEMPT|tonumber),url:(env.GITHUB_SERVER_URL+"/"+env.GITHUB_REPOSITORY+"/actions/runs/"+env.GITHUB_RUN_ID),environment:"web-apply"},saved:{forwardRenderSha256:"2244dedfa372c52fb32a891c8e6c6e547ef4bdbc64aa948a259fd495746c29bf",reverseRenderSha256:"d70d8cab4b96fd4390f8c3c843e747a66e8c8681cd6b99e18de4fc4196e3b7ca",derivation:{run:33329089385,artifact:9737130836,digest:"sha256:a2cc2486ea98f524698bdbd3b4c7c7c97295a55b14290aacb2b75ea96a0c2185"}},spent:{terminalBeforeRun:$spent},classification:$classification,prestate:$pre,mutation:{forwardAttempted:$forwardAttempted,applyOutcome:$apply,rollbackAttempted:$rollbackAttempted,rollbackOutcome:$rollbackStatus,rollbackProof:$rollback},poststate:$post,observations:{proofStatus:$proof,observerIndependent:false,credentialClass:"bootstrap web-apply readback",anonymousAccess:$access,authenticatedServedContent:"pending_operator_look"}}' > "${receipt}"
+            jq -n --arg carrier "${GITHUB_SHA}" --arg base "${REVIEWED_BASE_SHA}" --arg prHead "${PR_HEAD_SHA}" --arg classification "${classification}" --arg apply "${apply_status}" --arg rollbackStatus "${rollback_status}" --arg proof "${proof_status}" --argjson spent "${SPENT}" --argjson forwardAttempted "${forward_attempted}" --argjson rollbackAttempted "${rollback_attempted}" --argjson pre "${pre_json}" --argjson post "${post_json}" --argjson rollback "${rollback_json}" --argjson access "${access_json}" '{schema:"gftb-web-generation-40-parity/v2",authority:{reviewedBaseSha:$base,carrierMainSha:$carrier,pr:{number:142,headSha:$prHead,mergeMethod:"squash"},meta:{mainSha:"45dc15a1cfa8607f58b2614c2bf5225c022b3f63",adrBlob:"ed0fd327b75cbca7cc60fa343f6399c576772d35"},ruleset:{id:20930684,requiredStatus:"validate",strict:true,signatures:true}},run:{id:env.GITHUB_RUN_ID,attempt:(env.GITHUB_RUN_ATTEMPT|tonumber),url:(env.GITHUB_SERVER_URL+"/"+env.GITHUB_REPOSITORY+"/actions/runs/"+env.GITHUB_RUN_ID),environment:"web-apply"},saved:{forwardRenderSha256:"2244dedfa372c52fb32a891c8e6c6e547ef4bdbc64aa948a259fd495746c29bf",reverseRenderSha256:"d70d8cab4b96fd4390f8c3c843e747a66e8c8681cd6b99e18de4fc4196e3b7ca",derivation:{run:33329089385,artifact:9737130836,digest:"sha256:a2cc2486ea98f524698bdbd3b4c7c7c97295a55b14290aacb2b75ea96a0c2185"}},spent:{terminalBeforeRun:$spent},classification:$classification,prestate:$pre,mutation:{forwardAttempted:$forwardAttempted,applyOutcome:$apply,rollbackAttempted:$rollbackAttempted,rollbackOutcome:$rollbackStatus,rollbackProof:$rollback},poststate:$post,observations:{proofStatus:$proof,observerIndependent:false,credentialClass:"bootstrap web-apply readback",anonymousAccess:$access,authenticatedServedContent:"pending_operator_look"}}' > "${receipt}"
             chmod 600 "${receipt}"
           }
 
@@ -409,12 +466,16 @@ jobs:
           test "${{ steps.reconcile.outputs.terminal-rc }}" = 0
           test "${{ steps.reconcile.outputs.proof-status }}" = succeeded
 
-      - name: Remove exact web-apply credential
+      - name: Remove exact protected and observation material
         if: always()
         run: |
           set -euo pipefail
           test -n "${RUNNER_TEMP}"
-          kubeconfig="${RUNNER_TEMP}/gftb-web-generation-40.kubeconfig"
-          test "${kubeconfig}" = "${RUNNER_TEMP}/gftb-web-generation-40.kubeconfig"
-          rm -f -- "${RUNNER_TEMP}/gftb-web-generation-40.kubeconfig"
-          test ! -e "${RUNNER_TEMP}/gftb-web-generation-40.kubeconfig"
+          for name in             gftb-web-generation-40.kubeconfig             gftb-web-generation-40-receipt.json             pre.json post.json rollback.json access.json access.headers access.body; do
+            target="${RUNNER_TEMP}/${name}"
+            [[ "${target}" == "${RUNNER_TEMP}/"* ]]
+            test ! -L "${target}"
+            if test -e "${target}"; then test -f "${target}"; fi
+            rm -f -- "${target}"
+            test ! -e "${target}"
+          done
