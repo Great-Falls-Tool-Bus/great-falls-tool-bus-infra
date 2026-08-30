@@ -127,7 +127,7 @@ operator must supply the reviewed ceremony. The Secret must carry:
 `_member-db-cluster-prerequisites` rejects missing/wrong keys, annotations,
 empty proof, or reuse of the root key pair.
 
-## Step C — credentials## Step C — credentials
+## Step C — credentials
 
 **C1 — the owner credential is not yours to make.** CNPG generates
 `gftb-member-db-app` at bootstrap with the `gftb_migrator` password. No
@@ -151,8 +151,8 @@ restore apply, restore teardown, and migration apply) pass through
 `_reviewed-clean-main`, which requires
 the current branch to be `main`, a clean worktree, and `HEAD` to equal the
 verified `origin/main` tip — so none of them can run from this PR's branch,
-only after it lands. `member-db-stack-server-dry-run` (used by
-`member-db-stack-validate` and the dry-run below) does **not** carry that
+only after it lands. `member-db-stack-server-dry-run` (which depends on
+`member-db-stack-validate` and is the read-only dry-run below) does **not** carry that
 requirement, so Phase 3's read-only proof works from the branch today; Phase
 4 is gated on merging #118 first.
 
@@ -161,21 +161,26 @@ just member-db-stack-validate
 export MEMBER_DB_APPLY_KUBECONFIG=/path/to/member-db-apply.kubeconfig
 just member-db-stack-server-dry-run
 
+# Bind the reviewed declaration receipt to a fresh live API /32 readback before
+# the first NetworkPolicy mutation, not merely before Cluster creation.
+export MEMBER_DB_API_EGRESS_SOURCE_SHA=<current-reviewed-blahaj-sha>
+
 # Stage 1: root Secret already provisioned.
 GFTB_APPLY_CONFIRM=apply just member-db-backup-store-apply
 GFTB_APPLY_CONFIRM=apply just member-db-backup-bucket-create
 
 # Provision and prove the distinct bucket-scoped client credential (B2), then:
-export MEMBER_DB_API_EGRESS_SOURCE_SHA=<current-reviewed-blahaj-sha>
 GFTB_APPLY_CONFIRM=apply just member-db-cluster-apply
 ```
 
-Every cluster/restore mutation reads the current `default/kubernetes`
-Endpoints and fails unless its exact three /32s equal the reviewed manifest; the
-source SHA records the canonical declaration reviewed with that readback. The
+Every policy, cluster, and restore-apply mutation that depends on API egress
+runs `_member-db-current-api-egress-prerequisite` first. It reads the current
+`default/kubernetes` Endpoints and fails unless each named policy independently
+equals that exact three-/32 set; the source SHA records the canonical
+declaration reviewed with that readback. The
 historical `blahaj@72b6c2d9...` snapshot is alignment evidence only.
 
-`member-db-stack-apply` is a thin alias`member-db-stack-apply` is a thin alias over three ordered steps — run it
+`member-db-stack-apply` is a thin alias over three ordered steps — run it
 directly, or run the three yourself to watch each one land:
 
 1. `member-db-backup-store-apply` — applies ONLY the NetworkPolicy family and
@@ -215,10 +220,18 @@ Check all four, and record them as release evidence:
 
 **S3 — prove the role separation.** Connect as `gftb_app` and confirm
 `CREATE TABLE` is rejected and `INSERT` on a migrator-created table is accepted.
-This is the infra-side half of S1's acceptance row. The merged app carrier at
+This is the infra-side half of S1's acceptance row. The currently pinned,
+published app carrier at
 `af60fcd7539a4beff6f24e1a95eb11160df7c166` holds the corresponding
 PostgreSQL integration proof and refuses a runtime role with `SUPERUSER` or
-`BYPASSRLS`. This cluster supplies the managed LOGIN credential by Secret
+`BYPASSRLS`. It is not the final production carrier: app main is now signed
+`3d6909c242dbd847cf044730f74347a69eeaae80`, and app PR #218 at signed
+`dd12f0a1acedc8fb39cd3b63dd3ffc542c4ce3f4` changes the package/hydration
+graph. PR #121's repaired signed head
+`ed6567986625ca9c2899d71254e10a40449a4c7d` already uses the exact
+`app.kubernetes.io/part-of=great-falls-tool-bus` identity admitted here. After
+#218 lands and publishes, this migrator pin and #121's web/worker pins must
+advance together to that one successor digest before Ready/apply. This cluster supplies the managed LOGIN credential by Secret
 name; no password or tenant identity is declared here.
 
 ## Step B4 — backup verification (the RPO/RTO evidence)
@@ -309,10 +322,12 @@ separate prevents primary↔restore cross-admission.
    GFTB_APPLY_CONFIRM=apply just member-db-restore-rehearsal-apply
    ```
 
-   For a specific point-in-time target rather than latest-available, add
-   `spec.bootstrap.recovery.recoveryTarget.targetTime` to an operator-local
-   copy of `restore-cluster.template.yaml` before running the recipe above —
-   never commit a real timestamp to the reviewed template.
+   This exact recipe consumes the checked-in template path and therefore proves
+   latest-available recovery only. A point-in-time target needs its own reviewed,
+   exact template/recipe carrier with
+   `spec.bootstrap.recovery.recoveryTarget.targetTime` and the same branch,
+   confirmation, absence, and fresh-UID gates; an operator-local copy is not
+   consumed by this recipe.
 3. Verify: row counts match the source at the target time, and the migration
    ledger table is intact.
 4. Note the end time. **Total must be under four hours**, including the object
@@ -324,9 +339,10 @@ separate prevents primary↔restore cross-admission.
    GFTB_APPLY_CONFIRM=apply just member-db-restore-rehearsal-teardown
    ```
 
-   `openebs-bumble-postgresql-retain` means the two PVCs' underlying PVs go
-   to `Released`, not deleted, when the Cluster is removed — the recipe
-   prints them so nothing is orphaned silently. Reclaiming a `Released` PV
+   The teardown captures exactly the fresh Cluster's two owned PVC/PV pairs
+   before deletion, waits for those PVCs to disappear and those exact retained
+   PVs to reach `Released`, rechecks each claimRef, and prints only those PVs.
+   It refuses a cluster whose exact owned claim inventory cannot be proved. Reclaiming a `Released` PV
    for reuse (`kubectl patch pv … -p '{"spec":{"claimRef":null}}'`) is
    tracked as a follow-up (P-2); for a rehearsal this is expected and fine to
    leave Released.

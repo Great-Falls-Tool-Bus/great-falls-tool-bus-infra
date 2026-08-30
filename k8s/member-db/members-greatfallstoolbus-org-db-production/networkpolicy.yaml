@@ -163,10 +163,11 @@ spec:
 # below align with the reviewed backend-address snapshot in
 # tinyland-inc/blahaj@72b6c2d9c43894214f09c0f3f96586f8e0025337,
 # config/rke2-endpoint-backing.json (.10/.11/.12). That commit is a historical
-# declaration, not current authority: every attended cluster/restore apply
-# fails closed until MEMBER_DB_API_EGRESS_CIDRS_CURRENT and
-# MEMBER_DB_API_EGRESS_SOURCE_SHA attest the current canonical declaration or
-# current readback and exactly match these bytes.
+# declaration, not current authority: the separately receipted
+# _member-db-current-api-egress-prerequisite reads default/kubernetes live,
+# requires each named policy to equal the same exact current three-/32 set, and
+# records MEMBER_DB_API_EGRESS_SOURCE_SHA for the declaration reviewed with that
+# readback. The first policy mutation depends on that prerequisite.
 #
 # There is deliberately NO 0.0.0.0/0 and no bare `- ports:` rule: the backup
 # leg is scoped to the in-namespace rustfs pod, not to "anything on 9000".

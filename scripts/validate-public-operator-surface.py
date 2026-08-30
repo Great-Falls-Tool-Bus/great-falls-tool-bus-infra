@@ -337,7 +337,7 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "49a0e25c1cc8c8ff", "b15096271b4271a4", "fe1d38e06e5abf79", "905f0b0d50110b7a"
     ),
     "_reviewed-clean-main": _receipt(
-        "fe9e048cffbba33b", "36e25d7e15eff9f0", "2ef7dca85552e144", "3b2bf9865a24d32e"
+        "fd8c7ccb7c518246", "a962283874194037", "ee6e7e0d5dbfd608", "70bfb9635e76e35a"
     ),
     "_reviewed-implementation-core": _receipt(
         "180f8edd55babb51", "43e15dac40bbad2a", "bffe444ff6221c04", "7c64836ae0c2cfc6"
@@ -404,8 +404,12 @@ ATTENDED_RECIPE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     "_member-db-backup-root-prerequisite": (
         "_member-db-kubeconfig-input",
     ),
+    "_member-db-current-api-egress-prerequisite": (
+        "_member-db-kubeconfig-input",
+    ),
     "_member-db-cluster-prerequisites": (
         "_member-db-backup-root-prerequisite",
+        "_member-db-current-api-egress-prerequisite",
     ),
     "_member-db-platform-image-pull-prerequisite": (
         "_member-db-kubeconfig-input",
@@ -426,6 +430,7 @@ ATTENDED_RECIPE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     "member-db-backup-store-apply": (
         "member-db-stack-server-dry-run",
         "_member-db-backup-root-prerequisite",
+        "_member-db-current-api-egress-prerequisite",
         "_reviewed-clean-main",
         "_operator-apply-confirm",
     ),
@@ -499,8 +504,11 @@ ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     "_member-db-backup-root-prerequisite": _receipt(
         "7684e57c5a3da818", "fd8d350d27527737", "fca8c2c14f53f4d0", "329f91ee42dd5f72"
     ),
+    "_member-db-current-api-egress-prerequisite": _receipt(
+        "26b7bb2660a40012", "fe7671e5dd9c1ae4", "d178995c1eedd43b", "47c606df6357cc62"
+    ),
     "_member-db-cluster-prerequisites": _receipt(
-        "9fc4eba3b0851646", "ef38c17cf6588198", "5fc9197096f1b86e", "abb06dfabdfffdf0"
+        "50f5130424a3e947", "974cf955d4b989a7", "ec9c7ba8b8b45e52", "5d80e55b00440d3f"
     ),
     "_member-db-platform-image-pull-prerequisite": _receipt(
         "673466b3b6c2508b", "af108488925dfb5f", "8c5ebb4fd9fe63a5", "e3d3b33fe3a14206"
@@ -550,12 +558,12 @@ ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     # member-db-restore-rehearsal-apply: the RTO<=4h acceptance row's only
     #   proof path (B-5). Pinned so the wait-for-Ready cannot be dropped.
     "member-db-restore-rehearsal-apply": _receipt(
-        "46f282010a52a101", "20a2b346cdbf7b1a", "ca103d9b4b9caec2", "bfc8640d0fcc47b1"
+        "0f0babab2abd9bcd", "c9377cb844125d15", "796ccb2a3dec878d", "8b6a7f5716d42e37"
     ),
     # member-db-restore-rehearsal-teardown: pinned so the Released-PV printout
     #   (the minimum "don't orphan silently" step) cannot be dropped.
     "member-db-restore-rehearsal-teardown": _receipt(
-        "351a1db08e4e649a", "ab5c5f27475d4675", "8ac09460d67e910d", "a60048448b59b59e"
+        "f1b71fcba09f905b", "359c9e486f7149eb", "cc76832d7e9ab370", "4cc7650a4a3d7dd9"
     ),
     # member-db-migrate-render: emits the exact Git-pinned Job carrier. Both the
     #   dry-run and apply go through it; no runtime image input can alter bytes.
@@ -584,6 +592,7 @@ ATTENDED_OPERATOR_LOCAL_ROOTS = {
     # excluded on purpose so `check-hosted` stays hosted-runnable.
     "_member-db-kubeconfig-input",
     "_member-db-backup-root-prerequisite",
+    "_member-db-current-api-egress-prerequisite",
     "_member-db-cluster-prerequisites",
     "_member-db-platform-image-pull-prerequisite",
     "member-db-stack-server-dry-run",
@@ -3684,6 +3693,7 @@ def install_web_release_fixture_mocks(
         "chmod",
         "env",
         "grep",
+        "gpg",
         "jq",
         "mkdir",
         "mktemp",
@@ -4852,6 +4862,7 @@ def install_web_release_fixture_mocks(
         materialize(
             """
             #!__FIXTURE_PYTHON__
+            import os
             import pathlib
             import sys
 
@@ -4874,18 +4885,50 @@ def install_web_release_fixture_mocks(
                 print("main")
             elif args in (["status", "--porcelain"], ["ls-files", "-v"]):
                 pass
+            elif args == ["config", "--local", "--get", "remote.origin.url"]:
+                print(canonical)
             elif args == ["remote", "get-url", "origin"]:
                 print(canonical)
             elif args == [
                 "show-ref", "--verify", "--quiet", "refs/remotes/origin/main"
             ]:
                 pass
-            elif args[:2] == ["ls-remote", "--exit-code"] and args[3:] == [
-                "refs/heads/main"
-            ]:
+            elif (
+                len(args) == 6
+                and args[0] == "-C"
+                and args[2:4] == ["ls-remote", "--exit-code"]
+                and args[4:] == [canonical, "refs/heads/main"]
+            ):
+                required = {
+                    "GIT_CONFIG_NOSYSTEM": "1",
+                    "GIT_CONFIG_GLOBAL": "/dev/null",
+                    "GIT_TERMINAL_PROMPT": "0",
+                }
+                if any(os.environ.get(key) != value for key, value in required.items()):
+                    raise SystemExit("mock git requires config-empty remote lookup")
+                if "HOME" in os.environ or any(
+                    key.startswith("GIT_CONFIG_") and key not in required
+                    for key in os.environ
+                ):
+                    raise SystemExit("mock git rejected inherited config steering")
                 print(head + "\\trefs/heads/main")
-            elif args == ["verify-commit", head]:
-                pass
+            elif (
+                len(args) == 8
+                and args[:2] == ["-c", "gpg.format=openpgp"]
+                and args[2] == "-c"
+                and args[3].startswith("gpg.program=")
+                and args[4] == "-c"
+                and args[5].startswith("gpg.openpgp.program=")
+                and args[6:] == ["verify-commit", head]
+            ):
+                gpg_program = args[3].split("=", 1)[1]
+                openpgp_program = args[5].split("=", 1)[1]
+                if (
+                    gpg_program != openpgp_program
+                    or not pathlib.Path(gpg_program).is_absolute()
+                    or not pathlib.Path(gpg_program).is_file()
+                ):
+                    raise SystemExit("mock git requires one exact absolute OpenPGP verifier")
             else:
                 raise SystemExit(
                     "mock git rejected unexpected argv: " + " ".join(sys.argv[1:])
@@ -7281,6 +7324,36 @@ def self_test() -> None:
             "    true",
             "ALTCHA temporary Secret cleanup removal",
         ),
+        (
+            "_member-db-cluster-prerequisites",
+            "    set +x",
+            "    true",
+            "member-db Secret read xtrace hardening removal",
+        ),
+        (
+            "_member-db-current-api-egress-prerequisite",
+            '    jq -e --argjson current "${current_api_cidrs}" \'length == 2 and all(.[]; .cidrs == $current)\' <<<"${expected_api_sets}" >/dev/null ||',
+            "    true ||",
+            "member-db per-policy API equality bypass",
+        ),
+        (
+            "member-db-restore-rehearsal-apply",
+            '    [[ -z "${existing}" ]] ||',
+            "    true ||",
+            "restore rehearsal absence gate bypass",
+        ),
+        (
+            "member-db-restore-rehearsal-apply",
+            '    [[ "${ready_uid}" == "${created_uid}" ]] ||',
+            "    true ||",
+            "restore rehearsal fresh-UID gate bypass",
+        ),
+        (
+            "member-db-restore-rehearsal-teardown",
+            '      kubectl --kubeconfig "${kc}" wait "pv/${pv_name}" --for=jsonpath=\'{.status.phase}\'=Released --timeout=300s',
+            "      true",
+            "restore rehearsal exact PV transition wait bypass",
+        ),
     )
     for name, old, new, label in attended_body_mutations:
         mutated = mutate_recipe_body(justfile, name, old, new, label)
@@ -7384,8 +7457,8 @@ def self_test() -> None:
     body_mutations = (
         (
             "_reviewed-clean-main",
-            '    git verify-commit "${head_sha}" >/dev/null',
-            '    true # git verify-commit "${head_sha}" >/dev/null',
+            '    "${git_bin}" -c gpg.format=openpgp -c "gpg.program=${gpg_bin}" -c "gpg.openpgp.program=${gpg_bin}" verify-commit "${head_sha}" >/dev/null',
+            '    true # explicit OpenPGP verification bypassed',
             "comment-spoofed commit verification",
         ),
         (

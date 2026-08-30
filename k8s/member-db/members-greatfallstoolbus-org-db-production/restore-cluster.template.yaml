@@ -24,10 +24,10 @@
 # POINT-IN-TIME TARGET. Left unset here: CNPG recovers to the latest
 # available WAL when `recoveryTarget` is absent, which is both the common
 # case for an RTO rehearsal and the simplest thing to time honestly. An
-# operator who wants a specific `targetTime` adds
-# `bootstrap.recovery.recoveryTarget.targetTime` to their own operator-local
-# copy before applying — this stays a reviewed template, never a place a
-# real timestamp needs to be committed.
+# The exact rehearsal recipe consumes this checked-in path, so it cannot apply
+# an operator-local copy. A specific `targetTime` requires a separate reviewed,
+# exact template/recipe carrier with the same absence, fresh-UID, branch, and
+# confirmation gates; this carrier proves latest-available recovery only.
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:

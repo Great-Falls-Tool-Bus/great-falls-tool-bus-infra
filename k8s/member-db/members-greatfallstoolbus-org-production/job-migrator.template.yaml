@@ -14,6 +14,16 @@
 # Git-pinned do NOT mean applied, running, or served. Only the attended apply
 # and post-apply readback can establish those later states.
 #
+# SUCCESSOR REPIN REQUIRED BEFORE READY/APPLY. App main is now signed
+# 3d6909c242dbd847cf044730f74347a69eeaae80, and app PR #218 at signed
+# dd12f0a1acedc8fb39cd3b63dd3ffc542c4ce3f4 changes the package/hydration
+# graph but has not yet produced this carrier's successor publisher receipt.
+# PR #121's repaired signed head ed6567986625ca9c2899d71254e10a40449a4c7d
+# already carries the exact app.kubernetes.io/part-of=great-falls-tool-bus
+# identity this database policy admits. After #218 lands and publishes, replace
+# source/run/artifact/image together and advance #121 web/worker to the same
+# digest before production integration.
+#
 # WHY THIS IS A TEMPLATE AND NOT A STACK MEMBER
 #
 #   1. The reviewed image is part of this immutable release carrier. There is

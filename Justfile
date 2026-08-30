@@ -1502,14 +1502,15 @@ arc-enrollment-plan: enrollment-preflight arc-plan
 # The remote readback prevents a stale local origin/main ref from becoming apply
 # authority.
 _reviewed-clean-main:
-    #!/usr/bin/env bash
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
+    set +x
     set -euo pipefail
     [[ "$(git branch --show-current)" == "main" ]] || { echo "Guarded ARC operation requires the main branch" >&2; exit 2; }
     [[ -z "$(git status --porcelain)" ]] || { echo "Guarded ARC operation requires a clean worktree" >&2; exit 2; }
     index_flags="$(git ls-files -v | awk '$1 != "H"')"
     [[ -z "${index_flags}" ]] || { echo "Guarded ARC operation refuses assume-unchanged, skip-worktree, or non-cached index flags: ${index_flags}" >&2; exit 2; }
     canonical_remote="https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git"
-    origin_url="$(git remote get-url origin)"
+    origin_url="$(git config --local --get remote.origin.url)"
     case "${origin_url}" in
       https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra|https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git|git@github.com:Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git) ;;
       *) echo "Guarded ARC operation origin is not the canonical GFTB infra repository: ${origin_url}" >&2; exit 2 ;;
@@ -1518,10 +1519,32 @@ _reviewed-clean-main:
     head_sha="$(git rev-parse HEAD)"
     origin_sha="$(git rev-parse origin/main)"
     [[ "${head_sha}" == "${origin_sha}" ]] || { echo "Guarded ARC operation HEAD ${head_sha} is not origin/main ${origin_sha}" >&2; exit 2; }
-    remote_sha="$(git ls-remote --exit-code "${canonical_remote}" refs/heads/main | awk 'NR == 1 { print $1 }')"
-    [[ "${remote_sha}" =~ ^[0-9a-f]{40}$ ]] || { echo "Could not resolve the current remote main SHA" >&2; exit 2; }
+    git_bin="$(command -v git)"
+    gpg_bin="$(command -v gpg)"
+    env_bin="$(command -v env)"
+    [[ -n "${git_bin}" && -x "${git_bin}" ]] || { echo "Guarded ARC operation requires an executable git" >&2; exit 2; }
+    [[ -n "${gpg_bin}" && -x "${gpg_bin}" ]] || { echo "Guarded ARC operation requires an executable OpenPGP verifier" >&2; exit 2; }
+    [[ -n "${env_bin}" && -x "${env_bin}" ]] || { echo "Guarded ARC operation requires an executable env" >&2; exit 2; }
+    remote_probe_dir="$(mktemp -d "${TMPDIR:-/tmp}/gftb-infra-remote.XXXXXX")"
+    [[ -n "${remote_probe_dir}" && -d "${remote_probe_dir}" ]] || { echo "Could not create the bounded remote-verification directory" >&2; exit 2; }
+    cleanup_remote_probe() {
+      if [[ -n "${remote_probe_dir:-}" && -d "${remote_probe_dir}" ]]; then
+        rmdir -- "${remote_probe_dir}"
+      fi
+    }
+    trap cleanup_remote_probe EXIT
+    clean_git_env=("${env_bin}" -i GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0)
+    [[ -z "${SSL_CERT_FILE:-}" ]] || clean_git_env+=("SSL_CERT_FILE=${SSL_CERT_FILE}")
+    [[ -z "${NIX_SSL_CERT_FILE:-}" ]] || clean_git_env+=("NIX_SSL_CERT_FILE=${NIX_SSL_CERT_FILE}")
+    remote_output="$("${clean_git_env[@]}" "${git_bin}" -C "${remote_probe_dir}" ls-remote --exit-code "${canonical_remote}" refs/heads/main)"
+    [[ "${remote_output}" != *$'\n'* ]] || { echo "Canonical remote main lookup returned more than one ref" >&2; exit 2; }
+    IFS=$'\t' read -r remote_sha remote_ref remote_extra <<<"${remote_output}"
+    [[ -z "${remote_extra:-}" && "${remote_ref:-}" == "refs/heads/main" && "${remote_sha:-}" =~ ^[0-9a-f]{40}$ ]] || { echo "Could not resolve exactly one current canonical remote main SHA" >&2; exit 2; }
     [[ "${head_sha}" == "${remote_sha}" ]] || { echo "Guarded ARC operation HEAD ${head_sha} is not current remote main ${remote_sha}" >&2; exit 2; }
-    git verify-commit "${head_sha}" >/dev/null
+    cleanup_remote_probe
+    remote_probe_dir=""
+    trap - EXIT
+    "${git_bin}" -c gpg.format=openpgp -c "gpg.program=${gpg_bin}" -c "gpg.openpgp.program=${gpg_bin}" verify-commit "${head_sha}" >/dev/null
     echo "reviewed infra carrier: ${head_sha}"
 
 # Enrollment and GitHub App Secret materialization use the implementation-role
@@ -2473,15 +2496,63 @@ _member-db-backup-root-prerequisite: _member-db-kubeconfig-input
     [[ "${keys}" == $'RUSTFS_ACCESS_KEY\nRUSTFS_SECRET_KEY' ]] || { echo "${name} must carry exactly RUSTFS_ACCESS_KEY and RUSTFS_SECRET_KEY" >&2; exit 2; }
     echo "member-db backup-store root prerequisite passed by name/type/key inventory (values not printed)"
 
-# The CNPG client credential is separately pre-provisioned and least-privilege.
-# Its non-secret proof annotations bind bucket scope; root-key reuse is rejected.
-# The checked-in API /32s align with historical blahaj
-# 72b6c2d9c43894214f09c0f3f96586f8e0025337, never with inherited live truth.
-_member-db-cluster-prerequisites: _member-db-backup-root-prerequisite
+_member-db-current-api-egress-prerequisite: _member-db-kubeconfig-input
     #!/usr/bin/env bash
     set -euo pipefail
     : "${MEMBER_DB_API_EGRESS_SOURCE_SHA:?Set MEMBER_DB_API_EGRESS_SOURCE_SHA to the 40-hex canonical declaration source SHA reviewed with this current readback}"
     [[ "${MEMBER_DB_API_EGRESS_SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]] || { echo "MEMBER_DB_API_EGRESS_SOURCE_SHA must be 40 lowercase hex" >&2; exit 2; }
+    kc="${MEMBER_DB_APPLY_KUBECONFIG}"
+    if ! expected_api_sets="$(yq eval-all -o=json -I=0 '.' {{ member_db_stack_dir }}/networkpolicy.yaml | jq -e -c -s '
+      [
+        .[]
+        | select(.kind == "NetworkPolicy")
+        | select(.metadata.name == "allow-postgres-egress" or .metadata.name == "allow-restore-postgres-egress")
+        | {
+            name: .metadata.name,
+            cidrs: [
+              .spec.egress[]
+              | select(any(.ports[]?; .protocol == "TCP" and .port == 6443))
+              | .to[]?
+              | select(has("ipBlock"))
+              | .ipBlock.cidr
+            ] | unique | sort
+          }
+      ]
+      | sort_by(.name)
+      | if (
+          length == 2
+          and [.[].name] == ["allow-postgres-egress", "allow-restore-postgres-egress"]
+          and all(.[].cidrs; length == 3)
+        )
+        then .
+        else error("both member-db API egress policies must carry one exact three-/32 set")
+        end
+    ')"; then
+      echo "member-db API egress manifest decode/filter failed closed" >&2
+      exit 1
+    fi
+    if ! current_api_cidrs="$(kubectl --kubeconfig "${kc}" --namespace default get endpoints kubernetes -o json | jq -e -c '
+      [.subsets[]?.addresses[]?.ip + "/32"]
+      | unique | sort
+      | if length == 3 and all(.[]; test("^([0-9]{1,3}\\.){3}[0-9]{1,3}/32$"))
+        then .
+        else error("current kubernetes endpoints must resolve to exactly three /32 CIDRs")
+        end
+    ')"; then
+      echo "current kubernetes API endpoint readback failed closed" >&2
+      exit 2
+    fi
+    jq -e --argjson current "${current_api_cidrs}" 'length == 2 and all(.[]; .cidrs == $current)' <<<"${expected_api_sets}" >/dev/null || { echo "each checked-in member-db API /32 set must independently match the current attested set" >&2; exit 2; }
+    echo "member-db API egress prerequisite passed for current source ${MEMBER_DB_API_EGRESS_SOURCE_SHA}"
+
+# The API gate above is deliberately independent of Secret custody so the first
+# NetworkPolicy mutation cannot apply a stale /32. The CNPG client credential is
+# separately pre-provisioned and least-privilege; its non-secret annotations bind
+# bucket scope and the value comparison below rejects root-key reuse.
+_member-db-cluster-prerequisites: _member-db-backup-root-prerequisite _member-db-current-api-egress-prerequisite
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
+    set +x
+    set -euo pipefail
     kc="${MEMBER_DB_APPLY_KUBECONFIG}"
     ns="{{ member_db_ns }}"
     scoped="gftb-member-db-backup-s3"
@@ -2503,34 +2574,7 @@ _member-db-cluster-prerequisites: _member-db-backup-root-prerequisite
     [[ -n "${root_access}" && -n "${root_secret}" && -n "${scoped_access}" && -n "${scoped_secret}" ]] || { echo "object-store credentials must have nonempty data" >&2; exit 2; }
     [[ "${root_access}" != "${scoped_access}" && "${root_secret}" != "${scoped_secret}" ]] || { echo "bucket-scoped CNPG credential must be distinct from rustfs root authority" >&2; exit 2; }
     unset root_access root_secret scoped_access scoped_secret
-    if ! expected_api_cidrs="$(yq eval-all -o=json -I=0 '.' {{ member_db_stack_dir }}/networkpolicy.yaml | jq -e -c -s '
-      [
-        .[]
-        | select(.kind == "NetworkPolicy")
-        | select(.metadata.name == "allow-postgres-egress" or .metadata.name == "allow-restore-postgres-egress")
-        | .spec.egress[]
-        | select(any(.ports[]?; .protocol == "TCP" and .port == 6443))
-        | .to[]?
-        | select(has("ipBlock"))
-        | .ipBlock.cidr
-      ] | unique | sort
-    ')"; then
-      echo "member-db API egress manifest decode/filter failed closed" >&2
-      exit 1
-    fi
-    if ! current_api_cidrs="$(kubectl --kubeconfig "${kc}" --namespace default get endpoints kubernetes -o json | jq -e -c '
-      [.subsets[]?.addresses[]?.ip + "/32"]
-      | unique | sort
-      | if length == 3 and all(.[]; test("^([0-9]{1,3}\\.){3}[0-9]{1,3}/32$"))
-        then .
-        else error("current kubernetes endpoints must resolve to exactly three /32 CIDRs")
-        end
-    ')"; then
-      echo "current kubernetes API endpoint readback failed closed" >&2
-      exit 2
-    fi
-    [[ "${current_api_cidrs}" == "${expected_api_cidrs}" ]] || { echo "checked-in member-db API /32s do not match the current attested set" >&2; exit 2; }
-    echo "member-db cluster prerequisites passed for current API source ${MEMBER_DB_API_EGRESS_SOURCE_SHA}; Secret values not printed"
+    echo "member-db cluster credential prerequisites passed; Secret values not printed"
 
 # Only gftb-site is authorized public. The app package was observed anonymous;
 # this carrier makes no privacy claim and mutates no visibility.
@@ -2563,7 +2607,7 @@ member-db-stack-server-dry-run: member-db-stack-validate _member-db-kubeconfig-i
 #
 # Step one: the backup store alone (NetworkPolicy family + rustfs), then wait
 # for it to actually be Ready before anything tries to write to it.
-member-db-backup-store-apply: member-db-stack-server-dry-run _member-db-backup-root-prerequisite _reviewed-clean-main _operator-apply-confirm
+member-db-backup-store-apply: member-db-stack-server-dry-run _member-db-backup-root-prerequisite _member-db-current-api-egress-prerequisite _reviewed-clean-main _operator-apply-confirm
     #!/usr/bin/env bash
     set -euo pipefail
     kc="${MEMBER_DB_APPLY_KUBECONFIG}"
@@ -2699,33 +2743,89 @@ member-db-backup-verify: _member-db-kubeconfig-input
 # allow-cnpg-operator-ingress, allow-cnpg-to-backup-store-ingress, and the
 # separate closed allow-restore-postgres-egress policy cover the rehearsal.
 
-# Create the rehearsal Cluster and wait for it to report Ready. Note the
-# start time yourself before running this — the recipe does not, because the
-# RTO clock includes the object pull, which starts the instant this applies.
+# Create a genuinely fresh rehearsal Cluster and wait for that exact UID to
+# report Ready. The fixed name must be absent first; an old Ready object cannot
+# satisfy a new RTO proof. Note the start time yourself before running this
+# because the RTO clock includes the object pull, which begins at create.
 member-db-restore-rehearsal-apply: member-db-backup-verify _member-db-cluster-prerequisites _reviewed-clean-main _operator-apply-confirm
     #!/usr/bin/env bash
     set -euo pipefail
     kc="${MEMBER_DB_APPLY_KUBECONFIG}"
     ns="{{ member_db_ns }}"
-    kubectl --kubeconfig "${kc}" --namespace "${ns}" apply -f {{ member_db_restore_cluster_template }}
-    kubectl --kubeconfig "${kc}" --namespace "${ns}" wait cluster/{{ member_db_restore_cluster }} --for=condition=Ready --timeout=14400s
-    echo "restore rehearsal cluster Ready — note the end time now for the RTO measurement"
+    restore_name="{{ member_db_restore_cluster }}"
+    existing="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get "cluster/${restore_name}" --ignore-not-found -o name)"
+    [[ -z "${existing}" ]] || { echo "restore rehearsal requires an absent Cluster/${restore_name}; teardown the exact prior rehearsal before starting a new RTO proof" >&2; exit 2; }
+    created_json="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" create -f {{ member_db_restore_cluster_template }} -o json)"
+    created_identity="$(jq -er --arg expected "${restore_name}" '
+      if (
+        .apiVersion == "postgresql.cnpg.io/v1"
+        and .kind == "Cluster"
+        and .metadata.name == $expected
+        and (.metadata.uid | type == "string" and length > 0)
+      )
+      then [.metadata.name, .metadata.uid] | @tsv
+      else error("created restore Cluster identity mismatch")
+      end
+    ' <<<"${created_json}")"
+    IFS=$'\t' read -r created_name created_uid created_extra <<<"${created_identity}"
+    [[ "${created_name}" == "${restore_name}" && -n "${created_uid}" && -z "${created_extra:-}" ]] || { echo "created restore Cluster identity was not exact" >&2; exit 2; }
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" wait "cluster/${created_name}" --for=condition=Ready --timeout=14400s
+    ready_uid="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get "cluster/${created_name}" -o json | jq -er --arg expected "${created_name}" 'if (.metadata.name == $expected and (.metadata.uid | type == "string" and length > 0)) then .metadata.uid else error("ready restore Cluster identity mismatch") end')"
+    [[ "${ready_uid}" == "${created_uid}" ]] || { echo "restore rehearsal Cluster UID changed before Ready; refusing a reused or replaced proof object" >&2; exit 2; }
+    echo "restore rehearsal cluster ${created_name} Ready with fresh UID ${created_uid} — note the end time now for the RTO measurement"
 
-# Remove the rehearsal Cluster. CNPG owns its PVCs by ownerReference, so
-# deleting the Cluster deletes them, and openebs-bumble-postgresql-retain
-# means the underlying PVs go to Released rather than being destroyed (P-2 is
-# the full reclaim-mechanics writeup; this step is the minimum the review
-# asked for — leave with nothing orphaned unaccounted for). Prints the
-# Released PVs this rehearsal leaves behind so the operator can see and
-# reclaim them rather than discovering them later.
+# Remove one exact rehearsal Cluster. Before deletion, bind its UID to exactly
+# two owned PVC/PV pairs. Then wait for those PVCs to disappear and only those
+# retained PVs to reach Released, rechecking claimRef identity before reporting.
+# No cluster-wide Released-PV listing can be mistaken for this rehearsal's proof.
 member-db-restore-rehearsal-teardown: _member-db-kubeconfig-input _reviewed-clean-main _operator-apply-confirm
     #!/usr/bin/env bash
     set -euo pipefail
     kc="${MEMBER_DB_APPLY_KUBECONFIG}"
     ns="{{ member_db_ns }}"
-    kubectl --kubeconfig "${kc}" --namespace "${ns}" delete cluster/{{ member_db_restore_cluster }} --wait=true --timeout=300s
-    echo "rehearsal Cluster removed. Released PVs left behind (openebs-bumble-postgresql-retain, reclaimPolicy Retain):"
-    kubectl --kubeconfig "${kc}" get pv -o jsonpath='{range .items[?(@.status.phase=="Released")]}{.metadata.name}{"\t"}{.spec.claimRef.namespace}{"/"}{.spec.claimRef.name}{"\n"}{end}'
+    restore_name="{{ member_db_restore_cluster }}"
+    cluster_json="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get "cluster/${restore_name}" -o json)"
+    cluster_uid="$(jq -er --arg expected "${restore_name}" 'if (.metadata.name == $expected and (.metadata.uid | type == "string" and length > 0)) then .metadata.uid else error("restore Cluster identity mismatch") end' <<<"${cluster_json}")"
+    pvc_json="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get pvc -l "cnpg.io/cluster=${restore_name}" -o json)"
+    if ! claim_tsv="$(jq -er --arg uid "${cluster_uid}" --arg cluster "${restore_name}" '
+      .items
+      | if (
+          length == 2
+          and all(.[];
+            (.metadata.name | type == "string" and length > 0)
+            and (.spec.volumeName | type == "string" and length > 0)
+            and any(.metadata.ownerReferences[]?;
+              .uid == $uid and .kind == "Cluster" and .name == $cluster
+            )
+          )
+          and ([.[].spec.volumeName] | unique | length) == 2
+        )
+        then sort_by(.metadata.name)[] | [.metadata.name, .spec.volumeName] | @tsv
+        else error("restore rehearsal must own exactly two distinct PVC/PV claims")
+        end
+    ' <<<"${pvc_json}")"; then
+      echo "could not capture the exact restore rehearsal PVC/PV identities before teardown" >&2
+      exit 2
+    fi
+    mapfile -t rehearsal_claims <<<"${claim_tsv}"
+    [[ "${#rehearsal_claims[@]}" == "2" ]] || { echo "restore rehearsal claim capture must contain exactly two rows" >&2; exit 2; }
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" delete "cluster/${restore_name}" --wait=true --timeout=300s
+    echo "rehearsal Cluster ${restore_name} (UID ${cluster_uid}) removed; waiting for its exact retained claims:"
+    for claim in "${rehearsal_claims[@]}"; do
+      IFS=$'\t' read -r pvc_name pv_name claim_extra <<<"${claim}"
+      [[ -n "${pvc_name}" && -n "${pv_name}" && -z "${claim_extra:-}" ]] || { echo "captured rehearsal claim identity is malformed" >&2; exit 2; }
+      kubectl --kubeconfig "${kc}" --namespace "${ns}" wait "pvc/${pvc_name}" --for=delete --timeout=300s
+      kubectl --kubeconfig "${kc}" wait "pv/${pv_name}" --for=jsonpath='{.status.phase}'=Released --timeout=300s
+      pv_json="$(kubectl --kubeconfig "${kc}" get "pv/${pv_name}" -o json)"
+      jq -e --arg pv "${pv_name}" --arg ns "${ns}" --arg pvc "${pvc_name}" '
+        .metadata.name == $pv
+        and .status.phase == "Released"
+        and .spec.persistentVolumeReclaimPolicy == "Retain"
+        and .spec.claimRef.namespace == $ns
+        and .spec.claimRef.name == $pvc
+      ' <<<"${pv_json}" >/dev/null || { echo "retained PV ${pv_name} no longer identifies captured claim ${ns}/${pvc_name}" >&2; exit 2; }
+      printf '%s\t%s/%s\tphase=Released\n' "${pv_name}" "${ns}" "${pvc_name}"
+    done
 
 # Render the exact reviewed migration Job carrier. Pure text, no cluster contact.
 # The image is Git-pinned in the template, so there is no runtime image input or
