@@ -87,7 +87,8 @@ jobs:
             and .base.ref == "main" and .base.sha == $base
           ' <<<"${pr}" >/dev/null
           test "$(api "repos/${GITHUB_REPOSITORY}/git/commits/${GITHUB_SHA}" --jq .tree.sha)" = "$(api "repos/${GITHUB_REPOSITORY}/git/commits/${pr_head}" --jq .tree.sha)"
-          api "repos/${GITHUB_REPOSITORY}/commits/${pr_head}" --jq '.commit.verification | select(.verified == true and .reason == "valid")' >/dev/null
+          test "$(api "repos/${GITHUB_REPOSITORY}/commits/${pr_head}" --jq .commit.verification.verified)" = true
+          test "$(api "repos/${GITHUB_REPOSITORY}/commits/${pr_head}" --jq .commit.verification.reason)" = valid
           mapfile -t changed < <(api "repos/${GITHUB_REPOSITORY}/pulls/142/files" --paginate --jq '.[].filename' | LC_ALL=C sort)
           expected=(.github/workflows/web-generation-40-parity.yml scripts/validate-public-operator-surface.py)
           [[ "${changed[*]}" == "${expected[*]}" ]]
@@ -293,43 +294,22 @@ jobs:
             ' <<<"${policies}")"
             test "$(printf '%s' "${policy_semantic}" | sha256sum | awk '{print $1}')" = 301eecb4ad234fdd7258ac7351a5a563e1b53cb250bce6f51a68824854b28220
             jq -e '[.items[].metadata.name] | sort == ["allow-cloudflared-tunnel-ingress","allow-prometheus-scrape","default-deny-egress","default-deny-ingress"]' <<<"${policies}" >/dev/null
-            # Full API objects stay runner-local for assertions. Only canonical
-            # hashes and bounded, address-free projections enter the receipt.
-            canonical_sha256() { jq -S -c . | sha256sum | awk '{print $1}'; }
-            deployment_sha256="$(printf '%s' "${deployment}" | canonical_sha256)"
-            replica_sets_sha256="$(printf '%s' "${replica_sets}" | canonical_sha256)"
-            pods_sha256="$(printf '%s' "${pods}" | canonical_sha256)"
-            service_sha256="$(printf '%s' "${service}" | canonical_sha256)"
-            slices_sha256="$(printf '%s' "${slices}" | canonical_sha256)"
-            policies_sha256="$(printf '%s' "${policies}" | canonical_sha256)"
-            service_spec_sha256="$(jq -S -c '.spec' <<<"${service}" | sha256sum | awk '{print $1}')"
+            # Full API objects stay runner-local for assertions. The receipt
+            # contains only bounded projections and an allowlisted public-contract hash.
+            service_contract_sha256="$(jq -S -c '{type:.spec.type,selector:.spec.selector,ports:.spec.ports,externalIPs:(.spec.externalIPs // [])}' <<<"${service}" | sha256sum | awk '{print $1}')"
             jq -n \
               --argjson deployment "${deployment}" \
               --argjson replicaSets "${replica_sets}" \
               --argjson pods "${pods}" \
               --argjson endpointSlices "${slices}" \
               --argjson networkPolicies "${policies}" \
-              --arg deploymentSha256 "${deployment_sha256}" \
-              --arg replicaSetsSha256 "${replica_sets_sha256}" \
-              --arg podsSha256 "${pods_sha256}" \
-              --arg serviceSha256 "${service_sha256}" \
-              --arg endpointSlicesSha256 "${slices_sha256}" \
-              --arg networkPoliciesSha256 "${policies_sha256}" \
-              --arg serviceSpecSha256 "${service_spec_sha256}" \
+              --arg serviceContractSha256 "${service_contract_sha256}" \
               --arg activeUid "${active_uid}" \
               --arg revision "${revision}" \
               --arg image "${image}" \
               --arg source "${source}" \
               --arg digest "${image##*@}" \
               '{
-                fullSnapshotSha256: {
-                  deployment: $deploymentSha256,
-                  replicaSets: $replicaSetsSha256,
-                  pods: $podsSha256,
-                  service: $serviceSha256,
-                  endpointSlices: $endpointSlicesSha256,
-                  networkPolicies: $networkPoliciesSha256
-                },
                 deployment: {
                   name: $deployment.metadata.name,
                   generation: $deployment.metadata.generation,
@@ -354,7 +334,7 @@ jobs:
                 },
                 service: {
                   name: "greatfallstoolbus-org",
-                  specSha256: $serviceSpecSha256
+                  contractSha256: $serviceContractSha256
                 },
                 endpointSlices: {
                   sliceCount: ($endpointSlices.items | length),
