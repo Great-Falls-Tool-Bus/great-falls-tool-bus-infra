@@ -105,6 +105,8 @@ PY
   expect_failure root-as-scoped-authority     'secrets.contract.yaml'     'app.tinyland.dev/object-store-authority: object-read-write-no-admin'     'app.tinyland.dev/object-store-authority: server-root-admin'     'bucket-scoped backup Secret authority annotation contract'
   expect_failure invalid-yaml "${job}"     'apiVersion: batch/v1'     'apiVersion: ['     'YAML decode or jq query failed'
   echo "member-db validator negative controls passed"
+  cleanup_self_test
+  trap - EXIT
 }
 
 if [[ "${1:-}" == "--self-test" ]]; then
