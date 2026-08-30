@@ -73,7 +73,7 @@ RETIRED_WEB_CD_WORKFLOW = Path(".github/workflows/web-stack.yml")
 # desired-state tuple stays frozen until the permanent GF-I09 receiver has
 # proved canonical update -> revert -> re-forward and removes this bridge.
 WEB_GENERATION40_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-40-parity.yml")
-WEB_GENERATION40_BRIDGE_SHA256 = "32480f4244c20b742fb798a8f96330da50c5c3ed9171488609dd4c623793d8b9"
+WEB_GENERATION40_BRIDGE_SHA256 = "df3020153289f0e30db5e6c5d70cd31408c77d698cbbcab8a054a8e1efb4a471"
 WEB_GENERATION40_BRIDGE_RECIPES = frozenset(
     {"web-release-plan", "web-release-server-dry-run", "web-release-apply"}
 )
