@@ -80,6 +80,8 @@ WEB_GENERATION40_BRIDGE_RECIPES = frozenset(
 WEB_GENERATION40_TARGET_SOURCE = "06e8b2c390b9c057fd084540e1e5710411a76a93"
 WEB_GENERATION40_TARGET_IMAGE = "ghcr.io/great-falls-tool-bus/gftb-site@sha256:0295c226bd0bc78c0fe392b8955971ffbbd4fb9a0684939558d4c3d170a35dee"
 WEB_GENERATION40_DEPLOYMENT = Path("k8s/web/greatfallstoolbus-org-production/deployment.yaml")
+WEB_GENERATION40_TRANSIENT_VALIDATE = Path(".github/workflows/validate.yml")
+WEB_GENERATION40_TRANSIENT_VALIDATE_SHA256 = "7c9ead115809a8bf84e93d571abe3aa1e7205ad8ee492a91633b6d646a120dfb"
 WORKFLOW_REPOSITORY_DISPATCH = re.compile(r"^\s*repository_dispatch\s*:")
 JUST_COMMAND_START = re.compile(r"\bjust\b")
 JUST_OPTIONS_WITH_VALUES = {
@@ -1929,6 +1931,11 @@ def scan_workflows() -> list[Finding]:
         scoped_forbidden = forbidden_recipes
         if rel == WEB_GENERATION40_BRIDGE_WORKFLOW:
             scoped_forbidden = forbidden_recipes - set(WEB_GENERATION40_BRIDGE_RECIPES)
+        elif rel == WEB_GENERATION40_TRANSIENT_VALIDATE:
+            observed_validate_digest = hashlib.sha256(workflow_text.encode("utf-8")).hexdigest()
+            if observed_validate_digest != WEB_GENERATION40_TRANSIENT_VALIDATE_SHA256:
+                findings.append(Finding("web-generation40-transient-validate-bytes", rel, 1, "Transient offline render proof changed outside its reviewed receipt."))
+            scoped_forbidden = forbidden_recipes - {"web-release-plan"}
         findings.extend(
             scan_workflow_text(
                 workflow_text,
