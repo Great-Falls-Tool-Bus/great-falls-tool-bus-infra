@@ -72,27 +72,27 @@ jobs:
           esac
 
           api() { nix develop . --command gh api --hostname github.com "$@"; }
-          test "$(api repos/${GITHUB_REPOSITORY}/git/ref/heads/main --jq .object.sha)" = "${GITHUB_SHA}"
-          commit="$(api repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA})"
+          test "$(api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" = "${GITHUB_SHA}"
+          commit="$(api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}")"
           jq -e --arg base "${REVIEWED_BASE_SHA}" '
             .commit.verification.verified == true
             and .commit.verification.reason == "valid"
             and (.parents | length) == 1
             and .parents[0].sha == $base
           ' <<<"${commit}" >/dev/null
-          pr="$(api repos/${GITHUB_REPOSITORY}/pulls/140)"
+          pr="$(api "repos/${GITHUB_REPOSITORY}/pulls/140")"
           pr_head="$(jq -er '.head.sha' <<<"${pr}")"
           jq -e --arg carrier "${GITHUB_SHA}" --arg base "${REVIEWED_BASE_SHA}" '
             .merged == true and .merge_commit_sha == $carrier
             and .base.ref == "main" and .base.sha == $base
           ' <<<"${pr}" >/dev/null
-          test "$(api repos/${GITHUB_REPOSITORY}/git/commits/${GITHUB_SHA} --jq .tree.sha)" = "$(api repos/${GITHUB_REPOSITORY}/git/commits/${pr_head} --jq .tree.sha)"
-          api repos/${GITHUB_REPOSITORY}/commits/${pr_head} --jq '.verification | select(.verified == true and .reason == "valid")' >/dev/null
-          mapfile -t changed < <(api repos/${GITHUB_REPOSITORY}/pulls/140/files --paginate --jq '.[].filename' | LC_ALL=C sort)
+          test "$(api "repos/${GITHUB_REPOSITORY}/git/commits/${GITHUB_SHA}" --jq .tree.sha)" = "$(api "repos/${GITHUB_REPOSITORY}/git/commits/${pr_head}" --jq .tree.sha)"
+          api "repos/${GITHUB_REPOSITORY}/commits/${pr_head}" --jq '.verification | select(.verified == true and .reason == "valid")' >/dev/null
+          mapfile -t changed < <(api "repos/${GITHUB_REPOSITORY}/pulls/140/files" --paginate --jq '.[].filename' | LC_ALL=C sort)
           expected=(.github/workflows/web-generation-40-parity.yml scripts/validate-core-checkout.py scripts/validate-public-operator-surface.py)
           [[ "${changed[*]}" == "${expected[*]}" ]]
 
-          rules="$(api repos/${GITHUB_REPOSITORY}/rules/branches/main)"
+          rules="$(api "repos/${GITHUB_REPOSITORY}/rules/branches/main")"
           jq -e '
             any(.[]; .type == "required_signatures")
             and any(.[]; .type == "pull_request" and .parameters.allowed_merge_methods == ["squash"])
@@ -100,7 +100,7 @@ jobs:
           ' <<<"${rules}" >/dev/null
 
           test "$(api repos/Great-Falls-Tool-Bus/meta/git/ref/heads/main --jq .object.sha)" = "${META_MAIN_SHA}"
-          api repos/Great-Falls-Tool-Bus/meta/commits/${META_MAIN_SHA} --jq '.commit.verification | select(.verified == true and .reason == "valid")' >/dev/null
+          api "repos/Great-Falls-Tool-Bus/meta/commits/${META_MAIN_SHA}" --jq '.commit.verification | select(.verified == true and .reason == "valid")' >/dev/null
           adr="$(api "repos/Great-Falls-Tool-Bus/meta/contents/${META_ADR_PATH}?ref=${META_MAIN_SHA}")"
           test "$(jq -r .sha <<<"${adr}")" = "${META_ADR_BLOB}"
           test "$(jq -r .size <<<"${adr}")" = 11156
@@ -121,7 +121,7 @@ jobs:
           spent=false
           if (( GITHUB_RUN_ATTEMPT > 1 )); then
             for ((attempt=1; attempt<GITHUB_RUN_ATTEMPT; attempt++)); do
-              conclusion="$(api repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${attempt} --jq '.conclusion // ""')"
+              conclusion="$(api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${attempt}" --jq '.conclusion // ""')"
               [[ "${conclusion}" != success ]] || spent=true
             done
           fi
