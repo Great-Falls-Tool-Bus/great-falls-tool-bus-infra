@@ -148,7 +148,11 @@ jobs:
           if [[ "${mode}" == forward ]]; then
             export WEB_APPLY_IMAGE="${TARGET_IMAGE}" WEB_APPLY_SHA="${TARGET_SOURCE_SHA}"
             nix develop . --command just web-release-server-dry-run
-            if nix develop . --command just web-release-apply; then
+            set +e
+            nix develop . --command just web-release-apply
+            forward_apply_rc=0
+            set -e
+            if [[ "" -eq 0 ]]; then
               apply_status=succeeded
             else
               apply_status=failed
@@ -157,8 +161,16 @@ jobs:
                 chmod 600 ".k8s-plans/web-release.${suffix}"
               done
               export WEB_APPLY_IMAGE="${ROLLBACK_IMAGE}" WEB_APPLY_SHA="${ROLLBACK_SOURCE_SHA}"
-              if nix develop . --command just web-release-server-dry-run; then
-                if nix develop . --command just web-release-apply; then
+              set +e
+              nix develop . --command just web-release-server-dry-run
+              reverse_dry_run_rc=0
+              set -e
+              if [[ "" -eq 0 ]]; then
+                set +e
+                nix develop . --command just web-release-apply
+                reverse_apply_rc=0
+                set -e
+                if [[ "" -eq 0 ]]; then
                   rollback_status=succeeded
                 else
                   rollback_status=failed
