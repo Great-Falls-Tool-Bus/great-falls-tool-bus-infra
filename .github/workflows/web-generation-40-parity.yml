@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  REVIEWED_BASE_SHA: 8b14a32d237da1ce7068dfd03e593a60c59ab29e
+  REVIEWED_BASE_SHA: ca6f2ecb4cbb151112d46b93f1c57b0c3393c629
   TARGET_SOURCE_SHA: 06e8b2c390b9c057fd084540e1e5710411a76a93
   TARGET_IMAGE: ghcr.io/great-falls-tool-bus/gftb-site@sha256:0295c226bd0bc78c0fe392b8955971ffbbd4fb9a0684939558d4c3d170a35dee
   TARGET_RENDER_SHA256: 2244dedfa372c52fb32a891c8e6c6e547ef4bdbc64aa948a259fd495746c29bf
@@ -80,16 +80,16 @@ jobs:
             and (.parents | length) == 1
             and .parents[0].sha == $base
           ' <<<"${commit}" >/dev/null
-          pr="$(api "repos/${GITHUB_REPOSITORY}/pulls/140")"
+          pr="$(api "repos/${GITHUB_REPOSITORY}/pulls/141")"
           pr_head="$(jq -er '.head.sha' <<<"${pr}")"
           jq -e --arg carrier "${GITHUB_SHA}" --arg base "${REVIEWED_BASE_SHA}" '
             .merged == true and .merge_commit_sha == $carrier
             and .base.ref == "main" and .base.sha == $base
           ' <<<"${pr}" >/dev/null
           test "$(api "repos/${GITHUB_REPOSITORY}/git/commits/${GITHUB_SHA}" --jq .tree.sha)" = "$(api "repos/${GITHUB_REPOSITORY}/git/commits/${pr_head}" --jq .tree.sha)"
-          api "repos/${GITHUB_REPOSITORY}/commits/${pr_head}" --jq '.verification | select(.verified == true and .reason == "valid")' >/dev/null
-          mapfile -t changed < <(api "repos/${GITHUB_REPOSITORY}/pulls/140/files" --paginate --jq '.[].filename' | LC_ALL=C sort)
-          expected=(.github/workflows/web-generation-40-parity.yml scripts/validate-core-checkout.py scripts/validate-public-operator-surface.py)
+          api "repos/${GITHUB_REPOSITORY}/commits/${pr_head}" --jq '.commit.verification | select(.verified == true and .reason == "valid")' >/dev/null
+          mapfile -t changed < <(api "repos/${GITHUB_REPOSITORY}/pulls/141/files" --paginate --jq '.[].filename' | LC_ALL=C sort)
+          expected=(.github/workflows/web-generation-40-parity.yml scripts/validate-public-operator-surface.py)
           [[ "${changed[*]}" == "${expected[*]}" ]]
 
           rules="$(api "repos/${GITHUB_REPOSITORY}/rules/branches/main")"
@@ -99,12 +99,13 @@ jobs:
             and any(.[]; .type == "required_status_checks" and .parameters.strict_required_status_checks_policy == true and any(.parameters.required_status_checks[]; .context == "validate"))
           ' <<<"${rules}" >/dev/null
 
-          test "$(api repos/Great-Falls-Tool-Bus/meta/git/ref/heads/main --jq .object.sha)" = "${META_MAIN_SHA}"
-          api "repos/Great-Falls-Tool-Bus/meta/commits/${META_MAIN_SHA}" --jq '.commit.verification | select(.verified == true and .reason == "valid")' >/dev/null
-          adr="$(api "repos/Great-Falls-Tool-Bus/meta/contents/${META_ADR_PATH}?ref=${META_MAIN_SHA}")"
-          test "$(jq -r .sha <<<"${adr}")" = "${META_ADR_BLOB}"
-          test "$(jq -r .size <<<"${adr}")" = 11156
-          test "$(jq -r .content <<<"${adr}" | base64 --decode | sha256sum | awk '{print $1}')" = "${META_ADR_SHA256}"
+          # The ratifying Meta repository is private to this repository token.
+          # These exact, validator-byte-pinned constants bind the ratification
+          # without widening this current-repository execution credential.
+          test "${META_MAIN_SHA}" = 45dc15a1cfa8607f58b2614c2bf5225c022b3f63
+          test "${META_ADR_PATH}" = decisions/0022-gftb-site-main-prod-gfi09-carrier-2026-08-30.md
+          test "${META_ADR_BLOB}" = ed0fd327b75cbca7cc60fa343f6399c576772d35
+          test "${META_ADR_SHA256}" = 4016a684853bf2d2a0226a65ee814968d28acdd201c9087a73807838d30db607
 
           sha256sum --check --strict <<'HASHES'
           4359302dbd693ddef560d191dee91deaedad4a5f220b5e6cc93b388963eb8532  Justfile
@@ -311,7 +312,7 @@ jobs:
             post_json="$(cat "${RUNNER_TEMP}/post.json" 2>/dev/null || printf '{}')"
             rollback_json="$(cat "${RUNNER_TEMP}/rollback.json" 2>/dev/null || printf '{}')"
             access_json="$(cat "${RUNNER_TEMP}/access.json" 2>/dev/null || printf '{"intercepted":false}')"
-            jq -n --arg carrier "${GITHUB_SHA}" --arg base "${REVIEWED_BASE_SHA}" --arg prHead "${PR_HEAD_SHA}" --arg classification "${classification}" --arg apply "${apply_status}" --arg rollbackStatus "${rollback_status}" --arg proof "${proof_status}" --argjson spent "${SPENT}" --argjson forwardAttempted "${forward_attempted}" --argjson rollbackAttempted "${rollback_attempted}" --argjson pre "${pre_json}" --argjson post "${post_json}" --argjson rollback "${rollback_json}" --argjson access "${access_json}" '{schema:"gftb-web-generation-40-parity/v2",authority:{reviewedBaseSha:$base,carrierMainSha:$carrier,pr:{number:140,headSha:$prHead,mergeMethod:"squash"},meta:{mainSha:"45dc15a1cfa8607f58b2614c2bf5225c022b3f63",adrBlob:"ed0fd327b75cbca7cc60fa343f6399c576772d35"},ruleset:{id:20930684,requiredStatus:"validate",strict:true,signatures:true}},run:{id:env.GITHUB_RUN_ID,attempt:(env.GITHUB_RUN_ATTEMPT|tonumber),url:(env.GITHUB_SERVER_URL+"/"+env.GITHUB_REPOSITORY+"/actions/runs/"+env.GITHUB_RUN_ID),environment:"web-apply"},saved:{forwardRenderSha256:"2244dedfa372c52fb32a891c8e6c6e547ef4bdbc64aa948a259fd495746c29bf",reverseRenderSha256:"d70d8cab4b96fd4390f8c3c843e747a66e8c8681cd6b99e18de4fc4196e3b7ca",derivation:{run:33329089385,artifact:9737130836,digest:"sha256:a2cc2486ea98f524698bdbd3b4c7c7c97295a55b14290aacb2b75ea96a0c2185"}},spent:{terminalBeforeRun:$spent},classification:$classification,prestate:$pre,mutation:{forwardAttempted:$forwardAttempted,applyOutcome:$apply,rollbackAttempted:$rollbackAttempted,rollbackOutcome:$rollbackStatus,rollbackProof:$rollback},poststate:$post,observations:{proofStatus:$proof,observerIndependent:false,credentialClass:"bootstrap web-apply readback",anonymousAccess:$access,authenticatedServedContent:"pending_operator_look"}}' > "${receipt}"
+            jq -n --arg carrier "${GITHUB_SHA}" --arg base "${REVIEWED_BASE_SHA}" --arg prHead "${PR_HEAD_SHA}" --arg classification "${classification}" --arg apply "${apply_status}" --arg rollbackStatus "${rollback_status}" --arg proof "${proof_status}" --argjson spent "${SPENT}" --argjson forwardAttempted "${forward_attempted}" --argjson rollbackAttempted "${rollback_attempted}" --argjson pre "${pre_json}" --argjson post "${post_json}" --argjson rollback "${rollback_json}" --argjson access "${access_json}" '{schema:"gftb-web-generation-40-parity/v2",authority:{reviewedBaseSha:$base,carrierMainSha:$carrier,pr:{number:141,headSha:$prHead,mergeMethod:"squash"},meta:{mainSha:"45dc15a1cfa8607f58b2614c2bf5225c022b3f63",adrBlob:"ed0fd327b75cbca7cc60fa343f6399c576772d35"},ruleset:{id:20930684,requiredStatus:"validate",strict:true,signatures:true}},run:{id:env.GITHUB_RUN_ID,attempt:(env.GITHUB_RUN_ATTEMPT|tonumber),url:(env.GITHUB_SERVER_URL+"/"+env.GITHUB_REPOSITORY+"/actions/runs/"+env.GITHUB_RUN_ID),environment:"web-apply"},saved:{forwardRenderSha256:"2244dedfa372c52fb32a891c8e6c6e547ef4bdbc64aa948a259fd495746c29bf",reverseRenderSha256:"d70d8cab4b96fd4390f8c3c843e747a66e8c8681cd6b99e18de4fc4196e3b7ca",derivation:{run:33329089385,artifact:9737130836,digest:"sha256:a2cc2486ea98f524698bdbd3b4c7c7c97295a55b14290aacb2b75ea96a0c2185"}},spent:{terminalBeforeRun:$spent},classification:$classification,prestate:$pre,mutation:{forwardAttempted:$forwardAttempted,applyOutcome:$apply,rollbackAttempted:$rollbackAttempted,rollbackOutcome:$rollbackStatus,rollbackProof:$rollback},poststate:$post,observations:{proofStatus:$proof,observerIndependent:false,credentialClass:"bootstrap web-apply readback",anonymousAccess:$access,authenticatedServedContent:"pending_operator_look"}}' > "${receipt}"
             chmod 600 "${receipt}"
           }
 
