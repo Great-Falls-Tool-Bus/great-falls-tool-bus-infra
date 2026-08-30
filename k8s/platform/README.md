@@ -15,9 +15,11 @@ Git pins one image in both Deployments:
 
 No release recipe accepts an image input, tag, alternate repository, digest,
 or pull-secret value. The platform image references namespace-local
-ghcr-pull; PR #118 owns its single names-only kubernetes.io/dockerconfigjson
-contract and the operator provisions the value outside Git. Only gftb-site was
-authorized public.
+ghcr-pull; PR #118 owns the sole names-only kubernetes.io/dockerconfigjson
+target contract. Governed consumer enrollment and its sole controller project
+the bytes into that exact target (TIN-3768 / TIN-2609). The controller is not
+currently live, so the projection remains a HOLD. Out-of-band kubectl,
+per-tenant SOPS, and operator Secret creation are not admitted mechanisms.
 A future repository rename changes both manifest pins and the validator in one
 reviewed Git PR. Rollback is a reviewed Git re-pin.
 
@@ -38,7 +40,8 @@ creates or seeds a tenant.
 
 1. PR #118 must merge, remain the single names-only authority for ghcr-pull,
    and complete database/backup/runtime-DSN proof and its Git-pinned one-shot
-   migrator. The pull Secret has not been observed; this PR claims no existence.
+   migrator. The governed controller is not live and its pull projection has
+   not been observed; this PR claims no existence.
 2. The tenant tuple is absent. A reviewed bootstrap carrier must establish and
    receipt UUID, slug, display name, and initial owner/keyholder grant. This PR
    invents none of them.

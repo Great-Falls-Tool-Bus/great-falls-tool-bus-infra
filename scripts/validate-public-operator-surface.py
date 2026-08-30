@@ -457,9 +457,9 @@ ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     "_platform-release-kubeconfig-input": _receipt(
         "d4691ca921dc2f69", "135e09433d755159", "4e20bbc9d2b88201", "2b99a7893381ca9d"
     ),
-    # GHCR pull-credential exact namespace/name/type/key prerequisite.
+    # Governed GHCR pull projection: exact namespace/name/type/key observation.
     "_platform-release-pull-secret-preflight": _receipt(
-        "7016dce0d79f33ed", "32ffce1603cc1aa8", "35f34123e9d123c3", "519395127d8864f9"
+        "eddca7b6a8ce915a", "b4b630397bf52df0", "694acbbaedb46e7c", "0b0e236ef6fcf016"
     ),
     # platform-release-render: substitutes exactly two tenant sentinels
     #   while leaving Git-owned image bytes untouched.

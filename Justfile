@@ -2354,8 +2354,8 @@ grafana-dashboards-validate:
 # SEQUENCING. The publisher receipt is now closed in Git:
 # source af60fcd7539a4beff6f24e1a95eb11160df7c166, workflow run 33279762284 attempt 1, artifact greatfallstoolbus-org-image-af60fcd7539a4beff6f24e1a95eb11160df7c166-33279762284-1
 # (id 9722715788), image ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:10f853938dc6823afe8c9bdc54943587f963d22117aafd17247350b2b5712b35. Remaining blockers are member-db PR #118 bring-up + same-digest migration,
-# the absent reviewed tenant tuple, and the operator-provisioned GHCR pull
-# credential. The receipt-bound NetworkPolicy-first carrier is defined below.
+# the absent reviewed tenant tuple, and the not-yet-observed governed GHCR pull
+# projection (TIN-3768 / TIN-2609). The policy-first carrier is defined below.
 
 platform_stack_dir := "k8s/platform/members-greatfallstoolbus-org-production"
 platform_ns := "members-greatfallstoolbus-org-production"
@@ -2408,8 +2408,8 @@ _platform-release-pull-secret-preflight: _platform-release-kubeconfig-input
     #!/usr/bin/env bash
     set -euo pipefail
     command -v jq >/dev/null 2>&1 || { echo "jq is required" >&2; exit 1; }
-    kubectl --kubeconfig "${PLATFORM_APPLY_KUBECONFIG}" --namespace {{ platform_ns }} get secret ghcr-pull -o json | jq -e '.metadata.name == "ghcr-pull" and .metadata.namespace == "{{ platform_ns }}" and .type == "kubernetes.io/dockerconfigjson" and (.data | type == "object") and (.data[".dockerconfigjson"] | type == "string" and length > 0)' >/dev/null || { echo "Required operator-provisioned Secret {{ platform_ns }}/ghcr-pull is absent or invalid" >&2; exit 2; }
-    echo "GHCR pull credential prerequisite observed by name/type; no value printed"
+    kubectl --kubeconfig "${PLATFORM_APPLY_KUBECONFIG}" --namespace {{ platform_ns }} get secret ghcr-pull -o json | jq -e '.metadata.name == "ghcr-pull" and .metadata.namespace == "{{ platform_ns }}" and .type == "kubernetes.io/dockerconfigjson" and (.data | type == "object") and (.data[".dockerconfigjson"] | type == "string" and length > 0)' >/dev/null || { echo "Required governed-controller projection {{ platform_ns }}/ghcr-pull is absent or invalid (TIN-3768 / TIN-2609)" >&2; exit 2; }
+    echo "governed GHCR pull projection observed by exact name/type/key; no value printed"
 
 # Step N: exact NetworkPolicy-first carrier. It renders only the six policies
 # from the same Kustomize graph as the full stack, records exact bytes, applies
