@@ -375,6 +375,7 @@ ATTENDED_RECIPE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     # adding it would taint check-hosted through the attended closure.
     "_platform-release-inputs": (),
     "_platform-release-kubeconfig-input": (),
+    "_platform-release-pull-secret-preflight": ("_platform-release-kubeconfig-input",),
     # The single renderer. Both the plan and the preflight re-render through
     # it, so the reviewed bytes and the applied bytes are the same bytes — the
     # property WEB_RELEASE_CRITICAL_RECIPE_DIGESTS protects for
@@ -390,7 +391,7 @@ ATTENDED_RECIPE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
         "_platform-release-plan-root-contract",
     ),
     "platform-release-server-dry-run": (
-        "_platform-release-kubeconfig-input",
+        "_platform-release-pull-secret-preflight",
         "_platform-release-plan-preflight",
     ),
     # Ordered like web-release-apply: the reviewed-carrier and confirmation
@@ -399,11 +400,11 @@ ATTENDED_RECIPE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     "platform-release-apply": (
         "_reviewed-clean-main",
         "_operator-apply-confirm",
-        "_platform-release-kubeconfig-input",
+        "_platform-release-pull-secret-preflight",
         "_platform-release-plan-preflight",
     ),
     "platform-release-pinned-running-proof": (
-        "_platform-release-kubeconfig-input",
+        "_platform-release-pull-secret-preflight",
         "_platform-release-plan-preflight",
     ),
     "platform-release-served-proof": (),
@@ -436,22 +437,26 @@ ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     "_platform-release-kubeconfig-input": _receipt(
         "d4691ca921dc2f69", "135e09433d755159", "4e20bbc9d2b88201", "2b99a7893381ca9d"
     ),
+    # Private-GHCR exact namespace/name/type/key prerequisite.
+    "_platform-release-pull-secret-preflight": _receipt(
+        "491ebb2bbbcfc485", "23af5abd365ffd89", "e5df553cdeced2eb", "5d9973110375f292"
+    ),
     # platform-release-render: substitutes exactly two tenant sentinels
     #   while leaving Git-owned image bytes untouched.
     "platform-release-render": _receipt(
-        "6ec0b2665372d3e5", "00a58bec5d06dc50", "d821c2287bb4373f", "a9285f30057f4a96"
+        "ca642ba8224f26e4", "697a7bbbbd6e7b5a", "3dd2562e8b0e3630", "540d09acefc0cdd3"
     ),
     "_platform-release-plan-root-contract": _receipt(
         "ebf3de9991e622a2", "5b1be15f906593dc", "cb30d87b74d2ace1", "751b3178509f188b"
     ),
     "platform-release-plan": _receipt(
-        "f1717f9cbb6b4757", "0b956a2f618fa842", "4a73586e27b0ad4f", "83b738ae2531a95d"
+        "3b53fd6bcffd28f9", "474013f63be2b841", "0453e412bdaaad45", "190d21dc19c1f13e"
     ),
     # _platform-release-plan-preflight: what makes the apply byte-exact — the
     #   recorded bytes must hash to their receipt AND re-render identically
     #   from the current carrier before anything touches the wire.
     "_platform-release-plan-preflight": _receipt(
-        "95b87762848e2b9f", "974ff9b58cfd682c", "3e7d556c6d49ca01", "90394854bd9e8adb"
+        "a72ad486a4318df2", "f69089d5b986bd9a", "6e277f1fccf1568d", "ec4a8dcf6fbe9575"
     ),
     "platform-release-server-dry-run": _receipt(
         "0af1efe9cb262f4a", "0c0e5ec8516fcbd4", "58ee551d6cf8ec9a", "e625ddd244b185fc"
@@ -465,13 +470,13 @@ ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     # platform-release-pinned-running-proof: live digests equal the
     #   Git-derived byte-receipted plan; budgeted replicas are ready.
     "platform-release-pinned-running-proof": _receipt(
-        "7124069e9216909c", "01362550dce01db6", "9c8d66a048b62ffd", "88b192b31b0ade4f"
+        "4ce875bd7a833018", "0da7befaa471fa0b", "aed659b6a61eebcf", "a5b4db70533c80aa"
     ),
     # platform-release-served-proof: pinned specifically for its refusal
     #   branch — the PRIVATE staging host must refuse anonymous requests, and
     #   deleting that check leaves a proof that can never fail open-ness.
     "platform-release-served-proof": _receipt(
-        "3acf4262cd3ca8e0", "9035098a75c30588", "0ea312525f401d4a", "3b3b43c1f00d5429"
+        "35cd0cd48c0c7df7", "ab2191b25a7da948", "3b54c6a052efc4e1", "ac2480689bef7e3c"
     ),
 }
 
@@ -486,6 +491,7 @@ ATTENDED_OPERATOR_LOCAL_ROOTS = {
     # stays hosted-runnable.
     "_platform-release-inputs",
     "_platform-release-kubeconfig-input",
+    "_platform-release-pull-secret-preflight",
     "platform-release-render",
     "_platform-release-plan-root-contract",
     "platform-release-plan",

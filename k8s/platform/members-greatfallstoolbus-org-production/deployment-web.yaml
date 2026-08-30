@@ -106,6 +106,9 @@ spec:
                   matchLabels:
                     app.kubernetes.io/name: gftb-platform-web
                     app.kubernetes.io/component: web
+      # Private GHCR reference only; PR #118 owns the names-only contract.
+      imagePullSecrets:
+        - name: ghcr-pull
       containers:
         - name: gftb-platform-web
           # Git-owned immutable publisher receipt; the release renderer never

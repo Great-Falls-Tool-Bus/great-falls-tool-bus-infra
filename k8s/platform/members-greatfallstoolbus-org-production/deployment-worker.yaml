@@ -74,6 +74,9 @@ spec:
                   - key: kubernetes.io/hostname
                     operator: In
                     values: ["bumble", "sting"]
+      # Private GHCR reference only; PR #118 owns the names-only contract.
+      imagePullSecrets:
+        - name: ghcr-pull
       containers:
         - name: gftb-platform-worker
           # Same Git-owned immutable publisher receipt as the web Deployment.

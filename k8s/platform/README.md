@@ -13,7 +13,11 @@ Git pins one image in both Deployments:
 - workflow: run `33279762284`, attempt 1
 - artifact: `greatfallstoolbus-org-image-af60fcd7539a4beff6f24e1a95eb11160df7c166-33279762284-1` (id `9722715788`)
 
-No release recipe accepts an image input, tag, alternate repository, or digest.
+No release recipe accepts an image input, tag, alternate repository, digest,
+or pull-secret value. The private platform image references namespace-local
+ghcr-pull; PR #118 owns its single names-only kubernetes.io/dockerconfigjson
+contract and the operator provisions the value outside Git. Only gftb-site was
+authorized public.
 A future repository rename changes both manifest pins and the validator in one
 reviewed Git PR. Rollback is a reviewed Git re-pin.
 
@@ -32,8 +36,9 @@ creates or seeds a tenant.
 
 ## Remaining blockers
 
-1. PR #118 must merge and complete attended database bring-up, backup proof,
-   runtime DSN creation, and a migrator run pinned to the same image digest.
+1. PR #118 must merge, remain the single names-only authority for ghcr-pull,
+   and complete database/backup/runtime-DSN proof and its Git-pinned one-shot
+   migrator. The pull Secret has not been observed; this PR claims no existence.
 2. The tenant tuple is absent. A reviewed bootstrap carrier must establish and
    receipt UUID, slug, display name, and initial owner/keyholder grant. This PR
    invents none of them.

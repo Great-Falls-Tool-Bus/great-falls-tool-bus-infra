@@ -7,7 +7,10 @@ Nothing in this runbook is a CI deploy. Do not proceed past any STOP.
 1. Git pins `ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:10f853938dc6823afe8c9bdc54943587f963d22117aafd17247350b2b5712b35` in both serving Deployments. Publisher receipt:
    source `af60fcd7539a4beff6f24e1a95eb11160df7c166`; workflow run `33279762284`, attempt 1; artifact
    `greatfallstoolbus-org-image-af60fcd7539a4beff6f24e1a95eb11160df7c166-33279762284-1` (id `9722715788`). Do not re-resolve or override it.
-2. PR #118 is merged and its attended database path has proved Ready,
+2. PR #118 is merged, its single names-only ghcr-pull SecretContract is
+   authoritative, and the operator-provisioned namespace-local
+   kubernetes.io/dockerconfigjson Secret has been observed. Its attended
+   database path has also proved Ready,
    `continuousArchiving=True`, one completed Backup, and the runtime role
    Secret.
 3. `members-greatfallstoolbus-org-production` and the namespace-scoped
@@ -36,10 +39,11 @@ Resume only after that carrier lands and exact-name readback is receipted.
 
 ## Step M — migrate schema, not tenant data
 
-After Step N closes, run PR #118's reviewed migration chain with:
+After Step N closes and PR #118 lands, run its Git-pinned one-shot migration
+chain. It accepts no image input; the Job keeps the image entrypoint, uses only
+args ["migrator"], restartPolicy Never, and backoffLimit 0:
 
 ```bash
-export MEMBER_DB_MIGRATOR_IMAGE=ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:10f853938dc6823afe8c9bdc54943587f963d22117aafd17247350b2b5712b35
 just member-db-migrate-render
 just member-db-migrate-server-dry-run
 GFTB_APPLY_CONFIRM=apply GFTB_MEMBER_DB_MIGRATE_CONFIRM=member-db-migrate just member-db-migrate-apply
@@ -67,7 +71,7 @@ GFTB_APPLY_CONFIRM=apply just platform-release-apply
 just platform-release-pinned-running-proof
 ```
 
-Image is not an input. The plan derives the identical web/worker digest from
+Image and pull-secret values are not inputs. The plan derives the identical web/worker digest from
 Git, requires the exact admitted publisher identity, and records it beside the
 tenant, carrier, bytes, and sha256. Preflight refuses drift or tampering.
 
@@ -80,8 +84,9 @@ tunnel-route, and DNS changes, run:
 STAGING_ACCESS_STATE=gated just platform-release-served-proof
 ```
 
-Staging remains private QA. Access gates reachability but never substitutes for
-application authentication.
+Staging remains private QA. Gate-only proof requires exact 302 and Cloudflare
+Access login redirect semantics; it proves edge/Access, not origin. A complete
+service-token pair is required for the protected-origin 200 claim.
 
 ## Rollback
 

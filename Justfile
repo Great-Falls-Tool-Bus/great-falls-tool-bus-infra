@@ -2404,12 +2404,19 @@ _platform-release-kubeconfig-input:
         raise SystemExit("PLATFORM_APPLY_KUBECONFIG must have mode 0600")
     PY
 
+_platform-release-pull-secret-preflight: _platform-release-kubeconfig-input
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command -v jq >/dev/null 2>&1 || { echo "jq is required" >&2; exit 1; }
+    kubectl --kubeconfig "${PLATFORM_APPLY_KUBECONFIG}" --namespace {{ platform_ns }} get secret ghcr-pull -o json | jq -e '.metadata.name == "ghcr-pull" and .metadata.namespace == "{{ platform_ns }}" and .type == "kubernetes.io/dockerconfigjson" and (.data | type == "object") and (.data[".dockerconfigjson"] | type == "string" and length > 0)' >/dev/null || { echo "Required operator-provisioned Secret {{ platform_ns }}/ghcr-pull is absent or invalid" >&2; exit 2; }
+    echo "private GHCR pull prerequisite observed by name/type; no value printed"
+
 # THE SINGLE RENDERER. Git owns image bytes; this substitutes only the two
 # integrity-critical tenant sentinels. Pure text, no cluster contact.
 platform-release-render: _platform-release-inputs
     #!/usr/bin/env bash
     set -euo pipefail
-    kubectl kustomize "{{ platform_stack_dir }}" | python3 -I -c 'import sys; text = sys.stdin.read(); sentinel = "PLACEHOLDER-GFTB-TENANT-ID"; count = text.count(sentinel); sys.exit(f"committed stack must render exactly two tenant sentinels; observed {count}") if count != 2 else None; sys.stdout.write(text.replace(sentinel, sys.argv[1]))' "${GFTB_TENANT_ID}"
+    kubectl kustomize "{{ platform_stack_dir }}" | python3 -I -c 'import sys; text=sys.stdin.read(); tenant="PLACEHOLDER-GFTB-TENANT-ID"; tc=text.count(tenant); pc=text.count("name: ghcr-pull"); sys.exit(f"committed stack must render exactly two tenant sentinels; observed {tc}") if tc!=2 else None; sys.exit(f"committed stack must render exactly two ghcr-pull references; observed {pc}") if pc!=2 else None; sys.stdout.write(text.replace(tenant,sys.argv[1]))' "${GFTB_TENANT_ID}"
 
 # Plan artifacts live beside the web-release ones in the operator-private
 # .k8s-plans root (never committed; .gitignore covers it), held to the same
@@ -2458,22 +2465,18 @@ platform-release-plan: _platform-release-inputs _platform-release-plan-root-cont
     just platform-release-render > "${plan_root}/platform-release.rendered.yaml"
     test -s "${plan_root}/platform-release.rendered.yaml" || { echo "platform-release-render produced no manifest" >&2; exit 1; }
     yq eval-all -o=json -I=0 '.' "${plan_root}/platform-release.rendered.yaml" | jq --slurp '.' > "${rendered_json}"
-    platform_image="$(jq -er '[.[] | select(.kind == "Deployment" and (.metadata.name == "gftb-platform-web" or .metadata.name == "gftb-platform-worker")) | .spec.template.spec.containers[] | select(.name == "gftb-platform-web" or .name == "gftb-platform-worker") | .image] as $images | if (($images | length) == 2 and ($images | unique | length) == 1) then $images[0] else error("rendered web and worker must carry one identical image") end' "${rendered_json}")"
+    platform_image="$(jq -er 'def c($d;$c): [.[]|select(.kind=="Deployment" and .metadata.name==$d)] as $o | if ($o|length)!=1 then error("deployment identity/cardinality") else $o[0].spec.template.spec end as $p | if ($p.containers|length)!=1 or $p.containers[0].name!=$c then error("container identity/cardinality") else {p:$p,c:$p.containers[0]} end; c("gftb-platform-web";"gftb-platform-web") as $w | c("gftb-platform-worker";"gftb-platform-worker") as $k | if $w.p.imagePullSecrets==[{"name":"ghcr-pull"}] and $k.p.imagePullSecrets==[{"name":"ghcr-pull"}] and ($w.c|has("command")|not) and ($w.c|has("args")|not) and ($k.c|has("command")|not) and $k.c.args==["worker"] and $w.c.image==$k.c.image then $w.c.image else error("image/pull/entrypoint mismatch") end' "${rendered_json}")"
     printf '%s' "${platform_image}" | grep -Eq '^ghcr\.io/great-falls-tool-bus/greatfallstoolbus\.org@sha256:[0-9a-f]{64}$' || { echo "Git-owned platform image is not the admitted immutable publisher identity: ${platform_image}" >&2; exit 1; }
     python3 -I -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${plan_root}/platform-release.rendered.yaml" > "${plan_root}/platform-release.render-sha256"
-    printf '%s
-' "${platform_image}" > "${plan_root}/platform-release.image"
-    printf '%s
-' "${GFTB_TENANT_ID}" > "${plan_root}/platform-release.tenant"
+    printf '%s\n' "${platform_image}" > "${plan_root}/platform-release.image"
+    printf '%s\n' "${GFTB_TENANT_ID}" > "${plan_root}/platform-release.tenant"
     git -C "${repo_root}" rev-parse HEAD > "${plan_root}/platform-release.carrier-sha"
     chmod 600 "${plan_root}/platform-release.rendered.yaml" "${plan_root}/platform-release.render-sha256" "${plan_root}/platform-release.image" "${plan_root}/platform-release.tenant" "${plan_root}/platform-release.carrier-sha"
     echo "platform release plan recorded"
     echo "  image:   ${platform_image}"
     echo "  tenant:  ${GFTB_TENANT_ID}"
-    echo "  carrier: $(tr -d '
-' < "${plan_root}/platform-release.carrier-sha")"
-    echo "  render:  sha256:$(tr -d '
-' < "${plan_root}/platform-release.render-sha256")"
+    echo "  carrier: $(tr -d '\n' < "${plan_root}/platform-release.carrier-sha")"
+    echo "  render:  sha256:$(tr -d '\n' < "${plan_root}/platform-release.render-sha256")"
 
 # Refuse stale/foreign evidence: tenant, carrier, bytes, the image derived from
 # those bytes, and a fresh render must all agree.
@@ -2490,28 +2493,24 @@ _platform-release-plan-preflight: _platform-release-inputs _platform-release-pla
     for artifact in rendered.yaml render-sha256 image tenant carrier-sha; do
       test -f "${plan_root}/platform-release.${artifact}" || { echo "No platform release plan recorded; record one with platform-release-plan first" >&2; exit 2; }
     done
-    [[ "$(tr -d '
-' < "${plan_root}/platform-release.tenant")" == "${GFTB_TENANT_ID}" ]] || { echo "Planned tenant differs from GFTB_TENANT_ID; re-plan" >&2; exit 2; }
-    [[ "$(git -C "${repo_root}" rev-parse HEAD)" == "$(tr -d '
-' < "${plan_root}/platform-release.carrier-sha")" ]] || { echo "Infra carrier changed after the platform release plan; re-plan" >&2; exit 2; }
-    recorded_digest="$(tr -d '
-' < "${plan_root}/platform-release.render-sha256")"
+    [[ "$(tr -d '\n' < "${plan_root}/platform-release.tenant")" == "${GFTB_TENANT_ID}" ]] || { echo "Planned tenant differs from GFTB_TENANT_ID; re-plan" >&2; exit 2; }
+    [[ "$(git -C "${repo_root}" rev-parse HEAD)" == "$(tr -d '\n' < "${plan_root}/platform-release.carrier-sha")" ]] || { echo "Infra carrier changed after the platform release plan; re-plan" >&2; exit 2; }
+    recorded_digest="$(tr -d '\n' < "${plan_root}/platform-release.render-sha256")"
     [[ "$(python3 -I -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${plan_root}/platform-release.rendered.yaml")" == "${recorded_digest}" ]] || { echo "Recorded plan bytes do not match their receipt; re-plan" >&2; exit 2; }
     recorded_json="$(mktemp "${plan_root}/platform-release.recorded-json.XXXXXX")"
     recheck="$(mktemp "${plan_root}/platform-release.recheck.XXXXXX")"
     chmod 600 "${recorded_json}" "${recheck}"
     trap 'rm -f "${recorded_json}" "${recheck}"' EXIT
     yq eval-all -o=json -I=0 '.' "${plan_root}/platform-release.rendered.yaml" | jq --slurp '.' > "${recorded_json}"
-    recorded_image="$(jq -er '[.[] | select(.kind == "Deployment" and (.metadata.name == "gftb-platform-web" or .metadata.name == "gftb-platform-worker")) | .spec.template.spec.containers[] | select(.name == "gftb-platform-web" or .name == "gftb-platform-worker") | .image] as $images | if (($images | length) == 2 and ($images | unique | length) == 1) then $images[0] else error("recorded web and worker must carry one identical image") end' "${recorded_json}")"
+    recorded_image="$(jq -er 'def c($d;$c): [.[]|select(.kind=="Deployment" and .metadata.name==$d)] as $o | if ($o|length)!=1 then error("deployment identity/cardinality") else $o[0].spec.template.spec end as $p | if ($p.containers|length)!=1 or $p.containers[0].name!=$c then error("container identity/cardinality") else {p:$p,c:$p.containers[0]} end; c("gftb-platform-web";"gftb-platform-web") as $w | c("gftb-platform-worker";"gftb-platform-worker") as $k | if $w.p.imagePullSecrets==[{"name":"ghcr-pull"}] and $k.p.imagePullSecrets==[{"name":"ghcr-pull"}] and ($w.c|has("command")|not) and ($w.c|has("args")|not) and ($k.c|has("command")|not) and $k.c.args==["worker"] and $w.c.image==$k.c.image then $w.c.image else error("image/pull/entrypoint mismatch") end' "${recorded_json}")"
     printf '%s' "${recorded_image}" | grep -Eq '^ghcr\.io/great-falls-tool-bus/greatfallstoolbus\.org@sha256:[0-9a-f]{64}$' || { echo "Recorded platform image is not the admitted Git-owned identity" >&2; exit 2; }
-    [[ "$(tr -d '
-' < "${plan_root}/platform-release.image")" == "${recorded_image}" ]] || { echo "Planned image receipt differs from recorded rendered bytes; re-plan" >&2; exit 2; }
+    [[ "$(tr -d '\n' < "${plan_root}/platform-release.image")" == "${recorded_image}" ]] || { echo "Planned image receipt differs from recorded rendered bytes; re-plan" >&2; exit 2; }
     just platform-release-render > "${recheck}"
     [[ "$(python3 -I -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${recheck}")" == "${recorded_digest}" ]] || { echo "Reviewed manifests re-render differently than the recorded plan; re-plan" >&2; exit 2; }
     echo "platform release plan preflight passed: image=${recorded_image} render=sha256:${recorded_digest}"
 
 # Server-side dry-run of the EXACT recorded plan bytes. No mutation.
-platform-release-server-dry-run: _platform-release-kubeconfig-input _platform-release-plan-preflight
+platform-release-server-dry-run: _platform-release-pull-secret-preflight _platform-release-plan-preflight
     #!/usr/bin/env bash
     set -euo pipefail
     repo_root="$(git rev-parse --show-toplevel)"
@@ -2523,7 +2522,7 @@ platform-release-server-dry-run: _platform-release-kubeconfig-input _platform-re
 # recorded bytes, and waits for BOTH rollouts. The pre-rollout migration
 # (member-db PR #118's member-db-migrate-apply) must have completed first —
 # pods never migrate on startup (spec §6) — see the runbook ordering.
-platform-release-apply: _reviewed-clean-main _operator-apply-confirm _platform-release-kubeconfig-input _platform-release-plan-preflight
+platform-release-apply: _reviewed-clean-main _operator-apply-confirm _platform-release-pull-secret-preflight _platform-release-plan-preflight
     #!/usr/bin/env bash
     set -euo pipefail
     repo_root="$(git rev-parse --show-toplevel)"
@@ -2536,24 +2535,23 @@ platform-release-apply: _reviewed-clean-main _operator-apply-confirm _platform-r
 
 # PINNED + RUNNING proof. Read-only: live Deployments must equal the
 # Git-derived plan image and the budgeted replica counts must be ready.
-platform-release-pinned-running-proof: _platform-release-kubeconfig-input _platform-release-plan-preflight
+platform-release-pinned-running-proof: _platform-release-pull-secret-preflight _platform-release-plan-preflight
     #!/usr/bin/env bash
     set -euo pipefail
-    kc="${PLATFORM_APPLY_KUBECONFIG}"
-    ns="{{ platform_ns }}"
-    plan_root="$(git rev-parse --show-toplevel)/.k8s-plans"
-    expected_image="$(tr -d '
-' < "${plan_root}/platform-release.image")"
-    web_image="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get deployment/{{ platform_web_deploy }} -o jsonpath='{.spec.template.spec.containers[0].image}')"
-    worker_image="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get deployment/{{ platform_worker_deploy }} -o jsonpath='{.spec.template.spec.containers[0].image}')"
-    [[ "${web_image}" == "${expected_image}" ]] || { echo "PINNED proof FAILED: web serves ${web_image}, plan says ${expected_image}" >&2; exit 1; }
-    [[ "${worker_image}" == "${expected_image}" ]] || { echo "PINNED proof FAILED: worker runs ${worker_image}, plan says ${expected_image}" >&2; exit 1; }
-    web_ready="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get deployment/{{ platform_web_deploy }} -o jsonpath='{.status.readyReplicas}')"
-    worker_ready="$(kubectl --kubeconfig "${kc}" --namespace "${ns}" get deployment/{{ platform_worker_deploy }} -o jsonpath='{.status.readyReplicas}')"
-    [[ "${web_ready}" == "2" ]] || { echo "RUNNING proof FAILED: web readyReplicas ${web_ready:-0} != 2" >&2; exit 1; }
-    [[ "${worker_ready}" == "1" ]] || { echo "RUNNING proof FAILED: worker readyReplicas ${worker_ready:-0} != 1" >&2; exit 1; }
-    kubectl --kubeconfig "${kc}" --namespace "${ns}" get pods -l app.kubernetes.io/part-of=gftb-platform -o custom-columns=NAME:.metadata.name,COMPONENT:.metadata.labels.app\.kubernetes\.io/component,PHASE:.status.phase,NODE:.spec.nodeName
-    echo "PINNED+RUNNING proof passed: web(2) + worker(1) on ${expected_image}"
+    kc="${PLATFORM_APPLY_KUBECONFIG}"; ns="{{ platform_ns }}"; plan_root="$(git rev-parse --show-toplevel)/.k8s-plans"
+    expected_image="$(tr -d '\n' < "${plan_root}/platform-release.image")"
+    live="$(mktemp)"; trap 'rm -f "${live}"' EXIT
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" get deployment/{{ platform_web_deploy }} deployment/{{ platform_worker_deploy }} -o json > "${live}"
+    jq -e --arg image "${expected_image}" '
+      def d($n;$c;$r): [.items[]|select(.metadata.name==$n)] as $o | ($o|length)==1 and ($o[0].spec.template.spec.containers|length)==1 and $o[0].spec.template.spec.containers[0].name==$c and $o[0].spec.template.spec.containers[0].image==$image and $o[0].spec.template.spec.imagePullSecrets==[{"name":"ghcr-pull"}] and $o[0].spec.replicas==$r and $o[0].status.observedGeneration==$o[0].metadata.generation and $o[0].status.readyReplicas==$r and $o[0].status.updatedReplicas==$r and $o[0].status.availableReplicas==$r;
+      (.items|length)==2 and d("gftb-platform-web";"gftb-platform-web";2) and d("gftb-platform-worker";"gftb-platform-worker";1)
+      and ([.items[]|select(.metadata.name=="gftb-platform-web")][0].spec.template.spec.containers[0]|has("command")|not)
+      and ([.items[]|select(.metadata.name=="gftb-platform-web")][0].spec.template.spec.containers[0]|has("args")|not)
+      and ([.items[]|select(.metadata.name=="gftb-platform-worker")][0].spec.template.spec.containers[0]|has("command")|not)
+      and [.items[]|select(.metadata.name=="gftb-platform-worker")][0].spec.template.spec.containers[0].args==["worker"]
+    ' "${live}" >/dev/null || { echo "PINNED+RUNNING exact-contract proof FAILED" >&2; exit 1; }
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" get pods -l app.kubernetes.io/part-of=gftb-platform -o custom-columns=NAME:.metadata.name,COMPONENT:.metadata.labels.app\\.kubernetes\\.io/component,PHASE:.status.phase,NODE:.spec.nodeName
+    echo "PINNED+RUNNING proof passed: exact web(2) + worker(1) on ${expected_image}"
 
 # SERVED proof. Anonymous, from outside the cluster, against the staging host.
 # staging is PRIVATE (TIN-3815): with STAGING_ACCESS_STATE=gated the proof is
@@ -2565,20 +2563,29 @@ platform-release-pinned-running-proof: _platform-release-kubeconfig-input _platf
 platform-release-served-proof:
     #!/usr/bin/env bash
     set -euo pipefail
-    command -v curl >/dev/null 2>&1 || { echo "curl is required (nix develop provides it)" >&2; exit 1; }
-    [[ "${STAGING_ACCESS_STATE:?Set STAGING_ACCESS_STATE=gated after edge readback}" == "gated" ]] || { echo "staging.greatfallstoolbus.org is operator-QA-only; gated is the only admitted access state (TIN-3815)" >&2; exit 2; }
-    origin="https://staging.greatfallstoolbus.org"
-    anon_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "${origin}/health")"
-    case "${anon_code}" in
-      302|303|403) echo "SERVED proof (gate): anonymous /health -> ${anon_code} (refused toward Access)" ;;
-      *) echo "SERVED proof FAILED: anonymous /health returned ${anon_code}; expected an Access refusal (302/303/403) on the PRIVATE staging host" >&2; exit 1 ;;
-    esac
-    if [[ -n "${CF_ACCESS_CLIENT_ID:-}" && -n "${CF_ACCESS_CLIENT_SECRET:-}" ]]; then
+    command -v curl >/dev/null 2>&1 || { echo "curl is required" >&2; exit 1; }
+    [[ "${STAGING_ACCESS_STATE:?Set STAGING_ACCESS_STATE=gated after edge readback}" == "gated" ]] || { echo "gated is the only admitted staging state" >&2; exit 2; }
+    host="staging.greatfallstoolbus.org"; origin="https://${host}"
+    anon="$(curl -sS -o /dev/null -w '%{http_code}\n%{redirect_url}' --max-time 30 "${origin}/health")"
+    code="${anon%%$'\n'*}"; location="${anon#*$'\n'}"
+    [[ "${code}" == "302" ]] || { echo "Access proof requires exact anonymous 302; got ${code}" >&2; exit 1; }
+    python3 -I - "${location}" "${host}" <<'PY'
+    import sys
+    from urllib.parse import urlsplit
+    u=urlsplit(sys.argv[1])
+    if u.scheme!="https" or not (u.hostname or "").endswith(".cloudflareaccess.com") or u.path!=f"/cdn-cgi/access/login/{sys.argv[2]}":
+        raise SystemExit("exact Cloudflare Access redirect contract failed")
+    PY
+    id_set=0; secret_set=0
+    [[ -n "${CF_ACCESS_CLIENT_ID:-}" ]] && id_set=1
+    [[ -n "${CF_ACCESS_CLIENT_SECRET:-}" ]] && secret_set=1
+    [[ "${id_set}" == "${secret_set}" ]] || { echo "refusing half-configured Access token pair" >&2; exit 2; }
+    if [[ "${id_set}" == 1 ]]; then
       auth_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 -H "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" -H "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}" "${origin}/health")"
-      [[ "${auth_code}" == "200" ]] || { echo "SERVED proof FAILED: authenticated /health returned ${auth_code}; expected 200" >&2; exit 1; }
-      echo "SERVED proof passed: gate refuses anonymous, service-token /health -> 200"
+      [[ "${auth_code}" == 200 ]] || { echo "protected-origin proof requires 200; got ${auth_code}" >&2; exit 1; }
+      echo "SERVED proof passed: exact Access redirect and protected-origin 200"
     else
-      echo "SERVED proof (gate-only) passed; supply CF_ACCESS_CLIENT_ID/CF_ACCESS_CLIENT_SECRET for the authenticated 200 receipt"
+      echo "SERVED edge/Access proof passed; no origin claim without a complete service-token pair"
     fi
 
 # --- Reviewed gftb-site release candidate proofs ----------------------------
