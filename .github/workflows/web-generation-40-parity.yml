@@ -80,7 +80,7 @@ jobs:
             and (.parents | length) == 1
             and .parents[0].sha == $base
           ' <<<"${commit}" >/dev/null
-          pr="$(api "repos/${GITHUB_REPOSITORY}/pulls/__PR_NUMBER__")"
+          pr="$(api "repos/${GITHUB_REPOSITORY}/pulls/141")"
           pr_head="$(jq -er '.head.sha' <<<"${pr}")"
           jq -e --arg carrier "${GITHUB_SHA}" --arg base "${REVIEWED_BASE_SHA}" '
             .merged == true and .merge_commit_sha == $carrier
@@ -88,7 +88,7 @@ jobs:
           ' <<<"${pr}" >/dev/null
           test "$(api "repos/${GITHUB_REPOSITORY}/git/commits/${GITHUB_SHA}" --jq .tree.sha)" = "$(api "repos/${GITHUB_REPOSITORY}/git/commits/${pr_head}" --jq .tree.sha)"
           api "repos/${GITHUB_REPOSITORY}/commits/${pr_head}" --jq '.commit.verification | select(.verified == true and .reason == "valid")' >/dev/null
-          mapfile -t changed < <(api "repos/${GITHUB_REPOSITORY}/pulls/__PR_NUMBER__/files" --paginate --jq '.[].filename' | LC_ALL=C sort)
+          mapfile -t changed < <(api "repos/${GITHUB_REPOSITORY}/pulls/141/files" --paginate --jq '.[].filename' | LC_ALL=C sort)
           expected=(.github/workflows/web-generation-40-parity.yml scripts/validate-public-operator-surface.py)
           [[ "${changed[*]}" == "${expected[*]}" ]]
 
@@ -312,7 +312,7 @@ jobs:
             post_json="$(cat "${RUNNER_TEMP}/post.json" 2>/dev/null || printf '{}')"
             rollback_json="$(cat "${RUNNER_TEMP}/rollback.json" 2>/dev/null || printf '{}')"
             access_json="$(cat "${RUNNER_TEMP}/access.json" 2>/dev/null || printf '{"intercepted":false}')"
-            jq -n --arg carrier "${GITHUB_SHA}" --arg base "${REVIEWED_BASE_SHA}" --arg prHead "${PR_HEAD_SHA}" --arg classification "${classification}" --arg apply "${apply_status}" --arg rollbackStatus "${rollback_status}" --arg proof "${proof_status}" --argjson spent "${SPENT}" --argjson forwardAttempted "${forward_attempted}" --argjson rollbackAttempted "${rollback_attempted}" --argjson pre "${pre_json}" --argjson post "${post_json}" --argjson rollback "${rollback_json}" --argjson access "${access_json}" '{schema:"gftb-web-generation-40-parity/v2",authority:{reviewedBaseSha:$base,carrierMainSha:$carrier,pr:{number:0,headSha:$prHead,mergeMethod:"squash"},meta:{mainSha:"45dc15a1cfa8607f58b2614c2bf5225c022b3f63",adrBlob:"ed0fd327b75cbca7cc60fa343f6399c576772d35"},ruleset:{id:20930684,requiredStatus:"validate",strict:true,signatures:true}},run:{id:env.GITHUB_RUN_ID,attempt:(env.GITHUB_RUN_ATTEMPT|tonumber),url:(env.GITHUB_SERVER_URL+"/"+env.GITHUB_REPOSITORY+"/actions/runs/"+env.GITHUB_RUN_ID),environment:"web-apply"},saved:{forwardRenderSha256:"2244dedfa372c52fb32a891c8e6c6e547ef4bdbc64aa948a259fd495746c29bf",reverseRenderSha256:"d70d8cab4b96fd4390f8c3c843e747a66e8c8681cd6b99e18de4fc4196e3b7ca",derivation:{run:33329089385,artifact:9737130836,digest:"sha256:a2cc2486ea98f524698bdbd3b4c7c7c97295a55b14290aacb2b75ea96a0c2185"}},spent:{terminalBeforeRun:$spent},classification:$classification,prestate:$pre,mutation:{forwardAttempted:$forwardAttempted,applyOutcome:$apply,rollbackAttempted:$rollbackAttempted,rollbackOutcome:$rollbackStatus,rollbackProof:$rollback},poststate:$post,observations:{proofStatus:$proof,observerIndependent:false,credentialClass:"bootstrap web-apply readback",anonymousAccess:$access,authenticatedServedContent:"pending_operator_look"}}' > "${receipt}"
+            jq -n --arg carrier "${GITHUB_SHA}" --arg base "${REVIEWED_BASE_SHA}" --arg prHead "${PR_HEAD_SHA}" --arg classification "${classification}" --arg apply "${apply_status}" --arg rollbackStatus "${rollback_status}" --arg proof "${proof_status}" --argjson spent "${SPENT}" --argjson forwardAttempted "${forward_attempted}" --argjson rollbackAttempted "${rollback_attempted}" --argjson pre "${pre_json}" --argjson post "${post_json}" --argjson rollback "${rollback_json}" --argjson access "${access_json}" '{schema:"gftb-web-generation-40-parity/v2",authority:{reviewedBaseSha:$base,carrierMainSha:$carrier,pr:{number:141,headSha:$prHead,mergeMethod:"squash"},meta:{mainSha:"45dc15a1cfa8607f58b2614c2bf5225c022b3f63",adrBlob:"ed0fd327b75cbca7cc60fa343f6399c576772d35"},ruleset:{id:20930684,requiredStatus:"validate",strict:true,signatures:true}},run:{id:env.GITHUB_RUN_ID,attempt:(env.GITHUB_RUN_ATTEMPT|tonumber),url:(env.GITHUB_SERVER_URL+"/"+env.GITHUB_REPOSITORY+"/actions/runs/"+env.GITHUB_RUN_ID),environment:"web-apply"},saved:{forwardRenderSha256:"2244dedfa372c52fb32a891c8e6c6e547ef4bdbc64aa948a259fd495746c29bf",reverseRenderSha256:"d70d8cab4b96fd4390f8c3c843e747a66e8c8681cd6b99e18de4fc4196e3b7ca",derivation:{run:33329089385,artifact:9737130836,digest:"sha256:a2cc2486ea98f524698bdbd3b4c7c7c97295a55b14290aacb2b75ea96a0c2185"}},spent:{terminalBeforeRun:$spent},classification:$classification,prestate:$pre,mutation:{forwardAttempted:$forwardAttempted,applyOutcome:$apply,rollbackAttempted:$rollbackAttempted,rollbackOutcome:$rollbackStatus,rollbackProof:$rollback},poststate:$post,observations:{proofStatus:$proof,observerIndependent:false,credentialClass:"bootstrap web-apply readback",anonymousAccess:$access,authenticatedServedContent:"pending_operator_look"}}' > "${receipt}"
             chmod 600 "${receipt}"
           }
 
