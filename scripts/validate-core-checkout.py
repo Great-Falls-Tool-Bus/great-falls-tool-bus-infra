@@ -45,7 +45,6 @@ EXPECTED_WORKFLOWS = {
     "validate.yml",
     "web-crs.yml",
     "web-plan.yml",
-    "web-generation-40-parity.yml",
 }
 
 # One entry per workflow that declares the reusable core checkout. Values are
@@ -83,7 +82,6 @@ EXPECTED_ACTION_CHECKOUTS = {
     "validate.yml": 1,
     "web-crs.yml": 2,
     "web-plan.yml": 1,
-    "web-generation-40-parity.yml": 1,
 }
 
 EXPECTED_CORE_CI_PATH_EXPORTS = {
@@ -98,15 +96,10 @@ EXPECTED_CORE_CI_PATH_EXPORTS = {
     "validate.yml": 0,
     "web-crs.yml": 1,
     "web-plan.yml": 0,
-    "web-generation-40-parity.yml": 0,
 }
 
 EXPECTED_PERMISSIONS = {
-    workflow: (
-        ("actions: read", "contents: read", "pull-requests: read")
-        if workflow == "web-generation-40-parity.yml"
-        else (("contents: read", "id-token: write") if workflow == "flywheel-cache-proof.yml" else ("contents: read",))
-    )
+    workflow: (("contents: read", "id-token: write") if workflow == "flywheel-cache-proof.yml" else ("contents: read",))
     for workflow in EXPECTED_WORKFLOWS
 }
 
