@@ -88,9 +88,17 @@ PY
   expect_failure wrong-args "${job}"     '          args: ["migrator"]'     '          args: ["worker"]'     'migration Job entrypoint'
   expect_failure runtime-dsn "${job}"     '                  name: gftb-member-db-migrator-dsn'     '                  name: gftb-member-db-runtime'     'migration Job secret references (only the narrow migration credential)'
   expect_failure pull-secret "${job}"     '        - name: ghcr-pull'     '        - name: ghcr-pull-broken'     'migration Job imagePullSecrets'
+  expect_failure pull-secret-duplicate     'secrets.contract.yaml'     $'    - name: ghcr-pull\n      namespace: members-greatfallstoolbus-org-production\n      type: kubernetes.io/dockerconfigjson'     $'    - name: ghcr-pull\n      namespace: members-greatfallstoolbus-org-production\n      type: kubernetes.io/dockerconfigjson\n    - name: ghcr-pull\n      namespace: members-greatfallstoolbus-org-production\n      type: kubernetes.io/dockerconfigjson'     'GHCR pull Secret declaration cardinality'
   expect_failure pull-secret-manual-origin     'secrets.contract.yaml'     $'    - name: ghcr-pull\n      namespace: members-greatfallstoolbus-org-production'     $'    - name: ghcr-pull\n      namespace: members-greatfallstoolbus-org-production\n      origin: operator-provisioned'     'GHCR pull Secret manual provisioning fields (must be absent)'
   expect_failure pull-secret-manual-provisioner     'secrets.contract.yaml'     '      apply_prerequisite: _member-db-platform-image-pull-prerequisite'     $'      apply_prerequisite: _member-db-platform-image-pull-prerequisite\n      provisioned_by: operator via kubectl'     'GHCR pull Secret manual provisioning fields (must be absent)'
-  expect_failure pull-secret-governance     'secrets.contract.yaml'     'Under TIN-3768 consumer enrolment and TIN-2609'     'Under TIN-0000 ad hoc provisioning'     'GHCR pull Secret governed projection contract'
+  expect_failure pull-secret-projection-contract     'secrets.contract.yaml'     '        contract: RegistryPullProjection/v1'     '        contract: RegistryPullProjection/v0'     'GHCR pull Secret RegistryPullProjection contract'
+  expect_failure pull-secret-controller     'secrets.contract.yaml'     '        controller: sole-governed-owner-overlay'     '        controller: tenant-local'     'GHCR pull Secret controller authority contract'
+  expect_failure pull-secret-mutable     'secrets.contract.yaml'     '        immutable: true'     '        immutable: false'     'GHCR pull Secret immutable intent contract'
+  expect_failure pull-secret-unprotected-subordinate     'secrets.contract.yaml'     '        protected_subordinate_execution: true'     '        protected_subordinate_execution: false'     'GHCR pull Secret protected subordinate execution contract'
+  expect_failure pull-secret-overwrite     'secrets.contract.yaml'     '        create_if_absent: true'     '        create_if_absent: false'     'GHCR pull Secret create-if-absent contract'
+  expect_failure pull-secret-controller-live     'secrets.contract.yaml'     '        controller_live: false'     '        controller_live: true'     'GHCR pull Secret controller live-state contract'
+  expect_failure pull-secret-interim-authority     'secrets.contract.yaml'     '        interim_authority_permitted: false'     '        interim_authority_permitted: true'     'GHCR pull Secret interim authority contract'
+  expect_failure pull-secret-operator-created     'secrets.contract.yaml'     '        operator_created_secret_permitted: false'     '        operator_created_secret_permitted: true'     'GHCR pull Secret operator-created Secret prohibition'
   expect_failure restore-egress-selector     'members-greatfallstoolbus-org-db-production/networkpolicy.yaml'     $'  name: allow-restore-postgres-egress\n  namespace: members-greatfallstoolbus-org-db-production\n  labels:\n    app.kubernetes.io/name: gftb-member-db-restore\n    app.tinyland.dev/lifecycle: declare-only\nspec:\n  podSelector:\n    matchLabels:\n      cnpg.io/cluster: gftb-member-db-restore'     $'  name: allow-restore-postgres-egress\n  namespace: members-greatfallstoolbus-org-db-production\n  labels:\n    app.kubernetes.io/name: gftb-member-db-restore\n    app.tinyland.dev/lifecycle: declare-only\nspec:\n  podSelector:\n    matchLabels:\n      cnpg.io/cluster: gftb-member-db-restore-broken'     'allow-restore-postgres-egress podSelector'
   expect_failure root-as-scoped-authority     'secrets.contract.yaml'     'app.tinyland.dev/object-store-authority: object-read-write-no-admin'     'app.tinyland.dev/object-store-authority: server-root-admin'     'bucket-scoped backup Secret authority annotation contract'
   expect_failure invalid-yaml "${job}"     'apiVersion: batch/v1'     'apiVersion: ['     'YAML decode or jq query failed'
@@ -139,6 +147,8 @@ readonly WANT_MIGRATOR_SECRET="gftb-member-db-migrator-dsn"
 readonly WANT_PLATFORM_PART_OF="great-falls-tool-bus"
 readonly WANT_MIGRATOR_NAME="gftb-member-db-migrator"
 readonly WANT_IMAGE_PULL_SECRET="ghcr-pull"
+readonly WANT_PULL_PROJECTION_CONTRACT="RegistryPullProjection/v1"
+readonly WANT_PULL_PROJECTION_CONTROLLER="sole-governed-owner-overlay"
 readonly WANT_BACKUP_SECRET="gftb-member-db-backup-s3"
 readonly WANT_BUCKET="gftb-member-db-backups"
 readonly WANT_STORAGE_CLASS="openebs-bumble-postgresql-retain"
@@ -339,8 +349,22 @@ pull_contract_keys="$(yaml_query -c --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.s
 assert_eq "${pull_contract_keys}" '[".dockerconfigjson"]' "GHCR pull Secret key contract"
 pull_contract_manual_fields="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | (has("origin") or has("provisioned_by"))' "${secrets_contract}")"
 assert_eq "${pull_contract_manual_fields}" "false" "GHCR pull Secret manual provisioning fields (must be absent)"
-pull_contract_governed="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | (.authority | contains("TIN-3768") and contains("TIN-2609") and contains("sole governed owner-overlay controller") and contains("zero out-of-band kubectl") and contains("per-tenant SOPS"))' "${secrets_contract}")"
-assert_eq "${pull_contract_governed}" "true" "GHCR pull Secret governed projection contract"
+pull_contract_projection="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .projection.contract' "${secrets_contract}")"
+assert_eq "${pull_contract_projection}" "${WANT_PULL_PROJECTION_CONTRACT}" "GHCR pull Secret RegistryPullProjection contract"
+pull_contract_controller="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .projection.controller' "${secrets_contract}")"
+assert_eq "${pull_contract_controller}" "${WANT_PULL_PROJECTION_CONTROLLER}" "GHCR pull Secret controller authority contract"
+pull_contract_immutable="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .projection.immutable' "${secrets_contract}")"
+assert_eq "${pull_contract_immutable}" "true" "GHCR pull Secret immutable intent contract"
+pull_contract_protected_subordinate="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .projection.protected_subordinate_execution' "${secrets_contract}")"
+assert_eq "${pull_contract_protected_subordinate}" "true" "GHCR pull Secret protected subordinate execution contract"
+pull_contract_create_if_absent="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .projection.create_if_absent' "${secrets_contract}")"
+assert_eq "${pull_contract_create_if_absent}" "true" "GHCR pull Secret create-if-absent contract"
+pull_contract_controller_live="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .projection.controller_live' "${secrets_contract}")"
+assert_eq "${pull_contract_controller_live}" "false" "GHCR pull Secret controller live-state contract"
+pull_contract_interim_authority="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .projection.interim_authority_permitted' "${secrets_contract}")"
+assert_eq "${pull_contract_interim_authority}" "false" "GHCR pull Secret interim authority contract"
+pull_contract_operator_created="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .projection.operator_created_secret_permitted' "${secrets_contract}")"
+assert_eq "${pull_contract_operator_created}" "false" "GHCR pull Secret operator-created Secret prohibition"
 
 # --- axis 6: the two-role separation (acceptance row 2) ----------------------
 database="$(yaml_query -r 'select(.kind == "Cluster") | .spec.bootstrap.initdb.database' "${rendered}")"

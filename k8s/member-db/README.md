@@ -12,15 +12,12 @@ produced artifact
 `greatfallstoolbus-org-image-af60fcd7539a4beff6f24e1a95eb11160df7c166-33279762284-1`
 and the image now pinned in this carrier. Those facts prove merged, published,
 and Git-pinned states only; they do not prove this stack applied, running, or
-served. This is a frozen interim carrier, not the final production pin: app main
-is now signed `3d6909c242dbd847cf044730f74347a69eeaae80`, and app PR #218 at
-signed `dd12f0a1acedc8fb39cd3b63dd3ffc542c4ce3f4` changes the
-package/hydration graph. PR #121's repaired signed head
-`ed6567986625ca9c2899d71254e10a40449a4c7d` already uses the exact
-`app.kubernetes.io/part-of=great-falls-tool-bus` identity admitted by this
-database policy. After #218 lands and publishes, the migrator here and #121's
-web/worker must advance together to the same successor digest before
-Ready/apply.
+served. This is a frozen interim carrier, not the final production pin.
+Open-carrier heads and validation status are release-coordination evidence, not
+part of this durable substrate contract. After the app package/hydration
+successor lands and publishes, the migrator here and the separate web/worker
+carrier must advance together to the same successor digest before either
+carrier is Ready or applied.
 
 The role names are bound on both sides: `gftb_migrator` owns DDL and
 `gftb_app` is the DML-only runtime role. The migration creates the `tenant`

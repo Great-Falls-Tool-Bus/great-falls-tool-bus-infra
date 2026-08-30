@@ -3699,6 +3699,7 @@ def install_web_release_fixture_mocks(
         "mktemp",
         "python3",
         "rm",
+        "rmdir",
         "sort",
         "tail",
         "tr",

@@ -251,16 +251,13 @@ This is the infra-side half of S1's acceptance row. The currently pinned,
 published app carrier at
 `af60fcd7539a4beff6f24e1a95eb11160df7c166` holds the corresponding
 PostgreSQL integration proof and refuses a runtime role with `SUPERUSER` or
-`BYPASSRLS`. It is not the final production carrier: app main is now signed
-`3d6909c242dbd847cf044730f74347a69eeaae80`. App PR #218 is Ready/non-Draft
-at signed head `dd12f0a1acedc8fb39cd3b63dd3ffc542c4ce3f4` with protected merge
-auto-merge armed; it has not yet landed or published the successor image. PR
-#121's current signed reviewed head
-`9ec3f05678e01c45b21fe89e11b763eab9f8a8ba` already uses the exact
-`app.kubernetes.io/part-of=great-falls-tool-bus` identity admitted here. After
-#218 lands and publishes, this migrator pin and #121's web/worker pins must
-advance together to that one successor digest before Ready/apply. This cluster supplies the managed LOGIN credential by Secret
-name; no password or tenant identity is declared here.
+`BYPASSRLS`. It is not the final production carrier. Open-carrier heads and
+validation status are release-coordination evidence, not part of this durable
+runbook. After the app package/hydration successor lands and publishes, this
+migrator pin and the separate web/worker pins must advance together to that one
+successor digest before either carrier is Ready or applied. This cluster
+supplies the managed LOGIN credential by Secret name; no password or tenant
+identity is declared here.
 
 ## Step B4 — backup verification (the RPO/RTO evidence)
 
