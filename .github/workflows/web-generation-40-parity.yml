@@ -152,7 +152,7 @@ jobs:
             nix develop . --command just web-release-apply
             forward_apply_rc=0
             set -e
-            if [[ "" -eq 0 ]]; then
+            if [[ "${forward_apply_rc}" -eq 0 ]]; then
               apply_status=succeeded
             else
               apply_status=failed
@@ -165,12 +165,12 @@ jobs:
               nix develop . --command just web-release-server-dry-run
               reverse_dry_run_rc=0
               set -e
-              if [[ "" -eq 0 ]]; then
+              if [[ "${reverse_dry_run_rc}" -eq 0 ]]; then
                 set +e
                 nix develop . --command just web-release-apply
                 reverse_apply_rc=0
                 set -e
-                if [[ "" -eq 0 ]]; then
+                if [[ "${reverse_apply_rc}" -eq 0 ]]; then
                   rollback_status=succeeded
                 else
                   rollback_status=failed
