@@ -56,10 +56,13 @@ jobs:
           test "$(git branch --show-current)" = main
           test "$(git remote get-url origin)" = "https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra"
           test -z "$(git status --porcelain)"
-          if git config --local --get-regexp '^(url\..*\.insteadOf|gpg\.program|gpg\.openpgp\.program|core\.sshCommand)$'; then
-            echo "::error::Local Git configuration may not redirect canonical-main or signature verification."
+          if git config --get-regexp '^(url\..*\.insteadOf|gpg\..*|core\.sshCommand)$'; then
+            echo "::error::Git configuration may not redirect canonical-main or signature verification."
             exit 2
           fi
+          for name in GIT_CONFIG_COUNT GIT_CONFIG_SYSTEM GIT_CONFIG_GLOBAL GIT_SSH_COMMAND GIT_ASKPASS; do
+            test -z "${!name:-}" || { echo "::error::Refusing ambient ${name}."; exit 2; }
+          done
           remote_sha="$(gh api --hostname github.com repos/Great-Falls-Tool-Bus/great-falls-tool-bus-infra/git/ref/heads/main --jq .object.sha)"
           verified="$(gh api --hostname github.com "repos/Great-Falls-Tool-Bus/great-falls-tool-bus-infra/commits/${GITHUB_SHA}" --jq .commit.verification.verified)"
           reason="$(gh api --hostname github.com "repos/Great-Falls-Tool-Bus/great-falls-tool-bus-infra/commits/${GITHUB_SHA}" --jq .commit.verification.reason)"
@@ -67,7 +70,14 @@ jobs:
           test "${verified}" = true
           test "${reason}" = valid
           git update-ref refs/remotes/origin/main "${remote_sha}"
-          git verify-commit "${GITHUB_SHA}" >/dev/null
+          signer_home="${RUNNER_TEMP}/gftb-web-flow-gnupg"
+          mkdir -m 700 "${signer_home}"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --max-redirs 0 https://github.com/web-flow.gpg > "${RUNNER_TEMP}/web-flow.gpg"
+          mapfile -t fingerprints < <(gpg --batch --show-keys --with-colons "${RUNNER_TEMP}/web-flow.gpg" | awk -F: '$1 == "fpr" { print $10 }')
+          [[ "${fingerprints[*]}" == "5DE3E0509C47EA3CF04A42D34AEE18F83AFDEB23 968479A1AFF927E37D1A566BB5690EEEBB952194" ]]
+          gpg --batch --homedir "${signer_home}" --import "${RUNNER_TEMP}/web-flow.gpg" >/dev/null 2>&1
+          GNUPGHOME="${signer_home}" git verify-commit "${GITHUB_SHA}" >/dev/null
+          echo "GNUPGHOME=${signer_home}" >> "${GITHUB_ENV}"
 
       - name: Materialize protected web-apply credential
         working-directory: overlay
