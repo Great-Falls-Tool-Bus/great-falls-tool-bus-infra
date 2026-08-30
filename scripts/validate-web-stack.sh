@@ -123,46 +123,77 @@ if grep -REn "^kind:\s*Namespace" "${dir}" >/dev/null 2>&1; then
   fail "declare-only stack must NOT create the target namespace"
 fi
 
-# --- tracked authority twin: exact, namespace-scoped, never self-applied -------
-# The live web-apply identity pre-dates this declaration. Tracking its exact
-# ServiceAccount/Role/RoleBinding closes the out-of-band drift gap; deliberately
-# excluding it from the workload kustomization prevents the identity from
-# bootstrapping or widening its own authority.
-if yq -r '.resources[]?' "${kustomization}" | grep -Fxq "web-apply-rbac.yaml"; then
-  fail "web-apply-rbac.yaml must stay excluded from the workload kustomization"
-fi
-sa_json="$(yq eval -o=json -I=0 'select(.kind == "ServiceAccount")' "${rbac}")"
-role_json="$(yq eval -o=json -I=0 'select(.kind == "Role")' "${rbac}")"
-binding_json="$(yq eval -o=json -I=0 'select(.kind == "RoleBinding")' "${rbac}")"
+# --- tracked authority source: exact, namespace-scoped, never self-applied -----
+# These are desired source bytes, not a claim about live equality. A protected
+# read-only live census remains mandatory before the permanent carrier may
+# issue its one-use credential. The workload kustomization has an exact finite
+# surface and cannot bootstrap or widen this Role.
+kustomization_json="$(yq eval -o=json -I=0 '.' "${kustomization}")"
 jq -e '
-  .apiVersion == "v1"
-  and .kind == "ServiceAccount"
-  and .metadata.name == "web-apply"
-  and .metadata.namespace == "greatfallstoolbus-org-production"
-  and .automountServiceAccountToken == false
-' <<<"${sa_json}" >/dev/null || fail "web-apply ServiceAccount contract mismatch"
+  (. | keys | sort) == ["apiVersion","kind","labels","namespace","resources"]
+  and .resources == ["deployment.yaml","service.yaml","networkpolicy.yaml"]
+' <<<"${kustomization_json}" >/dev/null ||
+  fail "workload kustomization must remain the exact three-file surface with no patches, generators, or components"
+
+rbac_docs_json="$(yq eval-all -o=json -I=0 '. as $doc ireduce ([]; . + [$doc])' "${rbac}")"
 jq -e '
-  .apiVersion == "rbac.authorization.k8s.io/v1"
-  and .kind == "Role"
-  and .metadata.name == "web-apply"
-  and .metadata.namespace == "greatfallstoolbus-org-production"
-  and .rules == [
-    {"apiGroups":["apps"],"resources":["deployments"],"verbs":["get","list","watch","create","update","patch"]},
-    {"apiGroups":["apps"],"resources":["replicasets"],"verbs":["get","list","watch"]},
-    {"apiGroups":[""],"resources":["pods"],"verbs":["get","list","watch"]},
-    {"apiGroups":[""],"resources":["services"],"verbs":["get","list","watch","create","update","patch"]},
-    {"apiGroups":["networking.k8s.io"],"resources":["networkpolicies"],"verbs":["get","list","watch","create","update","patch","delete"]},
-    {"apiGroups":["discovery.k8s.io"],"resources":["endpointslices"],"verbs":["get","list","watch"]}
-  ]
-' <<<"${role_json}" >/dev/null || fail "web-apply Role contract mismatch"
-jq -e '
-  .apiVersion == "rbac.authorization.k8s.io/v1"
-  and .kind == "RoleBinding"
-  and .metadata.name == "web-apply"
-  and .metadata.namespace == "greatfallstoolbus-org-production"
-  and .roleRef == {"apiGroup":"rbac.authorization.k8s.io","kind":"Role","name":"web-apply"}
-  and .subjects == [{"kind":"ServiceAccount","name":"web-apply","namespace":"greatfallstoolbus-org-production"}]
-' <<<"${binding_json}" >/dev/null || fail "web-apply RoleBinding contract mismatch"
+  length == 3
+  and ([.[] | .kind] | sort) == ["Role","RoleBinding","ServiceAccount"]
+  and (([.[] | select(.kind == "ServiceAccount")] | length) == 1)
+  and (([.[] | select(.kind == "Role")] | length) == 1)
+  and (([.[] | select(.kind == "RoleBinding")] | length) == 1)
+  and ((.[] | select(.kind == "ServiceAccount")) == {
+    "apiVersion":"v1",
+    "kind":"ServiceAccount",
+    "metadata":{
+      "name":"web-apply",
+      "namespace":"greatfallstoolbus-org-production",
+      "labels":{
+        "app.kubernetes.io/managed-by":"great-falls-tool-bus-infra",
+        "app.kubernetes.io/part-of":"great-falls-tool-bus"
+      }
+    },
+    "automountServiceAccountToken":false
+  })
+  and ((.[] | select(.kind == "Role")) == {
+    "apiVersion":"rbac.authorization.k8s.io/v1",
+    "kind":"Role",
+    "metadata":{
+      "name":"web-apply",
+      "namespace":"greatfallstoolbus-org-production",
+      "labels":{
+        "app.kubernetes.io/managed-by":"great-falls-tool-bus-infra",
+        "app.kubernetes.io/part-of":"great-falls-tool-bus"
+      }
+    },
+    "rules":[
+      {"apiGroups":["apps"],"resources":["deployments"],"resourceNames":["greatfallstoolbus-org"],"verbs":["get","update","patch"]},
+      {"apiGroups":["apps"],"resources":["deployments"],"verbs":["list","watch","create"]},
+      {"apiGroups":["apps"],"resources":["replicasets"],"verbs":["list"]},
+      {"apiGroups":[""],"resources":["pods"],"verbs":["list"]},
+      {"apiGroups":[""],"resources":["services"],"resourceNames":["greatfallstoolbus-org"],"verbs":["get","update","patch"]},
+      {"apiGroups":[""],"resources":["services"],"verbs":["create"]},
+      {"apiGroups":["networking.k8s.io"],"resources":["networkpolicies"],"resourceNames":["default-deny-ingress","allow-cloudflared-tunnel-ingress","allow-prometheus-scrape","default-deny-egress"],"verbs":["get","update","patch","delete"]},
+      {"apiGroups":["networking.k8s.io"],"resources":["networkpolicies"],"verbs":["list","create"]},
+      {"apiGroups":["discovery.k8s.io"],"resources":["endpointslices"],"verbs":["list"]}
+    ]
+  })
+  and ((.[] | select(.kind == "RoleBinding")) == {
+    "apiVersion":"rbac.authorization.k8s.io/v1",
+    "kind":"RoleBinding",
+    "metadata":{
+      "name":"web-apply",
+      "namespace":"greatfallstoolbus-org-production",
+      "labels":{
+        "app.kubernetes.io/managed-by":"great-falls-tool-bus-infra",
+        "app.kubernetes.io/part-of":"great-falls-tool-bus"
+      }
+    },
+    "roleRef":{"apiGroup":"rbac.authorization.k8s.io","kind":"Role","name":"web-apply"},
+    "subjects":[{"kind":"ServiceAccount","name":"web-apply","namespace":"greatfallstoolbus-org-production"}]
+  })
+' <<<"${rbac_docs_json}" >/dev/null ||
+  fail "web-apply RBAC must be exactly one closed ServiceAccount/Role/RoleBinding document set"
 
 # --- gftb-site serving shape: containerPort 3000 + /health probes -----------
 port="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == strenv(app)) | .ports[] | select(.name == "http") | .containerPort' "${deploy}")"
@@ -229,6 +260,24 @@ fi
 # a real, contained local path. Refuse before this render, and before
 # web-stack-render's own separate render, ever runs.
 bash scripts/guard-no-remote-kustomize-resources.sh "${dir}"
-kubectl kustomize "${dir}" >/dev/null
+rendered_json="$(kubectl kustomize "${dir}" | yq eval-all -o=json -I=0 '. as $doc ireduce ([]; . + [$doc])' -)"
+jq -e '
+  length == 5
+  and ([.[] | "\(.kind)/\(.metadata.name)"] | sort) == [
+    "Deployment/greatfallstoolbus-org",
+    "NetworkPolicy/allow-cloudflared-tunnel-ingress",
+    "NetworkPolicy/allow-prometheus-scrape",
+    "NetworkPolicy/default-deny-ingress",
+    "Service/greatfallstoolbus-org"
+  ]
+  and ([.[] | select(
+    .kind == "ServiceAccount"
+    or .kind == "Role"
+    or .kind == "RoleBinding"
+    or .kind == "ClusterRole"
+    or .kind == "ClusterRoleBinding"
+  )] | length) == 0
+' <<<"${rendered_json}" >/dev/null ||
+  fail "workload render must contain exactly Deployment/Service/three NetworkPolicies and no RBAC authority"
 
 echo "web stack validation passed for ${app} in ${stack_ns}: ATTENDED-ONLY declare-only (replicas 2, image pinned to ${admitted_image_repo}@sha256:<64 hex>, no namespace, tracked exact web-apply RBAC excluded from workload kustomization, no workflow apply path -- the repository_dispatch CD carrier is retired and apply is attended-operator-only behind the promotion interlock), gftb-site static-origin ClusterIP 80->3000 with /health probes, default-deny + cloudflared-only public ingress, route+reaper fail-closed, no committed secrets"
