@@ -1,7 +1,7 @@
 name: Web generation 40 parity bridge
 
 # TIN-4227 one-time bridge. A merge push to canonical main reconciles only the
-# exact generation-40 tuple. The registered validator pins these bytes and
+# exact generation-40 tuple, from a signed bridge head. The registered validator pins these bytes and
 # freezes k8s/web at this tuple until GF-I09 replaces the bridge. Removal is
 # receiver-first only: prove canonical update -> revert -> re-forward before
 # deleting this workflow and its freeze assertion.
