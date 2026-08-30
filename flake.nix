@@ -19,7 +19,7 @@
           pkgs = nixpkgs.legacyPackages.${system};
           # actionlint v1.7.12 can deadlock before starting ShellCheck when a
           # run block exceeds the pressured kernel pipe capacity (upstream
-          # rhysd/actionlint#702). Consume the signed upstream fix until a
+          # rhysd/actionlint#650). Consume the signed upstream fix until a
           # release containing it reaches nixpkgs.
           actionlintFixed = pkgs.actionlint.overrideAttrs (old: {
             patches = (old.patches or [ ]) ++ [
