@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 60381)
-Total output lines: 4118
-
 set dotenv-load := false
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
@@ -141,18 +138,18 @@ workflow-lint:
         echo "workflow input must be a regular non-symlink file: ${workflow}" >&2
         exit 1
       }
-      printf 'actionlint: %s\n' "${workflow}"
+      printf "actionlint: %s\n" "${workflow}"
       lint_rc=0
       timeout --signal=TERM --kill-after=5s 30s \
-        actionlint -ignore 'label "tinyland-nix" is unknown' -ignore 'SC2155' "${workflow}" || lint_rc=$?
+        actionlint -ignore "label \"tinyland-nix\" is unknown" -ignore "SC2155" "${workflow}" || lint_rc=$?
       case "${lint_rc}" in
         0) ;;
         124|137)
-          printf '::error file=%s,title=actionlint timeout::actionlint exceeded 30 seconds for %s\n' "${workflow}" "${workflow}" >&2
+          printf "::error file=%s,title=actionlint timeout::actionlint exceeded 30 seconds for %s\n" "${workflow}" "${workflow}" >&2
           exit 1
           ;;
         *)
-          printf '::error file=%s,title=actionlint failed::actionlint exited %s for %s\n' "${workflow}" "${lint_rc}" "${workflow}" >&2
+          printf "::error file=%s,title=actionlint failed::actionlint exited %s for %s\n" "${workflow}" "${lint_rc}" "${workflow}" >&2
           exit "${lint_rc}"
           ;;
       esac
@@ -1269,7 +1266,1997 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
     else:
         if restore_pre_cutover(before_values[0], storage_delta) != after_values[0]:
             raise SystemExit(
-          …30381 tokens truncated…ody validation")
+                "ERROR: gh_nix Helm values contain changes beyond the reviewed runner-group "
+                "rollback (runnerGroup, the admitted ephemeral-storage transition, "
+                "pinned runner image digest, GF_FLYWHEEL_PROFILE_STATE, "
+                "arc-runner priorityClassName)"
+            )
+        print(
+            "ARC plan scope guard passed: exact gh_nix runner-group rollback update "
+            "plus the state-only runner_group_policy destroy."
+        )
+    PY
+    plan_digest_after="$(python3 -I -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${plan_path}")"
+    test "${plan_digest_after}" = "${plan_digest}" || { echo "ARC plan changed during scope review" >&2; exit 2; }
+    if [[ "${reconcile}" == "false" ]]; then
+        printf '%s\n' "${plan_digest}" > .tofu-plans/arc-runners.scope-sha256
+        chmod 600 .tofu-plans/arc-runners.scope-sha256
+    fi
+
+arc-apply: _reviewed-clean-main _reviewed-arc-core _operator-apply-confirm _arc-exclusive-confirm _arc-plan-input-preflight arc-init arc-plan-scope-check
+    #!/usr/bin/env bash
+    set -euo pipefail
+    core="${GF_ARC_CORE_PATH:-{{ arc_core_default }}}"
+    core_ci="${GF_ARC_CORE_CI_PATH:-{{ arc_core_ci_default }}}"
+    kubeconfig="${GFTB_ARC_KUBECONFIG:?Set GFTB_ARC_KUBECONFIG to the reviewed ARC kubeconfig}"
+    data_dir="$(pwd)/.tofu-plans/arc-runners.tfdata"
+    backend="${ARC_BACKEND:-{{ arc_backend_default }}}"
+    if [[ "${backend}" != /* ]]; then
+        backend="$(pwd)/${backend}"
+    fi
+    test -f .tofu-plans/arc-runners.tfplan
+    test -f .tofu-plans/arc-runners.source-sha
+    test -f .tofu-plans/arc-runners.core-sha
+    test -f .tofu-plans/arc-runners.backend-blob
+    test -f .tofu-plans/arc-runners.plan-sha256
+    test -f .tofu-plans/arc-runners.scope-sha256
+    test ! -e .tofu-plans/arc-runners.apply-attempted || { echo "ARC plan was already submitted; create and review a fresh plan" >&2; exit 2; }
+    test "$(git rev-parse HEAD)" = "$(tr -d '\n' < .tofu-plans/arc-runners.source-sha)" || { echo "ARC plan was created from a different infra revision" >&2; exit 2; }
+    test "$(git -C "${core}" rev-parse HEAD)" = "$(tr -d '\n' < .tofu-plans/arc-runners.core-sha)" || { echo "ARC plan was created from a different GloriousFlywheel revision" >&2; exit 2; }
+    test "$(python3 -I -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${backend}")" = "$(tr -d '\n' < .tofu-plans/arc-runners.backend-blob)" || { echo "ARC plan was created with a different backend declaration" >&2; exit 2; }
+    [[ -z "$(git status --porcelain)" ]] || { echo "Infra worktree changed before ARC apply" >&2; exit 2; }
+    [[ -z "$(git -C "${core}" status --porcelain)" ]] || { echo "ARC core changed before apply" >&2; exit 2; }
+    just _arc-plan-input-preflight
+    workspace="$(TF_CLI_CONFIG_FILE=/dev/null TF_VAR_k8s_config_path="${kubeconfig}" TF_DATA_DIR="${data_dir}" nix develop "${core_ci}" -c tofu -chdir="${core}/tofu/stacks/arc-runners" workspace show)"
+    [[ "${workspace}" == "default" ]] || { echo "ARC state must use the default workspace, observed ${workspace}" >&2; exit 2; }
+    just _arc-plan-input-preflight
+    plan_digest="$(python3 -I -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' .tofu-plans/arc-runners.tfplan)"
+    test "${plan_digest}" = "$(tr -d '\n' < .tofu-plans/arc-runners.plan-sha256)" || { echo "ARC plan digest changed after planning" >&2; exit 2; }
+    test "${plan_digest}" = "$(tr -d '\n' < .tofu-plans/arc-runners.scope-sha256)" || { echo "ARC plan is not the exact scope-reviewed artifact" >&2; exit 2; }
+    printf '%s\n' "${plan_digest}" > .tofu-plans/arc-runners.apply-attempted
+    chmod 600 .tofu-plans/arc-runners.apply-attempted
+    TF_CLI_CONFIG_FILE=/dev/null TF_VAR_k8s_config_path="${kubeconfig}" TF_DATA_DIR="${data_dir}" nix develop "${core_ci}" -c tofu -chdir="${core}/tofu/stacks/arc-runners" apply -input=false "$(pwd)/.tofu-plans/arc-runners.tfplan"
+    rm -f .tofu-plans/arc-runners.tfplan .tofu-plans/arc-runners.source-sha .tofu-plans/arc-runners.core-sha .tofu-plans/arc-runners.backend-blob .tofu-plans/arc-runners.kubeconfig-blob .tofu-plans/arc-runners.cluster-uid .tofu-plans/arc-runners.target-uid .tofu-plans/arc-runners.plan-sha256 .tofu-plans/arc-runners.scope-sha256 .tofu-plans/arc-runners.apply-attempted
+    rm -rf -- "${data_dir}"
+
+# Read-only closure receipt for the reviewed ARC transaction. It proves that
+# canonical remote state, a refreshed plan, the live ARC object, and the listener
+# all converge on the same reviewed capacity AND the same reviewed runner group,
+# without reusing the apply session. TIN-3902: `.spec.runnerGroup` is the one
+# thing the cutover changes, so a receipt that never reads it can go green while
+# the fleet is still idle in GitHub's Default group.
+arc-capacity-readback: _reviewed-clean-main _reviewed-arc-core _arc-exclusive-confirm _arc-backend-contract _arc-runtime-contract _arc-artifact-root-contract
+    #!/usr/bin/env bash
+    set -euo pipefail
+    umask 077
+    core="${GF_ARC_CORE_PATH:-{{ arc_core_default }}}"
+    core_ci="${GF_ARC_CORE_CI_PATH:-{{ arc_core_ci_default }}}"
+    kubeconfig="${GFTB_ARC_KUBECONFIG:?Set GFTB_ARC_KUBECONFIG to the reviewed ARC kubeconfig}"
+    backend="${ARC_BACKEND:-{{ arc_backend_default }}}"
+    if [[ "${backend}" != /* ]]; then
+        backend="$(pwd)/${backend}"
+    fi
+    mode="${GFTB_ARC_READBACK_MODE:-promoted}"
+    [[ "${mode}" == "promoted" || "${mode}" == "rolled-back" || "${mode}" == "reconcile" ]] || { echo "GFTB_ARC_READBACK_MODE must be promoted, rolled-back, or reconcile" >&2; exit 2; }
+    if [[ "${mode}" == "reconcile" ]]; then
+        test -f .tofu-plans/arc-runners.apply-attempted || { echo "No ambiguous ARC apply attempt requires reconciliation" >&2; exit 2; }
+    fi
+    readback_dir="$(mktemp -d "$(pwd)/.tofu-plans/arc-readback.XXXXXX")"
+    data_dir="${readback_dir}/tfdata"
+    state_json="${readback_dir}/state.json"
+    nochange_plan="${readback_dir}/nochange.tfplan"
+    plan_log="${readback_dir}/plan.log"
+    mkdir -m 700 "${data_dir}"
+    trap 'rm -rf "${readback_dir}"' EXIT
+    TF_CLI_CONFIG_FILE=/dev/null TF_VAR_k8s_config_path="${kubeconfig}" TF_DATA_DIR="${data_dir}" nix develop "${core_ci}" -c tofu -chdir="${core}/tofu/stacks/arc-runners" init -reconfigure -input=false -lockfile=readonly -backend-config="${backend}" >/dev/null
+    workspace="$(TF_CLI_CONFIG_FILE=/dev/null TF_VAR_k8s_config_path="${kubeconfig}" TF_DATA_DIR="${data_dir}" nix develop "${core_ci}" -c tofu -chdir="${core}/tofu/stacks/arc-runners" workspace show)"
+    [[ "${workspace}" == "default" ]] || { echo "ARC state must use the default workspace, observed ${workspace}" >&2; exit 2; }
+    TF_CLI_CONFIG_FILE=/dev/null TF_VAR_k8s_config_path="${kubeconfig}" TF_DATA_DIR="${data_dir}" nix develop "${core_ci}" -c tofu -chdir="${core}/tofu/stacks/arc-runners" show -json > "${state_json}"
+    state_values="$(jq -er '
+      [.. | objects | select(.address? == "module.gh_nix.helm_release.arc_runner")]
+      | if length == 1 and (.[0].values.values | length) == 1
+        then .[0].values.values[0]
+        else error("expected exactly one gh_nix Helm state value")
+        end
+    ' "${state_json}")"
+    state_request="$(yq -r '.template.spec.containers[] | select(.name == "runner") | .resources.requests."ephemeral-storage"' <<<"${state_values}")"
+    state_limit="$(yq -r '.template.spec.containers[] | select(.name == "runner") | .resources.limits."ephemeral-storage"' <<<"${state_values}")"
+    live_json="$(kubectl --kubeconfig "${kubeconfig}" --context honey -n arc-runners get autoscalingrunnerset great-falls-tool-bus-nix -o json)"
+    jq -e --arg uid "{{ arc_target_uid }}" '
+      .metadata.uid == $uid
+      and .spec.minRunners == 0
+      and .spec.maxRunners == 4
+      and .status.phase == "Running"
+      and (.status.pendingEphemeralRunners // 0) == 0
+      and ([.spec.template.spec.containers[] | select(.name == "runner")] | length == 1)
+    ' <<<"${live_json}" >/dev/null || { echo "Live great-falls-tool-bus-nix is not healthy" >&2; exit 2; }
+    live_request="$(jq -er '[.spec.template.spec.containers[] | select(.name == "runner")] | if length == 1 then .[0].resources.requests["ephemeral-storage"] else error("expected one runner container") end' <<<"${live_json}")"
+    live_limit="$(jq -er '[.spec.template.spec.containers[] | select(.name == "runner")] | if length == 1 then .[0].resources.limits["ephemeral-storage"] else error("expected one runner container") end' <<<"${live_json}")"
+    [[ "${state_request}" == "${live_request}" && "${state_limit}" == "${live_limit}" ]] || { echo "Canonical ARC state and live runner capacity disagree" >&2; exit 2; }
+    [[ ( "${state_request}" == "4Gi" && "${state_limit}" == "8Gi" ) || ( "${state_request}" == "8Gi" && "${state_limit}" == "16Gi" ) ]] || { echo "ARC capacity is outside the reviewed pre/post states" >&2; exit 2; }
+    state_group="$(jq -er '
+      [.. | objects | select(.address? == "module.gh_nix.helm_release.arc_runner")]
+      | if length == 1
+        then [.[0].values.set[] | select(.name == "runnerGroup")]
+        else error("expected exactly one gh_nix Helm state resource")
+        end
+      | if length == 1
+        then .[0].value
+        else error("expected exactly one gh_nix runnerGroup set entry")
+        end
+    ' "${state_json}")"
+    live_group="$(jq -er '.spec.runnerGroup' <<<"${live_json}")"
+    [[ "${state_group}" == "${live_group}" ]] || { echo "Canonical ARC state and live runner group disagree: ${state_group} vs ${live_group}" >&2; exit 2; }
+    [[ "${state_group}" == "default" || "${state_group}" == "great-falls-tool-bus-infra" ]] || { echo "ARC runner group is outside the reviewed pre/post admission identities: ${state_group}" >&2; exit 2; }
+    if [[ "${mode}" == "promoted" ]]; then
+        [[ "${state_request}" == "8Gi" && "${state_limit}" == "16Gi" ]] || { echo "ARC capacity promotion is not converged at 8Gi/16Gi" >&2; exit 2; }
+        [[ "${state_group}" == "great-falls-tool-bus-infra" ]] || { echo "ARC runner-group cutover is not converged at great-falls-tool-bus-infra" >&2; exit 2; }
+    fi
+    if [[ "${mode}" == "rolled-back" ]]; then
+        # TIN-2299's capacity bump applied on 2026-08-17 as helm_release
+        # great-falls-tool-bus-nix revision 6 with runnerGroup still `default`,
+        # decomposing TIN-3902's cutover. The ratified rollback from the
+        # post-cutover state is therefore the group-move reversal alone, which
+        # converges at the retained 8Gi/16Gi; the original combined reversal
+        # converges at 4Gi/8Gi and stays certifiable for a deliberate,
+        # separately-decided capacity revert. Both converge at group `default`.
+        [[ ( "${state_request}" == "4Gi" && "${state_limit}" == "8Gi" ) || ( "${state_request}" == "8Gi" && "${state_limit}" == "16Gi" ) ]] || { echo "ARC rollback is not converged at 4Gi/8Gi or the capacity-retained 8Gi/16Gi" >&2; exit 2; }
+        [[ "${state_group}" == "default" ]] || { echo "ARC runner-group rollback is not converged at default" >&2; exit 2; }
+    fi
+    listener_json="$(kubectl --kubeconfig "${kubeconfig}" --context honey -n arc-systems get pods -l actions.github.com/scale-set-name=great-falls-tool-bus-nix,actions.github.com/scale-set-namespace=arc-runners,app.kubernetes.io/component=runner-scale-set-listener -o json)"
+    jq -e '
+      (.items | length) == 1
+      and .items[0].metadata.deletionTimestamp == null
+      and .items[0].status.phase == "Running"
+      and any(.items[0].status.conditions[]?; .type == "Ready" and .status == "True")
+      and (.items[0].status.containerStatuses | length) > 0
+      and all(.items[0].status.containerStatuses[]; .ready == true and .restartCount == 0)
+    ' <<<"${listener_json}" >/dev/null || { echo "GFTB ARC listener is not one Ready zero-restart pod" >&2; exit 2; }
+    set +e
+    TF_CLI_CONFIG_FILE=/dev/null TF_VAR_k8s_config_path="${kubeconfig}" TF_DATA_DIR="${data_dir}" nix develop "${core_ci}" -c tofu -chdir="${core}/tofu/stacks/arc-runners" plan -input=false -detailed-exitcode -var-file="$(pwd)/{{ arc_tfvars }}" -out="${nochange_plan}" >"${plan_log}" 2>&1
+    plan_status=$?
+    set -e
+    # Classification is keyed on the refreshed plan and the runner group, NOT on
+    # the storage level. Storage stopped being a pre/post proxy on 2026-08-17,
+    # when TIN-2299's capacity bump applied on its own as helm_release revision 6
+    # and left the pre-cutover state already at 8Gi/16Gi: a pending decomposed
+    # cutover (or rollback) plan must still be able to reach the reconcile arm
+    # that re-runs arc-plan-scope-check, and a converged group=default state at
+    # either admitted storage level must be certifiable as rolled-back.
+    if [[ "${plan_status}" == "2" ]]; then
+        [[ "${mode}" == "reconcile" ]] || { echo "ARC state/source/live refresh is not a no-change plan (status 2); only GFTB_ARC_READBACK_MODE=reconcile may certify a pending plan" >&2; exit 2; }
+        GFTB_ARC_READBACK_MODE=reconcile GFTB_ARC_RECONCILE_PLAN_PATH="${nochange_plan}" GFTB_ARC_RECONCILE_DATA_DIR="${data_dir}" just arc-plan-scope-check
+        receipt="pre-change state/live ${state_request}/${state_limit} in runner group ${state_group} with an exact pending scope-reviewed plan; create and review a fresh plan"
+    elif [[ "${state_group}" == "great-falls-tool-bus-infra" ]]; then
+        [[ "${state_request}" == "8Gi" && "${state_limit}" == "16Gi" ]] || { echo "ARC dedicated-group state is outside the reviewed promoted capacity" >&2; exit 2; }
+        [[ "${plan_status}" == "0" ]] || { echo "Promoted ARC state/source/live refresh is not a no-change plan (status ${plan_status})" >&2; exit 2; }
+        receipt="promoted state/live 8Gi/16Gi in runner group ${state_group} with refreshed no-change plan"
+    else
+        [[ "${plan_status}" == "0" ]] || { echo "ARC state/source/live refresh failed (status ${plan_status})" >&2; exit 2; }
+        [[ "${mode}" == "rolled-back" ]] || { echo "ARC state/live is converged in runner group default with a no-change plan, which is a completed rollback or the decomposed pre-cutover state; re-run with GFTB_ARC_READBACK_MODE=rolled-back" >&2; exit 2; }
+        if [[ "${state_request}" == "8Gi" && "${state_limit}" == "16Gi" ]]; then
+            receipt="rolled-back state/live 8Gi/16Gi in runner group default with refreshed no-change plan; decomposed group-move reversal, TIN-2299 capacity retained"
+        else
+            receipt="rolled-back state/live 4Gi/8Gi in runner group default with refreshed no-change plan"
+        fi
+    fi
+    just _reviewed-clean-main
+    just _reviewed-arc-core
+    just _arc-backend-contract
+    just _arc-runtime-contract
+    if [[ -e .tofu-plans/arc-runners.apply-attempted ]]; then
+        rm -f .tofu-plans/arc-runners.tfplan .tofu-plans/arc-runners.source-sha .tofu-plans/arc-runners.core-sha .tofu-plans/arc-runners.backend-blob .tofu-plans/arc-runners.kubeconfig-blob .tofu-plans/arc-runners.cluster-uid .tofu-plans/arc-runners.target-uid .tofu-plans/arc-runners.plan-sha256 .tofu-plans/arc-runners.scope-sha256 .tofu-plans/arc-runners.apply-attempted
+        attempted_data_dir="$(pwd)/.tofu-plans/arc-runners.tfdata"
+        if [[ -e "${attempted_data_dir}" || -L "${attempted_data_dir}" ]]; then
+            [[ -d "${attempted_data_dir}" && ! -L "${attempted_data_dir}" ]] || { echo "ARC attempted TF_DATA_DIR is not a real directory" >&2; exit 2; }
+            rm -rf -- "${attempted_data_dir}"
+        fi
+    fi
+    echo "ARC capacity/runner-group receipt passed: ${receipt}; listener Ready."
+
+arc-enrollment-plan: enrollment-preflight arc-plan
+    @echo "Review with just arc-plan-show and just arc-plan-scope-check."
+    @echo "Then run: GFTB_APPLY_CONFIRM=apply GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-apply"
+    @echo "Then prove: GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-capacity-readback"
+
+# Production mutation must originate from clean, signed, current canonical main.
+# The remote readback prevents a stale local origin/main ref from becoming apply
+# authority.
+_reviewed-clean-main:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [[ "$(git branch --show-current)" == "main" ]] || { echo "Guarded ARC operation requires the main branch" >&2; exit 2; }
+    [[ -z "$(git status --porcelain)" ]] || { echo "Guarded ARC operation requires a clean worktree" >&2; exit 2; }
+    index_flags="$(git ls-files -v | awk '$1 != "H"')"
+    [[ -z "${index_flags}" ]] || { echo "Guarded ARC operation refuses assume-unchanged, skip-worktree, or non-cached index flags: ${index_flags}" >&2; exit 2; }
+    canonical_remote="https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git"
+    origin_url="$(git remote get-url origin)"
+    case "${origin_url}" in
+      https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra|https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git|git@github.com:Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git) ;;
+      *) echo "Guarded ARC operation origin is not the canonical GFTB infra repository: ${origin_url}" >&2; exit 2 ;;
+    esac
+    git show-ref --verify --quiet refs/remotes/origin/main || { echo "Fetch canonical origin/main before the guarded ARC operation" >&2; exit 2; }
+    head_sha="$(git rev-parse HEAD)"
+    origin_sha="$(git rev-parse origin/main)"
+    [[ "${head_sha}" == "${origin_sha}" ]] || { echo "Guarded ARC operation HEAD ${head_sha} is not origin/main ${origin_sha}" >&2; exit 2; }
+    remote_sha="$(git ls-remote --exit-code "${canonical_remote}" refs/heads/main | awk 'NR == 1 { print $1 }')"
+    [[ "${remote_sha}" =~ ^[0-9a-f]{40}$ ]] || { echo "Could not resolve the current remote main SHA" >&2; exit 2; }
+    [[ "${head_sha}" == "${remote_sha}" ]] || { echo "Guarded ARC operation HEAD ${head_sha} is not current remote main ${remote_sha}" >&2; exit 2; }
+    git verify-commit "${head_sha}" >/dev/null
+    echo "reviewed infra carrier: ${head_sha}"
+
+# Enrollment and GitHub App Secret materialization use the implementation-role
+# core pin. They may not execute an arbitrary sibling checkout.
+_reviewed-implementation-core:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    core="${GF_CORE_PATH:-../GloriousFlywheel}"
+    test -d "${core}/.git" -o -f "${core}/.git" || { echo "GF_CORE_PATH is not a Git checkout: ${core}" >&2; exit 2; }
+    [[ -z "$(git -C "${core}" status --porcelain)" ]] || { echo "GloriousFlywheel implementation core must be clean" >&2; exit 2; }
+    index_flags="$(git -C "${core}" ls-files -v | awk '$1 != "H"')"
+    [[ -z "${index_flags}" ]] || { echo "GloriousFlywheel implementation core refuses assume-unchanged, skip-worktree, or non-cached index flags: ${index_flags}" >&2; exit 2; }
+    [[ "$(git -C "${core}" rev-parse HEAD)" == "{{ gf_core_sha }}" ]] || { echo "GloriousFlywheel implementation core must be {{ gf_core_sha }}" >&2; exit 2; }
+    case "$(git -C "${core}" remote get-url origin)" in
+      https://github.com/tinyland-inc/GloriousFlywheel|https://github.com/tinyland-inc/GloriousFlywheel.git|git@github.com:tinyland-inc/GloriousFlywheel.git) ;;
+      *) echo "GloriousFlywheel implementation core origin is not canonical" >&2; exit 2 ;;
+    esac
+    git -C "${core}" verify-commit "{{ gf_core_sha }}" >/dev/null
+
+# ARC uses the role-specific, signed GloriousFlywheel source pin. The separate
+# checkout avoids silently substituting a newer implementation-core worktree.
+_reviewed-arc-core:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    core="${GF_ARC_CORE_PATH:-{{ arc_core_default }}}"
+    test -d "${core}/.git" -o -f "${core}/.git" || { echo "GF_ARC_CORE_PATH is not a Git checkout: ${core}" >&2; exit 2; }
+    [[ -z "$(git -C "${core}" status --porcelain)" ]] || { echo "GloriousFlywheel ARC core must be clean" >&2; exit 2; }
+    index_flags="$(git -C "${core}" ls-files -v | awk '$1 != "H"')"
+    [[ -z "${index_flags}" ]] || { echo "GloriousFlywheel ARC core refuses assume-unchanged, skip-worktree, or non-cached index flags: ${index_flags}" >&2; exit 2; }
+    [[ "$(git -C "${core}" rev-parse HEAD)" == "{{ arc_core_sha }}" ]] || { echo "GloriousFlywheel ARC core must be {{ arc_core_sha }}" >&2; exit 2; }
+    case "$(git -C "${core}" remote get-url origin)" in
+      https://github.com/tinyland-inc/GloriousFlywheel|https://github.com/tinyland-inc/GloriousFlywheel.git|git@github.com:tinyland-inc/GloriousFlywheel.git) ;;
+      *) echo "GloriousFlywheel ARC core origin is not canonical" >&2; exit 2 ;;
+    esac
+    git -C "${core}" verify-commit "{{ arc_core_sha }}" >/dev/null
+    core_abs="$(cd "${core}" && pwd -P)"
+    core_ci="${GF_ARC_CORE_CI_PATH:-{{ arc_core_ci_default }}}"
+    pinned_ci="github:tinyland-inc/GloriousFlywheel/{{ arc_core_sha }}#ci"
+    local_ci="path:${core_abs}#ci"
+    declared_local_ci="path:${core}#ci"
+    [[ "${core_ci}" == "${pinned_ci}" || "${core_ci}" == "${local_ci}" || "${core_ci}" == "${declared_local_ci}" ]] || { echo "GF_ARC_CORE_CI_PATH must be ${pinned_ci} or the reviewed local checkout ${local_ci}" >&2; exit 2; }
+    untracked="$(
+      {
+        git -C "${core}" ls-files --others --exclude-standard -- tofu/stacks/arc-runners tofu/modules
+        git -C "${core}" ls-files --others --ignored --exclude-standard -- tofu/stacks/arc-runners tofu/modules
+      } | sort -u
+    )"
+    unexpected="$(python3 -I -c 'import re,sys; pattern=re.compile(r"(^|/)\.terraform(/|$)|(^|/)(override\.(tf|tofu)|.*_override\.(tf|tofu)|.*\.auto\.tfvars(\.json)?|.*\.tfvars(\.json)?|.*\.(tf|tofu)(\.json)?)$"); print("\\n".join(line for line in sys.stdin.read().splitlines() if pattern.search(line)))' <<<"${untracked}")"
+    [[ -z "${unexpected}" ]] || { echo "GloriousFlywheel ARC core contains untracked/ignored Terraform input: ${unexpected}" >&2; exit 2; }
+
+# The canonical RustFS state identity is immutable here. A temporary backend may
+# replace only the S3 endpoint with a loopback port-forward; it must stay outside
+# the public repository and mode 0600.
+_arc-tofu-environment-contract:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    while IFS='=' read -r name _; do
+        case "${name}" in
+          TF_*|TOFU_*) echo "Refusing ambient ${name}; the ARC OpenTofu contract owns this input" >&2; exit 2 ;;
+        esac
+    done < <(env)
+
+_arc-backend-contract: _arc-tofu-environment-contract
+    #!/usr/bin/env bash
+    set -euo pipefail
+    backend="${ARC_BACKEND:-{{ arc_backend_default }}}"
+    : "${AWS_ACCESS_KEY_ID:?Set the exact RustFS ARC state access key}"
+    : "${AWS_SECRET_ACCESS_KEY:?Set the exact RustFS ARC state secret key}"
+    while IFS='=' read -r name _; do
+        case "${name}" in
+          AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY) ;;
+          AWS_*) echo "Refusing ambient ${name}; only the exact RustFS access-key pair is accepted" >&2; exit 2 ;;
+          HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|http_proxy|https_proxy|all_proxy) echo "Refusing ambient ${name}; ARC state traffic may not transit a proxy" >&2; exit 2 ;;
+        esac
+    done < <(env)
+    python3 -I - "${backend}" "$(pwd)/{{ arc_backend_default }}" "$(pwd)" <<'PY'
+    import os
+    import re
+    import stat
+    import sys
+    from pathlib import Path
+
+    candidate = Path(sys.argv[1]).expanduser()
+    canonical = Path(sys.argv[2]).resolve(strict=True)
+    repo = Path(sys.argv[3]).resolve(strict=True)
+    if not candidate.is_absolute():
+        candidate = repo / candidate
+    candidate = candidate.resolve(strict=True)
+    if not candidate.is_file():
+        raise SystemExit("ARC_BACKEND must be a regular file")
+
+    endpoint_pattern = re.compile(r'(?m)^(\s*s3\s*=\s*)"([^"]+)"(\s*)$')
+    canonical_text = canonical.read_text(encoding="utf-8")
+    candidate_text = candidate.read_text(encoding="utf-8")
+    canonical_matches = endpoint_pattern.findall(canonical_text)
+    candidate_matches = endpoint_pattern.findall(candidate_text)
+    if len(canonical_matches) != 1 or len(candidate_matches) != 1:
+        raise SystemExit("ARC backend must declare exactly one endpoints.s3 value")
+    normalized_canonical = endpoint_pattern.sub(r'\1"<ENDPOINT>"\3', canonical_text)
+    normalized_candidate = endpoint_pattern.sub(r'\1"<ENDPOINT>"\3', candidate_text)
+    if normalized_candidate != normalized_canonical:
+        raise SystemExit("ARC_BACKEND may differ from the reviewed backend only at endpoints.s3")
+
+    endpoint = candidate_matches[0][1]
+    if candidate == canonical:
+        if endpoint != "http://tofu-state-rustfs.nix-cache.svc:9000":
+            raise SystemExit("canonical ARC backend endpoint changed unexpectedly")
+    else:
+        try:
+            candidate.relative_to(repo)
+        except ValueError:
+            pass
+        else:
+            raise SystemExit("temporary ARC_BACKEND must remain outside the public repository")
+        metadata = candidate.stat()
+        if metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) != 0o600:
+            raise SystemExit("temporary ARC_BACKEND must be operator-owned and mode 0600")
+        match = re.fullmatch(r"http://127\.0\.0\.1:([0-9]{1,5})", endpoint)
+        if match is None or not 1 <= int(match.group(1)) <= 65535:
+            raise SystemExit("temporary ARC_BACKEND endpoint must be http://127.0.0.1:<port>")
+    print(f"reviewed ARC backend: tofu-state/great-falls-tool-bus-infra/arc-runners via {endpoint}")
+    PY
+
+_arc-kubeconfig-contract:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kubeconfig="${GFTB_ARC_KUBECONFIG:?Set GFTB_ARC_KUBECONFIG to the reviewed ARC kubeconfig}"
+    [[ -z "${KUBECONFIG:-}" ]] || { echo "Refusing ambient KUBECONFIG; GFTB_ARC_KUBECONFIG is authoritative" >&2; exit 2; }
+    [[ -z "${TF_VAR_k8s_config_path:-}" ]] || { echo "Refusing ambient TF_VAR_k8s_config_path; GFTB_ARC_KUBECONFIG is authoritative" >&2; exit 2; }
+    while IFS='=' read -r name _; do
+        case "${name}" in
+          KUBE_*|HELM_*) echo "Refusing ambient ${name}; the reviewed ARC kubeconfig is authoritative" >&2; exit 2 ;;
+          HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|http_proxy|https_proxy|all_proxy) echo "Refusing ambient ${name}; ARC Kubernetes traffic may not transit a proxy" >&2; exit 2 ;;
+        esac
+    done < <(env)
+    python3 -I - "${kubeconfig}" "$(pwd)" <<'PY'
+    import os
+    import stat
+    import sys
+    from pathlib import Path
+
+    path = Path(sys.argv[1]).expanduser().resolve(strict=True)
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("GFTB_ARC_KUBECONFIG must remain outside the public repository")
+    metadata = path.stat()
+    if not path.is_file() or metadata.st_uid != os.getuid():
+        raise SystemExit("GFTB_ARC_KUBECONFIG must be a regular file owned by the operator")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise SystemExit("GFTB_ARC_KUBECONFIG must have mode 0600")
+    PY
+    config_json="$(kubectl --kubeconfig "${kubeconfig}" config view --raw -o json)"
+    jq -e '
+      .["current-context"] == "honey"
+      and (.contexts | length == 1)
+      and (.contexts[0].name == "honey")
+      and (.contexts[0].context.cluster == "honey")
+      and (.contexts[0].context.user == "honey")
+      and (.clusters | length == 1)
+      and (.clusters[0].name == "honey")
+      and ((.clusters[0].cluster.server // "") | test("^https://[^/?#]+$"))
+      and ((.clusters[0].cluster["certificate-authority-data"] // "") | length > 0)
+      and ((.clusters[0].cluster["insecure-skip-tls-verify"] // false) == false)
+      and (.clusters[0].cluster | has("proxy-url") | not)
+      and (.users | length == 1)
+      and (.users[0].name == "honey")
+      and (.users[0].user | has("exec") | not)
+      and (.users[0].user | has("auth-provider") | not)
+      and (.users[0].user | has("tokenFile") | not)
+      and (.users[0].user | has("client-certificate") | not)
+      and (.users[0].user | has("client-key") | not)
+      and (
+        ((.users[0].user.token // "") | length > 0)
+        or (
+          ((.users[0].user["client-certificate-data"] // "") | length > 0)
+          and ((.users[0].user["client-key-data"] // "") | length > 0)
+        )
+      )
+    ' <<<"${config_json}" >/dev/null || { echo "GFTB_ARC_KUBECONFIG must be a single TLS-verified honey context with embedded credentials" >&2; exit 2; }
+    cluster_uid="$(kubectl --kubeconfig "${kubeconfig}" --context honey get namespace kube-system -o jsonpath='{.metadata.uid}')"
+    [[ "${cluster_uid}" == "{{ arc_cluster_uid }}" ]] || { echo "ARC kubeconfig does not target the reviewed Honey cluster UID" >&2; exit 2; }
+    echo "reviewed ARC cluster: honey (${cluster_uid})"
+
+_arc-runtime-contract: _arc-kubeconfig-contract
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kubeconfig="${GFTB_ARC_KUBECONFIG:?Set GFTB_ARC_KUBECONFIG to the reviewed ARC kubeconfig}"
+    target_uid="$(kubectl --kubeconfig "${kubeconfig}" --context honey -n arc-runners get autoscalingrunnerset great-falls-tool-bus-nix -o jsonpath='{.metadata.uid}')"
+    [[ "${target_uid}" == "{{ arc_target_uid }}" ]] || { echo "ARC kubeconfig does not target the reviewed great-falls-tool-bus-nix UID" >&2; exit 2; }
+    echo "reviewed ARC target: honey/arc-runners/great-falls-tool-bus-nix (${target_uid})"
+
+_arc-artifact-root-contract:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    python3 -I - "$(pwd)/.tofu-plans" <<'PY'
+    import os
+    import stat
+    import sys
+    from pathlib import Path
+
+    root = Path(sys.argv[1])
+    if not root.exists() and not root.is_symlink():
+        root.mkdir(mode=0o700)
+    metadata = root.lstat()
+    if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        raise SystemExit(".tofu-plans must be a real directory, not a symlink")
+    if metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) != 0o700:
+        raise SystemExit(".tofu-plans must be operator-owned and mode 0700")
+    for path in root.glob("arc-runners.*"):
+        item = path.lstat()
+        if path.name == "arc-runners.tfdata":
+            if not stat.S_ISDIR(item.st_mode) or stat.S_ISLNK(item.st_mode):
+                raise SystemExit("ARC TF_DATA_DIR must be a real directory")
+            expected_mode = 0o700
+        else:
+            if not stat.S_ISREG(item.st_mode) or stat.S_ISLNK(item.st_mode):
+                raise SystemExit(f"ARC plan artifact must be a regular file: {path.name}")
+            expected_mode = 0o600
+        if item.st_uid != os.getuid() or stat.S_IMODE(item.st_mode) != expected_mode:
+            raise SystemExit(
+                f"ARC artifact {path.name} must be operator-owned and mode {expected_mode:04o}"
+            )
+    PY
+
+_arc-plan-input-snapshot: _reviewed-clean-main _reviewed-arc-core _arc-exclusive-confirm _arc-backend-contract _arc-runtime-contract _arc-artifact-root-contract
+    #!/usr/bin/env bash
+    set -euo pipefail
+    umask 077
+    core="${GF_ARC_CORE_PATH:-{{ arc_core_default }}}"
+    kubeconfig="${GFTB_ARC_KUBECONFIG:?Set GFTB_ARC_KUBECONFIG to the reviewed ARC kubeconfig}"
+    data_dir="$(pwd)/.tofu-plans/arc-runners.tfdata"
+    backend="${ARC_BACKEND:-{{ arc_backend_default }}}"
+    if [[ "${backend}" != /* ]]; then
+        backend="$(pwd)/${backend}"
+    fi
+    just _reviewed-clean-main
+    just _reviewed-arc-core
+    just _arc-backend-contract
+    just _arc-runtime-contract
+    just _arc-artifact-root-contract
+    test ! -e .tofu-plans/arc-runners.apply-attempted || { echo "A prior ARC apply attempt must be reconciled before creating a fresh plan" >&2; exit 2; }
+    if [[ -e "${data_dir}" || -L "${data_dir}" ]]; then
+        [[ -d "${data_dir}" && ! -L "${data_dir}" ]] || { echo "ARC TF_DATA_DIR must be a real directory" >&2; exit 2; }
+        rm -rf -- "${data_dir}"
+    fi
+    mkdir -m 700 "${data_dir}"
+    rm -f .tofu-plans/arc-runners.tfplan .tofu-plans/arc-runners.source-sha .tofu-plans/arc-runners.core-sha .tofu-plans/arc-runners.backend-blob .tofu-plans/arc-runners.kubeconfig-blob .tofu-plans/arc-runners.cluster-uid .tofu-plans/arc-runners.target-uid .tofu-plans/arc-runners.plan-sha256 .tofu-plans/arc-runners.scope-sha256
+    git rev-parse HEAD > .tofu-plans/arc-runners.source-sha
+    git -C "${core}" rev-parse HEAD > .tofu-plans/arc-runners.core-sha
+    python3 -I -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${backend}" > .tofu-plans/arc-runners.backend-blob
+    python3 -I -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${kubeconfig}" > .tofu-plans/arc-runners.kubeconfig-blob
+    kubectl --kubeconfig "${kubeconfig}" --context honey get namespace kube-system -o jsonpath='{.metadata.uid}' > .tofu-plans/arc-runners.cluster-uid
+    kubectl --kubeconfig "${kubeconfig}" --context honey -n arc-runners get autoscalingrunnerset great-falls-tool-bus-nix -o jsonpath='{.metadata.uid}' > .tofu-plans/arc-runners.target-uid
+    chmod 600 .tofu-plans/arc-runners.source-sha .tofu-plans/arc-runners.core-sha .tofu-plans/arc-runners.backend-blob .tofu-plans/arc-runners.kubeconfig-blob .tofu-plans/arc-runners.cluster-uid .tofu-plans/arc-runners.target-uid
+
+_arc-plan-input-preflight: _reviewed-clean-main _reviewed-arc-core _arc-backend-contract _arc-runtime-contract _arc-artifact-root-contract
+    #!/usr/bin/env bash
+    set -euo pipefail
+    core="${GF_ARC_CORE_PATH:-{{ arc_core_default }}}"
+    kubeconfig="${GFTB_ARC_KUBECONFIG:?Set GFTB_ARC_KUBECONFIG to the reviewed ARC kubeconfig}"
+    backend="${ARC_BACKEND:-{{ arc_backend_default }}}"
+    if [[ "${backend}" != /* ]]; then
+        backend="$(pwd)/${backend}"
+    fi
+    test -f .tofu-plans/arc-runners.tfplan
+    test -f .tofu-plans/arc-runners.source-sha
+    test -f .tofu-plans/arc-runners.core-sha
+    test -f .tofu-plans/arc-runners.backend-blob
+    test -f .tofu-plans/arc-runners.kubeconfig-blob
+    test -f .tofu-plans/arc-runners.cluster-uid
+    test -f .tofu-plans/arc-runners.target-uid
+    test "$(git rev-parse HEAD)" = "$(tr -d '\n' < .tofu-plans/arc-runners.source-sha)" || { echo "ARC plan was created from a different infra revision" >&2; exit 2; }
+    test "$(git -C "${core}" rev-parse HEAD)" = "$(tr -d '\n' < .tofu-plans/arc-runners.core-sha)" || { echo "ARC plan was created from a different GloriousFlywheel revision" >&2; exit 2; }
+    test "$(python3 -I -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${backend}")" = "$(tr -d '\n' < .tofu-plans/arc-runners.backend-blob)" || { echo "ARC plan was created with a different backend declaration" >&2; exit 2; }
+    test "$(python3 -I -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${kubeconfig}")" = "$(tr -d '\n' < .tofu-plans/arc-runners.kubeconfig-blob)" || { echo "ARC plan was created with a different kubeconfig" >&2; exit 2; }
+    cluster_uid="$(kubectl --kubeconfig "${kubeconfig}" --context honey get namespace kube-system -o jsonpath='{.metadata.uid}')"
+    test "${cluster_uid}" = "$(tr -d '\n' < .tofu-plans/arc-runners.cluster-uid)" || { echo "ARC plan was created for a different cluster" >&2; exit 2; }
+    target_uid="$(kubectl --kubeconfig "${kubeconfig}" --context honey -n arc-runners get autoscalingrunnerset great-falls-tool-bus-nix -o jsonpath='{.metadata.uid}')"
+    test "${target_uid}" = "$(tr -d '\n' < .tofu-plans/arc-runners.target-uid)" || { echo "ARC plan was created for a different target cluster/release" >&2; exit 2; }
+
+_operator-apply-confirm:
+    [[ "${GFTB_APPLY_CONFIRM:-}" == "apply" ]] || { echo "Set GFTB_APPLY_CONFIRM=apply for this attended mutation" >&2; exit 2; }
+
+_arc-exclusive-confirm:
+    [[ "${GFTB_ARC_EXCLUSIVE_CONFIRM:-}" == "exclusive" ]] || { echo "Set GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive after confirming no concurrent ARC plan/apply" >&2; exit 2; }
+
+# --- edge zone stack (tofu/stacks/edge; TIN-2378 prep + TIN-2385) -----------
+# Console-created zones on the house CF account, looked up by name with a
+# ZONE-SCOPED token (TF_VAR_cloudflare_api_token; protected-environment
+# secret CLOUDFLARE_API_TOKEN_GFTB_ZONES in CI, sops-lane
+# cloudflare-api-token-gftb-zones on the operator machine). Records +
+# apex Access gate + latoolb.us redirect ruleset; NO mail records
+# (TIN-2379). Never applied while edge-dns manage_* toggles are on — see
+# tofu/stacks/edge/README.md.
+
+edge_zones_stack := "tofu/stacks/edge"
+edge_zones_backend := env_var_or_default("EDGE_ZONES_BACKEND", "tofu/backend/honey-edge.s3.hcl")
+
+edge-zones-fmt-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if command -v tofu >/dev/null 2>&1; then
+        tofu fmt -check -recursive {{ edge_zones_stack }}
+    else
+        nix develop "{{ gf_core_ci }}" -c tofu fmt -check -recursive {{ edge_zones_stack }}
+    fi
+
+# Regenerate the provider lock for the supported hosted-CI and operator
+# platforms. Review and commit the resulting lockfile change.
+edge-zones-lock:
+    tofu -chdir={{ edge_zones_stack }} providers lock -platform=linux_amd64 -platform=darwin_arm64
+
+edge-zones-validate:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tf_data_dir="$(mktemp -d -t great-falls-tool-bus-infra-edge-zones-tofu-data.XXXXXX)"
+    trap 'rm -rf "${tf_data_dir}"' EXIT
+    if command -v tofu >/dev/null 2>&1; then
+        TF_DATA_DIR="${tf_data_dir}" tofu -chdir={{ edge_zones_stack }} init -backend=false -lockfile=readonly >/tmp/great-falls-tool-bus-infra-edge-zones-init.log
+        TF_DATA_DIR="${tf_data_dir}" tofu -chdir={{ edge_zones_stack }} validate
+    else
+        nix develop "{{ gf_core_ci }}" -c bash -lc 'TF_DATA_DIR="'"${tf_data_dir}"'" tofu -chdir={{ edge_zones_stack }} init -backend=false -lockfile=readonly >/tmp/great-falls-tool-bus-infra-edge-zones-init.log && TF_DATA_DIR="'"${tf_data_dir}"'" tofu -chdir={{ edge_zones_stack }} validate'
+    fi
+
+edge-zones-init:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    backend="{{ edge_zones_backend }}"
+    test -f "${backend}"
+    if [[ "${backend}" != /* ]]; then
+        backend="$(pwd)/${backend}"
+    fi
+    tofu -chdir={{ edge_zones_stack }} init -reconfigure -backend-config="${backend}"
+
+edge-zones-plan:
+    mkdir -p .tofu-plans
+    tofu -chdir={{ edge_zones_stack }} plan -out="$(pwd)/.tofu-plans/edge.tfplan"
+
+_edge-zones-plan-json:
+    test -f .tofu-plans/edge.tfplan
+    tofu -chdir={{ edge_zones_stack }} show -json "$(pwd)/.tofu-plans/edge.tfplan" > .tofu-plans/edge.tfplan.json
+
+_edge-zones-plan-text:
+    @tofu -chdir={{ edge_zones_stack }} plan -no-color
+
+edge-zones-plan-show:
+    test -f .tofu-plans/edge.tfplan
+    tofu -chdir={{ edge_zones_stack }} show -no-color "$(pwd)/.tofu-plans/edge.tfplan"
+
+edge-zones-plan-destroy-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    test -f .tofu-plans/edge.tfplan
+    plan_json="$(mktemp "${TMPDIR:-/tmp}/gftb-edge-zones-plan.XXXXXX.json")"
+    trap 'rm -f "${plan_json}"' EXIT
+    tofu -chdir={{ edge_zones_stack }} show -json "$(pwd)/.tofu-plans/edge.tfplan" > "${plan_json}"
+    if python3 - "${plan_json}" <<'PY'
+    import json
+    import sys
+    from pathlib import Path
+
+    plan = json.loads(Path(sys.argv[1]).read_text())
+    for change in plan.get("resource_changes", []):
+        if "delete" in change.get("change", {}).get("actions", []):
+            sys.exit(0)
+    sys.exit(1)
+    PY
+    then
+        if [ "${ALLOW_EDGE_ZONES_DESTROY:-}" = "1" ]; then
+            echo "WARNING: destructive edge plan allowed because ALLOW_EDGE_ZONES_DESTROY=1"
+        else
+            echo "ERROR: destructive edge plan detected. Review just edge-zones-plan-show and record the decision before apply."
+            exit 1
+        fi
+    fi
+    echo "edge plan destroy guard passed."
+
+edge-zones-apply: edge-zones-plan-destroy-check
+    test -f .tofu-plans/edge.tfplan
+    tofu -chdir={{ edge_zones_stack }} apply "$(pwd)/.tofu-plans/edge.tfplan"
+
+# --- GFTB tenant mail custom resources (TIN-2379) ---------------------------
+# Tenant-owned MailDomain/MailAccount declarations live here and apply through
+# the namespace grant declared in blahaj (latoolb-us-production only). The
+# checked-in validation is offline. Live server dry-run/apply requires a
+# namespace-scoped kubeconfig from the protected mail environment.
+
+mail_cr_dir := "k8s/mail/latoolb-us-production"
+
+mail-cr-validate:
+    bash scripts/validate-mail-crs.sh {{ mail_cr_dir }}
+
+_mail-kubeconfig-inputs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${GFTB_MAIL_KUBECONFIG:?Set GFTB_MAIL_KUBECONFIG to the namespace-scoped kubeconfig path}"
+    python3 -I - "${GFTB_MAIL_KUBECONFIG}" "$(git rev-parse --show-toplevel)" <<'PY'
+    import os
+    import stat
+    import sys
+    from pathlib import Path
+
+    path = Path(sys.argv[1]).expanduser().resolve(strict=True)
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("GFTB_MAIL_KUBECONFIG must remain outside the public repository")
+    metadata = path.stat()
+    if not path.is_file() or metadata.st_uid != os.getuid():
+        raise SystemExit("GFTB_MAIL_KUBECONFIG must be a regular file owned by the operator")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise SystemExit("GFTB_MAIL_KUBECONFIG must have mode 0600")
+    PY
+
+mail-cr-server-dry-run: mail-cr-validate _mail-kubeconfig-inputs
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply --dry-run=server -k {{ mail_cr_dir }}
+
+mail-cr-apply: mail-cr-server-dry-run
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ mail_cr_dir }}
+
+# --- GFTB Mailman 3 list stack (TIN-2380) -----------------------------------
+# First-of-kind mailing-list engine (Mailman core + Postorius + HyperKitty) for
+# keyholders@latoolb.us, deployed overlay-side into latoolb-us-production and
+# consuming the blahaj mail substrate through the tenant-list-engine SMTP relay
+# contract (ADR 010). Checked-in validation is offline. Live server
+# dry-run/apply needs a namespace-scoped kubeconfig with WORKLOAD verbs — see
+# the RBAC note in docs/runbooks/list-bringup.md (the existing mail kubeconfig
+# is scoped to mail CRs only and cannot apply Deployments/Services/PVCs).
+
+list_stack_dir := "k8s/list/latoolb-us-production"
+
+list-stack-validate:
+    bash scripts/validate-list-stack.sh {{ list_stack_dir }}
+
+list-stack-server-dry-run: list-stack-validate _mail-kubeconfig-inputs
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply --dry-run=server -k {{ list_stack_dir }}
+
+list-stack-apply: list-stack-server-dry-run
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ list_stack_dir }}
+
+_list-member-add-inputs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${GFTB_LIST_KUBECONFIG:?Set GFTB_LIST_KUBECONFIG to the dedicated namespace list-admin kubeconfig}"
+    : "${GFTB_LIST_ID:?Set GFTB_LIST_ID to keyholders.latoolb.us or discuss.latoolb.us}"
+    : "${GFTB_LIST_SUBSCRIBER:?Set GFTB_LIST_SUBSCRIBER to the consented address}"
+    [[ "${GFTB_LIST_ID}" == "keyholders.latoolb.us" || "${GFTB_LIST_ID}" == "discuss.latoolb.us" ]] || { echo "GFTB_LIST_ID is not an allowed GFTB list" >&2; exit 2; }
+    test "${GFTB_LIST_MEMBER_CONSENT:-}" = "confirmed" || { echo "Set GFTB_LIST_MEMBER_CONSENT=confirmed after consent readback" >&2; exit 2; }
+    expected_confirm="${GFTB_LIST_ID}:${GFTB_LIST_SUBSCRIBER}"
+    test "${GFTB_LIST_MEMBER_CONFIRM:-}" = "${expected_confirm}" || { echo "Set GFTB_LIST_MEMBER_CONFIRM to the exact list-id:subscriber target" >&2; exit 2; }
+    python3 -I - "${GFTB_LIST_KUBECONFIG}" "$(git rev-parse --show-toplevel)" <<'PY'
+    import os
+    import re
+    import stat
+    import sys
+    from pathlib import Path
+
+    path = Path(sys.argv[1]).expanduser().resolve(strict=True)
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("GFTB_LIST_KUBECONFIG must remain outside the public repository")
+    metadata = path.stat()
+    if not path.is_file() or metadata.st_uid != os.getuid():
+        raise SystemExit("GFTB_LIST_KUBECONFIG must be a regular file owned by the operator")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise SystemExit("GFTB_LIST_KUBECONFIG must have mode 0600")
+
+    address = os.environ["GFTB_LIST_SUBSCRIBER"]
+    display = os.environ.get("GFTB_LIST_DISPLAY_NAME", "")
+    if len(address) > 254 or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", address):
+        raise SystemExit("GFTB_LIST_SUBSCRIBER must be one valid email address")
+    if len(display) > 100 or any(ord(character) < 32 or ord(character) == 127 for character in display):
+        raise SystemExit("GFTB_LIST_DISPLAY_NAME must be at most 100 control-free characters")
+    PY
+
+# Idempotently add one consented person as a member of one exact GFTB list.
+# Owner/moderator grants, removals, moderation, and settings changes remain held
+# for their own lifecycle/rollback contracts rather than sharing this surface.
+list-member-add: _list-member-add-inputs _reviewed-clean-main _operator-apply-confirm
+    #!/usr/bin/env bash
+    set -euo pipefail
+    namespace="latoolb-us-production"
+    pod_json="$(kubectl --kubeconfig "${GFTB_LIST_KUBECONFIG}" --namespace "${namespace}" get pods -l app.kubernetes.io/name=mailman-core -o json)"
+    core_pod="$(jq -er '[.items[] | select(.metadata.deletionTimestamp == null)] as $active | if (($active | length) == 1 and $active[0].status.phase == "Running" and any($active[0].status.conditions[]?; .type == "Ready" and .status == "True")) then $active[0].metadata.name else error("expected exactly one active Ready mailman-core pod") end' <<<"${pod_json}")"
+    find_membership() {
+      printf '%s\n%s\n' "${GFTB_LIST_ID}" "${GFTB_LIST_SUBSCRIBER}" | \
+        kubectl --kubeconfig "${GFTB_LIST_KUBECONFIG}" --namespace "${namespace}" exec -i "${core_pod}" --container mailman-core -- sh -eu -c '
+          IFS= read -r list_id
+          IFS= read -r subscriber
+          curl --fail --silent --show-error \
+            --user "restadmin:${MAILMAN_REST_PASSWORD}" --get \
+            --data-urlencode "list_id=${list_id}" \
+            --data-urlencode "subscriber=${subscriber}" \
+            --data-urlencode "role=member" \
+            "http://$(hostname -i):8001/3.1/members/find"
+        '
+    }
+    classify_membership() {
+      jq -er --arg list_id "${GFTB_LIST_ID}" --arg subscriber "${GFTB_LIST_SUBSCRIBER}" '
+        (.entries // []) as $entries
+        | [$entries[]
+            | select(.list_id == $list_id)
+            | select((.email | ascii_downcase) == ($subscriber | ascii_downcase))
+            | select(.role == "member")] as $exact
+        | if (.total_size == 0 and ($entries | length) == 0) then "absent"
+          elif (.total_size == 1 and ($entries | length) == 1 and ($exact | length) == 1) then "present"
+          else error("ambiguous or mismatched Mailman membership readback")
+          end
+      '
+    }
+    before_json="$(find_membership)"
+    before_state="$(classify_membership <<<"${before_json}")"
+    if [[ "${before_state}" == "present" ]]; then
+      echo "Selected list membership already present; no mutation."
+      exit 0
+    fi
+    status="$(printf '%s\n%s\n%s\n' "${GFTB_LIST_ID}" "${GFTB_LIST_SUBSCRIBER}" "${GFTB_LIST_DISPLAY_NAME:-}" | \
+      kubectl --kubeconfig "${GFTB_LIST_KUBECONFIG}" --namespace "${namespace}" exec -i "${core_pod}" --container mailman-core -- sh -eu -c '
+        IFS= read -r list_id
+        IFS= read -r subscriber
+        IFS= read -r display_name
+        curl --silent --show-error --output /dev/null --write-out "%{http_code}" \
+          --user "restadmin:${MAILMAN_REST_PASSWORD}" --request POST \
+          --data-urlencode "list_id=${list_id}" \
+          --data-urlencode "subscriber=${subscriber}" \
+          --data-urlencode "display_name=${display_name}" \
+          --data-urlencode "pre_verified=true" \
+          --data-urlencode "pre_confirmed=true" \
+          --data-urlencode "pre_approved=true" \
+          --data-urlencode "role=member" \
+          "http://$(hostname -i):8001/3.1/members"
+      ')"
+    test "${status}" = "201" || { echo "Membership add returned HTTP ${status}." >&2; exit 2; }
+    after_json="$(find_membership)"
+    test "$(classify_membership <<<"${after_json}")" = "present" || { echo "Membership readback did not converge." >&2; exit 2; }
+    echo "Selected list membership added and read back."
+
+# --- keyholders -> discuss add-only membership reconciler (TIN-3813 lane) ---
+# Enforces members(keyholders@latoolb.us) as a subset of
+# members(discuss@latoolb.us) going forward (the ratified private/public list
+# pairing, meta decisions/0014 ruling 5). Mailman owns list membership and
+# account-controller owns mail RESOURCE reconciliation only (launch-member-v0
+# spec responsibilities table), so the invariant lives here in the GFTB apply
+# plane as a narrow suspended CronJob: add-only, two pinned lists, dry-run
+# default-on, no k8s API identity, egress pinned to core REST, and gated on
+# the operator-minted mailman-listsync-rest Secret (Mailman core 3.3.10 has a
+# single global REST identity — the restricted-proxy scoping TIN-3813 calls
+# for does not exist yet and is tracked there; see the manifest comments and
+# docs/runbooks/list-operations.md section 8 for the declared gap and the
+# three-step attended activation). Checked-in validation is offline; live
+# server dry-run/apply uses the same protected mail-environment kubeconfig as
+# the other latoolb-us-production stacks. Merging changes nothing on its own.
+
+listsync_stack_dir := "k8s/list-sync/latoolb-us-production"
+
+listsync-stack-validate:
+    bash scripts/validate-listsync-stack.sh {{ listsync_stack_dir }}
+
+listsync-stack-server-dry-run: listsync-stack-validate _mail-kubeconfig-inputs
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply --dry-run=server -k {{ listsync_stack_dir }}
+
+listsync-stack-apply: listsync-stack-server-dry-run
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ listsync_stack_dir }}
+
+# --- GFTB contact-intake stack (TIN-2420 Path B) ----------------------------
+# Anubis PoW gate -> stdlib form-handler -> LMTP inject to keyholders@latoolb.us
+# (the list fans out to every keyholder; LMTP needs no SMTP credential).
+# Deployed overlay-side into latoolb-us-production. Checked-in validation is
+# offline. Live server dry-run/apply needs a namespace-scoped kubeconfig with
+# WORKLOAD verbs (same RBAC caveat as the list stack — see
+# docs/runbooks/form-intake.md). Nothing is exposed until the Cloudflare tunnel
+# public-hostname route is added (dashboard-side) and a live smoke passes.
+
+form_stack_dir := "k8s/form/latoolb-us-production"
+
+form-stack-validate:
+    bash scripts/validate-form-stack.sh {{ form_stack_dir }}
+
+# Offline ALTCHA challenge/solve/verify round-trip against the shipping server.py
+# (no network, no cluster). Also runs inside form-stack-validate.
+form-altcha-test:
+    python3 scripts/test-form-altcha.py
+
+# Create or rotate the names-only ALTCHA HMAC Secret from a mode-restricted
+# operator file without placing key bytes in argv, Git, or shell history.
+form-altcha-secret-apply: _mail-kubeconfig-inputs _reviewed-clean-main _operator-apply-confirm
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${FORM_ALTCHA_HMAC_KEY_PATH:?Set FORM_ALTCHA_HMAC_KEY_PATH to the retained operator key file outside this worktree}"
+    test "${GFTB_ALTCHA_SECRET_CONFIRM:-}" = "form-altcha-hmac" || { echo "Set GFTB_ALTCHA_SECRET_CONFIRM=form-altcha-hmac" >&2; exit 2; }
+    repo_root="$(git rev-parse --show-toplevel)"
+    key_path="$(python3 -I - "${FORM_ALTCHA_HMAC_KEY_PATH}" "${repo_root}" <<'PY'
+    import os
+    import re
+    import stat
+    import sys
+    from pathlib import Path
+
+    path = Path(sys.argv[1]).expanduser().resolve(strict=True)
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("FORM_ALTCHA_HMAC_KEY_PATH must remain outside the public repository")
+    if not path.is_file():
+        raise SystemExit("FORM_ALTCHA_HMAC_KEY_PATH must name a regular file")
+    metadata = path.stat()
+    if metadata.st_uid != os.getuid():
+        raise SystemExit("FORM_ALTCHA_HMAC_KEY_PATH must be owned by the operator")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise SystemExit("FORM_ALTCHA_HMAC_KEY_PATH must have mode 0600")
+    value = path.read_bytes()
+    if not re.fullmatch(rb"[0-9a-f]{64}", value):
+        raise SystemExit("FORM_ALTCHA_HMAC_KEY_PATH must contain exactly 64 lowercase hex bytes and no newline")
+    print(path)
+    PY
+    )"
+    namespace="latoolb-us-production"
+    pod_json="$(kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace "${namespace}" get pods -l app.kubernetes.io/name=form-handler -o json)"
+    active_count="$(jq -er '[.items[] | select(.metadata.deletionTimestamp == null)] | length' <<<"${pod_json}")"
+    [[ "${active_count}" =~ ^[01]$ ]] || { echo "Expected no more than one active form-handler pod." >&2; exit 2; }
+    old_name="$(jq -r '[.items[] | select(.metadata.deletionTimestamp == null)][0].metadata.name // ""' <<<"${pod_json}")"
+    old_uid="$(jq -r '[.items[] | select(.metadata.deletionTimestamp == null)][0].metadata.uid // ""' <<<"${pod_json}")"
+    umask 077
+    manifest="$(mktemp "${TMPDIR:-/tmp}/gftb-altcha-secret.XXXXXX.yaml")"
+    trap 'rm -f "${manifest}"' EXIT
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace "${namespace}" create secret generic form-altcha-hmac --from-file=hmac-key="${key_path}" --dry-run=client -o yaml > "${manifest}"
+    chmod 600 "${manifest}"
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace "${namespace}" apply --dry-run=server -f "${manifest}"
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace "${namespace}" apply -f "${manifest}"
+    if [[ -n "${old_name}" ]]; then
+      kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace "${namespace}" delete pod "${old_name}" --wait=true --timeout=120s
+    fi
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace "${namespace}" wait --for=create pod -l app.kubernetes.io/name=form-handler --timeout=180s
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace "${namespace}" wait --for=condition=Ready pod -l app.kubernetes.io/name=form-handler --timeout=180s
+    new_pod_json="$(kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace "${namespace}" get pods -l app.kubernetes.io/name=form-handler -o json)"
+    jq -e --arg old_uid "${old_uid}" '[.items[] | select(.metadata.deletionTimestamp == null)] as $active | ($active | length) == 1 and $active[0].status.phase == "Running" and any($active[0].status.conditions[]?; .type == "Ready" and .status == "True") and ($old_uid == "" or $active[0].metadata.uid != $old_uid)' <<<"${new_pod_json}" >/dev/null
+    echo "Secret applied and a replacement form-handler pod is Ready. Run the challenge and delivery smoke."
+
+form-stack-server-dry-run: form-stack-validate _mail-kubeconfig-inputs
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply --dry-run=server -k {{ form_stack_dir }}
+
+form-stack-apply: form-stack-server-dry-run
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ form_stack_dir }}
+
+# --- GFTB public discuss@ archive stack (TIN-2528) --------------------------
+# SECOND Anubis PoW gate (anubis-archive) fronting the HyperKitty web tier so
+# the PUBLIC discuss@ archive can ride the shared honey-ingress Cloudflare
+# Tunnel (anti-scrape, NOT auth). Faithful mirror of the form-stack recipes
+# above, pointed at k8s/archive. Deployed overlay-side into latoolb-us-production
+# and dry-run/applied with the SAME namespace-scoped mail kubeconfig (same RBAC
+# caveat as the form/list stacks). Checked-in validation is offline. LIVE: this
+# stack is applied and the public discuss@ archive is served at lists.latoolb.us.
+# Apply is manual (workflow_dispatch action=apply into the protected mail
+# environment, i.e. the archive-stack-apply recipe below); merging changes
+# nothing on its own. Go-live also required the privacy pre-flight, the Cloudflare
+# tunnel public-hostname route (dashboard-side), and the archive DNS enable
+# (var.archives_dns_enabled), all now satisfied. See
+# k8s/archive/latoolb-us-production/README.md and docs/discuss-archive-packet.md.
+
+archive_stack_dir := "k8s/archive/latoolb-us-production"
+
+archive-stack-validate:
+    bash scripts/validate-archive-stack.sh {{ archive_stack_dir }}
+
+archive-stack-server-dry-run: archive-stack-validate _mail-kubeconfig-inputs
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply --dry-run=server -k {{ archive_stack_dir }}
+
+archive-stack-apply: archive-stack-server-dry-run
+    kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ archive_stack_dir }}
+
+# --- GFTB on-cluster web serving (TIN-2541 skeleton; TIN-2543 cutover) -------
+# ATTENDED-ONLY DECLARE-ONLY IN GIT. The promoted gftb-site static Caddy origin
+# -> ClusterIP 80->3000 -> honey-ingress cloudflared tunnel, mirroring the
+# proven MassageIthaca full-on-cluster pattern. The checked-in overlay is
+# DECLARED AND VALIDATED, not parked: the Deployment carries replicas: 2 and a
+# digest-pinned ghcr.io/great-falls-tool-bus/gftb-site image, this stack
+# creates no Namespace, and the tunnel route is dashboard/token-managed (never
+# in git; TIN-991). scripts/validate-web-stack.sh enforces exactly that
+# posture.
+#
+# LEGACY CD RETIRED (TIN-3899, Phase 5 step 2). The cutover recipes below were
+# the operator-gated APPLY plane (TIN-2543, ADR 0008) reached through
+# .github/workflows/web-stack.yml -- workflow_dispatch + confirm=apply, or the
+# site repo's repository_dispatch: web-image-published. That workflow is DELETED:
+# no workflow in this repository applies this stack any more, and no
+# repository_dispatch consumer can reach kubectl. MERGING APPLIES NOTHING, and
+# now neither does any push to the public site repo.
+#
+# LEGACY CARRIER IS NOW DEAD CODE. `web-stack-apply` below still exists as the
+# original adapter-node cutover carrier (an operator with an operator-custody
+# web-apply kubeconfig could run `just web-stack-apply` by hand), but
+# `_web-stack-promotion-interlock` refuses it unconditionally now that the
+# gftb-site static origin is permanently promoted onto
+# Deployment/greatfallstoolbus-org -- there is no live state this carrier could
+# run against without the interlock firing. The reviewed, actually-used
+# forward path for the static origin is the web-release-* chain below, not
+# this carrier.
+#
+# TREE HONESTY (rung 1, 2026-08-21; ratification basis: operator interview
+# 2026-08-21, session register L71 Q2 rungs 1+2). This comment used to say the
+# operator-supplied WEB_APPLY_IMAGE was "re-pinned imperatively post-apply, so
+# the live pin may diverge from the declarative record in the tree" -- as if
+# that divergence were an accepted, permanent property of the design. It
+# wasn't a property of the design; it was this declarative record never being
+# updated at promotion time. The honest invariant is: THE TREE PINS WHAT IS
+# SERVED, and the operator updates k8s/web/greatfallstoolbus-org-production/
+# deployment.yaml as part of each web-release-* ceremony's pin step, the same
+# ceremony that already computes and asserts the exact served image digest
+# (see `_web-release-candidate-inputs`, `web-release-plan`). The
+# namespace-scoped web-apply SA cannot create namespaces; the operator minted
+# the greatfallstoolbus-org-production namespace + SA/RBAC out of band, once,
+# already. See k8s/web/README.md and docs/runbooks/oncluster-web-cutover.md.
+
+web_stack_dir := "k8s/web/greatfallstoolbus-org-production"
+web_stack_ns := "greatfallstoolbus-org-production"
+
+# Remote-resource ALLOWLIST guard (round 4, adversarial review PR #127
+# comments 5380010266 + 5380172269): every kustomize reference-carrying field
+# (resources/bases/components/generators/transformers/configurations/crds
+# and more -- see the script header) is accepted ONLY if it resolves to a
+# real, contained local path; everything else is refused before any
+# `kubectl kustomize` call. Replaces a round-3 denylist that adversarial
+# review proved leaky three separate ways (scheme-less git-host shorthand on
+# `resources`, and the `transformers`/`configurations`/`crds` fields being
+# absent from the field list entirely).
+guard-no-remote-kustomize-resources:
+    bash scripts/guard-no-remote-kustomize-resources.sh {{ web_stack_dir }}
+
+guard-no-remote-kustomize-resources-selftest:
+    bash scripts/guard-no-remote-kustomize-resources.sh --self-test
+
+web-stack-validate:
+    bash scripts/validate-web-stack.sh {{ web_stack_dir }}
+
+# Rung 2 (org-standard-cd-pattern-truth-20260821.md sec 4.1 -- "great-falls-
+# tool-bus-infra: no preview needed; wire the existing <stack>-plan ...
+# recipes as PR-required statuses. That IS rung 2 for the overlay." --
+# ratification basis: operator interview 2026-08-21, register L71 Q2 = rungs
+# 1+2, L73). Render the COMMITTED declare-only tree to stdout: kustomize only,
+# nothing else. This is deliberately NOT web-release-render: it takes no
+# WEB_APPLY_IMAGE/WEB_APPLY_SHA, resolves no GHCR candidate, injects no
+# source-sha annotation, and synthesizes no default-deny-egress NetworkPolicy.
+# It calls no `just` recipe at all, so it cannot reach -- directly or
+# transitively -- any member of the web-release-* reviewed candidate-
+# promotion family (scripts/validate-public-operator-surface.py
+# WEB_RELEASE_OPERATOR_LOCAL_ROOTS): that family stays exactly what TIN-3899 /
+# decisions/0016 made it, attended-operator-only and unreachable from every
+# CI workflow, and this recipe is written to stay outside its closure by
+# construction rather than by a validator exemption. Since rung 1
+# (deployment.yaml's "TREE HONESTY" fix) the committed tree already matches
+# web-release-render's own contract for every field except THREE it still
+# names as ceremony-only residuals -- in order of consequence: (1) the
+# PER-RELEASE CONTAINER IMAGE DIGEST (the field that decides what code
+# production actually runs; this render shows whatever digest is currently
+# committed, which is NOT necessarily what the next release ceremony will
+# pin), (2) the per-release source-sha annotation, and (3) the synthesized
+# default-deny-egress NetworkPolicy -- so this render is close to, but not
+# byte-identical with, what the attended ceremony would apply. Say that
+# honestly, and name the digest explicitly, in anything that consumes this
+# output; do not call it "the exact apply-time bytes". (The ceremony also
+# prunes two legacy egress NetworkPolicies at apply time -- that is an
+# apply-time-only concern, not a render residual: those two objects are not
+# in the committed tree at all, so this render never carries them either.)
+#
+# Runs the standalone remote-resource ALLOWLIST guard
+# (scripts/guard-no-remote-kustomize-resources.sh; round 4 after adversarial
+# review found the round-3 denylist leaky -- see that script's header)
+# directly, as a plain script call -- NOT via a `web-stack-validate` Just
+# dependency, because that recipe's own success message would print onto
+# this recipe's stdout ahead of the YAML, corrupting every caller that
+# captures `just web-stack-render` as a pure render (the workflow does
+# exactly that). The guard script itself is silent on success and calls no
+# `just` recipe, so this stays outside the web-release-* closure exactly as
+# before.
+web-stack-render:
+    bash scripts/guard-no-remote-kustomize-resources.sh {{ web_stack_dir }}
+    kubectl kustomize {{ web_stack_dir }}
+
+# Operator-supplied cutover inputs (attended env; never baked, and since
+# TIN-3899 never workflow-delivered either):
+#   WEB_APPLY_KUBECONFIG  path to the materialized namespace-scoped SA kubeconfig
+#   WEB_APPLY_IMAGE       image to serve (operator-resolved; not the PLACEHOLDER)
+# WEB_APPLY_REPLICAS    replica count to flip to (default 2, the MI prod shape)
+_web-apply-inputs:
+    test -n "${WEB_APPLY_KUBECONFIG:-}" || { echo "Set WEB_APPLY_KUBECONFIG to the web-apply kubeconfig path"; exit 1; }
+    test -f "${WEB_APPLY_KUBECONFIG}"
+    test -n "${WEB_APPLY_IMAGE:-}" || { echo "Set WEB_APPLY_IMAGE to the operator-resolved image reference"; exit 1; }
+    case "${WEB_APPLY_IMAGE}" in *PLACEHOLDER*) echo "refusing the declare-only PLACEHOLDER image; supply the real operator-resolved reference"; exit 1 ;; esac
+
+# Lighter-weight input check for read-only commands (drift-check) that need
+# only the kubeconfig, not an image to pin.
+_web-apply-kubeconfig-only:
+    test -n "${WEB_APPLY_KUBECONFIG:-}" || { echo "Set WEB_APPLY_KUBECONFIG to the web-apply kubeconfig path"; exit 1; }
+    test -f "${WEB_APPLY_KUBECONFIG}"
+
+# Server-side dry-run of the workload apply against the live API (no mutation).
+web-stack-server-dry-run: web-stack-validate _web-apply-inputs
+    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply --dry-run=server -k {{ web_stack_dir }}
+
+# PROMOTION INTERLOCK (TIN-3816; unattended trigger retired by TIN-3899). This
+# legacy adapter-node carrier and the reviewed web-release chain both mutate
+# Deployment/greatfallstoolbus-org in {{ web_stack_ns }}. Once the gftb-site
+# static origin is promoted in place, re-running this carrier would re-pin the
+# adapter-node image over it and `apply -k` would recreate allow-egress-dns /
+# allow-egress-discuss-archive -- silently reverting the promotion and falsifying
+# the SERVED proof.
+#
+# The carrier USED TO be fired unattended by web-stack.yml's
+# `repository_dispatch: web-image-published` (sent by greatfallstoolbus.org's
+# container-ghcr.yml on every push to main). TIN-3899 deleted that workflow and
+# the site-side signal job, so the carrier now has no automated caller at all and
+# the runbook quiesce rule is retired. This interlock is KEPT as the mechanical
+# belt-and-braces on the one remaining, attended path: it refuses from live
+# state, so an operator cannot revert the promotion by hand either, and its
+# receipt in WEB_RELEASE_CRITICAL_RECIPE_DIGESTS keeps any future re-wiring of a
+# mutating carrier failing closed at `just public-surface`.
+_web-stack-promotion-interlock: _web-apply-kubeconfig-only
+    #!/usr/bin/env bash
+    set -euo pipefail
+    live_image="$(kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} get deployment/greatfallstoolbus-org --ignore-not-found -o jsonpath='{.spec.template.spec.containers[?(@.name=="greatfallstoolbus-org")].image}')"
+    case "${live_image}" in
+      ghcr.io/great-falls-tool-bus/gftb-site@*|ghcr.io/great-falls-tool-bus/gftb-site:*)
+        echo "::error::promotion interlock: Deployment/greatfallstoolbus-org in {{ web_stack_ns }} already carries the promoted gftb-site origin (${live_image}). The legacy adapter-node carrier would revert it. Refusing." >&2
+        echo "Quiesce greatfallstoolbus.org main (the repository_dispatch source) until this carrier is retired; see docs/runbooks/oncluster-web-cutover.md section S." >&2
+        exit 1
+        ;;
+    esac
+    echo "promotion interlock: live image '${live_image:-<absent>}' is not a promoted gftb-site origin; the legacy carrier may proceed"
+
+# Operator-gated cutover apply: workload -> pin image -> flip replicas 0 -> N.
+# The namespace must already exist (the SA is namespace-scoped and cannot create
+# it); replicas are patched on the Deployment resource, not via the scale
+# subresource, so the least-privilege patch-Deployment grant is sufficient.
+web-stack-apply: _web-stack-promotion-interlock web-stack-server-dry-run
+    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply -k {{ web_stack_dir }}
+    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} set image deployment/greatfallstoolbus-org greatfallstoolbus-org="${WEB_APPLY_IMAGE}"
+    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} patch deployment/greatfallstoolbus-org --type merge --patch '{"spec":{"replicas":'"${WEB_APPLY_REPLICAS:-2}"'}}'
+    # 300s (was 180s): run 28769199755 (2026-07-06) hit `timed out waiting for the condition` on a cold-node image pull, but the rollout verified Ready seconds later -- a benign race, not a real failure.
+    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} rollout status deployment/greatfallstoolbus-org --timeout=300s
+
+# Post-apply read-only health gate: Deployment readyReplicas == desired. A ready
+# replica means the kubelet readinessProbe (GET /health on :3000) passed, so this
+# IS the /health gate. An in-namespace ad hoc curl is intentionally NOT the gate:
+# the NetworkPolicy admits :3000 only from the cloudflared tunnel and Prometheus,
+# so the Service /health curl is verified at runbook P4 through the tunnel.
+web-stack-health:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    test -n "${WEB_APPLY_KUBECONFIG:-}" || { echo "Set WEB_APPLY_KUBECONFIG to the web-apply kubeconfig path"; exit 1; }
+    desired="$(kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} get deployment/greatfallstoolbus-org -o jsonpath='{.spec.replicas}')"
+    ready="$(kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} get deployment/greatfallstoolbus-org -o jsonpath='{.status.readyReplicas}')"
+    ready="${ready:-0}"
+    echo "web stack health: ${ready}/${desired} replicas Ready (readinessProbe = GET /health on :3000)"
+    if [ "${ready}" != "${desired}" ]; then
+      echo "health gate FAILED: ready ${ready} != desired ${desired}" >&2
+      exit 1
+    fi
+    echo "web stack health gate passed"
+
+# --- GFTB Grafana dashboards (TIN-3896) -------------------------------------
+# Checked-in dashboard JSON for the three GFTB surfaces (web serve; mail/list/
+# form; ARC runners). These are DECLARATIONS ONLY: this recipe never contacts
+# Grafana, and the repo holds no Grafana credential. Importing them into the
+# live instance is an operator action -- see the README beside the JSON for the
+# provisioning proposal and the panel inventory.
+#
+# Every PromQL expression was discovered against the live cluster Prometheus
+# before it was written; where a signal has no exporter, the dashboard carries
+# a "signal not exported yet" text panel instead of an invented metric name.
+
+grafana_dashboard_dir := "observability/grafana/dashboards/gftb"
+
+grafana-dashboards-validate:
+    bash scripts/validate-grafana-dashboards.sh {{ grafana_dashboard_dir }}
+
+# --- Reviewed gftb-site release candidate proofs ----------------------------
+# These recipes are read-only/proof-only. They deliberately do not share the
+# legacy `web-stack-apply` mutation carrier, which pins the adapter-node image
+# and must never receive the static Caddy candidate; that candidate travels only
+# through the reviewed exact-render/apply/rollback contract below. The workflow
+# that used to drive the legacy carrier (.github/workflows/web-stack.yml) is
+# retired (TIN-3899).
+
+_web-release-candidate-inputs:
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
+    set +x
+    set -euo pipefail
+    : "${WEB_APPLY_IMAGE:?Set WEB_APPLY_IMAGE to the reviewed gftb-site digest}"
+    : "${WEB_APPLY_SHA:?Set WEB_APPLY_SHA to the exact gftb-site source commit}"
+    [[ "${WEB_APPLY_IMAGE}" =~ ^ghcr\.io/great-falls-tool-bus/gftb-site@sha256:[0-9a-f]{64}$ ]] || { echo "WEB_APPLY_IMAGE must be the exact gftb-site sha256 digest" >&2; exit 2; }
+    [[ "${WEB_APPLY_SHA}" =~ ^[0-9a-f]{40}$ ]] || { echo "WEB_APPLY_SHA must be 40 lowercase hex characters" >&2; exit 2; }
+    [[ "${WEB_APPLY_REPLICAS:-2}" == "2" ]] || { echo "WEB_APPLY_REPLICAS must be exactly 2 for the ratified production shape" >&2; exit 2; }
+    while IFS='=' read -r name value; do
+      case "${name}" in
+        HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|http_proxy|https_proxy|all_proxy|no_proxy)
+          if [[ -n "${value}" ]]; then
+            echo "Refusing ambient ${name}; release proofs must use the direct reviewed route" >&2
+            exit 2
+          fi
+          ;;
+      esac
+    done < <(env)
+
+# Discover the immutable candidate for ONE exact gftb-site source commit, prove
+# that digest, then re-resolve the tag and refuse if it moved. This is the
+# reviewed single entrypoint for OBTAINING WEB_APPLY_IMAGE: the operator supplies
+# only WEB_APPLY_SHA, the one allowed tag is constructed here rather than typed,
+# and the digest is never hand-copied out of a registry UI. It takes no Just
+# dependency: _web-release-candidate-inputs demands a WEB_APPLY_IMAGE that does
+# not exist yet, so the guard is applied by the nested candidate-proof call once
+# the digest is known.
+#
+# NOTHING is printed to stdout until BOTH the nested proof receipt and the
+# second tag read have been checked, so a green-looking line can never precede a
+# refusal. The proof's own receipt is captured rather than streamed for the same
+# reason, and because its exact text is what positively confirms the reviewed
+# callee actually ran: a renamed/skipped recipe that exits 0 silently (e.g. under
+# JUST_ALLOW_MISSING) yields no receipt and is refused here.
+web-release-resolve-candidate:
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
+    set +x
+    set -euo pipefail
+    : "${WEB_APPLY_SHA:?Set WEB_APPLY_SHA to the exact gftb-site source commit}"
+    [[ "${WEB_APPLY_SHA}" =~ ^[0-9a-f]{40}$ ]] || { echo "WEB_APPLY_SHA must be 40 lowercase hex characters" >&2; exit 2; }
+    [[ "${WEB_APPLY_IMAGE+x}" != x ]] || { echo "WEB_APPLY_IMAGE must be unset; the resolver selects the immutable digest" >&2; exit 2; }
+    command -v crane >/dev/null 2>&1 || { echo "crane is required (nix develop provides it)" >&2; exit 1; }
+    command -v just >/dev/null 2>&1 || { echo "just is required (nix develop provides it)" >&2; exit 1; }
+    umask 077
+    source_sha="${WEB_APPLY_SHA}"
+    candidate_tag="ghcr.io/great-falls-tool-bus/gftb-site:sha-${source_sha}"
+    temp_root="$(python3 -I - "${TMPDIR:-/tmp}" "$(git rev-parse --show-toplevel)" <<'PY'
+    import os
+    import stat
+    import sys
+    from pathlib import Path
+
+    path = Path(sys.argv[1]).resolve(strict=True)
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("TMPDIR must remain outside the public repository")
+    metadata = path.stat()
+    mode = stat.S_IMODE(metadata.st_mode)
+    private = metadata.st_uid == os.getuid() and (mode & 0o022) == 0
+    shared_sticky = metadata.st_uid == 0 and bool(mode & stat.S_ISVTX)
+    if not path.is_dir() or not (private or shared_sticky):
+        raise SystemExit("TMPDIR must be operator-private or a root-owned sticky directory")
+    print(path)
+    PY
+    )"
+    resolver_dir="$(mktemp -d "${temp_root}/gftb-web-resolver.XXXXXX")"
+    trap 'rm -rf "${resolver_dir}"' EXIT
+    mkdir -m 700 "${resolver_dir}/home" "${resolver_dir}/xdg" "${resolver_dir}/docker"
+    printf '{}\n' > "${resolver_dir}/docker/config.json"
+    chmod 600 "${resolver_dir}/docker/config.json"
+    crane_clean() {
+      env -i PATH="${PATH}" HOME="${resolver_dir}/home" XDG_CONFIG_HOME="${resolver_dir}/xdg" DOCKER_CONFIG="${resolver_dir}/docker" crane "$@"
+    }
+    resolve_candidate_tag() {
+      local stage="$1"
+      local resolved
+      resolved="$(crane_clean digest "${candidate_tag}")" || { echo "candidate tag ${stage} resolution failed" >&2; exit 1; }
+      [[ "${resolved}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "candidate tag ${stage} digest is malformed" >&2; exit 1; }
+      printf '%s\n' "${resolved}"
+    }
+    first_digest="$(resolve_candidate_tag first)"
+    candidate_image="ghcr.io/great-falls-tool-bus/gftb-site@${first_digest}"
+    # Deliberately NOT run under `env -i`: unlike the registry reads above, this
+    # is the reviewed guard re-entering on the OPERATOR's real environment.
+    # _web-release-candidate-inputs exists to refuse ambient proxy settings and a
+    # non-2 WEB_APPLY_REPLICAS; scrubbing the environment here would hide exactly
+    # the ambient state that guard is there to catch. For the same reason
+    # WEB_APPLY_REPLICAS is passed through untouched rather than pinned to 2 --
+    # the resolver discovers a digest, it does not launder release inputs. Only
+    # WEB_APPLY_IMAGE is contributed, and it is the digest just resolved.
+    proof_output="$(WEB_APPLY_IMAGE="${candidate_image}" WEB_APPLY_SHA="${source_sha}" just web-release-candidate-proof)"
+    [[ "${proof_output}" == *"anonymous candidate proof passed: source=${source_sha} digest=${first_digest}"* ]] || { echo "nested candidate proof did not emit its receipt" >&2; exit 1; }
+    second_digest="$(resolve_candidate_tag second)"
+    [[ "${second_digest}" == "${first_digest}" ]] || { echo "candidate tag moved during the proof; refusing" >&2; exit 1; }
+    printf '%s\n' "${proof_output}"
+    echo "resolved candidate: source=${source_sha} tag=${candidate_tag} digest=${first_digest}"
+
+# Prove the package is anonymously readable, is the selected immutable digest,
+# and carries the exact static-Caddy runtime/source identity. Every registry
+# call runs with an empty process environment and fresh Docker credential root.
+web-release-candidate-proof: _web-release-candidate-inputs
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
+    set +x
+    set -euo pipefail
+    command -v crane >/dev/null 2>&1 || { echo "crane is required (nix develop provides it)" >&2; exit 1; }
+    command -v jq >/dev/null 2>&1 || { echo "jq is required (nix develop provides it)" >&2; exit 1; }
+    umask 077
+    temp_root="$(python3 -I - "${TMPDIR:-/tmp}" "$(git rev-parse --show-toplevel)" <<'PY'
+    import os
+    import stat
+    import sys
+    from pathlib import Path
+
+    path = Path(sys.argv[1]).resolve(strict=True)
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("TMPDIR must remain outside the public repository")
+    metadata = path.stat()
+    mode = stat.S_IMODE(metadata.st_mode)
+    private = metadata.st_uid == os.getuid() and (mode & 0o022) == 0
+    shared_sticky = metadata.st_uid == 0 and bool(mode & stat.S_ISVTX)
+    if not path.is_dir() or not (private or shared_sticky):
+        raise SystemExit("TMPDIR must be operator-private or a root-owned sticky directory")
+    print(path)
+    PY
+    )"
+    proof_dir="$(mktemp -d "${temp_root}/gftb-web-candidate.XXXXXX")"
+    trap 'rm -rf "${proof_dir}"' EXIT
+    mkdir -m 700 "${proof_dir}/home" "${proof_dir}/xdg" "${proof_dir}/docker"
+    printf '{}\n' > "${proof_dir}/docker/config.json"
+    chmod 600 "${proof_dir}/docker/config.json"
+    crane_clean() {
+      env -i PATH="${PATH}" HOME="${proof_dir}/home" XDG_CONFIG_HOME="${proof_dir}/xdg" DOCKER_CONFIG="${proof_dir}/docker" crane "$@"
+    }
+    expected_digest="${WEB_APPLY_IMAGE##*@}"
+    actual_digest="$(crane_clean digest "${WEB_APPLY_IMAGE}")"
+    [[ "${actual_digest}" == "${expected_digest}" ]] || { echo "anonymous digest mismatch" >&2; exit 1; }
+    crane_clean manifest "${WEB_APPLY_IMAGE}" > "${proof_dir}/manifest.json"
+    crane_clean config "${WEB_APPLY_IMAGE}" > "${proof_dir}/config.json"
+    jq -e '
+      .schemaVersion == 2
+      and ((.mediaType == "application/vnd.oci.image.manifest.v1+json") or (.mediaType == "application/vnd.docker.distribution.manifest.v2+json"))
+      and (has("manifests") | not)
+      and ((.config.digest // "") | test("^sha256:[0-9a-f]{64}$"))
+      and ((.config.size // 0) > 0)
+      and ((.layers | length) > 0)
+      and all(.layers[]; ((.digest // "") | test("^sha256:[0-9a-f]{64}$")) and ((.size // 0) > 0))
+    ' "${proof_dir}/manifest.json" >/dev/null || { echo "candidate is not one valid OCI/Docker image manifest" >&2; exit 1; }
+    jq -e --arg sha "${WEB_APPLY_SHA}" '
+      .os == "linux"
+      and .architecture == "amd64"
+      and .config.User == "65532:65532"
+      and .config.Entrypoint == ["/bin/dumb-init", "--"]
+      and .config.Cmd == ["/bin/caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+      and .config.WorkingDir == "/srv"
+      and (.config.Env | sort) == (["HOME=/tmp", "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt", "XDG_CONFIG_HOME=/tmp", "XDG_DATA_HOME=/tmp"] | sort)
+      and (.config.ExposedPorts | type == "object" and (keys == ["3000/tcp"]))
+      and .config.Labels["org.opencontainers.image.source"] == "https://github.com/Great-Falls-Tool-Bus/gftb-site"
+      and .config.Labels["org.opencontainers.image.revision"] == $sha
+    ' "${proof_dir}/config.json" >/dev/null || { echo "candidate OCI runtime/source contract mismatch" >&2; exit 1; }
+    crane_clean pull "${WEB_APPLY_IMAGE}" "${proof_dir}/image.tar"
+    test -s "${proof_dir}/image.tar" || { echo "anonymous candidate pull produced no image" >&2; exit 1; }
+    echo "anonymous candidate proof passed: source=${WEB_APPLY_SHA} digest=${expected_digest}"
+
+# Render the exact static-Caddy workload to stdout for the given
+# WEB_APPLY_IMAGE/WEB_APPLY_SHA. The checked-in base (rung 1 tree honesty,
+# 2026-08-21) already carries the static-Caddy shape -- this transform's
+# per-container overrides are now idempotent no-ops for everything except the
+# per-release image, source-sha annotation, and the synthesized
+# default-deny-egress NetworkPolicy (see k8s/web/.../deployment.yaml and
+# networkpolicy.yaml headers). This recipe never writes back to the checked-in
+# manifest; callers may redirect stdout only to a caller-owned temporary
+# receipt. No cluster or registry is contacted here.
+web-release-render: _web-release-candidate-inputs
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
+    set +x
+    set -euo pipefail
+    command -v kubectl >/dev/null 2>&1 || { echo "kubectl is required (nix develop provides it)" >&2; exit 1; }
+    command -v yq >/dev/null 2>&1 || { echo "yq is required (nix develop provides it)" >&2; exit 1; }
+    command -v jq >/dev/null 2>&1 || { echo "jq is required (nix develop provides it)" >&2; exit 1; }
+    yq_version="$(yq --version 2>&1 || true)"
+    if ! printf "%s" "${yq_version}" | grep -qi "mikefarah" || ! printf "%s" "${yq_version}" | grep -Eqi "version v?4\."; then echo "mikefarah yq-go v4 is required; got: ${yq_version:-unavailable}" >&2; exit 1; fi
+    umask 077
+    temp_root="$(python3 -I - "${TMPDIR:-/tmp}" "$(git rev-parse --show-toplevel)" <<'PY'
+    import os
+    import stat
+    import sys
+    from pathlib import Path
+
+    path = Path(sys.argv[1]).resolve(strict=True)
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("TMPDIR must remain outside the public repository")
+    metadata = path.stat()
+    mode = stat.S_IMODE(metadata.st_mode)
+    private = metadata.st_uid == os.getuid() and (mode & 0o022) == 0
+    shared_sticky = metadata.st_uid == 0 and bool(mode & stat.S_ISVTX)
+    if not path.is_dir() or not (private or shared_sticky):
+        raise SystemExit("TMPDIR must be operator-private or a root-owned sticky directory")
+    print(path)
+    PY
+    )"
+    render_dir="$(mktemp -d "${temp_root}/gftb-web-render.XXXXXX")"
+    trap 'rm -rf "${render_dir}"' EXIT
+    mkdir -m 700 "${render_dir}/home"
+    env -i PATH="${PATH}" HOME="${render_dir}/home" just web-stack-validate >/dev/null
+    base="${render_dir}/base.yaml"
+    rendered="${render_dir}/rendered.yaml"
+    kubectl kustomize {{ web_stack_dir }} > "${base}"
+    # Keep YAML parsing/serialization in mikefarah yq-go and all mutation
+    # semantics in jq; -I=0 produces one JSON document per input document.
+    yq eval-all -o=json -I=0 '.' "${base}" \
+      | jq --arg image "${WEB_APPLY_IMAGE}" --arg sha "${WEB_APPLY_SHA}" '
+      if .kind == "NetworkPolicy" and (.metadata.name == "allow-egress-dns" or .metadata.name == "allow-egress-discuss-archive") then
+        empty
+      elif .kind == "Deployment" and .metadata.name == "greatfallstoolbus-org" and .metadata.namespace == "greatfallstoolbus-org-production" then
+        .spec.replicas = 2
+        | .spec.template.metadata.annotations["app.tinyland.dev/source-sha"] = $sha
+        | .spec.template.spec.automountServiceAccountToken = false
+        | .spec.template.spec.enableServiceLinks = false
+        | .spec.template.spec.securityContext = {
+            "runAsNonRoot": true,
+            "runAsUser": 65532,
+            "runAsGroup": 65532,
+            "fsGroup": 65532,
+            "seccompProfile": {"type": "RuntimeDefault"}
+          }
+        | del(
+            .spec.template.spec.hostNetwork,
+            .spec.template.spec.hostPID,
+            .spec.template.spec.hostIPC,
+            .spec.template.spec.shareProcessNamespace
+          )
+        | .spec.template.spec.containers |= map(
+            if .name == "greatfallstoolbus-org" then
+              .image = $image
+              | .securityContext = {
+                  "allowPrivilegeEscalation": false,
+                  "readOnlyRootFilesystem": true,
+                  "capabilities": {"drop": ["ALL"]}
+                }
+              | del(.command, .args, .env, .envFrom, .volumeMounts, .lifecycle, .workingDir, .stdin, .stdinOnce, .tty)
+              | .ports |= map(del(.hostIP, .hostPort))
+            else . end
+          )
+      elif .kind == "NetworkPolicy" and .metadata.name == "default-deny-ingress" and .metadata.namespace == "greatfallstoolbus-org-production" then
+        .,
+        {
+          "apiVersion": "networking.k8s.io/v1",
+          "kind": "NetworkPolicy",
+          "metadata": {
+            "name": "default-deny-egress",
+            "namespace": "greatfallstoolbus-org-production",
+            "labels": {
+              "app.kubernetes.io/managed-by": "great-falls-tool-bus-infra",
+              "app.kubernetes.io/part-of": "great-falls-tool-bus",
+              "app.tinyland.dev/lifecycle": "declare-only",
+              "app.tinyland.dev/tenant": "great-falls-tool-bus"
+            }
+          },
+          "spec": {
+            "podSelector": {
+              "matchLabels": {
+                "app.kubernetes.io/name": "greatfallstoolbus-org",
+                "app.kubernetes.io/component": "web"
+              }
+            },
+            "policyTypes": ["Egress"],
+            "egress": []
+          }
+        }
+      else . end
+      ' \
+      | yq eval-all -p=json -o=yaml -P '.' - > "${rendered}"
+    # The later mutation lane must explicitly delete the two omitted legacy
+    # adapter-node egress policies; `kubectl apply` does not prune omissions.
+    expected_census=$'Deployment\tgreatfallstoolbus-org\tgreatfallstoolbus-org-production\nNetworkPolicy\tallow-cloudflared-tunnel-ingress\tgreatfallstoolbus-org-production\nNetworkPolicy\tallow-prometheus-scrape\tgreatfallstoolbus-org-production\nNetworkPolicy\tdefault-deny-egress\tgreatfallstoolbus-org-production\nNetworkPolicy\tdefault-deny-ingress\tgreatfallstoolbus-org-production\nService\tgreatfallstoolbus-org\tgreatfallstoolbus-org-production'
+    actual_census="$(
+      yq eval-all -o=json -I=0 '.' "${rendered}" \
+        | jq -r '[.kind, .metadata.name, (.metadata.namespace // "")] | @tsv' \
+        | LC_ALL=C sort
+    )"
+    [[ "${actual_census}" == "${expected_census}" ]] || { echo "rendered object census mismatch" >&2; exit 1; }
+    yq eval-all -o=json -I=0 '.' "${rendered}" \
+      | jq --slurp -e --arg image "${WEB_APPLY_IMAGE}" --arg sha "${WEB_APPLY_SHA}" '
+      [.[] | select(.kind == "Deployment" and .metadata.name == "greatfallstoolbus-org" and .metadata.namespace == "greatfallstoolbus-org-production")] as $deployments
+      | [.[] | select(.kind == "Service" and .metadata.name == "greatfallstoolbus-org" and .metadata.namespace == "greatfallstoolbus-org-production")] as $services
+      | ($deployments | length) == 1
+        and ($deployments[0].spec.replicas == 2)
+        and ($deployments[0].spec.template.metadata.annotations["app.tinyland.dev/source-sha"] == $sha)
+        and ($deployments[0].spec.template.spec.automountServiceAccountToken == false)
+        and ($deployments[0].spec.template.spec.enableServiceLinks == false)
+        and ($deployments[0].spec.template.spec.securityContext.runAsNonRoot == true)
+        and ($deployments[0].spec.template.spec.securityContext.runAsUser == 65532)
+        and ($deployments[0].spec.template.spec.securityContext.runAsGroup == 65532)
+        and ($deployments[0].spec.template.spec.securityContext.fsGroup == 65532)
+        and ($deployments[0].spec.template.spec.securityContext.seccompProfile.type == "RuntimeDefault")
+        and (($deployments[0].spec.template.spec.securityContext | keys | sort) == (["fsGroup", "runAsGroup", "runAsNonRoot", "runAsUser", "seccompProfile"] | sort))
+        and (($deployments[0].spec.template.spec.securityContext.seccompProfile | keys) == ["type"])
+        and (($deployments[0].spec.template.spec | has("hostNetwork")) | not)
+        and (($deployments[0].spec.template.spec | has("hostPID")) | not)
+        and (($deployments[0].spec.template.spec | has("hostIPC")) | not)
+        and (($deployments[0].spec.template.spec | has("shareProcessNamespace")) | not)
+        and (($deployments[0].spec.template.spec | has("initContainers")) | not)
+        and (($deployments[0].spec.template.spec | has("ephemeralContainers")) | not)
+        and (($deployments[0].spec.template.spec | has("imagePullSecrets")) | not)
+        and (($deployments[0].spec.template.spec | has("volumes")) | not)
+        and (($deployments[0].spec.template.spec.containers | length) == 1)
+        and ($deployments[0].spec.template.spec.containers[0].name == "greatfallstoolbus-org")
+        and ($deployments[0].spec.template.spec.containers[0].image == $image)
+        and (($deployments[0].spec.template.spec.containers[0] | has("command")) | not)
+        and (($deployments[0].spec.template.spec.containers[0] | has("args")) | not)
+        and (($deployments[0].spec.template.spec.containers[0] | has("env")) | not)
+        and (($deployments[0].spec.template.spec.containers[0] | has("envFrom")) | not)
+        and (($deployments[0].spec.template.spec.containers[0] | has("volumeMounts")) | not)
+        and (($deployments[0].spec.template.spec.containers[0] | has("lifecycle")) | not)
+        and (($deployments[0].spec.template.spec.containers[0] | has("workingDir")) | not)
+        and (($deployments[0].spec.template.spec.containers[0] | has("stdin")) | not)
+        and (($deployments[0].spec.template.spec.containers[0] | has("stdinOnce")) | not)
+        and (($deployments[0].spec.template.spec.containers[0] | has("tty")) | not)
+        and ($deployments[0].spec.template.spec.containers[0].ports == [{"containerPort": 3000, "name": "http", "protocol": "TCP"}])
+        and ($deployments[0].spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation == false)
+        and ($deployments[0].spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem == true)
+        and ($deployments[0].spec.template.spec.containers[0].securityContext.capabilities.drop == ["ALL"])
+        and (($deployments[0].spec.template.spec.containers[0].securityContext | keys | sort) == (["allowPrivilegeEscalation", "capabilities", "readOnlyRootFilesystem"] | sort))
+        and (($deployments[0].spec.template.spec.containers[0].securityContext.capabilities | keys) == ["drop"])
+        and ($services | length) == 1
+        and ($services[0].apiVersion == "v1")
+        and ($services[0].kind == "Service")
+        and (($services[0].spec | keys | sort) == (["ports", "selector", "type"] | sort))
+        and ($services[0].spec.type == "ClusterIP")
+        and ($services[0].spec.selector == {"app.kubernetes.io/component": "web", "app.kubernetes.io/name": "greatfallstoolbus-org"})
+        and ($services[0].spec.ports == [{"name": "http", "port": 80, "protocol": "TCP", "targetPort": "http"}])
+        and ([.[] | select(.kind == "Namespace" or .kind == "Secret" or .kind == "SecretList")] | length) == 0
+      ' >/dev/null || { echo "rendered static-Caddy workload contract mismatch" >&2; exit 1; }
+    rendered_network_policies_semantic="$(
+      yq eval-all -o=json -I=0 '.' "${rendered}" \
+        | jq --slurp -S -c '
+      def canonical_rule:
+        (if ((.from? // null) | type) == "array" then .from |= sort_by(tojson) else . end)
+        | (if ((.to? // null) | type) == "array" then (if .to == [] then del(.to) else .to |= sort_by(tojson) end) else . end)
+        | (if ((.ports? // null) | type) == "array" then .ports |= sort_by(tojson) else . end);
+      [.[] | select(.kind == "NetworkPolicy") | {
+        apiVersion,
+        kind,
+        metadata: {name: .metadata.name, namespace: .metadata.namespace, labels: .metadata.labels},
+        spec: (.spec
+          | .ingress = (.ingress // [])
+          | .egress = (.egress // [])
+          | (if ((.policyTypes? // null) | type) == "array" then .policyTypes |= sort else . end)
+          | (if ((.ingress? // null) | type) == "array" then .ingress |= (map(canonical_rule) | sort_by(tojson)) else . end)
+          | (if ((.egress? // null) | type) == "array" then .egress |= (map(canonical_rule) | sort_by(tojson)) else . end))
+      }] | sort_by(.metadata.name)
+        '
+    )"
+    rendered_network_policies_digest="$(python3 -I -c 'import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest())' "${rendered_network_policies_semantic}")"
+    [[ "${rendered_network_policies_digest}" == "301eecb4ad234fdd7258ac7351a5a563e1b53cb250bce6f51a68824854b28220" ]] || { echo "rendered static-Caddy NetworkPolicy contract mismatch" >&2; exit 1; }
+    cat "${rendered}"
+
+_web-release-kubeconfig-inputs:
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
+    set +x
+    set -euo pipefail
+    : "${WEB_RELEASE_KUBECONFIG:?Set WEB_RELEASE_KUBECONFIG to the proof-only web release kubeconfig}"
+    source_kubeconfig="${WEB_RELEASE_KUBECONFIG}"
+    [[ -z "${KUBECONFIG:-}" ]] || { echo "Refusing ambient KUBECONFIG; WEB_RELEASE_KUBECONFIG is authoritative" >&2; exit 2; }
+    while IFS='=' read -r name value; do
+      case "${name}" in
+        HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|http_proxy|https_proxy|all_proxy|no_proxy)
+          if [[ -n "${value}" ]]; then
+            echo "Refusing ambient ${name}; web release readback may not transit a proxy" >&2
+            exit 2
+          fi
+          ;;
+      esac
+    done < <(env)
+    umask 077
+    temp_root="$(python3 -I - "${TMPDIR:-/tmp}" "$(git rev-parse --show-toplevel)" <<'PY'
+    import os
+    import stat
+    import sys
+    from pathlib import Path
+
+    path = Path(sys.argv[1]).resolve(strict=True)
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("TMPDIR must remain outside the public repository")
+    metadata = path.stat()
+    mode = stat.S_IMODE(metadata.st_mode)
+    private = metadata.st_uid == os.getuid() and (mode & 0o022) == 0
+    shared_sticky = metadata.st_uid == 0 and bool(mode & stat.S_ISVTX)
+    if not path.is_dir() or not (private or shared_sticky):
+        raise SystemExit("TMPDIR must be operator-private or a root-owned sticky directory")
+    print(path)
+    PY
+    )"
+    kube_dir="$(mktemp -d "${temp_root}/gftb-web-kubeconfig.XXXXXX")"
+    trap 'rm -rf "${kube_dir}"' EXIT
+    mkdir -m 700 "${kube_dir}/home"
+    release_kubeconfig="${kube_dir}/kubeconfig"
+    python3 -I - "${source_kubeconfig}" "$(git rev-parse --show-toplevel)" "${release_kubeconfig}" <<'PY'
+    import os
+    import shutil
+    import stat
+    import sys
+    from pathlib import Path
+
+    raw = Path(sys.argv[1])
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    destination = Path(sys.argv[3])
+    destination_parent = destination.parent.stat()
+    if not stat.S_ISDIR(destination_parent.st_mode) or destination_parent.st_uid != os.getuid() or stat.S_IMODE(destination_parent.st_mode) != 0o700:
+        raise SystemExit("private kubeconfig staging directory failed custody validation")
+    if not raw.is_absolute() or raw.is_symlink():
+        raise SystemExit("WEB_RELEASE_KUBECONFIG must be an absolute non-symlink path")
+    path = raw.resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("WEB_RELEASE_KUBECONFIG must remain outside the public repository")
+    expected = path.stat()
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    source_fd = os.open(raw, flags)
+    metadata = os.fstat(source_fd)
+    if (metadata.st_dev, metadata.st_ino) != (expected.st_dev, expected.st_ino):
+        os.close(source_fd)
+        raise SystemExit("WEB_RELEASE_KUBECONFIG changed during custody validation")
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid() or metadata.st_nlink != 1:
+        os.close(source_fd)
+        raise SystemExit("WEB_RELEASE_KUBECONFIG must be a regular file owned by the operator")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        os.close(source_fd)
+        raise SystemExit("WEB_RELEASE_KUBECONFIG must have mode 0600")
+    destination_fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(source_fd, "rb") as source, os.fdopen(destination_fd, "wb") as target:
+        shutil.copyfileobj(source, target)
+        target.flush()
+        os.fsync(target.fileno())
+    PY
+    kubectl_clean() {
+      env -i PATH="${PATH}" HOME="${kube_dir}/home" kubectl --kubeconfig "${release_kubeconfig}" "$@"
+    }
+    auth_stdout="${kube_dir}/auth.stdout"
+    auth_stderr="${kube_dir}/auth.stderr"
+    auth_decision() {
+      local status output
+      : > "${auth_stdout}"
+      : > "${auth_stderr}"
+      if kubectl_clean "$@" > "${auth_stdout}" 2> "${auth_stderr}"; then
+        status=0
+      else
+        status=$?
+      fi
+      output="$(tr -d '\r\n' < "${auth_stdout}")"
+      if [[ -s "${auth_stderr}" ]] || { [[ "${status}" -ne 0 ]] && [[ "${status}" -ne 1 ]]; } || { [[ "${status}" -eq 0 ]] && [[ "${output}" != "yes" ]]; } || { [[ "${status}" -eq 1 ]] && [[ "${output}" != "no" ]]; }; then
+        echo "Kubernetes authorization decision was not an exact yes/no result" >&2
+        return 2
+      fi
+      printf '%s\n' "${output}"
+    }
+    capture_kubectl_output() {
+      local destination="$1"
+      local requirement="$2"
+      shift 2
+      : > "${auth_stderr}"
+      if ! kubectl_clean "$@" > "${destination}" 2> "${auth_stderr}"; then
+        echo "Kubernetes authorization/discovery request failed" >&2
+        return 2
+      fi
+      [[ ! -s "${auth_stderr}" ]] || { echo "Kubernetes authorization/discovery request emitted diagnostics" >&2; return 2; }
+      [[ "${requirement}" == "allow-empty" ]] || test -s "${destination}" || { echo "Kubernetes authorization/discovery request returned no data" >&2; return 2; }
+    }
+    raw_ssar_decision() {
+      local verb="$1" api_group="$2" resource="$3"
+      local request="${kube_dir}/raw-ssar-request.json"
+      local response="${kube_dir}/raw-ssar-response.json"
+      jq -n --arg verb "${verb}" --arg api_group "${api_group}" --arg resource "${resource}" '
+        {
+          apiVersion: "authorization.k8s.io/v1",
+          kind: "SelfSubjectAccessReview",
+          spec: {resourceAttributes: {verb: $verb, group: $api_group, resource: $resource}}
+        }
+      ' > "${request}"
+      capture_kubectl_output "${response}" require-data create --raw /apis/authorization.k8s.io/v1/selfsubjectaccessreviews -f "${request}" || return 2
+      jq -e '
+        .apiVersion == "authorization.k8s.io/v1"
+        and .kind == "SelfSubjectAccessReview"
+        and (.status.allowed | type == "boolean")
+        and ((.status.denied // false) | type == "boolean")
+        and ((.status.evaluationError // "") == "")
+        and ((.status.allowed == false) or ((.status.denied // false) == false))
+      ' "${response}" >/dev/null || { echo "Kubernetes raw authorization review was malformed" >&2; return 2; }
+      if jq -e '.status.allowed == true' "${response}" >/dev/null; then printf 'yes\n'; else printf 'no\n'; fi
+    }
+    config_parse_stderr="${kube_dir}/config-parse.stderr"
+    # yq-go owns YAML decoding; jq slurps the JSON stream and keeps the
+    # exact-one-document guard fail-closed before any schema assertion.
+    if ! { env -i PATH="${PATH}" HOME="${kube_dir}/home" yq eval-all -o=json -I=0 '.' "${release_kubeconfig}" | env -i PATH="${PATH}" HOME="${kube_dir}/home" jq --slurp -e '
+      if length == 1 then .[0] else error("expected exactly one kubeconfig document") end
+      | .["current-context"] as $current
+      | type == "object"
+        and ((keys | sort) == (["apiVersion", "clusters", "contexts", "current-context", "kind", "preferences", "users"] | sort))
+        and .apiVersion == "v1"
+        and .kind == "Config"
+        and .preferences == {}
+        and ($current | type == "string" and length > 0)
+        and (.clusters | length) == 1
+        and (.contexts | length) == 1
+        and (.users | length) == 1
+        and ((.clusters[0] | keys | sort) == ["cluster", "name"])
+        and ((.contexts[0] | keys | sort) == ["context", "name"])
+        and ((.users[0] | keys | sort) == ["name", "user"])
+        and ((.clusters[0].cluster | keys | sort) == ["certificate-authority-data", "server"])
+        and ((.contexts[0].context | keys | sort) == ["cluster", "namespace", "user"])
+        and ((.users[0].user | keys) == ["token"])
+        and (.contexts[0].name == $current)
+        and (.contexts[0].context.cluster == .clusters[0].name)
+        and (.contexts[0].context.user == .users[0].name)
+        and (.contexts[0].context.namespace == "greatfallstoolbus-org-production")
+        and ((.clusters[0].cluster.server // "") | test("^https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$"))
+        and ((.clusters[0].cluster["certificate-authority-data"] // "") | type == "string" and test("^[A-Za-z0-9+/]+={0,2}$") and length >= 16)
+        and ((.users[0].user.token // "") | type == "string" and test("^[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}$"))
+    '; } >/dev/null 2> "${config_parse_stderr}"; then
+      echo "WEB_RELEASE_KUBECONFIG must be one TLS-verified namespace-bound token context" >&2
+      exit 2
+    fi
+    [[ ! -s "${config_parse_stderr}" ]] || { echo "WEB_RELEASE_KUBECONFIG parsing emitted unexpected diagnostics" >&2; exit 2; }
+    cluster_uid="$(kubectl_clean get namespace kube-system -o jsonpath='{.metadata.uid}')"
+    [[ "${cluster_uid}" == "cc121476-7a95-4b24-aa61-79d1f45713bd" ]] || { echo "WEB_RELEASE_KUBECONFIG does not target the reviewed Honey cluster" >&2; exit 2; }
+    for read_contract in "get deployments" "list replicasets" "list pods" "get services" "list endpointslices.discovery.k8s.io" "list networkpolicies.networking.k8s.io"; do
+      read -r verb resource <<<"${read_contract}"
+      decision="$(auth_decision auth can-i "${verb}" "${resource}" --namespace {{ web_stack_ns }})" || exit 2
+      [[ "${decision}" == "yes" ]] || { echo "WEB_RELEASE_KUBECONFIG cannot ${verb} ${resource}" >&2; exit 2; }
+    done
+    decision="$(auth_decision auth can-i get namespaces --all-namespaces)" || exit 2
+    [[ "${decision}" == "yes" ]] || { echo "WEB_RELEASE_KUBECONFIG cannot read the Honey cluster identity" >&2; exit 2; }
+
+    # SelfSubjectRulesReview is only an auxiliary, reject-only grant census.
+    # Kubernetes explicitly warns that it may be incomplete and must not be the
+    # authority for external decisions. Every mutation decision below is made
+    # independently through SelfSubjectAccessReview (`kubectl auth can-i`).
+    rules_request="${kube_dir}/rules-request.json"
+    rules_response="${kube_dir}/rules-response.json"
+    jq -n --arg namespace "{{ web_stack_ns }}" '{apiVersion:"authorization.k8s.io/v1",kind:"SelfSubjectRulesReview",spec:{namespace:$namespace}}' > "${rules_request}"
+    capture_kubectl_output "${rules_response}" require-data create --raw /apis/authorization.k8s.io/v1/selfsubjectrulesreviews -f "${rules_request}"
+    python3 -I - "${rules_response}" <<'PY'
+    import json
+    import sys
+    from pathlib import Path
+
+    review = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    if review.get("apiVersion") != "authorization.k8s.io/v1" or review.get("kind") != "SelfSubjectRulesReview":
+        raise SystemExit("unexpected SelfSubjectRulesReview response shape")
+    status = review.get("status")
+    if not isinstance(status, dict) or status.get("incomplete") is not False or status.get("evaluationError", "") != "":
+        raise SystemExit("SelfSubjectRulesReview is incomplete or reported an evaluation error")
+    allowed_resource_actions = {
+        ("", "namespaces", "get"),
+        ("", "pods", "list"),
+        ("", "services", "get"),
+        ("apps", "deployments", "get"),
+        ("apps", "replicasets", "list"),
+        ("authentication.k8s.io", "selfsubjectreviews", "create"),
+        ("authorization.k8s.io", "selfsubjectaccessreviews", "create"),
+        ("authorization.k8s.io", "selfsubjectrulesreviews", "create"),
+        ("discovery.k8s.io", "endpointslices", "list"),
+        ("networking.k8s.io", "networkpolicies", "list"),
+    }
+    observed_resource_actions = set()
+    for rule in status.get("resourceRules", []):
+        if not isinstance(rule, dict):
+            raise SystemExit("malformed SelfSubjectRulesReview resource rule")
+        api_groups = rule.get("apiGroups")
+        resources = rule.get("resources")
+        verbs = rule.get("verbs")
+        resource_names = rule.get("resourceNames", [])
+        if not isinstance(api_groups, list) or not api_groups or not all(isinstance(value, str) for value in api_groups):
+            raise SystemExit("malformed SelfSubjectRulesReview apiGroups field")
+        if not all(isinstance(values, list) and values and all(isinstance(value, str) and value for value in values) for values in (resources, verbs)):
+            raise SystemExit("malformed SelfSubjectRulesReview resource rule fields")
+        if resource_names not in (None, []) or any("*" in values for values in (api_groups, resources, verbs)):
+            raise SystemExit("named or wildcard resource authority is outside the web proof contract")
+        for api_group in api_groups:
+            for resource in resources:
+                for verb in verbs:
+                    action = (api_group, resource, verb)
+                    if action not in allowed_resource_actions:
+                        raise SystemExit(f"unexpected reported resource authority: {api_group}/{resource}:{verb}")
+                    observed_resource_actions.add(action)
+    allowed_non_resource_urls = {
+        "/.well-known/openid-configuration",
+        "/.well-known/openid-configuration/",
+        "/api",
+        "/api/*",
+        "/apis",
+        "/apis/*",
+        "/healthz",
+        "/livez",
+        "/openid/v1/jwks",
+        "/openid/v1/jwks/",
+        "/openapi",
+        "/openapi/*",
+        "/readyz",
+        "/version",
+        "/version/",
+    }
+    for rule in status.get("nonResourceRules", []):
+        if not isinstance(rule, dict):
+            raise SystemExit("malformed SelfSubjectRulesReview non-resource rule")
+        urls = rule.get("nonResourceURLs")
+        verbs = rule.get("verbs")
+        if not isinstance(urls, list) or not urls or not isinstance(verbs, list) or not verbs:
+            raise SystemExit("malformed SelfSubjectRulesReview non-resource fields")
+        if not all(isinstance(url, str) and url in allowed_non_resource_urls for url in urls):
+            raise SystemExit("unexpected reported non-resource URL authority")
+        if not all(isinstance(verb, str) and verb in {"get", "head"} for verb in verbs):
+            raise SystemExit("unexpected reported non-resource verb authority")
+    required_resource_actions = {
+        ("", "namespaces", "get"),
+        ("", "pods", "list"),
+        ("", "services", "get"),
+        ("apps", "deployments", "get"),
+        ("apps", "replicasets", "list"),
+        ("discovery.k8s.io", "endpointslices", "list"),
+        ("networking.k8s.io", "networkpolicies", "list"),
+    }
+    if not required_resource_actions <= observed_resource_actions:
+        raise SystemExit("SelfSubjectRulesReview omitted a required reported read grant")
+    PY
+    rules_snapshot="$(jq -S -c '
+      def resource_rule: {
+        apiGroups: ((.apiGroups // []) | sort | unique),
+        resources: ((.resources // []) | sort | unique),
+        resourceNames: ((.resourceNames // []) | sort | unique),
+        verbs: ((.verbs // []) | sort | unique)
+      };
+      def non_resource_rule: {
+        nonResourceURLs: ((.nonResourceURLs // []) | sort | unique),
+        verbs: ((.verbs // []) | sort | unique)
+      };
+      {
+        incomplete: .status.incomplete,
+        evaluationError: (.status.evaluationError // ""),
+        resourceRules: ([.status.resourceRules[]? | resource_rule] | sort_by(tojson) | unique),
+        nonResourceRules: ([.status.nonResourceRules[]? | non_resource_rule] | sort_by(tojson) | unique)
+      }
+    ' "${rules_response}")"
+    rules_digest="$(python3 -I -c 'import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest())' "${rules_snapshot}")"
+
+    for scope in namespaced cluster; do
+      if [[ "${scope}" == "namespaced" ]]; then
+        discovery_scope=(--namespaced=true)
+        auth_scope=(--namespace {{ web_stack_ns }})
+      else
+        discovery_scope=(--namespaced=false)
+        auth_scope=(--all-namespaces)
+      fi
+      for verb in create update patch delete deletecollection; do
+        resources_file="${kube_dir}/resources-${scope}-${verb}.txt"
+        normalized_resources_file="${kube_dir}/resources-${scope}-${verb}.normalized"
+        capture_kubectl_output "${resources_file}" allow-empty api-resources --cached=false "${discovery_scope[@]}" --verbs="${verb}" -o name
+        python3 -I - "${resources_file}" "${normalized_resources_file}" <<'PY'
+    import re
+    import sys
+    from pathlib import Path
+
+    resources = [line for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines() if line]
+    if len(resources) != len(set(resources)) or any(not re.fullmatch(r"[a-z0-9.-]+(?:/[a-z0-9.-]+)?", resource) for resource in resources):
+        raise SystemExit("Kubernetes API discovery returned malformed or duplicate resource names")
+    normalized = []
+    for discovered in resources:
+        if "/" not in discovered:
+            normalized.append((discovered, ""))
+            continue
+        base, qualified_subresource = discovered.split("/", 1)
+        if "." in qualified_subresource:
+            subresource, api_group = qualified_subresource.split(".", 1)
+            if "." in base or not api_group:
+                raise SystemExit("Kubernetes API discovery returned an ambiguous grouped subresource")
+            base = f"{base}.{api_group}"
+        else:
+            subresource = qualified_subresource
+        if not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", base) or not re.fullmatch(r"[a-z0-9][a-z0-9-]*", subresource):
+            raise SystemExit("Kubernetes API discovery returned a malformed subresource")
+        normalized.append((base, subresource))
+    if len(normalized) != len(set(normalized)):
+        raise SystemExit("Kubernetes API discovery returned duplicate normalized resources")
+    Path(sys.argv[2]).write_text("".join(f"{base}|{subresource}\n" for base, subresource in normalized), encoding="utf-8")
+    PY
+        while IFS='|' read -r resource subresource; do
+          [[ -n "${resource}" ]] || continue
+          auth_args=(auth can-i "${verb}" "${resource}")
+          display_resource="${resource}"
+          if [[ -n "${subresource}" ]]; then
+            auth_args+=(--subresource="${subresource}")
+            display_resource="${resource}/${subresource}"
+          fi
+          decision="$(auth_decision "${auth_args[@]}" "${auth_scope[@]}")" || exit 2
+          if [[ "${decision}" == "yes" ]]; then
+            case "${scope}:${verb}:${display_resource}" in
+              cluster:create:selfsubjectaccessreviews.authorization.k8s.io|cluster:create:selfsubjectrulesreviews.authorization.k8s.io|cluster:create:selfsubjectreviews.authentication.k8s.io) ;;
+              *) echo "WEB_RELEASE_KUBECONFIG can mutate ${scope} resource ${display_resource} (${verb})" >&2; exit 2 ;;
+            esac
+          fi
+        done < "${normalized_resources_file}"
+      done
+    done
+    for resource in secrets configmaps serviceaccounts roles.rbac.authorization.k8s.io rolebindings.rbac.authorization.k8s.io; do
+      for verb in get list watch create update patch delete deletecollection; do
+        decision="$(auth_decision auth can-i "${verb}" "${resource}" --namespace {{ web_stack_ns }})" || exit 2
+        [[ "${decision}" == "no" ]] || { echo "WEB_RELEASE_KUBECONFIG must not access ${resource} (${verb})" >&2; exit 2; }
+      done
+    done
+    for resource in clusterroles.rbac.authorization.k8s.io clusterrolebindings.rbac.authorization.k8s.io; do
+      for verb in get list watch create update patch delete deletecollection; do
+        decision="$(auth_decision auth can-i "${verb}" "${resource}" --all-namespaces)" || exit 2
+        [[ "${decision}" == "no" ]] || { echo "WEB_RELEASE_KUBECONFIG must not access ${resource} (${verb})" >&2; exit 2; }
+      done
+    done
+    for named_contract in \
+      "namespaces|greatfallstoolbus-org-production|cluster" \
+      "deployments.apps|greatfallstoolbus-org|namespaced" \
+      "services|greatfallstoolbus-org|namespaced" \
+      "networkpolicies.networking.k8s.io|allow-cloudflared-tunnel-ingress|namespaced" \
+      "networkpolicies.networking.k8s.io|allow-prometheus-scrape|namespaced" \
+      "networkpolicies.networking.k8s.io|default-deny-egress|namespaced" \
+      "networkpolicies.networking.k8s.io|default-deny-ingress|namespaced" \
+      "networkpolicies.networking.k8s.io|allow-egress-dns|namespaced" \
+      "networkpolicies.networking.k8s.io|allow-egress-discuss-archive|namespaced"; do
+      IFS='|' read -r resource resource_name scope <<<"${named_contract}"
+      if [[ "${scope}" == "namespaced" ]]; then auth_scope=(--namespace {{ web_stack_ns }}); else auth_scope=(--all-namespaces); fi
+      for verb in update patch delete; do
+        decision="$(auth_decision auth can-i "${verb}" "${resource}/${resource_name}" "${auth_scope[@]}")" || exit 2
+        [[ "${decision}" == "no" ]] || { echo "WEB_RELEASE_KUBECONFIG must not mutate named release object ${resource}/${resource_name} (${verb})" >&2; exit 2; }
+      done
+    done
+    for named_subresource_contract in \
+      "namespaces|greatfallstoolbus-org-production|status|cluster|update patch" \
+      "namespaces|greatfallstoolbus-org-production|finalize|cluster|update patch" \
+      "deployments.apps|greatfallstoolbus-org|status|namespaced|update patch" \
+      "deployments.apps|greatfallstoolbus-org|scale|namespaced|update patch" \
+      "services|greatfallstoolbus-org|status|namespaced|update patch" \
+      "services|greatfallstoolbus-org|proxy|namespaced|get create update patch delete"; do
+      IFS='|' read -r resource resource_name subresource scope verbs <<<"${named_subresource_contract}"
+      if [[ "${scope}" == "namespaced" ]]; then auth_scope=(--namespace {{ web_stack_ns }}); else auth_scope=(--all-namespaces); fi
+      read -r -a verb_list <<<"${verbs}"
+      for verb in "${verb_list[@]}"; do
+        decision="$(auth_decision auth can-i "${verb}" "${resource}/${resource_name}" --subresource="${subresource}" "${auth_scope[@]}")" || exit 2
+        [[ "${decision}" == "no" ]] || { echo "WEB_RELEASE_KUBECONFIG must not access named release subresource ${resource}/${resource_name}/${subresource} (${verb})" >&2; exit 2; }
+      done
+    done
+    for resource_contract in \
+      "deployments scale namespaced" \
+      "deployments status namespaced" \
+      "replicasets scale namespaced" \
+      "replicasets status namespaced" \
+      "pods exec namespaced" \
+      "pods attach namespaced" \
+      "pods portforward namespaced" \
+      "pods ephemeralcontainers namespaced" \
+      "pods eviction namespaced" \
+      "pods binding namespaced" \
+      "pods log namespaced" \
+      "pods proxy namespaced" \
+      "pods resize namespaced" \
+      "pods status namespaced" \
+      "services proxy namespaced" \
+      "services status namespaced" \
+      "namespaces finalize cluster" \
+      "namespaces status cluster" \
+      "nodes log cluster" \
+      "nodes metrics cluster" \
+      "nodes proxy cluster" \
+      "nodes stats cluster" \
+      "endpointslices.discovery.k8s.io status namespaced" \
+      "networkpolicies.networking.k8s.io status namespaced" \
+      "serviceaccounts token namespaced"; do
+      read -r resource subresource scope <<<"${resource_contract}"
+      if [[ "${scope}" == "namespaced" ]]; then auth_scope=(--namespace {{ web_stack_ns }}); else auth_scope=(--all-namespaces); fi
+      for verb in get list watch create update patch delete deletecollection; do
+        decision="$(auth_decision auth can-i "${verb}" "${resource}" --subresource="${subresource}" "${auth_scope[@]}")" || exit 2
+        [[ "${decision}" == "no" ]] || { echo "WEB_RELEASE_KUBECONFIG must not access privileged subresource ${resource}/${subresource} (${verb})" >&2; exit 2; }
+      done
+    done
+    for special_contract in \
+      "bind roles.rbac.authorization.k8s.io namespaced" \
+      "bind clusterroles.rbac.authorization.k8s.io cluster" \
+      "escalate roles.rbac.authorization.k8s.io namespaced" \
+      "escalate clusterroles.rbac.authorization.k8s.io cluster" \
+      "impersonate users cluster" \
+      "impersonate groups cluster" \
+      "impersonate serviceaccounts cluster"; do
+      read -r verb resource scope <<<"${special_contract}"
+      if [[ "${scope}" == "namespaced" ]]; then auth_scope=(--namespace {{ web_stack_ns }}); else auth_scope=(--all-namespaces); fi
+      decision="$(auth_decision auth can-i "${verb}" "${resource}" "${auth_scope[@]}")" || exit 2
+      [[ "${decision}" == "no" ]] || { echo "WEB_RELEASE_KUBECONFIG must not ${verb} ${resource}" >&2; exit 2; }
+    done
+    for signer_verb in approve attest sign; do
+      decision="$(raw_ssar_decision "${signer_verb}" certificates.k8s.io signers)" || exit 2
+      [[ "${decision}" == "no" ]] || { echo "WEB_RELEASE_KUBECONFIG must not ${signer_verb} certificates.k8s.io signers" >&2; exit 2; }
+    done
+    for auth_scope_flag in "--namespace={{ web_stack_ns }}" "--all-namespaces"; do
+      decision="$(auth_decision auth can-i '*' '*' "${auth_scope_flag}")" || exit 2
+      [[ "${decision}" == "no" ]] || { echo "WEB_RELEASE_KUBECONFIG must not hold wildcard authority" >&2; exit 2; }
+    done
+    echo "reviewed stable web release-object mutation denial: Honey/{{ web_stack_ns }} authority=${rules_digest}"
+
+# Read-only PINNED/RUNNING proof for the later static release. It accepts only a
+# fully observed two-replica rollout whose Deployment, active ReplicaSet, and
+# both pods all bind the selected source SHA and immutable image digest.
+web-release-pinned-running-proof: _web-release-candidate-inputs
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
+    set +x
+    set -euo pipefail
+    : "${WEB_RELEASE_KUBECONFIG:?Set WEB_RELEASE_KUBECONFIG to the proof-only web release kubeconfig}"
+    source_kubeconfig="${WEB_RELEASE_KUBECONFIG}"
+    repo_root="$(git rev-parse --show-toplevel)"
+    umask 077
+    temp_root="$(python3 -I - "${TMPDIR:-/tmp}" "${repo_root}" <<'PY'
+    import os
+    import stat
+    import sys
+    from pathlib import Path
+
+    path = Path(sys.argv[1]).resolve(strict=True)
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("TMPDIR must remain outside the public repository")
+    metadata = path.stat()
+    mode = stat.S_IMODE(metadata.st_mode)
+    private = metadata.st_uid == os.getuid() and (mode & 0o022) == 0
+    shared_sticky = metadata.st_uid == 0 and bool(mode & stat.S_ISVTX)
+    if not path.is_dir() or not (private or shared_sticky):
+        raise SystemExit("TMPDIR must be operator-private or a root-owned sticky directory")
+    print(path)
+    PY
+    )"
+    proof_dir="$(mktemp -d "${temp_root}/gftb-web-running.XXXXXX")"
+    trap 'rm -rf "${proof_dir}"' EXIT
+    mkdir -m 700 "${proof_dir}/home"
+    release_kubeconfig="${proof_dir}/kubeconfig"
+    kubeconfig_digest="$(python3 -I - "${source_kubeconfig}" "${repo_root}" "${release_kubeconfig}" <<'PY'
+    import hashlib
+    import os
+    import stat
+    import sys
+    from pathlib import Path
+
+    raw = Path(sys.argv[1])
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    destination = Path(sys.argv[3])
+    destination_parent = destination.parent.stat()
+    if not stat.S_ISDIR(destination_parent.st_mode) or destination_parent.st_uid != os.getuid() or stat.S_IMODE(destination_parent.st_mode) != 0o700:
+        raise SystemExit("private kubeconfig staging directory failed custody validation")
     if not raw.is_absolute() or raw.is_symlink():
         raise SystemExit("WEB_RELEASE_KUBECONFIG must be an absolute non-symlink path")
     path = raw.resolve(strict=True)
