@@ -1,0 +1,198 @@
+name: Web generation 40 parity bridge
+
+# TIN-4227 one-time bridge. A merge push to canonical main reconciles only the
+# exact generation-40 tuple. The registered validator pins these bytes and
+# freezes k8s/web at this tuple until GF-I09 replaces the bridge. Removal is
+# receiver-first only: prove canonical update -> revert -> re-forward before
+# deleting this workflow and its freeze assertion.
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/web-generation-40-parity.yml"
+      - "Justfile"
+      - "k8s/web/greatfallstoolbus-org-production/deployment.yaml"
+      - "scripts/validate-public-operator-surface.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gftb-web-generation-40-parity
+  cancel-in-progress: false
+
+env:
+  TARGET_SOURCE_SHA: 06e8b2c390b9c057fd084540e1e5710411a76a93
+  TARGET_IMAGE: ghcr.io/great-falls-tool-bus/gftb-site@sha256:0295c226bd0bc78c0fe392b8955971ffbbd4fb9a0684939558d4c3d170a35dee
+  ROLLBACK_SOURCE_SHA: d22c0ca8f4683e5d93a554872b78d0a4a81e0028
+  ROLLBACK_IMAGE: ghcr.io/great-falls-tool-bus/gftb-site@sha256:e95c9588a320a92986ccbeff630c2837b0f3be08a9100ef505225f55194746d3
+  WEB_APPLY_REPLICAS: "2"
+
+jobs:
+  parity:
+    name: Reconcile generation 40 parity
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: tinyland-nix
+    timeout-minutes: 25
+    environment: web-apply
+    steps:
+      - name: Checkout exact main carrier
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: main
+          fetch-depth: 0
+          path: overlay
+          persist-credentials: false
+
+      - name: Verify canonical current signed main through GitHub
+        working-directory: overlay
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_HOST: github.com
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REPOSITORY}" = "Great-Falls-Tool-Bus/great-falls-tool-bus-infra"
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test "$(git branch --show-current)" = main
+          test "$(git remote get-url origin)" = "https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra"
+          test -z "$(git status --porcelain)"
+          if git config --local --get-regexp '^(url\..*\.insteadOf|gpg\.program|gpg\.openpgp\.program|core\.sshCommand)$'; then
+            echo "::error::Local Git configuration may not redirect canonical-main or signature verification."
+            exit 2
+          fi
+          remote_sha="$(gh api --hostname github.com repos/Great-Falls-Tool-Bus/great-falls-tool-bus-infra/git/ref/heads/main --jq .object.sha)"
+          verified="$(gh api --hostname github.com "repos/Great-Falls-Tool-Bus/great-falls-tool-bus-infra/commits/${GITHUB_SHA}" --jq .commit.verification.verified)"
+          reason="$(gh api --hostname github.com "repos/Great-Falls-Tool-Bus/great-falls-tool-bus-infra/commits/${GITHUB_SHA}" --jq .commit.verification.reason)"
+          test "${remote_sha}" = "${GITHUB_SHA}"
+          test "${verified}" = true
+          test "${reason}" = valid
+          git update-ref refs/remotes/origin/main "${remote_sha}"
+          git verify-commit "${GITHUB_SHA}" >/dev/null
+
+      - name: Materialize protected web-apply credential
+        working-directory: overlay
+        env:
+          WEB_APPLY_KUBECONFIG_B64: ${{ secrets.WEB_APPLY_KUBECONFIG_B64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "${WEB_APPLY_KUBECONFIG_B64}"
+          kubeconfig="${RUNNER_TEMP}/gftb-web-generation-40.kubeconfig"
+          printf '%s' "${WEB_APPLY_KUBECONFIG_B64}" | base64 --decode > "${kubeconfig}"
+          chmod 600 "${kubeconfig}"
+          echo "WEB_APPLY_KUBECONFIG=${kubeconfig}" >> "${GITHUB_ENV}"
+
+      - name: Classify exact live tuple with bootstrap credential
+        id: classify
+        working-directory: overlay
+        run: |
+          set -euo pipefail
+          live="$(kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" -n greatfallstoolbus-org-production get deployment/greatfallstoolbus-org -o json)"
+          image="$(jq -er '.spec.template.spec.containers[] | select(.name == "web") | .image' <<<"${live}")"
+          source="$(jq -er '.spec.template.metadata.annotations["app.tinyland.dev/source-sha"]' <<<"${live}")"
+          replicas="$(jq -er '.spec.replicas' <<<"${live}")"
+          test "${replicas}" = 2
+          if [[ "${image}" == "${TARGET_IMAGE}" && "${source}" == "${TARGET_SOURCE_SHA}" ]]; then
+            mode=noop
+          elif [[ "${image}" == "${ROLLBACK_IMAGE}" && "${source}" == "${ROLLBACK_SOURCE_SHA}" ]]; then
+            mode=forward
+          else
+            echo "::error::Live tuple is neither exact generation 37 nor exact generation 40."
+            echo "observed image=${image} source=${source} replicas=${replicas}" >&2
+            exit 2
+          fi
+          echo "mode=${mode}" >> "${GITHUB_OUTPUT}"
+
+      - name: Record exact forward and reverse plans
+        working-directory: overlay
+        run: |
+          set -euo pipefail
+          save_plan() {
+            local label="$1"
+            for suffix in rendered.yaml render-sha256 image source-sha carrier-sha; do
+              cp ".k8s-plans/web-release.${suffix}" ".k8s-plans/generation-40.${label}.${suffix}"
+              chmod 600 ".k8s-plans/generation-40.${label}.${suffix}"
+            done
+          }
+          export WEB_APPLY_IMAGE="${TARGET_IMAGE}" WEB_APPLY_SHA="${TARGET_SOURCE_SHA}"
+          nix develop . --command just web-release-plan
+          save_plan forward
+          export WEB_APPLY_IMAGE="${ROLLBACK_IMAGE}" WEB_APPLY_SHA="${ROLLBACK_SOURCE_SHA}"
+          nix develop . --command just web-release-plan
+          save_plan reverse
+          for suffix in rendered.yaml render-sha256 image source-sha carrier-sha; do
+            cp ".k8s-plans/generation-40.forward.${suffix}" ".k8s-plans/web-release.${suffix}"
+            chmod 600 ".k8s-plans/web-release.${suffix}"
+          done
+
+      - name: Apply exact forward plan with exact reverse rollback
+        id: apply
+        working-directory: overlay
+        env:
+          GFTB_APPLY_CONFIRM: apply
+        run: |
+          set -euo pipefail
+          mode="${{ steps.classify.outputs.mode }}"
+          apply_status=not-needed
+          rollback_status=not-needed
+          if [[ "${mode}" == forward ]]; then
+            export WEB_APPLY_IMAGE="${TARGET_IMAGE}" WEB_APPLY_SHA="${TARGET_SOURCE_SHA}"
+            nix develop . --command just web-release-server-dry-run
+            if nix develop . --command just web-release-apply; then
+              apply_status=succeeded
+            else
+              apply_status=failed
+              for suffix in rendered.yaml render-sha256 image source-sha carrier-sha; do
+                cp ".k8s-plans/generation-40.reverse.${suffix}" ".k8s-plans/web-release.${suffix}"
+                chmod 600 ".k8s-plans/web-release.${suffix}"
+              done
+              export WEB_APPLY_IMAGE="${ROLLBACK_IMAGE}" WEB_APPLY_SHA="${ROLLBACK_SOURCE_SHA}"
+              if nix develop . --command just web-release-server-dry-run && nix develop . --command just web-release-apply; then
+                rollback_status=succeeded
+              else
+                rollback_status=failed
+              fi
+            fi
+          elif [[ "${mode}" == noop ]]; then
+            apply_status=noop
+          else
+            apply_status=refused
+          fi
+          printf 'apply-status=%s\nrollback-status=%s\n' "${apply_status}" "${rollback_status}" >> "${GITHUB_OUTPUT}"
+          [[ "${apply_status}" == succeeded || "${apply_status}" == noop ]]
+
+      - name: Write secret-free bootstrap receipt
+        id: receipt
+        if: always()
+        working-directory: overlay
+        run: |
+          set -uo pipefail
+          post='{}'; readback_status=failed
+          if post="$(kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" -n greatfallstoolbus-org-production get deployment/greatfallstoolbus-org -o json 2>/dev/null)"; then readback_status=succeeded; fi
+          image="$(jq -r '.spec.template.spec.containers[]? | select(.name == "web") | .image // "unknown"' <<<"${post}" 2>/dev/null || printf unknown)"
+          source="$(jq -r '.spec.template.metadata.annotations["app.tinyland.dev/source-sha"] // "unknown"' <<<"${post}" 2>/dev/null || printf unknown)"
+          generation="$(jq -r '.metadata.generation // "unknown"' <<<"${post}" 2>/dev/null || printf unknown)"
+          replicas="$(jq -r '.spec.replicas // "unknown"' <<<"${post}" 2>/dev/null || printf unknown)"
+          forward_hash="$(tr -d '\n' < .k8s-plans/generation-40.forward.render-sha256 2>/dev/null || printf unavailable)"
+          reverse_hash="$(tr -d '\n' < .k8s-plans/generation-40.reverse.render-sha256 2>/dev/null || printf unavailable)"
+          jq -n --arg carrier "${GITHUB_SHA}" --arg mode "${{ steps.classify.outputs.mode }}"             --arg apply "${{ steps.apply.outputs.apply-status }}" --arg rollback "${{ steps.apply.outputs.rollback-status }}"             --arg target_source "${TARGET_SOURCE_SHA}" --arg target_image "${TARGET_IMAGE}"             --arg rollback_source "${ROLLBACK_SOURCE_SHA}" --arg rollback_image "${ROLLBACK_IMAGE}"             --arg forward_hash "${forward_hash}" --arg reverse_hash "${reverse_hash}" --arg readback "${readback_status}"             --arg observed_source "${source}" --arg observed_image "${image}" --arg generation "${generation}" --arg replicas "${replicas}"             '{schema:"gftb-web-generation-40-parity/v1",carrier_sha:$carrier,mode:$mode,apply_status:$apply,rollback_status:$rollback,target:{source_sha:$target_source,image:$target_image},rollback:{source_sha:$rollback_source,image:$rollback_image},plans:{forward_sha256:$forward_hash,reverse_sha256:$reverse_hash},readback:{status:$readback,observer_independent:false,credential_class:"bootstrap web-apply credential",source_sha:$observed_source,image:$observed_image,deployment_generation:$generation,replicas:$replicas}}'             > "${RUNNER_TEMP}/gftb-web-generation-40-receipt.json"
+          chmod 600 "${RUNNER_TEMP}/gftb-web-generation-40-receipt.json"
+          printf 'readback-status=%s\nobserved-source=%s\nobserved-image=%s\n' "${readback_status}" "${source}" "${image}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload parity receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gftb-web-generation-40-parity-${{ github.sha }}
+          path: ${{ runner.temp }}/gftb-web-generation-40-receipt.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Assert exact target readback
+        if: always()
+        run: |
+          set -euo pipefail
+          [[ "${{ steps.apply.outputs.apply-status }}" == succeeded || "${{ steps.apply.outputs.apply-status }}" == noop ]]
+          test "${{ steps.receipt.outputs.readback-status }}" = succeeded
+          test "${{ steps.receipt.outputs.observed-source }}" = "${TARGET_SOURCE_SHA}"
+          test "${{ steps.receipt.outputs.observed-image }}" = "${TARGET_IMAGE}"
