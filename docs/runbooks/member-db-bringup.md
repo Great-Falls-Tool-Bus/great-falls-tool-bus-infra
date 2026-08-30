@@ -31,9 +31,10 @@ not an estate-owned tcfs bucket. What remains is operational and attended:
 1. Merge this PR through its required validation and review gates. The mutating
    recipes require clean, current, verified `main`; a PR branch cannot apply.
 2. At the sitting, read current operator/namespace/cluster state, establish the
-   two namespaces and operator-custody credentials if absent, then follow the
-   ordered S → M → R chain. This document does not claim those live objects are
-   absent or present.
+   two namespaces and the other operator-custody credentials if absent, and
+   observe the governed `ghcr-pull` controller projection described in C3.
+   Then follow the ordered S → M → R chain. This document does not claim those
+   live objects or the projection are absent or present.
 3. Preserve the exact Git-pinned image. There is no runtime image override or
    alternate repository authority. A different image requires a new app source,
    publisher receipt, reviewed Git pin, and the same validation/review gates.
@@ -138,11 +139,37 @@ database namespace, type `kubernetes.io/basic-auth`, `username:
 gftb_app`. `managed.roles` binds the role to it. This is the DML-only
 credential the platform's web and worker Deployments will consume.
 
-**C3 — provision the namespace-local GHCR pull Secret.** Create `ghcr-pull`
-in the platform namespace, type `kubernetes.io/dockerconfigjson`, with only
-`.dockerconfigjson`. The migrator Job references that name. The app package
-was observed anonymously pullable during review; only gftb-site is authorized
-public. This PR changes no visibility and makes no private-state claim.
+**C3 — declare and observe the governed GHCR pull projection (Related to
+TIN-3768 / TIN-2609).** The sole names-only target is `ghcr-pull` in
+`members-greatfallstoolbus-org-production`, type
+`kubernetes.io/dockerconfigjson`, with only `.dockerconfigjson`. The
+migrator, web, and worker carriers reference that one name.
+
+Secret bytes belong exclusively to TIN-3768 consumer enrolment through the
+TIN-2609 sole governed owner-overlay controller's immutable
+`RegistryPullProjection` intent and protected subordinate execution path.
+Do **not** run `kubectl create secret` or `kubectl apply` for this Secret,
+add a per-tenant SOPS payload, copy a personal dockerconfig, or treat an
+operator-created object as an interim route. This runbook declares the target;
+it does not claim the controller or projection is live.
+
+Before migration dry-run or apply, require governed evidence for all four:
+
+1. the controller's observed projection resolves exactly one
+   `members-greatfallstoolbus-org-production/ghcr-pull` Secret with the exact
+   type and key above;
+2. `_member-db-platform-image-pull-prerequisite` passes against that observed
+   object without printing its value;
+3. an uncached cold pull proves registry access to the exact coordinated
+   successor digest pinned by both #118 and #121; and
+4. while current and previous credential generations are both retained, an
+   uncached rollback pull proves the recorded previous digest. Only after that
+   proof may the governed path revoke the old generation.
+
+The app package was observed anonymously pullable during review, but only
+gftb-site is authorized public. This PR changes no visibility and makes no
+private-state claim; pull success never substitutes for the governed projection
+receipt.
 
 ## Step S — apply the database stack (ORDERED, B-4)
 
@@ -225,10 +252,11 @@ published app carrier at
 `af60fcd7539a4beff6f24e1a95eb11160df7c166` holds the corresponding
 PostgreSQL integration proof and refuses a runtime role with `SUPERUSER` or
 `BYPASSRLS`. It is not the final production carrier: app main is now signed
-`3d6909c242dbd847cf044730f74347a69eeaae80`, and app PR #218 at signed
-`dd12f0a1acedc8fb39cd3b63dd3ffc542c4ce3f4` changes the package/hydration
-graph. PR #121's repaired signed head
-`ed6567986625ca9c2899d71254e10a40449a4c7d` already uses the exact
+`3d6909c242dbd847cf044730f74347a69eeaae80`. App PR #218 is Ready/non-Draft
+at signed head `dd12f0a1acedc8fb39cd3b63dd3ffc542c4ce3f4` with protected merge
+auto-merge armed; it has not yet landed or published the successor image. PR
+#121's current signed reviewed head
+`9ec3f05678e01c45b21fe89e11b763eab9f8a8ba` already uses the exact
 `app.kubernetes.io/part-of=great-falls-tool-bus` identity admitted here. After
 #218 lands and publishes, this migrator pin and #121's web/worker pins must
 advance together to that one successor digest before Ready/apply. This cluster supplies the managed LOGIN credential by Secret

@@ -88,6 +88,9 @@ PY
   expect_failure wrong-args "${job}"     '          args: ["migrator"]'     '          args: ["worker"]'     'migration Job entrypoint'
   expect_failure runtime-dsn "${job}"     '                  name: gftb-member-db-migrator-dsn'     '                  name: gftb-member-db-runtime'     'migration Job secret references (only the narrow migration credential)'
   expect_failure pull-secret "${job}"     '        - name: ghcr-pull'     '        - name: ghcr-pull-broken'     'migration Job imagePullSecrets'
+  expect_failure pull-secret-manual-origin     'secrets.contract.yaml'     $'    - name: ghcr-pull\n      namespace: members-greatfallstoolbus-org-production'     $'    - name: ghcr-pull\n      namespace: members-greatfallstoolbus-org-production\n      origin: operator-provisioned'     'GHCR pull Secret manual provisioning fields (must be absent)'
+  expect_failure pull-secret-manual-provisioner     'secrets.contract.yaml'     '      apply_prerequisite: _member-db-platform-image-pull-prerequisite'     $'      apply_prerequisite: _member-db-platform-image-pull-prerequisite\n      provisioned_by: operator via kubectl'     'GHCR pull Secret manual provisioning fields (must be absent)'
+  expect_failure pull-secret-governance     'secrets.contract.yaml'     'Under TIN-3768 consumer enrolment and TIN-2609'     'Under TIN-0000 ad hoc provisioning'     'GHCR pull Secret governed projection contract'
   expect_failure restore-egress-selector     'members-greatfallstoolbus-org-db-production/networkpolicy.yaml'     $'  name: allow-restore-postgres-egress\n  namespace: members-greatfallstoolbus-org-db-production\n  labels:\n    app.kubernetes.io/name: gftb-member-db-restore\n    app.tinyland.dev/lifecycle: declare-only\nspec:\n  podSelector:\n    matchLabels:\n      cnpg.io/cluster: gftb-member-db-restore'     $'  name: allow-restore-postgres-egress\n  namespace: members-greatfallstoolbus-org-db-production\n  labels:\n    app.kubernetes.io/name: gftb-member-db-restore\n    app.tinyland.dev/lifecycle: declare-only\nspec:\n  podSelector:\n    matchLabels:\n      cnpg.io/cluster: gftb-member-db-restore-broken'     'allow-restore-postgres-egress podSelector'
   expect_failure root-as-scoped-authority     'secrets.contract.yaml'     'app.tinyland.dev/object-store-authority: object-read-write-no-admin'     'app.tinyland.dev/object-store-authority: server-root-admin'     'bucket-scoped backup Secret authority annotation contract'
   expect_failure invalid-yaml "${job}"     'apiVersion: batch/v1'     'apiVersion: ['     'YAML decode or jq query failed'
@@ -326,12 +329,18 @@ assert_eq "${root_excluded}" "true" "rustfs root must be excluded from backup ac
 if [ "${WANT_BACKUP_SECRET}" = "${WANT_RUSTFS_ROOT_SECRET}" ]; then
   fail "bucket-scoped backup Secret and rustfs root Secret must be different names"
 fi
+pull_contract_count="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '[.spec.secrets[] | select(.name == $n)] | length' "${secrets_contract}")"
+assert_eq "${pull_contract_count}" "1" "GHCR pull Secret declaration cardinality"
 pull_contract_ns="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .namespace' "${secrets_contract}")"
 assert_eq "${pull_contract_ns}" "${WANT_PLATFORM_NS}" "GHCR pull Secret namespace contract"
 pull_contract_type="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .type' "${secrets_contract}")"
 assert_eq "${pull_contract_type}" "kubernetes.io/dockerconfigjson" "GHCR pull Secret type contract"
 pull_contract_keys="$(yaml_query -c --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .keys' "${secrets_contract}")"
 assert_eq "${pull_contract_keys}" '[".dockerconfigjson"]' "GHCR pull Secret key contract"
+pull_contract_manual_fields="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | (has("origin") or has("provisioned_by"))' "${secrets_contract}")"
+assert_eq "${pull_contract_manual_fields}" "false" "GHCR pull Secret manual provisioning fields (must be absent)"
+pull_contract_governed="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | (.authority | contains("TIN-3768") and contains("TIN-2609") and contains("sole governed owner-overlay controller") and contains("zero out-of-band kubectl") and contains("per-tenant SOPS"))' "${secrets_contract}")"
+assert_eq "${pull_contract_governed}" "true" "GHCR pull Secret governed projection contract"
 
 # --- axis 6: the two-role separation (acceptance row 2) ----------------------
 database="$(yaml_query -r 'select(.kind == "Cluster") | .spec.bootstrap.initdb.database' "${rendered}")"
