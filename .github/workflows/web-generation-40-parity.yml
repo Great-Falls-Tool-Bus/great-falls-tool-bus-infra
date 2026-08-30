@@ -63,20 +63,20 @@ jobs:
           for name in GIT_CONFIG_COUNT GIT_CONFIG_SYSTEM GIT_CONFIG_GLOBAL GIT_SSH_COMMAND GIT_ASKPASS; do
             test -z "${!name:-}" || { echo "::error::Refusing ambient ${name}."; exit 2; }
           done
-          remote_sha="$(gh api --hostname github.com repos/Great-Falls-Tool-Bus/great-falls-tool-bus-infra/git/ref/heads/main --jq .object.sha)"
-          verified="$(gh api --hostname github.com "repos/Great-Falls-Tool-Bus/great-falls-tool-bus-infra/commits/${GITHUB_SHA}" --jq .commit.verification.verified)"
-          reason="$(gh api --hostname github.com "repos/Great-Falls-Tool-Bus/great-falls-tool-bus-infra/commits/${GITHUB_SHA}" --jq .commit.verification.reason)"
+          remote_sha="$(nix develop . --command gh api --hostname github.com repos/Great-Falls-Tool-Bus/great-falls-tool-bus-infra/git/ref/heads/main --jq .object.sha)"
+          verified="$(nix develop . --command gh api --hostname github.com "repos/Great-Falls-Tool-Bus/great-falls-tool-bus-infra/commits/${GITHUB_SHA}" --jq .commit.verification.verified)"
+          reason="$(nix develop . --command gh api --hostname github.com "repos/Great-Falls-Tool-Bus/great-falls-tool-bus-infra/commits/${GITHUB_SHA}" --jq .commit.verification.reason)"
           test "${remote_sha}" = "${GITHUB_SHA}"
           test "${verified}" = true
           test "${reason}" = valid
           git update-ref refs/remotes/origin/main "${remote_sha}"
           signer_home="${RUNNER_TEMP}/gftb-web-flow-gnupg"
           mkdir -m 700 "${signer_home}"
-          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --max-redirs 0 https://github.com/web-flow.gpg > "${RUNNER_TEMP}/web-flow.gpg"
-          mapfile -t fingerprints < <(gpg --batch --show-keys --with-colons "${RUNNER_TEMP}/web-flow.gpg" | awk -F: '$1 == "fpr" { print $10 }')
+          nix develop . --command curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --max-redirs 0 https://github.com/web-flow.gpg > "${RUNNER_TEMP}/web-flow.gpg"
+          mapfile -t fingerprints < <(nix develop . --command gpg --batch --show-keys --with-colons "${RUNNER_TEMP}/web-flow.gpg" | awk -F: '$1 == "fpr" { print $10 }')
           [[ "${fingerprints[*]}" == "5DE3E0509C47EA3CF04A42D34AEE18F83AFDEB23 968479A1AFF927E37D1A566BB5690EEEBB952194" ]]
-          gpg --batch --homedir "${signer_home}" --import "${RUNNER_TEMP}/web-flow.gpg" >/dev/null 2>&1
-          GNUPGHOME="${signer_home}" git verify-commit "${GITHUB_SHA}" >/dev/null
+          nix develop . --command gpg --batch --homedir "${signer_home}" --import "${RUNNER_TEMP}/web-flow.gpg" >/dev/null 2>&1
+          GNUPGHOME="${signer_home}" nix develop . --command git verify-commit "${GITHUB_SHA}" >/dev/null
           echo "GNUPGHOME=${signer_home}" >> "${GITHUB_ENV}"
 
       - name: Materialize protected web-apply credential
@@ -97,7 +97,7 @@ jobs:
         working-directory: overlay
         run: |
           set -euo pipefail
-          live="$(kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" -n greatfallstoolbus-org-production get deployment/greatfallstoolbus-org -o json)"
+          live="$(nix develop . --command kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" -n greatfallstoolbus-org-production get deployment/greatfallstoolbus-org -o json)"
           image="$(jq -er '.spec.template.spec.containers[] | select(.name == "web") | .image' <<<"${live}")"
           source="$(jq -er '.spec.template.metadata.annotations["app.tinyland.dev/source-sha"]' <<<"${live}")"
           replicas="$(jq -er '.spec.replicas' <<<"${live}")"
@@ -182,7 +182,9 @@ jobs:
         run: |
           set -uo pipefail
           post='{}'; readback_status=failed
-          if post="$(kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" -n greatfallstoolbus-org-production get deployment/greatfallstoolbus-org -o json 2>/dev/null)"; then readback_status=succeeded; fi
+          if [[ -n "${WEB_APPLY_KUBECONFIG:-}" ]] && post="$(nix develop . --command kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" -n greatfallstoolbus-org-production get deployment/greatfallstoolbus-org -o json 2>/dev/null)"; then
+            readback_status=succeeded
+          fi
           image="$(jq -r '.spec.template.spec.containers[]? | select(.name == "web") | .image // "unknown"' <<<"${post}" 2>/dev/null || printf unknown)"
           source="$(jq -r '.spec.template.metadata.annotations["app.tinyland.dev/source-sha"] // "unknown"' <<<"${post}" 2>/dev/null || printf unknown)"
           generation="$(jq -r '.metadata.generation // "unknown"' <<<"${post}" 2>/dev/null || printf unknown)"
