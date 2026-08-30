@@ -46,6 +46,7 @@ visitor -> greatfallstoolbus.org (Cloudflare edge, TLS terminates here)
 | `greatfallstoolbus-org-production/service.yaml` | ClusterIP 80→3000 | internal DNS only; never internet-exposed directly |
 | `greatfallstoolbus-org-production/networkpolicy.yaml` | default-deny + explicit allows | ingress only from the `cloudflared` namespace (:3000) and prometheus; no egress rules declared here — the static Caddy origin makes no outbound calls, and `web-release-render` additionally synthesizes a `default-deny-egress` NetworkPolicy at ceremony time (not yet git-tracked; see the Justfile `_k8s-drift-check` header) |
 | `greatfallstoolbus-org-production/kustomization.yaml` | kustomize entrypoint | renders cleanly; creates **no** Namespace |
+| `greatfallstoolbus-org-production/web-apply-rbac.yaml` | declarative twin of the namespace-scoped apply identity | one ServiceAccount, one exact Role, and one RoleBinding; deliberately excluded from the workload kustomization so this tree cannot bootstrap its own authority |
 | `secrets.contract.yaml` | names-only three-plane secrets contract | no values, ever |
 | `pr-env-lane.md` | reaper / PR-env lane note | parked (see below) |
 | `../../tofu/intent/great-falls-tool-bus/web-oncluster-route.json` | cloudflared route intent | `applied:false`, `dns_enabled:false`, `route_enabled:false` |
@@ -70,10 +71,14 @@ visitor -> greatfallstoolbus.org (Cloudflare edge, TLS terminates here)
    digest, or any other repository — including the retired legacy
    `ghcr.io/great-falls-tool-bus/greatfallstoolbus.org` adapter-node image —
    fails.
-3. **No namespace, no Secret.** `greatfallstoolbus-org-production` is not created
-   here (a `kind: Namespace` object fails validation) and the namespace-scoped
-   `web-apply` SA cannot create one; the namespace, the SA/RBAC, and the GHCR
-   pull Secret are operator-provisioned out of band.
+3. **No namespace, no Secret, no self-bootstrap.**
+   `greatfallstoolbus-org-production` is not created here (a `kind: Namespace`
+   object fails validation), and the namespace-scoped `web-apply` identity
+   cannot create one. Its exact ServiceAccount/Role/RoleBinding declaration is
+   now tracked beside the workload, including read-only EndpointSlice
+   `get/list/watch`, but is deliberately absent from `kustomization.yaml` so a
+   workload apply cannot grant or widen its own authority. Credential material,
+   namespace creation, and the GHCR pull Secret remain protected external state.
 4. **The surviving attended carrier is interlocked.** `just web-stack-apply`
    takes `_web-stack-promotion-interlock` as its FIRST dependency. The interlock
    reads the LIVE Deployment image and refuses when it is already a
@@ -189,8 +194,9 @@ just web-stack-validate     # invariant checks + `kubectl kustomize` render
 no workflow may. This tree is **ATTENDED-ONLY declare-only**, not parked:
 `scripts/validate-web-stack.sh` requires `replicas: 2` and a digest-pinned
 `ghcr.io/great-falls-tool-bus/gftb-site` image here, and forbids a
-`Namespace` object — the namespace and the `web-apply` SA/RBAC are minted by the
-operator out of band (the SA cannot create namespaces), the tunnel route stays
+`Namespace` object — the namespace and credential are protected external state;
+the exact `web-apply` RBAC declaration is tracked but excluded from the workload
+kustomization so it cannot self-bootstrap. The SA cannot create namespaces, the tunnel route stays
 dashboard-managed, and the DNS flip (P6) plus CF Pages decommission (P7) remain
 separate operator steps. **Rung 1 tree honesty (2026-08-21):** this pin is now
 the declarative record of what is actually served — an operator updates it here

@@ -54,6 +54,7 @@ deploy="${dir}/deployment.yaml"
 svc="${dir}/service.yaml"
 netpol="${dir}/networkpolicy.yaml"
 kustomization="${dir}/kustomization.yaml"
+rbac="${dir}/web-apply-rbac.yaml"
 route_intent="${web_root}/../../tofu/intent/great-falls-tool-bus/web-oncluster-route.json"
 prenv_schema="${web_root}/../../tofu/intent/great-falls-tool-bus/pr-env-lanes.schema.json"
 secrets_contract="${web_root}/secrets.contract.yaml"
@@ -71,7 +72,7 @@ if ! printf "%s" "${yq_version}" | grep -qi "mikefarah" || ! printf "%s" "${yq_v
 command -v jq >/dev/null 2>&1 || fail "jq is required (JSON intent assertions)"
 command -v kubectl >/dev/null 2>&1 || fail "kubectl is required for kubectl kustomize"
 
-for f in "${deploy}" "${svc}" "${netpol}" "${kustomization}" \
+for f in "${deploy}" "${svc}" "${netpol}" "${kustomization}" "${rbac}" \
   "${route_intent}" "${prenv_schema}" "${secrets_contract}"; do
   require_file "${f}"
 done
@@ -121,6 +122,47 @@ fi
 if grep -REn "^kind:\s*Namespace" "${dir}" >/dev/null 2>&1; then
   fail "declare-only stack must NOT create the target namespace"
 fi
+
+# --- tracked authority twin: exact, namespace-scoped, never self-applied -------
+# The live web-apply identity pre-dates this declaration. Tracking its exact
+# ServiceAccount/Role/RoleBinding closes the out-of-band drift gap; deliberately
+# excluding it from the workload kustomization prevents the identity from
+# bootstrapping or widening its own authority.
+if yq -r '.resources[]?' "${kustomization}" | grep -Fxq "web-apply-rbac.yaml"; then
+  fail "web-apply-rbac.yaml must stay excluded from the workload kustomization"
+fi
+sa_json="$(yq eval -o=json -I=0 'select(.kind == "ServiceAccount")' "${rbac}")"
+role_json="$(yq eval -o=json -I=0 'select(.kind == "Role")' "${rbac}")"
+binding_json="$(yq eval -o=json -I=0 'select(.kind == "RoleBinding")' "${rbac}")"
+jq -e '
+  .apiVersion == "v1"
+  and .kind == "ServiceAccount"
+  and .metadata.name == "web-apply"
+  and .metadata.namespace == "greatfallstoolbus-org-production"
+  and .automountServiceAccountToken == false
+' <<<"${sa_json}" >/dev/null || fail "web-apply ServiceAccount contract mismatch"
+jq -e '
+  .apiVersion == "rbac.authorization.k8s.io/v1"
+  and .kind == "Role"
+  and .metadata.name == "web-apply"
+  and .metadata.namespace == "greatfallstoolbus-org-production"
+  and .rules == [
+    {"apiGroups":["apps"],"resources":["deployments"],"verbs":["get","list","watch","create","update","patch"]},
+    {"apiGroups":["apps"],"resources":["replicasets"],"verbs":["get","list","watch"]},
+    {"apiGroups":[""],"resources":["pods"],"verbs":["get","list","watch"]},
+    {"apiGroups":[""],"resources":["services"],"verbs":["get","list","watch","create","update","patch"]},
+    {"apiGroups":["networking.k8s.io"],"resources":["networkpolicies"],"verbs":["get","list","watch","create","update","patch","delete"]},
+    {"apiGroups":["discovery.k8s.io"],"resources":["endpointslices"],"verbs":["get","list","watch"]}
+  ]
+' <<<"${role_json}" >/dev/null || fail "web-apply Role contract mismatch"
+jq -e '
+  .apiVersion == "rbac.authorization.k8s.io/v1"
+  and .kind == "RoleBinding"
+  and .metadata.name == "web-apply"
+  and .metadata.namespace == "greatfallstoolbus-org-production"
+  and .roleRef == {"apiGroup":"rbac.authorization.k8s.io","kind":"Role","name":"web-apply"}
+  and .subjects == [{"kind":"ServiceAccount","name":"web-apply","namespace":"greatfallstoolbus-org-production"}]
+' <<<"${binding_json}" >/dev/null || fail "web-apply RoleBinding contract mismatch"
 
 # --- gftb-site serving shape: containerPort 3000 + /health probes -----------
 port="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == strenv(app)) | .ports[] | select(.name == "http") | .containerPort' "${deploy}")"
@@ -189,4 +231,4 @@ fi
 bash scripts/guard-no-remote-kustomize-resources.sh "${dir}"
 kubectl kustomize "${dir}" >/dev/null
 
-echo "web stack validation passed for ${app} in ${stack_ns}: ATTENDED-ONLY declare-only (replicas 2, image pinned to ${admitted_image_repo}@sha256:<64 hex>, no namespace, no workflow apply path -- the repository_dispatch CD carrier is retired and apply is attended-operator-only behind the promotion interlock), gftb-site static-origin ClusterIP 80->3000 with /health probes, default-deny + cloudflared-only public ingress, route+reaper fail-closed, no committed secrets"
+echo "web stack validation passed for ${app} in ${stack_ns}: ATTENDED-ONLY declare-only (replicas 2, image pinned to ${admitted_image_repo}@sha256:<64 hex>, no namespace, tracked exact web-apply RBAC excluded from workload kustomization, no workflow apply path -- the repository_dispatch CD carrier is retired and apply is attended-operator-only behind the promotion interlock), gftb-site static-origin ClusterIP 80->3000 with /health probes, default-deny + cloudflared-only public ingress, route+reaper fail-closed, no committed secrets"
