@@ -228,7 +228,11 @@ jobs:
           }
           snapshot() (
             set -euo pipefail
-            local label="$1" image="$2" source="$3" out="${RUNNER_TEMP}/${label}.json"
+            local label image source out
+            label="$1"
+            image="$2"
+            source="$3"
+            out="${RUNNER_TEMP}/${label}.json"
             local deployment replica_sets pods service slices policies dep_uid revision active_rs active_uid pod_uids pod_network service_uid
             deployment="$(kube get deployment/greatfallstoolbus-org -o json)"
             replica_sets="$(kube get replicasets.apps -o json)"
