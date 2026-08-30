@@ -216,7 +216,7 @@ jobs:
       # TRANSIENT TIN-4227 proof: PR-only, offline, secret-free. Removed after
       # the exact forward/reverse render bytes are captured and pinned.
       - name: Derive exact generation-40 forward and reverse render receipts
-        if: github.event_name == 'pull_request' && github.head_ref == 'codex/tin-4227-generation-40-parity'
+        if: always() if: github.event_name == 'pull_request' && github.head_ref == 'codex/tin-4227-generation-40-parity'if: github.event_name == 'pull_request' && github.head_ref == 'codex/tin-4227-generation-40-parity' github.event_name == 'pull_request' if: github.event_name == 'pull_request' && github.head_ref == 'codex/tin-4227-generation-40-parity'if: github.event_name == 'pull_request' && github.head_ref == 'codex/tin-4227-generation-40-parity' github.head_ref == 'codex/tin-4227-generation-40-parity'
         working-directory: overlay
         run: |
           set -euo pipefail
@@ -238,7 +238,7 @@ jobs:
           chmod 600 generation-40-render-proof/*
 
       - name: Upload exact generation-40 render receipts
-        if: github.event_name == 'pull_request' && github.head_ref == 'codex/tin-4227-generation-40-parity'
+        if: always() if: github.event_name == 'pull_request' && github.head_ref == 'codex/tin-4227-generation-40-parity'if: github.event_name == 'pull_request' && github.head_ref == 'codex/tin-4227-generation-40-parity' github.event_name == 'pull_request' if: github.event_name == 'pull_request' && github.head_ref == 'codex/tin-4227-generation-40-parity'if: github.event_name == 'pull_request' && github.head_ref == 'codex/tin-4227-generation-40-parity' github.head_ref == 'codex/tin-4227-generation-40-parity'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: generation-40-render-proof-${{ github.event.pull_request.head.sha }}
