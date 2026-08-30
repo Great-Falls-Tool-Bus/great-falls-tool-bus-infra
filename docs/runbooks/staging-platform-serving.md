@@ -7,10 +7,10 @@ Nothing in this runbook is a CI deploy. Do not proceed past any STOP.
 1. Git pins `ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:10f853938dc6823afe8c9bdc54943587f963d22117aafd17247350b2b5712b35` in both serving Deployments. Publisher receipt:
    source `af60fcd7539a4beff6f24e1a95eb11160df7c166`; workflow run `33279762284`, attempt 1; artifact
    `greatfallstoolbus-org-image-af60fcd7539a4beff6f24e1a95eb11160df7c166-33279762284-1` (id `9722715788`). Do not re-resolve or override it.
-2. PR #118 is merged, its single names-only ghcr-pull SecretContract is
-   authoritative, and the operator-provisioned namespace-local
-   kubernetes.io/dockerconfigjson Secret has been observed. Its attended
-   database path has also proved Ready,
+2. Before proceeding, require PR #118 to land. Then require its single
+   names-only ghcr-pull SecretContract to be authoritative and require the
+   operator-provisioned namespace-local kubernetes.io/dockerconfigjson Secret
+   to be observed. Require its attended database path to prove Ready,
    `continuousArchiving=True`, one completed Backup, and the runtime role
    Secret.
 3. `members-greatfallstoolbus-org-production` and the namespace-scoped
