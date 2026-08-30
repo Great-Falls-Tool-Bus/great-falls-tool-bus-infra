@@ -2337,7 +2337,7 @@ grafana-dashboards-validate:
 
 # --- GFTB platform staging serving (TIN-3815 / TIN-3817 staging slice) -------
 # DECLARE-ONLY IN GIT, ATTENDED ON THE WIRE. The web + worker Deployments and
-# the web Service for the gftb-platform app in
+# the web Service for the Great Falls Tool Bus app in
 # members-greatfallstoolbus-org-production, served at
 # staging.greatfallstoolbus.org (exact-PR/operator QA with the APPLICATION auth
 # path — slices doc §4 hosts row, TIN-3815) once the operator opens the
@@ -2353,9 +2353,9 @@ grafana-dashboards-validate:
 #
 # SEQUENCING. The publisher receipt is now closed in Git:
 # source af60fcd7539a4beff6f24e1a95eb11160df7c166, workflow run 33279762284 attempt 1, artifact greatfallstoolbus-org-image-af60fcd7539a4beff6f24e1a95eb11160df7c166-33279762284-1
-# (id 9722715788), image ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:10f853938dc6823afe8c9bdc54943587f963d22117aafd17247350b2b5712b35. Remaining blockers are member-db PR #118
-# bring-up + same-digest migration, the absent reviewed tenant tuple, and a
-# receipt-bound Just-only NetworkPolicy-first carrier. See the runbook.
+# (id 9722715788), image ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:10f853938dc6823afe8c9bdc54943587f963d22117aafd17247350b2b5712b35. Remaining blockers are member-db PR #118 bring-up + same-digest migration,
+# the absent reviewed tenant tuple, and the operator-provisioned GHCR pull
+# credential. The receipt-bound NetworkPolicy-first carrier is defined below.
 
 platform_stack_dir := "k8s/platform/members-greatfallstoolbus-org-production"
 platform_ns := "members-greatfallstoolbus-org-production"
@@ -2409,7 +2409,106 @@ _platform-release-pull-secret-preflight: _platform-release-kubeconfig-input
     set -euo pipefail
     command -v jq >/dev/null 2>&1 || { echo "jq is required" >&2; exit 1; }
     kubectl --kubeconfig "${PLATFORM_APPLY_KUBECONFIG}" --namespace {{ platform_ns }} get secret ghcr-pull -o json | jq -e '.metadata.name == "ghcr-pull" and .metadata.namespace == "{{ platform_ns }}" and .type == "kubernetes.io/dockerconfigjson" and (.data | type == "object") and (.data[".dockerconfigjson"] | type == "string" and length > 0)' >/dev/null || { echo "Required operator-provisioned Secret {{ platform_ns }}/ghcr-pull is absent or invalid" >&2; exit 2; }
-    echo "private GHCR pull prerequisite observed by name/type; no value printed"
+    echo "GHCR pull credential prerequisite observed by name/type; no value printed"
+
+# Step N: exact NetworkPolicy-first carrier. It renders only the six policies
+# from the same Kustomize graph as the full stack, records exact bytes, applies
+# only those recorded bytes, and compares all live names/specs to the plan.
+platform-network-policy-render:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command -v yq >/dev/null 2>&1 || { echo "yq is required" >&2; exit 1; }
+    yq_version="$(yq --version 2>&1 || true)"
+    printf '%s' "${yq_version}" | grep -qi mikefarah && printf '%s' "${yq_version}" | grep -Eqi 'version v?4\.' || { echo "mikefarah yq-go v4 is required; got: ${yq_version:-unavailable}" >&2; exit 1; }
+    just platform-stack-validate >/dev/null
+    rendered="$(mktemp)"
+    trap 'rm -f "${rendered}"' EXIT
+    kubectl kustomize "{{ platform_stack_dir }}" > "${rendered}"
+    yq eval-all 'select(.kind == "NetworkPolicy")' "${rendered}"
+
+platform-network-policy-plan: _platform-release-plan-root-contract
+    #!/usr/bin/env bash
+    set -euo pipefail
+    umask 077
+    command -v yq >/dev/null 2>&1 || { echo "yq is required" >&2; exit 1; }
+    command -v jq >/dev/null 2>&1 || { echo "jq is required" >&2; exit 1; }
+    repo_root="$(git rev-parse --show-toplevel)"
+    plan_root="${repo_root}/.k8s-plans"
+    rendered_json="$(mktemp "${plan_root}/platform-network-policy.rendered-json.XXXXXX")"
+    chmod 600 "${rendered_json}"
+    trap 'rm -f "${rendered_json}"' EXIT
+    just platform-network-policy-render > "${plan_root}/platform-network-policy.rendered.yaml"
+    test -s "${plan_root}/platform-network-policy.rendered.yaml" || { echo "policy renderer produced no manifest" >&2; exit 1; }
+    yq eval-all -o=json -I=0 '.' "${plan_root}/platform-network-policy.rendered.yaml" | jq --slurp '.' > "${rendered_json}"
+    jq -e --arg ns "{{ platform_ns }}" 'type == "array" and length == 6 and all(.[]; .apiVersion == "networking.k8s.io/v1" and .kind == "NetworkPolicy" and .metadata.namespace == $ns and .metadata.labels["app.kubernetes.io/part-of"] == "great-falls-tool-bus") and ([.[].metadata.name] | sort) == ["allow-cloudflared-tunnel-ingress","allow-egress-dns","allow-egress-member-db","allow-prometheus-scrape","default-deny-egress","default-deny-ingress"]' "${rendered_json}" >/dev/null || { echo "policy render is not the exact six-policy inventory" >&2; exit 1; }
+    jq -r 'sort_by(.metadata.name)[] | .metadata.name' "${rendered_json}" > "${plan_root}/platform-network-policy.inventory"
+    python3 -I -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${plan_root}/platform-network-policy.rendered.yaml" > "${plan_root}/platform-network-policy.render-sha256"
+    git -C "${repo_root}" rev-parse HEAD > "${plan_root}/platform-network-policy.carrier-sha"
+    chmod 600 "${plan_root}/platform-network-policy.rendered.yaml" "${plan_root}/platform-network-policy.inventory" "${plan_root}/platform-network-policy.render-sha256" "${plan_root}/platform-network-policy.carrier-sha"
+    echo "platform NetworkPolicy plan recorded"
+    echo "  carrier: $(tr -d '\n' < "${plan_root}/platform-network-policy.carrier-sha")"
+    echo "  render:  sha256:$(tr -d '\n' < "${plan_root}/platform-network-policy.render-sha256")"
+
+_platform-network-policy-plan-preflight: _platform-release-plan-root-contract
+    #!/usr/bin/env bash
+    set -euo pipefail
+    umask 077
+    command -v yq >/dev/null 2>&1 || { echo "yq is required" >&2; exit 1; }
+    command -v jq >/dev/null 2>&1 || { echo "jq is required" >&2; exit 1; }
+    repo_root="$(git rev-parse --show-toplevel)"
+    plan_root="${repo_root}/.k8s-plans"
+    for artifact in rendered.yaml inventory render-sha256 carrier-sha; do
+      test -f "${plan_root}/platform-network-policy.${artifact}" || { echo "No policy plan recorded; run platform-network-policy-plan first" >&2; exit 2; }
+    done
+    [[ "$(git -C "${repo_root}" rev-parse HEAD)" == "$(tr -d '\n' < "${plan_root}/platform-network-policy.carrier-sha")" ]] || { echo "Infra carrier changed after policy plan; re-plan" >&2; exit 2; }
+    recorded_digest="$(tr -d '\n' < "${plan_root}/platform-network-policy.render-sha256")"
+    [[ "$(python3 -I -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${plan_root}/platform-network-policy.rendered.yaml")" == "${recorded_digest}" ]] || { echo "Policy plan bytes do not match receipt; re-plan" >&2; exit 2; }
+    expected_inventory=$'allow-cloudflared-tunnel-ingress\nallow-egress-dns\nallow-egress-member-db\nallow-prometheus-scrape\ndefault-deny-egress\ndefault-deny-ingress'
+    [[ "$(tr -d '\r' < "${plan_root}/platform-network-policy.inventory")" == "${expected_inventory}" ]] || { echo "Policy inventory differs from exact six names; re-plan" >&2; exit 2; }
+    recorded_json="$(mktemp "${plan_root}/platform-network-policy.recorded-json.XXXXXX")"
+    recheck="$(mktemp "${plan_root}/platform-network-policy.recheck.XXXXXX")"
+    chmod 600 "${recorded_json}" "${recheck}"
+    trap 'rm -f "${recorded_json}" "${recheck}"' EXIT
+    yq eval-all -o=json -I=0 '.' "${plan_root}/platform-network-policy.rendered.yaml" | jq --slurp '.' > "${recorded_json}"
+    jq -e --arg ns "{{ platform_ns }}" 'type == "array" and length == 6 and all(.[]; .apiVersion == "networking.k8s.io/v1" and .kind == "NetworkPolicy" and .metadata.namespace == $ns and .metadata.labels["app.kubernetes.io/part-of"] == "great-falls-tool-bus") and ([.[].metadata.name] | sort) == ["allow-cloudflared-tunnel-ingress","allow-egress-dns","allow-egress-member-db","allow-prometheus-scrape","default-deny-egress","default-deny-ingress"]' "${recorded_json}" >/dev/null || { echo "Recorded policy bytes lack exact inventory/identity label" >&2; exit 2; }
+    just platform-network-policy-render > "${recheck}"
+    [[ "$(python3 -I -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${recheck}")" == "${recorded_digest}" ]] || { echo "Reviewed policies re-render differently; re-plan" >&2; exit 2; }
+    echo "platform NetworkPolicy preflight passed: sha256:${recorded_digest}"
+
+platform-network-policy-server-dry-run: _platform-release-kubeconfig-input _platform-network-policy-plan-preflight
+    #!/usr/bin/env bash
+    set -euo pipefail
+    plan="$(git rev-parse --show-toplevel)/.k8s-plans/platform-network-policy.rendered.yaml"
+    kubectl --kubeconfig "${PLATFORM_APPLY_KUBECONFIG}" --namespace {{ platform_ns }} apply --dry-run=server -f "${plan}"
+
+platform-network-policy-live-proof: _platform-release-kubeconfig-input _platform-network-policy-plan-preflight
+    #!/usr/bin/env bash
+    set -euo pipefail
+    plan_root="$(git rev-parse --show-toplevel)/.k8s-plans"
+    planned_json="$(mktemp "${plan_root}/platform-network-policy.planned-json.XXXXXX")"
+    live_json="$(mktemp "${plan_root}/platform-network-policy.live-json.XXXXXX")"
+    chmod 600 "${planned_json}" "${live_json}"
+    trap 'rm -f "${planned_json}" "${live_json}"' EXIT
+    yq eval-all -o=json -I=0 '.' "${plan_root}/platform-network-policy.rendered.yaml" | jq --slurp '.' > "${planned_json}"
+    kubectl --kubeconfig "${PLATFORM_APPLY_KUBECONFIG}" --namespace {{ platform_ns }} get networkpolicy -o json > "${live_json}"
+    jq -e --slurpfile planned "${planned_json}" --arg ns "{{ platform_ns }}" '
+      def canon: {apiVersion,kind,name:.metadata.name,namespace:.metadata.namespace,partOf:.metadata.labels["app.kubernetes.io/part-of"],spec};
+      ($planned[0] | map(select(.kind == "NetworkPolicy")) | map(canon) | sort_by(.name)) as $expected
+      | ([.items[] | canon] | sort_by(.name)) as $live
+      | (.items | length) == 6
+      and ([.items[].metadata.name] | sort) == ["allow-cloudflared-tunnel-ingress","allow-egress-dns","allow-egress-member-db","allow-prometheus-scrape","default-deny-egress","default-deny-ingress"]
+      and all(.items[]; .metadata.namespace == $ns and .metadata.labels["app.kubernetes.io/part-of"] == "great-falls-tool-bus")
+      and $live == $expected
+    ' "${live_json}" >/dev/null || { echo "Live NetworkPolicy names/specs differ from exact plan" >&2; exit 1; }
+    echo "live NetworkPolicy proof passed: exact six names/specs and identity label"
+
+platform-network-policy-apply: _reviewed-clean-main _operator-apply-confirm _platform-release-kubeconfig-input _platform-network-policy-plan-preflight
+    #!/usr/bin/env bash
+    set -euo pipefail
+    plan="$(git rev-parse --show-toplevel)/.k8s-plans/platform-network-policy.rendered.yaml"
+    kubectl --kubeconfig "${PLATFORM_APPLY_KUBECONFIG}" --namespace {{ platform_ns }} apply --dry-run=server -f "${plan}"
+    kubectl --kubeconfig "${PLATFORM_APPLY_KUBECONFIG}" --namespace {{ platform_ns }} apply -f "${plan}"
+    just platform-network-policy-live-proof
 
 # THE SINGLE RENDERER. Git owns image bytes; this substitutes only the two
 # integrity-critical tenant sentinels. Pure text, no cluster contact.
@@ -2439,12 +2538,13 @@ _platform-release-plan-root-contract:
         raise SystemExit(".k8s-plans must be a real directory, not a symlink")
     if metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) != 0o700:
         raise SystemExit(".k8s-plans must be operator-owned and mode 0700")
-    for path in sorted(root.glob("platform-release.*")):
-        item = path.lstat()
-        if stat.S_ISLNK(item.st_mode) or not stat.S_ISREG(item.st_mode):
-            raise SystemExit(f"platform release plan artifact must be a regular file: {path.name}")
-        if item.st_uid != os.getuid() or stat.S_IMODE(item.st_mode) != 0o600:
-            raise SystemExit(f"platform release plan artifact {path.name} must be operator-owned and mode 0600")
+    for pattern in ("platform-release.*", "platform-network-policy.*"):
+        for path in sorted(root.glob(pattern)):
+            item = path.lstat()
+            if stat.S_ISLNK(item.st_mode) or not stat.S_ISREG(item.st_mode):
+                raise SystemExit(f"platform plan artifact must be a regular file: {path.name}")
+            if item.st_uid != os.getuid() or stat.S_IMODE(item.st_mode) != 0o600:
+                raise SystemExit(f"platform plan artifact {path.name} must be operator-owned and mode 0600")
     PY
 
 # PLAN. Offline: render ONCE, derive the one image from Git-owned bytes, and
@@ -2522,7 +2622,7 @@ platform-release-server-dry-run: _platform-release-pull-secret-preflight _platfo
 # recorded bytes, and waits for BOTH rollouts. The pre-rollout migration
 # (member-db PR #118's member-db-migrate-apply) must have completed first —
 # pods never migrate on startup (spec §6) — see the runbook ordering.
-platform-release-apply: _reviewed-clean-main _operator-apply-confirm _platform-release-pull-secret-preflight _platform-release-plan-preflight
+platform-release-apply: _reviewed-clean-main _operator-apply-confirm platform-network-policy-live-proof _platform-release-pull-secret-preflight _platform-release-plan-preflight
     #!/usr/bin/env bash
     set -euo pipefail
     repo_root="$(git rev-parse --show-toplevel)"
@@ -2550,7 +2650,7 @@ platform-release-pinned-running-proof: _platform-release-pull-secret-preflight _
       and ([.items[]|select(.metadata.name=="gftb-platform-worker")][0].spec.template.spec.containers[0]|has("command")|not)
       and [.items[]|select(.metadata.name=="gftb-platform-worker")][0].spec.template.spec.containers[0].args==["worker"]
     ' "${live}" >/dev/null || { echo "PINNED+RUNNING exact-contract proof FAILED" >&2; exit 1; }
-    kubectl --kubeconfig "${kc}" --namespace "${ns}" get pods -l app.kubernetes.io/part-of=gftb-platform -o custom-columns=NAME:.metadata.name,COMPONENT:.metadata.labels.app\\.kubernetes\\.io/component,PHASE:.status.phase,NODE:.spec.nodeName
+    kubectl --kubeconfig "${kc}" --namespace "${ns}" get pods -l app.kubernetes.io/part-of=great-falls-tool-bus -o custom-columns=NAME:.metadata.name,COMPONENT:.metadata.labels.app\\.kubernetes\\.io/component,PHASE:.status.phase,NODE:.spec.nodeName
     echo "PINNED+RUNNING proof passed: exact web(2) + worker(1) on ${expected_image}"
 
 # SERVED proof. Anonymous, from outside the cluster, against the staging host.

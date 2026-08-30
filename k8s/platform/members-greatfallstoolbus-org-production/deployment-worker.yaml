@@ -19,7 +19,7 @@ metadata:
   labels:
     app.kubernetes.io/name: gftb-platform-worker
     app.kubernetes.io/component: worker
-    app.kubernetes.io/part-of: gftb-platform
+    app.kubernetes.io/part-of: great-falls-tool-bus
     app.kubernetes.io/managed-by: great-falls-tool-bus-infra
     app.tinyland.dev/tenant: great-falls-tool-bus
     app.tinyland.dev/lifecycle: declare-only
@@ -46,7 +46,7 @@ spec:
         # stack's egress allows select on.
         app.kubernetes.io/name: gftb-platform-worker
         app.kubernetes.io/component: worker
-        app.kubernetes.io/part-of: gftb-platform
+        app.kubernetes.io/part-of: great-falls-tool-bus
     spec:
       # Long enough for a graceful drain: the worker traps SIGTERM, finishes
       # the in-flight job, and releases its lease. A job it cannot finish is
@@ -74,7 +74,7 @@ spec:
                   - key: kubernetes.io/hostname
                     operator: In
                     values: ["bumble", "sting"]
-      # Private GHCR reference only; PR #118 owns the names-only contract.
+      # GHCR pull credential reference only; PR #118 owns the names-only contract.
       imagePullSecrets:
         - name: ghcr-pull
       containers:

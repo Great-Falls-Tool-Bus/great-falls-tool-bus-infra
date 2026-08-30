@@ -12,15 +12,16 @@ yaml="$(mktemp)"; json="$(mktemp)"; contract="$(mktemp)"; mut="$(mktemp)"; trap 
 kubectl kustomize "${dir}">"${yaml}"; yq eval-all -o=json -I=0 '.' "${yaml}"|jq --slurp '.'>"${json}"
 cat >"${contract}" <<'JQ'
 def one($k;$n):[.[]|select(.kind==$k and .metadata.name==$n)]as$x|if($x|length)==1 then$x[0]else error("identity/cardinality")end;
-def cs:{"matchLabels":{"app.kubernetes.io/part-of":"gftb-platform"},"matchExpressions":[{"key":"app.kubernetes.io/component","operator":"In","values":["web","worker","migrator"]}]};
+def cs:{"matchLabels":{"app.kubernetes.io/part-of":"great-falls-tool-bus"},"matchExpressions":[{"key":"app.kubernetes.io/component","operator":"In","values":["web","worker","migrator"]}]};
 def hp($p;$g):$p.automountServiceAccountToken==false and $p.terminationGracePeriodSeconds==$g and $p.securityContext=={"runAsNonRoot":true,"runAsUser":1001,"runAsGroup":1001,"fsGroup":1001,"seccompProfile":{"type":"RuntimeDefault"}};
 def hc($c):$c.securityContext=={"allowPrivilegeEscalation":false,"readOnlyRootFilesystem":true,"capabilities":{"drop":["ALL"]}} and ($c|has("envFrom")|not);
 def np($n;$s):one("NetworkPolicy";$n)as$p|$p.apiVersion=="networking.k8s.io/v1" and $p.metadata.namespace==$ns and $p.spec==$s;
 one("Deployment";"gftb-platform-web")as$w|one("Deployment";"gftb-platform-worker")as$k|one("Service";"gftb-platform-web")as$s
 |$w.spec.template.spec as$wp|$k.spec.template.spec as$kp|$wp.containers as$wc|$kp.containers as$kc
-|(type=="array" and length==9 and all(.[];type=="object" and .metadata.namespace==$ns))
+|(type=="array" and length==9 and all(.[];type=="object" and .metadata.namespace==$ns and .metadata.labels["app.kubernetes.io/part-of"]=="great-falls-tool-bus"))
 and([.[]|"\(.kind)/\(.metadata.name)"]|sort)==["Deployment/gftb-platform-web","Deployment/gftb-platform-worker","NetworkPolicy/allow-cloudflared-tunnel-ingress","NetworkPolicy/allow-egress-dns","NetworkPolicy/allow-egress-member-db","NetworkPolicy/allow-prometheus-scrape","NetworkPolicy/default-deny-egress","NetworkPolicy/default-deny-ingress","Service/gftb-platform-web"]
 and $w.spec.replicas==2 and $w.spec.strategy=={"type":"RollingUpdate","rollingUpdate":{"maxUnavailable":0,"maxSurge":1}} and $k.spec.replicas==1 and $k.spec.strategy=={"type":"Recreate"}
+and $w.spec.template.metadata.labels["app.kubernetes.io/part-of"]=="great-falls-tool-bus" and $k.spec.template.metadata.labels["app.kubernetes.io/part-of"]=="great-falls-tool-bus"
 and($wc|length)==1 and($kc|length)==1 and $wc[0].name=="gftb-platform-web" and $kc[0].name=="gftb-platform-worker" and $wc[0].image==$image and $kc[0].image==$image
 and $wp.imagePullSecrets==[{"name":"ghcr-pull"}] and $kp.imagePullSecrets==[{"name":"ghcr-pull"}] and($wc[0]|has("command")|not)and($wc[0]|has("args")|not)and($kc[0]|has("command")|not)and $kc[0].args==["worker"]
 and hp($wp;15) and hp($kp;30) and hc($wc[0]) and hc($kc[0])

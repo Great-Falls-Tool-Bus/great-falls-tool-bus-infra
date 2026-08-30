@@ -382,6 +382,25 @@ ATTENDED_RECIPE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     # web-release-render, protected the same way here.
     "platform-release-render": ("_platform-release-inputs",),
     "_platform-release-plan-root-contract": (),
+    "platform-network-policy-render": (),
+    "platform-network-policy-plan": ("_platform-release-plan-root-contract",),
+    "_platform-network-policy-plan-preflight": (
+        "_platform-release-plan-root-contract",
+    ),
+    "platform-network-policy-server-dry-run": (
+        "_platform-release-kubeconfig-input",
+        "_platform-network-policy-plan-preflight",
+    ),
+    "platform-network-policy-live-proof": (
+        "_platform-release-kubeconfig-input",
+        "_platform-network-policy-plan-preflight",
+    ),
+    "platform-network-policy-apply": (
+        "_reviewed-clean-main",
+        "_operator-apply-confirm",
+        "_platform-release-kubeconfig-input",
+        "_platform-network-policy-plan-preflight",
+    ),
     "platform-release-plan": (
         "_platform-release-inputs",
         "_platform-release-plan-root-contract",
@@ -400,6 +419,7 @@ ATTENDED_RECIPE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     "platform-release-apply": (
         "_reviewed-clean-main",
         "_operator-apply-confirm",
+        "platform-network-policy-live-proof",
         "_platform-release-pull-secret-preflight",
         "_platform-release-plan-preflight",
     ),
@@ -437,9 +457,9 @@ ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     "_platform-release-kubeconfig-input": _receipt(
         "d4691ca921dc2f69", "135e09433d755159", "4e20bbc9d2b88201", "2b99a7893381ca9d"
     ),
-    # Private-GHCR exact namespace/name/type/key prerequisite.
+    # GHCR pull-credential exact namespace/name/type/key prerequisite.
     "_platform-release-pull-secret-preflight": _receipt(
-        "491ebb2bbbcfc485", "23af5abd365ffd89", "e5df553cdeced2eb", "5d9973110375f292"
+        "7016dce0d79f33ed", "32ffce1603cc1aa8", "35f34123e9d123c3", "519395127d8864f9"
     ),
     # platform-release-render: substitutes exactly two tenant sentinels
     #   while leaving Git-owned image bytes untouched.
@@ -447,7 +467,26 @@ ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "ca642ba8224f26e4", "697a7bbbbd6e7b5a", "3dd2562e8b0e3630", "540d09acefc0cdd3"
     ),
     "_platform-release-plan-root-contract": _receipt(
-        "ebf3de9991e622a2", "5b1be15f906593dc", "cb30d87b74d2ace1", "751b3178509f188b"
+        "e16ba6ba26533cca", "fbca534e8825fc8a", "c7a9a27db96ae621", "91c9dff4aca417fd"
+    ),
+    # Exact Step-N policy-only render/plan/apply/live-proof chain.
+    "platform-network-policy-render": _receipt(
+        "81e80678fce1b826", "a1baed2d230cea86", "62ae821d20a1a4f5", "672585b135bcb534"
+    ),
+    "platform-network-policy-plan": _receipt(
+        "7b277c920e8f6a4b", "80d0546a1f1f1898", "79705838dd986c6b", "440ba2a8c07ee50a"
+    ),
+    "_platform-network-policy-plan-preflight": _receipt(
+        "bb6072a72c200ff3", "cbddc282f7fd95e7", "ec4236b8b313bd85", "a810fb30d454c5a0"
+    ),
+    "platform-network-policy-server-dry-run": _receipt(
+        "9963ade48dd48195", "59a17cd96e17256a", "4639b1fc8a77edc6", "ff4355a2a5ede333"
+    ),
+    "platform-network-policy-live-proof": _receipt(
+        "8ba173fa23ffe503", "680626dcf4293adc", "43e7774484cfb604", "139c73134fd9ea46"
+    ),
+    "platform-network-policy-apply": _receipt(
+        "29728ae7eea20a08", "5ed3f843ccea7368", "04cc4d0798f80286", "3fdbdccdfdd2ef01"
     ),
     "platform-release-plan": _receipt(
         "3b53fd6bcffd28f9", "474013f63be2b841", "0453e412bdaaad45", "190d21dc19c1f13e"
@@ -470,7 +509,7 @@ ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     # platform-release-pinned-running-proof: live digests equal the
     #   Git-derived byte-receipted plan; budgeted replicas are ready.
     "platform-release-pinned-running-proof": _receipt(
-        "4ce875bd7a833018", "0da7befaa471fa0b", "aed659b6a61eebcf", "a5b4db70533c80aa"
+        "dee9e97689d3d13e", "44b1d3e122e129ad", "6fe48b7f399bcfb4", "386140758fe8daee"
     ),
     # platform-release-served-proof: pinned specifically for its refusal
     #   branch — the PRIVATE staging host must refuse anonymous requests, and
@@ -484,7 +523,7 @@ ATTENDED_OPERATOR_LOCAL_ROOTS = {
     "_list-member-add-inputs",
     "list-member-add",
     "form-altcha-secret-apply",
-    # Platform staging serving (TIN-3815 / TIN-3817). All ten are
+    # Platform staging serving (TIN-3815 / TIN-3817). Every listed recipe is
     # operator-local: no workflow, script, or composite action may invoke
     # them, and the closure taints anything that tries to wrap one.
     # `platform-stack-validate` is excluded on purpose so `check-hosted`
@@ -494,6 +533,12 @@ ATTENDED_OPERATOR_LOCAL_ROOTS = {
     "_platform-release-pull-secret-preflight",
     "platform-release-render",
     "_platform-release-plan-root-contract",
+    "platform-network-policy-render",
+    "platform-network-policy-plan",
+    "_platform-network-policy-plan-preflight",
+    "platform-network-policy-server-dry-run",
+    "platform-network-policy-live-proof",
+    "platform-network-policy-apply",
     "platform-release-plan",
     "_platform-release-plan-preflight",
     "platform-release-server-dry-run",
@@ -7053,6 +7098,23 @@ def self_test() -> None:
         "attended-recipe-dependencies-mismatch",
     )
 
+    platform_without_policy_proof = mutate_recipe_dependencies(
+        justfile,
+        "platform-release-apply",
+        (
+            "_reviewed-clean-main",
+            "_operator-apply-confirm",
+            "_platform-release-pull-secret-preflight",
+            "_platform-release-plan-preflight",
+        ),
+        "platform apply live-policy proof removal",
+    )
+    expect_attended_contract_rejection(
+        platform_without_policy_proof,
+        "platform apply live-policy proof removal",
+        "attended-recipe-dependencies-mismatch",
+    )
+
     attended_body_mutations = (
         (
             "_mail-kubeconfig-inputs",
@@ -7108,6 +7170,19 @@ def self_test() -> None:
         expect_attended_contract_rejection(
             mutated, label, "attended-recipe-executable-receipt-mismatch"
         )
+
+    policy_apply_short_circuit = mutate_recipe_body(
+        justfile,
+        "platform-network-policy-apply",
+        "    #!/usr/bin/env bash\n",
+        "    #!/usr/bin/env bash\n    exit 0\n",
+        "policy apply short circuit",
+    )
+    expect_attended_contract_rejection(
+        policy_apply_short_circuit,
+        "policy apply short circuit",
+        "attended-recipe-executable-receipt-mismatch",
+    )
 
     attended_short_circuit = mutate_recipe_body(
         justfile,

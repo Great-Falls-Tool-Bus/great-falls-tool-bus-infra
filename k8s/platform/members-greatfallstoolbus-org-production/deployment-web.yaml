@@ -35,7 +35,7 @@ metadata:
   labels:
     app.kubernetes.io/name: gftb-platform-web
     app.kubernetes.io/component: web
-    app.kubernetes.io/part-of: gftb-platform
+    app.kubernetes.io/part-of: great-falls-tool-bus
     app.kubernetes.io/managed-by: great-falls-tool-bus-infra
     app.tinyland.dev/tenant: great-falls-tool-bus
     app.tinyland.dev/lifecycle: declare-only
@@ -67,7 +67,7 @@ spec:
         # database.
         app.kubernetes.io/name: gftb-platform-web
         app.kubernetes.io/component: web
-        app.kubernetes.io/part-of: gftb-platform
+        app.kubernetes.io/part-of: great-falls-tool-bus
     spec:
       terminationGracePeriodSeconds: 15
       automountServiceAccountToken: false
@@ -106,7 +106,7 @@ spec:
                   matchLabels:
                     app.kubernetes.io/name: gftb-platform-web
                     app.kubernetes.io/component: web
-      # Private GHCR reference only; PR #118 owns the names-only contract.
+      # GHCR pull credential reference only; PR #118 owns the names-only contract.
       imagePullSecrets:
         - name: ghcr-pull
       containers:

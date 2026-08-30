@@ -18,7 +18,7 @@
 # THE MIGRATOR RIDES THESE POLICIES TOO. The pre-rollout migration Job
 # (k8s/member-db/members-greatfallstoolbus-org-production/
 # job-migrator.template.yaml, PR #118) runs in this namespace with
-# part-of=gftb-platform, component=migrator — the egress allows below select
+# part-of=great-falls-tool-bus, component=migrator — the egress allows below select
 # the migrator alongside web and worker, which is what lets that Job reach
 # 5432 once this stack's default-deny-egress exists. Sequencing note for the
 # operator: THIS FILE is admitted on its own, BEFORE the first migration —
@@ -37,7 +37,7 @@ metadata:
   name: default-deny-ingress
   namespace: members-greatfallstoolbus-org-production
   labels:
-    app.kubernetes.io/part-of: gftb-platform
+    app.kubernetes.io/part-of: great-falls-tool-bus
     app.tinyland.dev/lifecycle: declare-only
 spec:
   podSelector: {}
@@ -49,7 +49,7 @@ metadata:
   name: default-deny-egress
   namespace: members-greatfallstoolbus-org-production
   labels:
-    app.kubernetes.io/part-of: gftb-platform
+    app.kubernetes.io/part-of: great-falls-tool-bus
     app.tinyland.dev/lifecycle: declare-only
 spec:
   podSelector: {}
@@ -118,12 +118,12 @@ metadata:
   name: allow-egress-dns
   namespace: members-greatfallstoolbus-org-production
   labels:
-    app.kubernetes.io/part-of: gftb-platform
+    app.kubernetes.io/part-of: great-falls-tool-bus
     app.tinyland.dev/lifecycle: declare-only
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/part-of: gftb-platform
+      app.kubernetes.io/part-of: great-falls-tool-bus
     matchExpressions:
       - key: app.kubernetes.io/component
         operator: In
@@ -146,7 +146,7 @@ spec:
 # The ONE backend: PostgreSQL 5432 on the gftb-member-db instance pods in the
 # database namespace. This is the platform-side reciprocal of the member-db
 # stack's allow-platform-postgres-ingress (PR #118): that side admits
-# part-of=gftb-platform pods with component in {web, worker, migrator} FROM
+# part-of=great-falls-tool-bus pods with component in {web, worker, migrator} FROM
 # this namespace; this side lets exactly those pods dial out TO exactly those
 # instance pods. NetworkPolicy egress evaluates the post-DNAT destination, so
 # the target is the instance pod selector (cnpg.io/cluster=gftb-member-db) on
@@ -157,12 +157,12 @@ metadata:
   name: allow-egress-member-db
   namespace: members-greatfallstoolbus-org-production
   labels:
-    app.kubernetes.io/part-of: gftb-platform
+    app.kubernetes.io/part-of: great-falls-tool-bus
     app.tinyland.dev/lifecycle: declare-only
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/part-of: gftb-platform
+      app.kubernetes.io/part-of: great-falls-tool-bus
     matchExpressions:
       - key: app.kubernetes.io/component
         operator: In

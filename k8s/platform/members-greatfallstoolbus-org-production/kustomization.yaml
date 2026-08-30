@@ -25,5 +25,5 @@ labels:
   - includeSelectors: false
     pairs:
       app.kubernetes.io/managed-by: great-falls-tool-bus-infra
-      app.kubernetes.io/part-of: gftb-platform
+      app.kubernetes.io/part-of: great-falls-tool-bus
       app.tinyland.dev/tenant: great-falls-tool-bus

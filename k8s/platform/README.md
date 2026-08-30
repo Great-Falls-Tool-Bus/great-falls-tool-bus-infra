@@ -14,7 +14,7 @@ Git pins one image in both Deployments:
 - artifact: `greatfallstoolbus-org-image-af60fcd7539a4beff6f24e1a95eb11160df7c166-33279762284-1` (id `9722715788`)
 
 No release recipe accepts an image input, tag, alternate repository, digest,
-or pull-secret value. The private platform image references namespace-local
+or pull-secret value. The platform image references namespace-local
 ghcr-pull; PR #118 owns its single names-only kubernetes.io/dockerconfigjson
 contract and the operator provisions the value outside Git. Only gftb-site was
 authorized public.
@@ -42,12 +42,26 @@ creates or seeds a tenant.
 2. The tenant tuple is absent. A reviewed bootstrap carrier must establish and
    receipt UUID, slug, display name, and initial owner/keyholder grant. This PR
    invents none of them.
-3. NetworkPolicy-first admission has no registered, receipt-bound Just carrier.
-   The runbook stops at Step N. Raw `kubectl`, an ad hoc script, or applying
-   the whole serving stack is not a substitute.
+3. The exact Step-N policy-only plan/apply/live-proof carrier is registered in
+   the Justfile. It remains attended and applies nothing until explicitly run.
 4. CI is remote validation only; it does not mutate the cluster.
+5. After app PR #218 publishes its successor receipt, a successor infra PR
+   must re-pin both Deployments and the validator; this PR does not predict
+   that digest.
 
 ## Attended release after blockers close
+
+Run Step N first:
+
+```bash
+just platform-network-policy-plan
+export PLATFORM_APPLY_KUBECONFIG=/path/to/platform-apply.kubeconfig
+just platform-network-policy-server-dry-run
+GFTB_APPLY_CONFIRM=apply just platform-network-policy-apply
+just platform-network-policy-live-proof
+```
+
+Then the full release; its apply mechanically re-runs the exact live policy proof:
 
 ```bash
 just platform-stack-validate

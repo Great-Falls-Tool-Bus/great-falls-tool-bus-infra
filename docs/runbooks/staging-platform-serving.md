@@ -25,17 +25,24 @@ Create `gftb-member-db-runtime-dsn/dsn` in the platform namespace from PR
 `sslmode=verify-full`. Never give web/worker the migrator DSN. Values remain
 outside Git.
 
-## Step N — STOP: NetworkPolicy-first carrier is absent
+## Step N — plan and admit the exact policy-only slice
 
-The first migration must run only after the exact six policies are admitted:
-`default-deny-ingress`, `default-deny-egress`,
-`allow-cloudflared-tunnel-ingress`, `allow-prometheus-scrape`,
-`allow-egress-dns`, and `allow-egress-member-db`.
+This canonical Just carrier renders only the six NetworkPolicies from the same
+Kustomize graph as the full stack, records exact Git bytes and inventory, then
+server-dry-runs, applies, and compares every live policy name/spec to the plan:
 
-This branch has no registered, receipt-bound, Just-only plan →
-server-dry-run → attended-apply carrier for that policy-only slice. Stop.
-Do not use raw `kubectl apply`, an ad hoc script, or the whole serving stack.
-Resume only after that carrier lands and exact-name readback is receipted.
+```bash
+just platform-network-policy-plan
+export PLATFORM_APPLY_KUBECONFIG=/path/to/platform-apply.kubeconfig
+just platform-network-policy-server-dry-run
+GFTB_APPLY_CONFIRM=apply just platform-network-policy-apply
+just platform-network-policy-live-proof
+```
+
+The live proof requires exactly those six policies in the namespace and the
+`app.kubernetes.io/part-of=great-falls-tool-bus` identity used by PR #118.
+Raw `kubectl` or the whole serving stack is not an equivalent Step-N carrier.
+The later `platform-release-apply` mechanically depends on this exact live proof.
 
 ## Step M — migrate schema, not tenant data
 
@@ -71,7 +78,9 @@ GFTB_APPLY_CONFIRM=apply just platform-release-apply
 just platform-release-pinned-running-proof
 ```
 
-Image and pull-secret values are not inputs. The plan derives the identical web/worker digest from
+Image and pull-secret values are not inputs. After app PR #218 publishes a
+successor receipt, a successor infra PR must re-pin both Deployments and the
+validator before a new plan; this runbook does not guess that digest. The plan derives the identical web/worker digest from
 Git, requires the exact admitted publisher identity, and records it beside the
 tenant, carrier, bytes, and sha256. Preflight refuses drift or tampering.
 
