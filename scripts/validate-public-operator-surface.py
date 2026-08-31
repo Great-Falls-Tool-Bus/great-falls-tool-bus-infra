@@ -84,7 +84,7 @@ RETIRED_WEB_GENERATION40_BRIDGE_WORKFLOW = Path(".github/workflows/web-generatio
 # recompute it (sha256sum .github/workflows/web-generation-42-parity.yml)
 # after any edit, including the final meta-ratification fill.
 WEB_GENERATION42_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-42-parity.yml")
-WEB_GENERATION42_BRIDGE_SHA256 = "1f8428898ed5c99a1c1acb05ea238fd88b670985dd90953d11e1e8d36664f1ea"
+WEB_GENERATION42_BRIDGE_SHA256 = "ef854f0a2016ea56d6bfb2239240d311a8726a5d9a411cb47697a71c9e37b6fc"
 WEB_GENERATION42_BRIDGE_RECIPES = frozenset(
     {"web-release-candidate-proof", "web-release-plan", "web-release-server-dry-run", "web-release-apply"}
 )

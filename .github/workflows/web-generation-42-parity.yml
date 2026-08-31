@@ -44,13 +44,12 @@ env:
   # on image and source SHA only.
   ROLLBACK_RENDER_SHA256: 2244dedfa372c52fb32a891c8e6c6e547ef4bdbc64aa948a259fd495746c29bf
   WEB_APPLY_REPLICAS: "2"
-  # PLACEHOLDER: meta main sha, ADR blob sha, and ADR sha256 for the merged
-  # decisions/0022 amendment 2 in the meta repo. Fill in after
-  # jess/decision-0022-amendment-2-gen42 merges to meta main.
-  META_MAIN_SHA: PLACEHOLDER_META_MAIN_SHA
+  # Meta ratification: main sha, ADR blob sha, and ADR sha256 of the merged
+  # decisions/0022 Amendment 2 (meta #54).
+  META_MAIN_SHA: f5dfa5e6accc1e04f139fbd2e6e6237064115bda
   META_ADR_PATH: decisions/0022-gftb-site-main-prod-gfi09-carrier-2026-08-30.md
-  META_ADR_BLOB: PLACEHOLDER_META_ADR_BLOB
-  META_ADR_SHA256: PLACEHOLDER_META_ADR_SHA256
+  META_ADR_BLOB: c7db85fbf9440ca32406af9863db96a067fa0733
+  META_ADR_SHA256: f5db7c9fc10258fb1cc0318b1e777380c5bf32eb3acc926174a4b3419f960552
   # The bridge-adding PR in great-falls-tool-bus-infra; the authority step
   # binds the merge to it and the parity receipt embeds it.
   BRIDGE_PR_NUMBER: "151"
@@ -135,10 +134,10 @@ jobs:
           # The ratifying Meta repository is private to this repository token.
           # These exact, validator-byte-pinned constants bind the ratification
           # without widening this current-repository execution credential.
-          test "${META_MAIN_SHA}" = PLACEHOLDER_META_MAIN_SHA
+          test "${META_MAIN_SHA}" = f5dfa5e6accc1e04f139fbd2e6e6237064115bda
           test "${META_ADR_PATH}" = decisions/0022-gftb-site-main-prod-gfi09-carrier-2026-08-30.md
-          test "${META_ADR_BLOB}" = PLACEHOLDER_META_ADR_BLOB
-          test "${META_ADR_SHA256}" = PLACEHOLDER_META_ADR_SHA256
+          test "${META_ADR_BLOB}" = c7db85fbf9440ca32406af9863db96a067fa0733
+          test "${META_ADR_SHA256}" = f5db7c9fc10258fb1cc0318b1e777380c5bf32eb3acc926174a4b3419f960552
 
           sha256sum --check --strict <<'HASHES'
           c603a5c8d3fb516d6e55674accdbfb1ce70b68de56cf34427e00317a5576e403  Justfile
