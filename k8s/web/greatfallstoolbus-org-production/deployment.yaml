@@ -149,11 +149,14 @@ spec:
         - name: greatfallstoolbus-org
           # Digest-pinned production image: the promoted gftb-site static
           # origin (ADR 0010 §5 cutover shape; TIN-3899 promotion). Candidate
-          # 06e8b2c390b9c057fd084540e1e5710411a76a93 (signed gftb-site
-          # main, PR #43 merge), generation 40. The immutable candidate
-          # was published by GitHub Actions run 33325107454 on 2026-08-30;
-          # public GHCR manifest resolution of tag sha-06e8b2c390b9c057fd084540e1e5710411a76a93
-          # returned exactly the digest pinned below. This commit records
+          # 9713538bb8a78d66405c725bbd6931f882a689cc (signed gftb-site
+          # main, PR #44 merge: log-surface density), generation 41. The
+          # immutable candidate was published by GitHub Actions run
+          # 33344303714 on 2026-08-31; anonymous public GHCR manifest
+          # resolution of tag sha-9713538bb8a78d66405c725bbd6931f882a689cc
+          # returned exactly the digest pinned below. Previous pin
+          # (generation 40, rollback candidate):
+          # sha256:0295c226bd0bc78c0fe392b8955971ffbbd4fb9a0684939558d4c3d170a35dee. This commit records
           # reviewed desired release truth; PINNED/RUNNING/SERVED remain
           # separate post-apply evidence and are not claimed here.
           #
@@ -165,7 +168,7 @@ spec:
           # build/index.js in this image. `web-release-render` (Justfile)
           # deletes command/args/env/envFrom/volumeMounts unconditionally on
           # every render for exactly this reason.
-          image: ghcr.io/great-falls-tool-bus/gftb-site@sha256:0295c226bd0bc78c0fe392b8955971ffbbd4fb9a0684939558d4c3d170a35dee
+          image: ghcr.io/great-falls-tool-bus/gftb-site@sha256:2e80301da28d99edfad7f4caeccdc5aed109f8aaa74ee54efc1f646d8ecaa4da
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
