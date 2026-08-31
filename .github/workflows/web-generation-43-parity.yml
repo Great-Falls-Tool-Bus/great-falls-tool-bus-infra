@@ -43,7 +43,7 @@ env:
   # PR-only proof step (validate run 33381373277), then that step
   # restored byte-for-byte. PLACEHOLDER until the target pin is chosen and
   # proved.
-  TARGET_RENDER_SHA256: PLACEHOLDER_TARGET_RENDER_SHA256
+  TARGET_RENDER_SHA256: 8b8aef60cba0d88be7bd468ba8fa2b58b870ce3965729d1fb9b74d5daf11ea9e
   # Generation 42 is RUNNING (TIN-4227 second bridge terminal receipt); a
   # failed forward apply rolls back to it.
   ROLLBACK_SOURCE_SHA: 9adae265731ec22011e562bc4d8f1bcc90d1629b
@@ -52,7 +52,7 @@ env:
   # PLACEHOLDER: it must be recomputed against the render inputs at the base
   # this bridge is actually cut from, even though generation 42's image and
   # source SHA above are already known.
-  ROLLBACK_RENDER_SHA256: PLACEHOLDER_ROLLBACK_RENDER_SHA256
+  ROLLBACK_RENDER_SHA256: 46b0b981969c6192e79ce5801467667e4b7bc5af642dc940e07ef711fefed874
   WEB_APPLY_REPLICAS: "2"
   # Meta ratification: main sha, ADR blob sha, and ADR sha256 of the merged
   # decisions/0022 Amendment 3 (meta PR pending). PLACEHOLDER until that
