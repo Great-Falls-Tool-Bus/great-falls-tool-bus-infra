@@ -687,21 +687,21 @@ legacy-CD invariant below).
 to canonical `main` (`_reviewed-clean-main`), `GFTB_APPLY_CONFIRM=apply` is set,
 the kubeconfig satisfies its custody contract **and passes an authorization
 preflight**, and the plan still reproduces byte-for-byte. It server-dry-runs,
-applies the recorded bytes, deletes the two legacy adapter-node egress policies
-the render deliberately omits (`allow-egress-dns`,
-`allow-egress-discuss-archive` — `kubectl apply` does not prune omissions), and
-waits for the rollout.
+applies the recorded bytes, and waits for the rollout. (Before TIN-4254 it also
+deleted the two legacy adapter-node egress policies `allow-egress-dns` /
+`allow-egress-discuss-archive`; that delete lane is retired — every gen 37→45
+apply already ran it, and the committed tree now declares `default-deny-egress`
+instead.)
 
 The authorization preflight lives in `_web-release-apply-kubeconfig-contract` and
 runs `kubectl auth can-i` for every verb the chain needs in
 `greatfallstoolbus-org-production` — `get`/`list`/`watch`/`create`/`update`/`patch`
 on `deployments.apps`, `get`/`create`/`update`/`patch` on `services` and
-`networkpolicies.networking.k8s.io`, and **`delete networkpolicies`** — refusing
-before anything is touched if any answer is not `yes` or if the review emits any
-diagnostic. `apply --dry-run=server` authorizes only the objects it applies; it
-does not authorize the delete. Without the preflight the realistic failure is a
-green dry-run, a successful apply, a denied delete, and a half-done promotion
-running the new image with `allow-egress-dns` still additively permitting egress.
+`networkpolicies.networking.k8s.io` — refusing before anything is touched if any
+answer is not `yes` or if the review emits any diagnostic. `apply
+--dry-run=server` can miss verbs the real apply needs (a `create` on an object
+that does not exist yet reaches a different authorization path), so every verb
+the chain uses is probed up front rather than inferred from the dry-run.
 
 **Rollback** has two shapes, and only one of them runs through the chain:
 
@@ -722,10 +722,12 @@ running the new image with `allow-egress-dns` still additively permitting egress
   `kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace
   greatfallstoolbus-org-production set image deployment/greatfallstoolbus-org
   greatfallstoolbus-org=<receipt-line-12 greatfallstoolbus.org@sha256:…>`.
-  Once the live image is no longer gftb-site the interlock reopens, and a
-  `web-stack.yml` `workflow_dispatch` (`confirm=apply`, `image=<that digest>`)
-  restores the two egress NetworkPolicies (`allow-egress-dns`,
-  `allow-egress-discuss-archive`) that the promotion deleted. Record the
+  Once the live image is no longer gftb-site the interlock reopens. Note that
+  since TIN-4254 the committed tree declares `default-deny-egress` and no longer
+  carries `allow-egress-dns` / `allow-egress-discuss-archive` at all, so a tree
+  apply will **not** restore the egress allows the retired adapter-node origin
+  needed; re-establishing those is an explicit, attended, out-of-band step.
+  Record the
   imperative `set image` in the release notes as an out-of-band mutation; the
   receipt-line-12 "rollback rehearsal" **cannot** be rehearsed through the chain
   for the first promotion, and the receipt must say so rather than claim a
@@ -799,10 +801,13 @@ Where each line comes from in this chain:
   `Deployment/greatfallstoolbus-org` in `greatfallstoolbus-org-production` — the
   same object this promotion cuts over. Unchecked it would have (a) imperatively
   re-pinned the adapter-node digest back over the gftb-site static origin and (b)
-  re-applied the committed kustomization, which **recreates** `allow-egress-dns`
-  and `allow-egress-discuss-archive` that `web-release-apply` deletes --
-  omissions are not pruned -- undoing the empty-egress invariant. The next green
-  push to the site repo would have silently falsified the SERVED proof.
+  re-applied the committed kustomization, which at the time **recreated**
+  `allow-egress-dns` and `allow-egress-discuss-archive` that `web-release-apply`
+  then deleted -- omissions are not pruned -- undoing the empty-egress
+  invariant. (Since TIN-4254 the tree carries neither policy and declares
+  `default-deny-egress` instead, so this specific recreation path is closed at
+  the source.) The next green push to the site repo would have silently
+  falsified the SERVED proof.
 
   **TIN-3899 (Phase 5 step 2) removed the trigger, both ends.** The workflow is
   deleted here; the `signal-cd` job is deleted in the site repo. Three things now
@@ -854,8 +859,7 @@ Where each line comes from in this chain:
   scan refuses a `kubectl` tree-apply (`-k`, `-f`, `--kustomize`, `--filename`)
   aimed at `{{ web_stack_dir }}` (or its literal path) from any recipe other than
   `web-stack-apply` and `web-stack-server-dry-run`, because a fresh
-  tree-apply would recreate `allow-egress-dns`/`allow-egress-discuss-archive`
-  and re-pin the tree's adapter-node digest without ever passing through
+  tree-apply would mutate the release surface without ever passing through
   `_web-stack-promotion-interlock` (only `web-stack-apply` is bound to it).
   Both scans are textual and do **not** see shell *variable indirection*
   (`KC=kubectl; "${KC}" … set image`, a patch body assembled into a variable

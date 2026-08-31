@@ -174,7 +174,6 @@ jq --slurp -e '
       {"apiGroups":[""],"resources":["services"],"resourceNames":["greatfallstoolbus-org"],"verbs":["get","update","patch"]},
       {"apiGroups":[""],"resources":["services"],"verbs":["create"]},
       {"apiGroups":["networking.k8s.io"],"resources":["networkpolicies"],"resourceNames":["default-deny-ingress","allow-cloudflared-tunnel-ingress","allow-prometheus-scrape","default-deny-egress"],"verbs":["get","update","patch"]},
-      {"apiGroups":["networking.k8s.io"],"resources":["networkpolicies"],"resourceNames":["allow-egress-dns","allow-egress-discuss-archive"],"verbs":["delete"]},
       {"apiGroups":["networking.k8s.io"],"resources":["networkpolicies"],"verbs":["list","create"]},
       {"apiGroups":["discovery.k8s.io"],"resources":["endpointslices"],"verbs":["list"]}
     ]
@@ -228,6 +227,17 @@ assert_eq "${tunnel_port}" "3000" "public ingress port"
 if yq -r 'select(.kind == "NetworkPolicy") | .spec.egress[]?.to[]? | select(has("ipBlock")) | .ipBlock.cidr' "${netpol}" | grep -q "0.0.0.0/0"; then
   fail "web egress must not include 0.0.0.0/0"
 fi
+# default-deny-egress is COMMITTED tree truth since TIN-4254 (W13): the static
+# origin gets no egress at all, so the policy must be present with an empty
+# egress rule list, exactly as the release ceremony has always applied it.
+egress_deny_json="$(yq eval -o=json -I=0 'select(.kind == "NetworkPolicy" and .metadata.name == "default-deny-egress")' "${netpol}")"
+jq -e '
+  .metadata.namespace == "greatfallstoolbus-org-production"
+  and .spec.policyTypes == ["Egress"]
+  and .spec.egress == []
+  and .spec.podSelector == {"matchLabels":{"app.kubernetes.io/name":"greatfallstoolbus-org","app.kubernetes.io/component":"web"}}
+' <<<"${egress_deny_json}" >/dev/null ||
+  fail "default-deny-egress NetworkPolicy must be committed with policyTypes [Egress] and an empty egress rule list"
 
 # --- FAIL-CLOSED route intent: applied/dns/route all false -------------------
 assert_eq "$(jq -r '.applied' "${route_intent}")" "false" "route intent applied"
@@ -263,11 +273,12 @@ fi
 bash scripts/guard-no-remote-kustomize-resources.sh "${dir}"
 rendered_json_stream="$(kubectl kustomize "${dir}" | yq eval-all -o=json -I=0 '.' -)"
 jq --slurp -e '
-  length == 5
+  length == 6
   and ([.[] | "\(.kind)/\(.metadata.name)"] | sort) == [
     "Deployment/greatfallstoolbus-org",
     "NetworkPolicy/allow-cloudflared-tunnel-ingress",
     "NetworkPolicy/allow-prometheus-scrape",
+    "NetworkPolicy/default-deny-egress",
     "NetworkPolicy/default-deny-ingress",
     "Service/greatfallstoolbus-org"
   ]
@@ -279,6 +290,6 @@ jq --slurp -e '
     or .kind == "ClusterRoleBinding"
   )] | length) == 0
 ' <<<"${rendered_json_stream}" >/dev/null ||
-  fail "workload render must contain exactly Deployment/Service/three NetworkPolicies and no RBAC authority"
+  fail "workload render must contain exactly Deployment/Service/four NetworkPolicies and no RBAC authority"
 
-echo "web stack validation passed for ${app} in ${stack_ns}: ATTENDED-ONLY declare-only (replicas 2, image pinned to ${admitted_image_repo}@sha256:<64 hex>, no namespace, tracked exact web-apply RBAC excluded from workload kustomization, no workflow apply path -- the repository_dispatch CD carrier is retired and apply is attended-operator-only behind the promotion interlock), gftb-site static-origin ClusterIP 80->3000 with /health probes, default-deny + cloudflared-only public ingress, route+reaper fail-closed, no committed secrets"
+echo "web stack validation passed for ${app} in ${stack_ns}: ATTENDED-ONLY declare-only (replicas 2, image pinned to ${admitted_image_repo}@sha256:<64 hex>, no namespace, tracked exact web-apply RBAC excluded from workload kustomization, no workflow apply path -- the repository_dispatch CD carrier is retired and apply is attended-operator-only behind the promotion interlock), gftb-site static-origin ClusterIP 80->3000 with /health probes, default-deny ingress + committed default-deny-egress (empty egress) + cloudflared-only public ingress, route+reaper fail-closed, no committed secrets"
