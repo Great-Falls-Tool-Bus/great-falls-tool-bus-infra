@@ -1167,7 +1167,6 @@ def scan_arc_operator_contract_text(text: str, path: Path) -> list[Finding]:
     return findings
 
 
-
 def arc_storage_carrier_texts() -> dict[Path, str]:
     """Read executable carrier sources; the contract itself remains source-only."""
     paths = set(git_files(WORKFLOW_GLOBS + SCRIPT_GLOBS + COMPOSITE_ACTION_GLOBS))
@@ -1212,7 +1211,7 @@ def scan_arc_storage_source_contract_text(
         observed = [
             value.strip()
             for value in re.findall(
-                rf"^[ \\t]*{re.escape(name)}[ \\t]*=[ \\t]*([^\\n#]+)",
+                rf"^[ \t]*{re.escape(name)}[ \t]*=[ \t]*([^\n#]+)",
                 tfvars,
                 flags=re.MULTILINE,
             )
@@ -1300,7 +1299,7 @@ def scan_arc_storage_source_contract_text(
                 )
             logical = "\n".join(shell_logical_lines(executable))
             direct_arc_apply = (
-                re.search(r"\\b(?:tofu|terraform)\\b[^\\n]*\\bapply\\b", logical)
+                re.search(r"\b(?:tofu|terraform)\b[^\n]*\bapply\b", logical)
                 is not None
                 and ("arc-runners" in executable or "{{ arc_tfvars }}" in executable)
             )
@@ -1320,11 +1319,11 @@ def scan_arc_storage_source_contract_text(
             token for token in ARC_STORAGE_RUNTIME_TOKENS if token in text
         )
         direct_arc_apply = (
-            re.search(r"\\b(?:tofu|terraform)\\b[^\\n]*\\bapply\\b", text)
+            re.search(r"\b(?:tofu|terraform)\b[^\n]*\bapply\b", text)
             is not None
             and "arc-runners" in text
         )
-        invokes_arc_apply = re.search(r"\\bjust\\b[^\\n]*\\barc-apply\\b", text)
+        invokes_arc_apply = re.search(r"\bjust\b[^\n]*\barc-apply\b", text)
         if observed_tokens or direct_arc_apply or invokes_arc_apply:
             findings.append(
                 Finding(
@@ -6613,13 +6612,21 @@ def self_test() -> None:
         ('"request": "8Gi"', '"request": "9Gi"', "8Gi request envelope"),
         ('"limit": "16Gi"', '"limit": "17Gi"', "16Gi limit envelope"),
         (
-            '"node_hostname": "sting"',
-            '"node_hostname": "honey"',
+            '"node_hostname": "sting",\n    "reclaim_policy": "Delete"',
+            '"node_hostname": "honey",\n    "reclaim_policy": "Delete"',
             "Sting storage placement",
         ),
         (
-            '"name": "nix-volume-init"',
-            '"name": "other-init"',
+            '"name": "nix-volume-init",\n'
+            '          "run_as_user": 0,\n'
+            '          "run_as_group": 0,\n'
+            '          "mount_segments": [\n'
+            '            "nix-target",',
+            '"name": "other-init",\n'
+            '          "run_as_user": 0,\n'
+            '          "run_as_group": 0,\n'
+            '          "mount_segments": [\n'
+            '            "nix-target",',
             "initializer identity",
         ),
         (
@@ -6676,8 +6683,8 @@ def self_test() -> None:
 
     for name, expected in ARC_STORAGE_TFVARS_EXPECTED.items():
         pattern = re.compile(
-            rf"(^[ \\t]*{re.escape(name)}[ \\t]*=[ \\t]*)"
-            rf"{re.escape(expected)}([ \\t]*$)",
+            rf"(^[ \t]*{re.escape(name)}[ \t]*=[ \t]*)"
+            rf"{re.escape(expected)}([ \t]*$)",
             flags=re.MULTILINE,
         )
         replacement = (
@@ -6804,7 +6811,6 @@ def self_test() -> None:
         "ad hoc ARC apply carrier",
         "arc-storage-external-carrier",
     )
-
 
     attended_baseline = scan_attended_operator_contract_text(
         justfile, Path("Justfile")
