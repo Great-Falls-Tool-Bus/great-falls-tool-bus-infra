@@ -163,3 +163,8 @@ byte-identical at both commits, so `GF_OIDC_PROFILE_SHA256` is unchanged and
 this workflow's fetched helper is the same file. The finite contract checks
 this mapping exactly. A future convergence must review the executable core
 delta as its own adoption change.
+
+## `GF_RELEASE_READ_TOKEN` (repository secret, 2026-08-31)
+
+Fine-grained GitHub token, single repository `tinyland-inc/GloriousFlywheel`, permission Contents: read only, no other scope. Consumed only by `.github/workflows/flywheel-cache-proof.yml` through `gf-credhelper-install@v3.1.0`'s `token` input, to fetch the released `gf-reapi-credhelper` asset now that the core repository is private. The job already runs only on `push` to `main` and `workflow_dispatch`, never on `pull_request`. Minted by the operator; never pasted into a file. Until it exists the action falls back to the unauthenticated fetch and the lane keeps failing at that step.
+
