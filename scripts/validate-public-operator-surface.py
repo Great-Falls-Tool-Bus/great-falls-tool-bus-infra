@@ -321,7 +321,7 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "fe8c324732148b38", "c967bad1c1ccab8e", "fd3840cedf78db82", "9b5a73294ec96ef6"
     ),
     "arc-capacity-readback": _receipt(
-        "10a49e33fd0cb568", "0a0b53e097661d10", "5ca9ebe461940732", "79b00a0d36efef31"
+        "f97a8882b81b762f", "b8586288811b6653", "9ce250bc0ac32ada", "7aac3fafb3455694"
     ),
     "arc-enrollment-plan": _receipt(
         "49a0e25c1cc8c8ff", "b15096271b4271a4", "fe1d38e06e5abf79", "905f0b0d50110b7a"

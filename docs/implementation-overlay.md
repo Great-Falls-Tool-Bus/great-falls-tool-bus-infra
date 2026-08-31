@@ -307,8 +307,8 @@ makes that saved plan non-retryable. After restoring backend connectivity, run
 `GFTB_ARC_READBACK_MODE=reconcile GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just
 arc-capacity-readback`. That mode is keyed on the refreshed plan and the
 runner group, not the storage level: a pending plan (in any admitted posture,
-including today's live 8/16 GiB with the decomposed cutover pending) must pass
-`arc-plan-scope-check` again and yields the pre-change receipt, while an empty
+including a pending TIN-4246 capacity step from the live dedicated group) must
+pass `arc-plan-scope-check` again and yields the pre-change receipt, while an empty
 refreshed plan certifies the landed state (promoted at the dedicated group;
 converged group `default` requires an explicit `rolled-back` re-run); either
 way canonical state and the live scale set must also agree
@@ -416,11 +416,13 @@ kubectl --context honey -n arc-runners \
   -o jsonpath='{.spec.template.spec.containers[?(@.name=="runner")].resources.requests.ephemeral-storage}'
 ```
 
-`4Gi` means the combined posture; `8Gi` means the decomposed posture (the
-current live state — do **not** stop; the guard admits the zero-storage-delta
-cutover). Anything else is a stop condition. The tfvars stay at `8Gi`/`16Gi`
-in both postures: the plan's storage delta follows from canonical/live state,
-not from a tfvars edit.
+`4Gi` means the combined posture; `8Gi` means the decomposed posture. Anything
+else is a stop condition for this runbook, TIN-4246's `12Gi` included: the
+runner-group cutover landed in #113, so both postures are historical and a
+`12Gi` reading means the live group move is already done and the bounded
+capacity exception is on top of it. In either cutover posture the plan's
+storage delta follows from canonical/live state, not from a tfvars edit; the
+tfvars carry the reviewed envelope, which TIN-4246 moved to `12Gi`/`24Gi`.
 
 ### Step 3 — quiet window and plan
 
@@ -510,9 +512,13 @@ GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-capacity-readback
 
 `arc-capacity-readback` proves capacity convergence, runner-group convergence,
 and listener health. In the default `promoted` mode it now requires canonical
-state and the live AutoscalingRunnerSet to agree on **both** `8Gi`/`16Gi` and
-`.spec.runnerGroup: great-falls-tool-bus-infra`, so the receipt can no longer
-go green while the scale set is still idle in GitHub's `Default` group. It
+state and the live AutoscalingRunnerSet to agree on **both** the reviewed
+storage envelope (`8Gi`/`16Gi`, or `12Gi`/`24Gi` under the TIN-4246 bounded
+exception) and `.spec.runnerGroup: great-falls-tool-bus-infra`, so the receipt
+can no longer go green while the scale set is still idle in GitHub's `Default`
+group. `rolled-back` is deliberately not widened: it still demands `4Gi`/`8Gi`
+or `8Gi`/`16Gi`, so a group-move reversal cannot certify itself while the
+bounded exception is live. It
 still does not — and cannot — prove GitHub-side *admission*, which is an org
 setting. Add the independent group and admission readbacks:
 

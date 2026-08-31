@@ -1405,7 +1405,7 @@ arc-capacity-readback: _reviewed-clean-main _reviewed-arc-core _arc-exclusive-co
     live_request="$(jq -er '[.spec.template.spec.containers[] | select(.name == "runner")] | if length == 1 then .[0].resources.requests["ephemeral-storage"] else error("expected one runner container") end' <<<"${live_json}")"
     live_limit="$(jq -er '[.spec.template.spec.containers[] | select(.name == "runner")] | if length == 1 then .[0].resources.limits["ephemeral-storage"] else error("expected one runner container") end' <<<"${live_json}")"
     [[ "${state_request}" == "${live_request}" && "${state_limit}" == "${live_limit}" ]] || { echo "Canonical ARC state and live runner capacity disagree" >&2; exit 2; }
-    [[ ( "${state_request}" == "4Gi" && "${state_limit}" == "8Gi" ) || ( "${state_request}" == "8Gi" && "${state_limit}" == "16Gi" ) ]] || { echo "ARC capacity is outside the reviewed pre/post states" >&2; exit 2; }
+    [[ ( "${state_request}" == "4Gi" && "${state_limit}" == "8Gi" ) || ( "${state_request}" == "8Gi" && "${state_limit}" == "16Gi" ) || ( "${state_request}" == "12Gi" && "${state_limit}" == "24Gi" ) ]] || { echo "ARC capacity is outside the reviewed pre/post states" >&2; exit 2; }
     state_group="$(jq -er '
       [.. | objects | select(.address? == "module.gh_nix.helm_release.arc_runner")]
       | if length == 1
@@ -1421,7 +1421,7 @@ arc-capacity-readback: _reviewed-clean-main _reviewed-arc-core _arc-exclusive-co
     [[ "${state_group}" == "${live_group}" ]] || { echo "Canonical ARC state and live runner group disagree: ${state_group} vs ${live_group}" >&2; exit 2; }
     [[ "${state_group}" == "default" || "${state_group}" == "great-falls-tool-bus-infra" ]] || { echo "ARC runner group is outside the reviewed pre/post admission identities: ${state_group}" >&2; exit 2; }
     if [[ "${mode}" == "promoted" ]]; then
-        [[ "${state_request}" == "8Gi" && "${state_limit}" == "16Gi" ]] || { echo "ARC capacity promotion is not converged at 8Gi/16Gi" >&2; exit 2; }
+        [[ ( "${state_request}" == "8Gi" && "${state_limit}" == "16Gi" ) || ( "${state_request}" == "12Gi" && "${state_limit}" == "24Gi" ) ]] || { echo "ARC capacity promotion is not converged at 8Gi/16Gi or the TIN-4246 12Gi/24Gi" >&2; exit 2; }
         [[ "${state_group}" == "great-falls-tool-bus-infra" ]] || { echo "ARC runner-group cutover is not converged at great-falls-tool-bus-infra" >&2; exit 2; }
     fi
     if [[ "${mode}" == "rolled-back" ]]; then
@@ -1455,14 +1455,19 @@ arc-capacity-readback: _reviewed-clean-main _reviewed-arc-core _arc-exclusive-co
     # cutover (or rollback) plan must still be able to reach the reconcile arm
     # that re-runs arc-plan-scope-check, and a converged group=default state at
     # either admitted storage level must be certifiable as rolled-back.
+    # TIN-4246 adds a third admitted level, 12Gi/24Gi, reachable only through
+    # the capacity shape and therefore only inside the dedicated runner group:
+    # `promoted` certifies 8Gi/16Gi or 12Gi/24Gi, while `rolled-back` still
+    # demands 4Gi/8Gi or 8Gi/16Gi, so a group-move reversal cannot certify
+    # itself while the bounded exception is still live.
     if [[ "${plan_status}" == "2" ]]; then
         [[ "${mode}" == "reconcile" ]] || { echo "ARC state/source/live refresh is not a no-change plan (status 2); only GFTB_ARC_READBACK_MODE=reconcile may certify a pending plan" >&2; exit 2; }
         GFTB_ARC_READBACK_MODE=reconcile GFTB_ARC_RECONCILE_PLAN_PATH="${nochange_plan}" GFTB_ARC_RECONCILE_DATA_DIR="${data_dir}" just arc-plan-scope-check
         receipt="pre-change state/live ${state_request}/${state_limit} in runner group ${state_group} with an exact pending scope-reviewed plan; create and review a fresh plan"
     elif [[ "${state_group}" == "great-falls-tool-bus-infra" ]]; then
-        [[ "${state_request}" == "8Gi" && "${state_limit}" == "16Gi" ]] || { echo "ARC dedicated-group state is outside the reviewed promoted capacity" >&2; exit 2; }
+        [[ ( "${state_request}" == "8Gi" && "${state_limit}" == "16Gi" ) || ( "${state_request}" == "12Gi" && "${state_limit}" == "24Gi" ) ]] || { echo "ARC dedicated-group state is outside the reviewed promoted capacity" >&2; exit 2; }
         [[ "${plan_status}" == "0" ]] || { echo "Promoted ARC state/source/live refresh is not a no-change plan (status ${plan_status})" >&2; exit 2; }
-        receipt="promoted state/live 8Gi/16Gi in runner group ${state_group} with refreshed no-change plan"
+        receipt="promoted state/live ${state_request}/${state_limit} in runner group ${state_group} with refreshed no-change plan"
     else
         [[ "${plan_status}" == "0" ]] || { echo "ARC state/source/live refresh failed (status ${plan_status})" >&2; exit 2; }
         [[ "${mode}" == "rolled-back" ]] || { echo "ARC state/live is converged in runner group default with a no-change plan, which is a completed rollback or the decomposed pre-cutover state; re-run with GFTB_ARC_READBACK_MODE=rolled-back" >&2; exit 2; }
