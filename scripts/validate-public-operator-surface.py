@@ -614,8 +614,10 @@ WEB_RELEASE_VALIDATION_SCRIPT = Path("scripts/validate-web-stack.sh")
 # the same PR (same recompute command as above).
 # Updated 2026-08-29: the yq-go preflight now requires both the mikefarah
 # vendor marker and a v4 version marker; this receipt binds that exact fix.
+# Updated 2026-08-30 (PR #143): tracked web-apply RBAC is now validated
+# exactly and is proved absent from the workload render; this receipt co-moves.
 WEB_RELEASE_VALIDATION_SCRIPT_SHA256 = _receipt(
-    "c260f829e1531513", "3c4fa03db9443b1d", "55cf9d7e5fa02b78", "a6a56635fbab64c8"
+    "f67dac23be354e04", "d94384ad26440876", "c010c464b91d1a8c", "d22763f8bb1afcb9"
 )
 
 FLAKE_RELEASE_PACKAGES = ("crane", "curl")

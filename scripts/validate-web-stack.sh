@@ -135,7 +135,7 @@ jq -e '
 ' <<<"${kustomization_json}" >/dev/null ||
   fail "workload kustomization must remain the exact three-file surface with no patches, generators, or components"
 
-rbac_docs_json="$(yq eval-all -o=json -I=0 '. as $doc ireduce ([]; . + [$doc])' "${rbac}")"
+rbac_docs_json="$(yq eval-all -o=json -I=0 '.' "${rbac}")"
 jq -e '
   length == 3
   and ([.[] | .kind] | sort) == ["Role","RoleBinding","ServiceAccount"]
@@ -260,8 +260,8 @@ fi
 # a real, contained local path. Refuse before this render, and before
 # web-stack-render's own separate render, ever runs.
 bash scripts/guard-no-remote-kustomize-resources.sh "${dir}"
-rendered_json="$(kubectl kustomize "${dir}" | yq eval-all -o=json -I=0 '. as $doc ireduce ([]; . + [$doc])' -)"
-jq -e '
+rendered_json_stream="$(kubectl kustomize "${dir}" | yq eval-all -o=json -I=0 '.' -)"
+jq --slurp -e '
   length == 5
   and ([.[] | "\(.kind)/\(.metadata.name)"] | sort) == [
     "Deployment/greatfallstoolbus-org",
@@ -277,7 +277,7 @@ jq -e '
     or .kind == "ClusterRole"
     or .kind == "ClusterRoleBinding"
   )] | length) == 0
-' <<<"${rendered_json}" >/dev/null ||
+' <<<"${rendered_json_stream}" >/dev/null ||
   fail "workload render must contain exactly Deployment/Service/three NetworkPolicies and no RBAC authority"
 
 echo "web stack validation passed for ${app} in ${stack_ns}: ATTENDED-ONLY declare-only (replicas 2, image pinned to ${admitted_image_repo}@sha256:<64 hex>, no namespace, tracked exact web-apply RBAC excluded from workload kustomization, no workflow apply path -- the repository_dispatch CD carrier is retired and apply is attended-operator-only behind the promotion interlock), gftb-site static-origin ClusterIP 80->3000 with /health probes, default-deny + cloudflared-only public ingress, route+reaper fail-closed, no committed secrets"
