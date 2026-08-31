@@ -164,11 +164,11 @@ this workflow's fetched helper is the same file. The finite contract checks
 this mapping exactly. A future convergence must review the executable core
 delta as its own adoption change.
 
-## `GF_RELEASE_READ_TOKEN` (repository secret, 2026-08-31)
+## GloriousFlywheel credential helper: fleet-baked, no consumer credential (ruling 2026-08-31)
 
-Fine-grained GitHub token, single repository `tinyland-inc/GloriousFlywheel`, permission Contents: read only, no other scope. Consumed only by `.github/workflows/flywheel-cache-proof.yml` through `gf-credhelper-install@v3.1.0`'s `token` input, to fetch the released `gf-reapi-credhelper` asset now that the core repository is private. The job already runs only on `push` to `main` and `workflow_dispatch`, never on `pull_request`. Minted by the operator; never pasted into a file. Until it exists the action falls back to the unauthenticated fetch and the lane keeps failing at that step.
+Operator ruling 2026-08-31 (TIN-4246 comment `7add7fd8`; TIN-4227): the released `gf-reapi-credhelper` binary is baked into the tinyland runner image by the GloriousFlywheel supply plane (the #1689 OIDC-helper pattern). Consumers on the fleet fetch nothing at job time and hold no GloriousFlywheel read credential. Two bridges were opened and retired the same night and must not return:
 
-## `TINYLAND_CI_DISPATCH_CLIENT_ID` (variable) + `TINYLAND_CI_DISPATCH_APP_PRIVATE_KEY` (repository secret): the target flow
+- `GF_RELEASE_READ_TOKEN` (fine-grained PAT, #153): never minted; the repository secret is deleted. Ruled as "completely circumventing the GH App pattern and skipping the intended -infra overlay repo".
+- `TINYLAND_CI_DISPATCH_CLIENT_ID` + `TINYLAND_CI_DISPATCH_APP_PRIVATE_KEY` (App-pair per-run mint, #154): projection reverted and verified absent by name. App reach extension, if ever wanted, goes through declared overlay IaC plus a per-target readiness gate (the blahaj precedent), never a hand-set secret.
 
-Operator ruling 2026-08-31: the App-based flow is the proper one; the fine-grained PAT above is interim. The `tinyland_ci_dispatch` GitHub App (lab registry `github_apps.tinyland_ci_dispatch`, custodied at `nix/secrets/common.yaml#github_apps.tinyland_ci_dispatch`, installed on GloriousFlywheel only) mints a per-run installation token scoped to `tinyland-inc/GloriousFlywheel` with `contents: read` (`actions/create-github-app-token`, the same step GloriousFlywheel's `credhelper-release-proof.yml` uses). Projection onto this repository is a lab registry `projection_targets` addition (variable `TINYLAND_CI_DISPATCH_CLIENT_ID` = sops key `client_id`, secret `TINYLAND_CI_DISPATCH_APP_PRIVATE_KEY` = sops key `private_key_pem`) run through `just project-repo-credentials` by the operator. The mint step is skipped while the variable is absent, so the PAT keeps working until the projection lands; once it lands, `GF_RELEASE_READ_TOKEN` can be deleted at its expiry (2026-09-30).
-
+`flywheel-cache-proof.yml` now verifies the helper on the runner PATH and records its digest; provenance is the runner image digest. The `gf-credhelper-install` action remains only for external-org runners off the fleet. Follow-up in the same shape: the credentialed OIDC-profile checkout (`GF_CORE_DEPLOY_KEY`, TIN-4015) can retire once the baked image is proven on this lane, since #1689 bakes that helper too.
