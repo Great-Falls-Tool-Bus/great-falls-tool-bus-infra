@@ -68,19 +68,27 @@ dind_runner_scale_set_name   = "great-falls-tool-bus-dind"
 
 # The site build lane materializes Nix, pnpm, and Bazel state on the runner
 # rootfs while the volumes below are disabled. On 2026-08-17, four independent
-# build/test pods were evicted after crossing the former 8Gi container limit.
-# 8Gi/16Gi preserves the max-four posture while restoring the last known
-# nix-build limit; docs/implementation-overlay.md defines the measured soak gate.
-# Capacity is unchanged by TIN-3902: the runner-group cutover is an admission
-# fix, not a capacity change. min 0 / max 4 is the reviewed TIN-2165/TIN-2234
-# posture and must stay non-zero — a dedicated group with zero capacity admits
-# nobody, which was the defect in the unmerged 2026-07-31 quarantine draft.
+# build/test pods were evicted after crossing the former 8Gi container limit;
+# that raised the envelope to 8Gi/16Gi. On 2026-08-31, pods were evicted again
+# at the 16Gi limit on the second Bazel build of the platform spoke (GF seat,
+# run 33373351388); this is the bounded TIN-4246 exception (operator-ratified
+# via the GF seat interview, recorded on TIN-4246/TIN-4227) that raises the
+# envelope to 12Gi/24Gi. docs/implementation-overlay.md defines the measured
+# soak gate. Capacity is unchanged by TIN-3902: the runner-group cutover is an
+# admission fix, not a capacity change. min 0 / max 4 is the reviewed
+# TIN-2165/TIN-2234 posture and must stay non-zero: a dedicated group with
+# zero capacity admits nobody, which was the defect in the unmerged
+# 2026-07-31 quarantine draft. The max-four posture is unchanged by this
+# ephemeral-storage step, but node-root ephemeral storage is shared across
+# concurrent runner pods on the same node, so the worst case is
+# 4 x 24Gi = 96Gi. Codex #146's generic-ephemeral-volume PVC scratch pattern
+# is the durable fix and retires this exception when it lands.
 nix_min_runners               = 0
 nix_max_runners               = 4
 nix_cpu_limit                 = "4"
 nix_memory_limit              = "8Gi"
-nix_ephemeral_storage_request = "8Gi"
-nix_ephemeral_storage_limit   = "16Gi"
+nix_ephemeral_storage_request = "12Gi"
+nix_ephemeral_storage_limit   = "24Gi"
 nix_store_enabled             = false
 nix_store_prepopulate_enabled = false
 nix_store_storage_class       = "openebs-bumble-zfs"

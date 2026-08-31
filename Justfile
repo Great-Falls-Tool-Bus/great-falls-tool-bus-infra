@@ -485,7 +485,9 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
     # wildcards and no "allow anything under this prefix" escape.
     #
     #   capacity  1 in-place gh_nix Helm update whose only values delta is the
-    #             runner container ephemeral-storage 4Gi->8Gi / 8Gi->16Gi bump.
+    #             runner container ephemeral-storage 4Gi->8Gi / 8Gi->16Gi bump,
+    #             or (TIN-4246, bounded exception) the 8Gi->12Gi / 16Gi->24Gi
+    #             bump, or that bump's exact reverse 12Gi->8Gi / 24Gi->16Gi.
     #   cutover   the runner-group move: 1 in-place gh_nix Helm update
     #             (runnerGroup set entry, runner image digest, the
     #             GF_FLYWHEEL_PROFILE_STATE env pair, template.spec
@@ -503,11 +505,17 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
     # Operational fact this code cannot show: the TIN-2299 capacity bump was
     # applied on 2026-08-17 as helm_release great-falls-tool-bus-nix revision 6
     # with runnerGroup still `default`, decomposing TIN-3902's combined cutover.
-    # The live pre-cutover state is therefore already 8/16Gi, so a fresh cutover
+    # #113 landed the runner-group cutover itself; live state has been 8/16Gi
+    # in the dedicated great-falls-tool-bus-infra runner group ever since. The
+    # live pre-cutover state was therefore already 8/16Gi, so a fresh cutover
     # plan (and the ratified rollback fallback from the post-cutover state)
-    # carries no storage delta. Each shape admits both storage transitions and
-    # nothing in between: mixed states are refused, and the group-move deltas
-    # stay byte-strict either way.
+    # carries no storage delta. TIN-4246 (2026-08-31, bounded exception) moves
+    # live state from that same dedicated group to 12/24Gi; its own reverse is
+    # admitted in the capacity shape so the exception can be rolled back
+    # without a fresh scope-contract PR, and Codex #146's generic-ephemeral
+    # PVC pattern is the durable fix that retires it. Each shape admits only
+    # its enumerated storage transitions and nothing in between: mixed states
+    # are refused, and the group-move deltas stay byte-strict either way.
     #
     # Any capacity, roster, image, or module-pin change beyond these requires its
     # own reviewed scope-contract update. This guard fails closed.
@@ -529,6 +537,7 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
     RUNNER_PRIORITY_CLASS = "arc-runner"
     LOW_STORAGE = {"requests": "4Gi", "limits": "8Gi"}
     HIGH_STORAGE = {"requests": "8Gi", "limits": "16Gi"}
+    EXPANDED_STORAGE = {"requests": "12Gi", "limits": "24Gi"}
     # Root outputs the advanced ARC role pin adds. They are pure source-derived
     # receipts: creating or destroying them mutates nothing outside tofu state.
     RUNNER_GROUP_OUTPUTS = {
@@ -1210,7 +1219,11 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
             (HIGH_STORAGE, HIGH_STORAGE),
         )
     else:
-        admitted_storage = ((LOW_STORAGE, HIGH_STORAGE),)
+        admitted_storage = (
+            (LOW_STORAGE, HIGH_STORAGE),
+            (HIGH_STORAGE, EXPANDED_STORAGE),
+            (EXPANDED_STORAGE, HIGH_STORAGE),
+        )
     if (before_storage, after_storage) not in admitted_storage:
         raise SystemExit(
             "ERROR: expected runner resources.requests/resources.limits "
@@ -1237,7 +1250,15 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
     storage_delta = before_storage != after_storage
 
     if shape == "capacity":
-        promote = {"4Gi": "8Gi", "8Gi": "16Gi"}
+        # Keyed on the observed BEFORE pair, which admitted_storage above has
+        # already constrained to one of exactly three rows, so this lookup is
+        # unambiguous and cannot silently fall through to the wrong direction.
+        capacity_transforms = {
+            (LOW_STORAGE["requests"], LOW_STORAGE["limits"]): {"4Gi": "8Gi", "8Gi": "16Gi"},
+            (HIGH_STORAGE["requests"], HIGH_STORAGE["limits"]): {"8Gi": "12Gi", "16Gi": "24Gi"},
+            (EXPANDED_STORAGE["requests"], EXPANDED_STORAGE["limits"]): {"12Gi": "8Gi", "24Gi": "16Gi"},
+        }
+        promote = capacity_transforms[(before_storage["requests"], before_storage["limits"])]
         expected_values = storage.sub(
             lambda match: (
                 match.group("prefix")
@@ -1248,9 +1269,20 @@ arc-plan-scope-check: _reviewed-arc-core _arc-tofu-environment-contract _arc-art
             ),
             before_values[0],
         )
+        transition_label = (
+            before_storage["requests"]
+            + "/"
+            + before_storage["limits"]
+            + " -> "
+            + after_storage["requests"]
+            + "/"
+            + after_storage["limits"]
+        )
         if expected_values != after_values[0]:
-            raise SystemExit("ERROR: gh_nix Helm values contain changes beyond 4/8Gi -> 8/16Gi")
-        print("ARC plan scope guard passed: exact gh_nix 4/8Gi -> 8/16Gi update only.")
+            raise SystemExit(
+                "ERROR: gh_nix Helm values contain changes beyond " + transition_label
+            )
+        print("ARC plan scope guard passed: exact gh_nix " + transition_label + " update only.")
     elif shape == "cutover":
         if restore_pre_cutover(after_values[0], storage_delta) != before_values[0]:
             raise SystemExit(

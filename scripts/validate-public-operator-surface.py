@@ -315,7 +315,7 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "c37fb8c36e826dc6", "3676b9eafb3336d0", "87893f2ae0d1c1ec", "c957b577fd505498"
     ),
     "arc-plan-scope-check": _receipt(
-        "581e0d278c091783", "3d8635db7d9f965f", "adb725c3cf079a96", "2d491a784a580878"
+        "c9ef542330dd3fd8", "495b5e90bbdec620", "4abc069d3c0f42f1", "81220cd56fe0fb9b"
     ),
     "arc-apply": _receipt(
         "fe8c324732148b38", "c967bad1c1ccab8e", "fd3840cedf78db82", "9b5a73294ec96ef6"
