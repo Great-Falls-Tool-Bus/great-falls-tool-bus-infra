@@ -5030,9 +5030,9 @@ def run_web_release_semantic_fixtures() -> None:
                 "self-test FAILED: render fixture retained an injected envFrom"
             )
         for state, diagnostic in (
-            ("render-secret", "rendered object census mismatch"),
-            ("render-missing-default-ingress", "rendered object census mismatch"),
-            ("render-retained-legacy-egress", "rendered object census mismatch"),
+            ("render-secret", "workload render must contain exactly Deployment/Service/three NetworkPolicies and no RBAC authority"),
+            ("render-missing-default-ingress", "workload render must contain exactly Deployment/Service/three NetworkPolicies and no RBAC authority"),
+            ("render-retained-legacy-egress", "workload render must contain exactly Deployment/Service/three NetworkPolicies and no RBAC authority"),
             (
                 "render-init-container",
                 "rendered static-Caddy workload contract mismatch",
