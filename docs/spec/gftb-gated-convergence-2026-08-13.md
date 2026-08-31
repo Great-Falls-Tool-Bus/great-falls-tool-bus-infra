@@ -94,8 +94,11 @@ The admission consumer must:
 5. call upstream `VerifyReleaseHandoff` with all three exact byte documents;
 6. bind the verified tenant, source, commit/tree, media types, payload and
    descriptor digests, runtime image, overlay root, and policy fields; and
-7. derive `installationDigest` only from
-   `Verified.Application.RuntimeImage.ResultImageDigest`.
+7. after successful pinned `VerifyReleaseHandoff`, require
+   `ApplicationReleaseOperand.InstallationDigest` to equal both
+   `verified.Application.RuntimeImage.ResultImageDigest` and
+   `verified.Verification.ApplicationReferences.RuntimeResultImageDigest`;
+   any mismatch refuses.
 
 An OCI locator in a request is not verification evidence. If the canonical GF
 wire lacks a required repository-coordinate proof, GF must version the wire;
