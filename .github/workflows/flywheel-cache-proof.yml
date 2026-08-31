@@ -56,7 +56,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GF_OIDC_PROFILE_REF: 11ace397282ff89aeb1dfeb4a32fcbed3200c2ff
+  GF_OIDC_PROFILE_REF: e175a398c3c8f25f99c41eff8b584df6a360531e
 
 jobs:
   cache-proof:

@@ -9,11 +9,11 @@
 # Registration is not admission: which GFTB repositories may actually be
 # assigned this scale set's work is the runner_group boundary below.
 #
-# CONSERVATIVE CAPACITY POSTURE (TIN-2165/TIN-2234 pod-cap crunch): nix lane
-# only, max 4, min 0, no warm pool, docker/dind lanes OFF. Sting placement +
-# the dedicated compute-expansion toleration mirror the tinyland-goo-nix
-# anchor shape in the older personal-account overlay (honey is pod-count full; sting carries
-# the dedicated.tinyland.dev/compute-expansion taint).
+# CONSERVATIVE CAPACITY POSTURE (TIN-4072): nix lane only, max 1, min 0,
+# no warm pool, docker/dind lanes OFF. The one-slot first proof binds the
+# signed GloriousFlywheel #1594 generic-ephemeral mechanism to Sting's
+# fast-local scratch class; the selector and compute-expansion toleration stay
+# unchanged.
 
 cluster_context       = "honey"
 github_config_url     = "https://github.com/Great-Falls-Tool-Bus"
@@ -66,29 +66,33 @@ dind_runner_scale_set_name   = "great-falls-tool-bus-dind"
 # docker/dind names above are inert while their deploy flags are false; they
 # exist so a future lane enable is a one-flag change, not a naming decision.
 
-# The site build lane materializes Nix, pnpm, and Bazel state on the runner
-# rootfs while the volumes below are disabled. On 2026-08-17, four independent
-# build/test pods were evicted after crossing the former 8Gi container limit.
-# 8Gi/16Gi preserves the max-four posture while restoring the last known
-# nix-build limit; docs/implementation-overlay.md defines the measured soak gate.
-# Capacity is unchanged by TIN-3902: the runner-group cutover is an admission
-# fix, not a capacity change. min 0 / max 4 is the reviewed TIN-2165/TIN-2234
-# posture and must stay non-zero — a dedicated group with zero capacity admits
-# nobody, which was the defect in the unmerged 2026-07-31 quarantine draft.
-nix_min_runners               = 0
-nix_max_runners               = 4
-nix_cpu_limit                 = "4"
-nix_memory_limit              = "8Gi"
-nix_ephemeral_storage_request = "8Gi"
-nix_ephemeral_storage_limit   = "16Gi"
-nix_store_enabled             = false
-nix_store_prepopulate_enabled = false
-nix_store_storage_class       = "openebs-bumble-zfs"
-nix_store_size                = "50Gi"
-nix_warm_pool_enabled         = false
-deploy_docker_runner          = false
-deploy_dind_runner            = false
-deploy_longhorn               = false
+# TIN-4072: five separate GFTB runner pods were evicted at the 16Gi
+# container writable-layer limit while the protected app build was healthy.
+# Keep the container envelope at 8Gi/16Gi and move the measured write paths to
+# per-runner generic-ephemeral claims on the Sting fast-local scratch class.
+# The signed GloriousFlywheel #1594 defaults are 64+32+32Gi; max1 is the
+# reviewed first-proof width against 455,074,283,520 free bytes. Any raise
+# requires a separate operator ruling and source carrier.
+nix_min_runners                = 0
+nix_max_runners                = 1
+nix_cpu_limit                  = "4"
+nix_memory_limit               = "8Gi"
+nix_ephemeral_storage_request  = "8Gi"
+nix_ephemeral_storage_limit    = "16Gi"
+nix_store_enabled              = false
+nix_store_prepopulate_enabled  = false
+nix_store_storage_class        = "openebs-bumble-zfs"
+nix_store_size                 = "50Gi"
+nix_root_volume_storage_class  = "local-path-sting-fast-ephemeral"
+nix_root_volume_size           = "64Gi"
+nix_work_volume_storage_class  = "local-path-sting-fast-ephemeral"
+nix_work_volume_size           = "32Gi"
+nix_cache_volume_storage_class = "local-path-sting-fast-ephemeral"
+nix_cache_volume_size          = "32Gi"
+nix_warm_pool_enabled          = false
+deploy_docker_runner           = false
+deploy_dind_runner             = false
+deploy_longhorn                = false
 
 # Shared-cache-backed wiring for the primary nix lane: the runner injects
 # BAZEL_REMOTE_CACHE + GF_BAZEL_SUBSTRATE_MODE=shared-cache-backed and the

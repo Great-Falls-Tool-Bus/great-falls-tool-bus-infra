@@ -8,9 +8,12 @@ in this org. The other self-hosted workflows hold one repository-scoped,
 read-only source-checkout credential (`GF_CORE_DEPLOY_KEY`, TIN-4015,
 2026-08-22: GloriousFlywheel went private and this repository's own
 `validate-core-checkout.py` enforces that it is the only credential any core
-checkout may carry) -- see docs/ci-credentials.md. ARC apply authority and
-Kubernetes/Cloudflare/DreamHost credentials remain operator-owned; this one
-source-read credential is not apply authority.
+checkout may carry) -- see docs/ci-credentials.md. ARC runtime mutation
+requires the version-pinned protected canonical-main planner, exact saved-plan
+executor, and independent observer/readback carrier. Kubernetes, Cloudflare,
+and DreamHost credentials remain outside this source repository; the one
+source-read credential is not plan, apply, or evidence authority. TIN-4072
+remains source-only until that protected carrier exists.
 
 Hard rules:
 
@@ -64,9 +67,10 @@ Hard rules:
   `scripts/validate-runner-group-contract.py` (via `just check-hosted`) is the
   only thing holding the two halves of the admission boundary together
 - keep the capacity posture conservative (nix lane only,
-  `nix_max_runners = 4`, no warm pool, docker/dind off) unless an explicit
-  operator decision raises it; the honey/sting pod budget is the scarce
-  resource (TIN-2165/TIN-2234)
+  `nix_max_runners = 1`, no warm pool, docker/dind off) unless an explicit
+  operator decision raises it; TIN-4072 binds that first-proof width to the
+  Sting 64/32/32 GiB generic-ephemeral package for `/nix`, `_work`, and
+  `.cache`
 - keep reusable OpenTofu modules, runner images, and product docs in
   `tinyland-inc/GloriousFlywheel`
 - this overlay owns the GFTB edge/DNS **apply plane**

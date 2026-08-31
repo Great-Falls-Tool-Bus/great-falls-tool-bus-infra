@@ -12,8 +12,10 @@ see its own section below.
 
 The required `validate` workflow checks out only this public overlay with
 `persist-credentials: false`; it has no GloriousFlywheel dependency and stays
-secret-free. Exact GloriousFlywheel source-dependent ARC validation and all
-ARC state plan/apply work are operator-local.
+secret-free. Exact GloriousFlywheel source-dependent ARC declaration checks
+remain source-only. TIN-4072 runtime mutation requires a version-pinned
+protected canonical-main planner, exact saved-plan executor, and independent
+observer/readback; no local credential path is release authority.
 
 The other core-consuming workflows (`archive-stack.yml`, `edge-drift.yml`,
 `edge-plan.yml`, `flywheel-cache-proof.yml`, `form-crs.yml`,
@@ -116,17 +118,17 @@ own `flake.nix` devshell already provides everything `web-stack-validate`/
 `web-stack-render` need, so `web-plan.yml` is simpler than the other
 self-hosted lanes, not merely equivalent to them — one fewer moving part,
 and one fewer private-repo dependency. Self-hosted workload and non-ARC
-apply lanes remain separately gated. ARC plan/apply always happens on the
-operator machine (see docs/implementation-overlay.md).
+apply lanes remain separately gated. TIN-4072 has no active ARC mutation lane;
+its future protected carrier is defined in docs/implementation-overlay.md.
 
 ## Why It Exists
 
 The overlay owns reviewed implementation declarations and public names for the
-Great-Falls-Tool-Bus organization boundary; private values stay in operator
-custody. The core repo owns reusable OpenTofu modules, runner images, actions,
-and docs. Hosted CI proves this repo's own declarations. An operator-local
-exact checkout supplies the additional ARC module validation without copying
-core product logic into this repo.
+Great-Falls-Tool-Bus organization boundary; private values stay outside source.
+The core repo owns reusable OpenTofu modules, runner images, actions, and docs.
+CI proves this repo's declarations. The future protected ARC carrier must pin
+that source without copying core product logic into this repo; source checkout
+authority is not plan, apply, observer, or release authority.
 
 ## Current Status
 
@@ -154,12 +156,11 @@ a new credential.
 The overlay's implementation authority remains
 `2281b576bce0e8dd776a047b84e7464f5b508a62`, shared by
 `config/organization.yaml`, `MODULE.bazel`, `Justfile`, and the non-ARC core
-workflow consumers. The ARC runner and OIDC profile surfaces carry a separate
-role pin, advanced by TIN-3902 from
-`df510574d17b85e7f15470caf3574fcabc4768f1` to
-`11ace397282ff89aeb1dfeb4a32fcbed3200c2ff` so the `arc-runners` stack exposes
-the `runner_group` input. `scripts/flywheel-github-oidc-profile.sh` is
-byte-identical at both commits, so `GF_OIDC_PROFILE_SHA256` is unchanged and
-this workflow's fetched helper is the same file. The finite contract checks
-this mapping exactly. A future convergence must review the executable core
-delta as its own adoption change.
+workflow consumers. The ARC runner and OIDC profile surfaces carry a separate role pin. TIN-3902
+advanced it from `df510574d17b85e7f15470caf3574fcabc4768f1` to
+`11ace397282ff89aeb1dfeb4a32fcbed3200c2ff` for `runner_group`; TIN-4072
+advances it to signed GloriousFlywheel #1594
+`e175a398c3c8f25f99c41eff8b584df6a360531e` for the top-level
+generic-ephemeral runner-volume inputs. The OIDC helper blob is byte-identical
+at 11ace and e175, so `GF_OIDC_PROFILE_SHA256` is unchanged. The finite
+contract checks this mapping exactly; the implementation pin does not move.

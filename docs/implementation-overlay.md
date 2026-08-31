@@ -103,40 +103,22 @@ owner-distinct registration name).
 
 ## Conservative Capacity Posture
 
-Honey/sting pod budget is the scarce resource (TIN-2165/TIN-2234):
+TIN-4072 binds the first proof to one Nix runner:
 
-- nix lane only (`deploy_docker_runner = false`, `deploy_dind_runner = false`)
-- `nix_min_runners = 0`, `nix_max_runners = 4`
-- `nix_warm_pool_enabled = false`
-- each nix runner requests 8 GiB and is limited to 16 GiB of ephemeral storage;
-  `/nix`, `_work`, and `.cache` remain on the container root filesystem while
-  the optional volumes are disabled
-- runner pods pinned to `sting` with the
-  `dedicated.tinyland.dev/compute-expansion` toleration (the tinyland-goo-nix
-  anchor shape)
+- nix lane only; docker/dind remain disabled
+- `nix_min_runners = 0`, `nix_max_runners = 1`
+- warm pool disabled
+- the container writable-layer request/limit remains 8 GiB/16 GiB
+- `/nix`, `/home/runner/_work`, and `/home/runner/.cache` mount per-runner
+  generic-ephemeral PVCs on `local-path-sting-fast-ephemeral` at 64/32/32 GiB
+- runner selector, compute-expansion toleration, runner group, image, labels,
+  and cache endpoints remain unchanged
 
-Raising any of these is an explicit operator decision followed by
-`just arc-plan` / `just arc-apply`.
-
-The 8/16 GiB envelope is the bounded response to the 2026-08-17 site-CI evidence:
-four independent build/test pods crossed the former 8 GiB limit and were
-evicted, while the lightweight carrier validation completed. The source carrier
-records max-runner node/quota fit first. After its attended apply and exact
-state/live readback, a natural-fanout run and immediate warm rerun are recorded
-on TIN-2299 and a reviewed follow-up before the envelope is accepted. Every
-self-hosted check must receive a real runner, the runner container's combined writable-rootfs plus log peak
-(`rootfs.usedBytes + logs.usedBytes`) must stay below 75% of its limit, and no
-pod eviction, restart, or node `DiskPressure` may occur. A warm cache rerun must
-also pass. Failure drains the scale set and requires a separate signed,
-reviewed rollback carrier. The scope guard admits the runner-group cutover's
-exact reversal in both its postures (the decomposed group-move reversal with
-storage retained at 8/16 GiB, or the combined reversal that carries the limit
-`16Gi -> 8Gi` and request `8Gi -> 4Gi` storage step with it); a
-capacity-only 8/16 GiB to 4/8 GiB reversal is not one of the enumerated
-shapes and still needs its own reviewed scope-contract update.
-It is not permission to raise the limit again without new evidence. Per-runner bounded volumes for `/nix`,
-`_work`, and `.cache` remain the durable follow-up once the primary core stack
-exposes storage-class inputs compatible with `sting`.
+The one-slot package is 128 GiB against the measured 455,074,283,520 free bytes
+on Sting fast-local. Four packages are 512 GiB and are refused. Any raise above
+one is a separate operator decision and source carrier. This moves the measured
+write paths off the container writable layer without raising that 8/16 GiB
+envelope.
 
 ## Shared Substrate
 
@@ -152,18 +134,22 @@ exposes storage-class inputs compatible with `sting`.
 
 ## ARC Apply Authority
 
-Secret-free `validate.yml` runs on a GitHub-hosted runner. ARC state planning
-and mutation do not run in GitHub Actions. They run attended on the operator
-machine through the guarded Just surface, with exact reviewed source, runtime
-RustFS credentials, and an external kubeconfig bound to the reviewed Honey
-cluster and runner-set UIDs. Keep that kubeconfig's RBAC as narrow as the ARC
-plan/readback operations permit; the current guard does not certify RBAC. Do not add a
-repository ARC kubeconfig or cross-repository source credential to recreate a
-CI deploy lane.
+TIN-4072 grants no operator-local, attended, dispatch, or ad hoc runtime
+authority. Its signed GF pin, tfvars, and storage declarations are source-only.
+The only admitted runtime path is a version-pinned protected canonical-main
+planner, a subordinate executor consuming the exact saved-plan bytes without
+replanning, and an identity-separated independent observer/readback.
 
-## Enrollment Preflight
+This repository does not yet contain that protected carrier. No source merge,
+local plan, local apply, rollback command, or local readback releases
+application PR #218. Kubernetes and backend credentials for the eventual
+carrier remain external to this public source tree and do not create authority
+by their presence.
+## Enrollment Preflight## Enrollment Preflight
 
-Run this before `arc-plan` or `arc-apply`:
+This read-only diagnostic is declaration troubleshooting only. It is not a
+plan/apply precondition, a promoted receipt, or authority to run the retained
+local mutation surface:
 
 ```bash
 export GF_CORE_PATH=../GloriousFlywheel
@@ -178,125 +164,36 @@ repo-specific labels. At the pinned pre-#1208 core revision, the shared prefligh
 still prints a legacy core-read-credential row. Do not provision a key solely
 for that row; `just core-checkout` is the source-authority gate.
 
-## ARC Runner Plan And Apply
+## TIN-4072 protected-carrier hold
 
-The operator-local path is the only ARC deploy surface. Before beginning,
-fetch canonical `main`, use a clean `main` worktree at the exact signed current
-remote head, and prepare a clean, signed GloriousFlywheel checkout at
-`11ace397282ff89aeb1dfeb4a32fcbed3200c2ff`. Set
-`GF_ARC_CORE_PATH` to that checkout and keep `GF_ARC_CORE_CI_PATH` on the same
-exact pin.
+The TIN-4072 desired delta is exact: max runners four to one plus the signed
+e175a398 generic-ephemeral package for `/nix`, `_work`, and `.cache`.
+Pure validators bind that declaration, the Sting StorageClass provisioner and
+node path, the fixed initializer, and the unchanged runner envelope.
 
-Set `GFTB_ARC_KUBECONFIG` to an operator-owned regular file outside the repo,
-mode 0600. It must contain exactly the `honey` context, use no credential exec
-plugin, and reach the existing
-`honey/arc-runners/great-falls-tool-bus-nix` AutoscalingRunnerSet. The plan
-receipt binds the target's exact live UID, so a different cluster, namespace,
-or replacement release refuses apply. Ambient `KUBECONFIG` and
-`TF_VAR_k8s_config_path` are rejected.
+The retained local `arc-plan-scope-check` is deliberately restored to its
+three historical shapes: capacity, runner-group cutover, and runner-group
+rollback. A plan containing `storage-adoption`, `storage-rollback`, the
+max-four-to-max-one delta, or the generic-ephemeral projection is refused.
+Because local `arc-apply` depends on that exact guard, it cannot mutate the
+TIN-4072 declaration. The retained local readback has no storage promotion or
+storage rollback receipt and cannot release application PR #218.
 
-The reviewed backend identity is bucket `tofu-state`, key
-`great-falls-tool-bus-infra/arc-runners/terraform.tfstate`. `ARC_BACKEND` may
-instead name an operator-owned mode-0600 file outside the repo for a temporary
-port-forward, but that file must be byte-equivalent to the reviewed backend
-except for an `http://127.0.0.1:<port>` S3 endpoint. State credentials remain
-runtime operator inputs. The workspace must be `default`; ambient workspace,
-backend, CLI, profile, logging, and credential indirection overrides are
-rejected.
+Runtime adoption waits for the protected canonical-main planner, exact
+saved-plan executor, and independent observer/readback carrier. That carrier
+must pin its implementation version and identities, refuse replanning, and
+emit the promoted receipt before #218 can be released. Until then live ARC
+state remains unchanged.
 
-Run the finite sequence through Just:
-
-```bash
-GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-plan
-just arc-plan-show
-just arc-plan-scope-check
-GFTB_APPLY_CONFIRM=apply GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-apply
-GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-capacity-readback
-```
-
-`arc-plan` refuses non-main, dirty, stale, forked, or unsigned infra source and
-records both the infra and core SHAs beside the mode-0600 binary plan.
-`arc-apply` repeats both source guards, requires the target-specific attended
-confirmation, checks the saved SHA markers, and deletes the plan and markers
-only after a successful apply. Pending plans are sensitive local artifacts;
-the binary plan and all source/backend/kubeconfig/target receipts are mode 0600.
-Never upload, commit, or copy them into a shared location.
-
-Apply remains guarded by OpenTofu JSON plan actions. `just arc-plan-scope-check`
-admits exactly three enumerated plans and refuses everything else:
-
-1. **capacity** — one in-place `module.gh_nix.helm_release.arc_runner` update
-   whose only Helm-values delta is the runner container's `ephemeral-storage`
-   `4Gi -> 8Gi` request and `8Gi -> 16Gi` limit. In this shape the Helm `set`
-   block is compared whole, so a capacity plan cannot smuggle a `runnerGroup`
-   move: it fails with `changes fields outside values: set`.
-2. **cutover** — the TIN-3902 runner-group move: the `runnerGroup` Helm `set`
-   entry `default -> great-falls-tool-bus-infra`, the pinned runner image
-   digest carried by the advanced ARC role pin, the new
-   `GF_FLYWHEEL_PROFILE_STATE=shared-cache-backed` runner env var, and
-   `template.spec.priorityClassName: arc-runner`; plus one create of the
-   state-only `terraform_data.runner_group_policy` receipt and the nine new
-   source-derived root outputs the advanced pin adds. Its storage transition
-   is one of exactly two: `4Gi/8Gi -> 8Gi/16Gi` (the original combined shape
-   carrying the capacity delta) or `8Gi/16Gi -> 8Gi/16Gi` with byte-identical
-   storage (the decomposed shape — the live posture since the TIN-2299
-   capacity bump applied separately on 2026-08-17 as helm revision 6).
-3. **rollback** — the byte-exact reverse of the cutover in either posture: the
-   same Helm update inverted plus one destroy of the policy receipt and its
-   nine outputs, with storage `8Gi/16Gi -> 4Gi/8Gi` (combined) or retained at
-   `8Gi/16Gi` (decomposed group-move reversal — the ratified fallback from
-   the post-cutover state).
-
-Every address, action, output name, Helm `set` entry, and Helm-values byte in
-those three shapes is enumerated; there are no wildcards. Anything else — an
-extra create, any delete or replacement of the Helm release, any values or
-`set` change outside the enumerated set, any drift — is a stop condition
-requiring a separate reviewed decision. This operator surface has no delete
-bypass.
-
-The contract is pinned to today's reviewed capacity and roster. A **future
-capacity change** (for example `nix_max_runners` 4 -> 8, a memory or CPU
-envelope move, or a further `ephemeral-storage` step) is refused until its own
-scope-contract update lands; so is any roster, image-digest, or module-pin
-move. Advancing the contract is the reviewed decision point, never a
-workaround.
-
-### Exclusive state window
-
-The RustFS S3 backend has **no remote state lock**. Before planning, establish
-an exclusive quiet window covering plan, human review, apply, and live/state
-readback. Confirm that no other operator and no workflow is planning or
-mutating this ARC stack, and keep that true for the whole window. Supply
-`GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive` only as a one-shot value on each plan,
-apply, and readback command after making that check; the value records an
-operator fact and is not itself a lock.
-
-When using the localhost backend override, loss of the port-forward is an
-ambiguous failure if cluster mutation may have started but the state write did
-not complete. Stop immediately. Read back the live
-`great-falls-tool-bus-nix` release and the canonical remote state before any
-new plan or retry. Do not assume a failed command means the cluster was
-unchanged, and do not blindly reapply the saved plan. The apply-attempt marker
-makes that saved plan non-retryable. After restoring backend connectivity, run
-`GFTB_ARC_READBACK_MODE=reconcile GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just
-arc-capacity-readback`. That mode is keyed on the refreshed plan and the
-runner group, not the storage level: a pending plan (in any admitted posture,
-including today's live 8/16 GiB with the decomposed cutover pending) must pass
-`arc-plan-scope-check` again and yields the pre-change receipt, while an empty
-refreshed plan certifies the landed state (promoted at the dedicated group;
-converged group `default` requires an explicit `rolled-back` re-run); either
-way canonical state and the live scale set must also agree
-on `.spec.runnerGroup`. It then invalidates the entire attempted bundle. A
-pre-change receipt permits a fresh plan. A promoted receipt does not permit
-retry. Any other result is a stop condition requiring a separate reviewed
-state/live reconciliation.
-
+## Historical runner group cutover (TIN-3902 only)
 ## Runner group cutover
 
-TIN-3902. Moves `great-falls-tool-bus-nix` off GitHub's shared `Default`
-runner group onto the dedicated, selected-repository
-`great-falls-tool-bus-infra` group. This is an admission fix, not a capacity
-change: `nix_min_runners = 0` / `nix_max_runners = 4` are unchanged.
+This section records the already-ratified TIN-3902 operator procedure for
+historical recovery only; it is not TIN-4072 authority. TIN-3902 moved
+`great-falls-tool-bus-nix` off GitHub's shared `Default` runner group onto the
+dedicated `great-falls-tool-bus-infra` group while `nix_min_runners = 0` and
+`nix_max_runners = 4` remained unchanged. TIN-4072 now declares max one with
+generic-ephemeral storage, but only the protected carrier above may adopt it.
 
 ### Why source alone is not enough
 
@@ -353,20 +250,19 @@ just arc-validate
 
 `arc-validate` is the one that proves the tfvars still matches the pinned
 module surface, so it must run against the advanced ARC role pin
-(`11ace397282ff89aeb1dfeb4a32fcbed3200c2ff`).
+(`e175a398c3c8f25f99c41eff8b584df6a360531e`).
 
 ### Step 2 — plan-scope contract (landed)
 
 `just arc-plan-scope-check` admits this cutover and its rollback, alongside the
 pre-existing `ephemeral-storage` capacity plan. The allowlist is keyed on
 resource address plus action plus the enumerated attribute paths that may
-change, and it fails closed on everything else. The three admitted shapes are
-listed under "Operator ARC apply" above; the cutover's exact expected shape is
-Step 4 below.
+change, and it fails closed on everything else. The three retained historical shapes are capacity, cutover, and rollback;
+the cutover's exact expected shape is recorded in Step 4 below.
 
 Do not work around the guard. Any change beyond the enumerated set — including
-a later capacity move such as `nix_max_runners` 4 -> 8 — needs its own reviewed
-scope-contract update first.
+a raise above `nix_max_runners = 1` — needs its own reviewed scope-contract
+update first.
 
 **Precondition: confirm which cutover posture is live.** The `cutover` shape
 admits exactly two storage transitions:
@@ -402,8 +298,8 @@ The RustFS S3 backend has no remote state lock; hold the exclusive window
 described in "Exclusive state window" across every command below.
 
 ```bash
-export GF_ARC_CORE_PATH=/operator/path/GloriousFlywheel-arc-11ace
-export GF_ARC_CORE_CI_PATH=path:/operator/path/GloriousFlywheel-arc-11ace#ci
+export GF_ARC_CORE_PATH=/operator/path/GloriousFlywheel-arc-e175a398
+export GF_ARC_CORE_CI_PATH=path:/operator/path/GloriousFlywheel-arc-e175a398#ci
 export GFTB_ARC_KUBECONFIG=/operator/path/gftb-arc.kubeconfig
 # Export the RustFS access-key pair from operator custody.
 just enrollment-preflight
@@ -627,9 +523,11 @@ the template's four internally divergent pins were a wart to fix, not
 replicate. The same commit appears in `config/organization.yaml`,
 `MODULE.bazel`, `Justfile`, and each non-ARC core workflow.
 
-The ARC runner and OIDC profile surfaces carry a separate role pin, advanced by
-TIN-3902 from `df510574d17b85e7f15470caf3574fcabc4768f1` (2026-07-09) to
-`11ace397282ff89aeb1dfeb4a32fcbed3200c2ff`. That commit was the head of
+The ARC runner and OIDC profile surfaces carry a separate role pin. TIN-3902
+advanced it from `df510574d17b85e7f15470caf3574fcabc4768f1` (2026-07-09) to
+`11ace397282ff89aeb1dfeb4a32fcbed3200c2ff`. TIN-4072 now advances it to the
+signed GloriousFlywheel #1594 merge
+`e175a398c3c8f25f99c41eff8b584df6a360531e`. The 11ace commit was the head of
 GloriousFlywheel `origin/main` when it was selected on 2026-08-18; `origin/main`
 has advanced since, so it is precisely a reviewed **ancestor** of `origin/main`,
 not `origin/main` itself.
@@ -645,12 +543,12 @@ untracked Terraform inputs under `tofu/stacks/arc-runners` or `tofu/modules`.
 Justfile strings so they cannot drift silently — neither validator names the
 `arc-runners` path, reads the stack, or executes anything.
 
-The reason for the advance is narrow and mandatory: `runner_group` and
+The reason for the historical TIN-3902 advance was narrow and mandatory: `runner_group` and
 `runner_group_policy` do not exist as `arc-runners` stack inputs before
 GloriousFlywheel `f13f8ad9` (TIN-3209, PR #1303), so the runner-group binding
 is unexpressible at the old pin.
 
-Reviewed module surface between those two ARC pins:
+Reviewed module surface between the df510 and 11ace ARC pins:
 
 - no `arc-runners` stack variable was removed, and no pre-existing variable's
   default changed
@@ -684,14 +582,24 @@ Reviewed module surface between those two ARC pins:
 - `scripts/flywheel-github-oidc-profile.sh` is byte-identical at both pins, so
   the pinned `GF_OIDC_PROFILE_SHA256` content hash is unchanged
 
-Nothing in that range is breaking for this overlay's `arc-runners` stack, so
-the pin advance stops at current `origin/main` rather than at an earlier safe
-commit. Two changes in the range are affirmative reasons not to stop earlier:
-`f1b8f362` (TIN-3601) advances the `actions-runner` image past GitHub's rolling
-runner-deprecation minimum, and `6e52ff1d` / `66f67168` harden listener
-placement and controller pinning after the 2026-08-09 estate-wide outage.
+Nothing in that historical range was breaking for this overlay's `arc-runners`
+stack, so TIN-3902 stopped at the then-current `origin/main` rather than an
+earlier safe commit. Two changes in the df510-to-11ace range were affirmative
+reasons not to stop earlier: `f1b8f362` (TIN-3601) advances the `actions-runner` image past
+GitHub's rolling runner-deprecation minimum, and `6e52ff1d` / `66f67168` harden
+listener placement and controller pinning after the 2026-08-09 estate-wide
+outage.
 
-The implementation pin is deliberately not advanced with it. It governs the
+The TIN-4072 11ace-to-e175 range is narrower at this overlay boundary: six
+already-existing module inputs become top-level `arc-runners` stack inputs for
+the storage class and size of `/nix`, `_work`, and `.cache`. Empty classes remain
+inert; this overlay deliberately sets the Sting class and 64/32/32 GiB sizes.
+The OIDC helper blob is byte-identical, so its pinned SHA-256 remains unchanged;
+the exact plan-scope guard refuses any source effect outside the reviewed Helm
+update.
+
+The implementation pin is deliberately not advanced with the ARC role pin. It
+governs the
 edge/DNS, mail, list, form, archive, and web consumers, none of which are
 involved in runner-group admission. Review any future pin convergence as a
 separate executable-core adoption change.

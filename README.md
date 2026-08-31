@@ -63,8 +63,12 @@ Grounded mermaid diagrams (mail flow, network/ports, planes, Bazel/GF) live in
   door) and (b) the template carried four divergent pins across its own files,
   a drift wart. `config/organization.yaml`, `MODULE.bazel`, `Justfile`, and the
   non-ARC workflow consumers share this implementation pin.
-- ARC/OIDC role pin: `11ace397282ff89aeb1dfeb4a32fcbed3200c2ff`. It was the
-  head of GloriousFlywheel `origin/main` when selected on 2026-08-18;
+- ARC/OIDC role pin: `e175a398c3c8f25f99c41eff8b584df6a360531e`, the signed
+  GloriousFlywheel #1594 merge. TIN-4072 advances the previously reviewed
+  `11ace397282ff89aeb1dfeb4a32fcbed3200c2ff` role pin so the top-level
+  `arc-runners` stack exposes the module's existing generic-ephemeral `/nix`,
+  `_work`, and `.cache` inputs. The previous pin was the head of
+  GloriousFlywheel `origin/main` when selected on 2026-08-18;
   `origin/main` has advanced since, so the accurate statement is that this pin
   is a reviewed **ancestor** of `origin/main`, not `origin/main` itself. What
   binds the `arc-runners` stack to it is the Justfile — `arc_core_default` /
@@ -96,11 +100,17 @@ Grounded mermaid diagrams (mail flow, network/ports, planes, Bazel/GF) live in
   TIN-3601), a new `GF_FLYWHEEL_PROFILE_STATE` env var mirroring
   `GF_BAZEL_SUBSTRATE_MODE`, and `priorityClassName: arc-runner` (the
   cluster-scoped class already exists on `honey`; this overlay does not create
-  it). The implementation pin is deliberately NOT advanced with it; pin
-  convergence remains a separate adoption change.
-- Capacity posture (TIN-2165/TIN-2234 pod-cap crunch): nix only, `min 0 / max
-  4`, no warm pool, docker/dind off, sting placement + the dedicated
-  `compute-expansion` toleration.
+  it). From 11ace to e175, the TIN-4072 source effect is deliberately narrower:
+  six already-existing module inputs become top-level stack inputs for the
+  `/nix`, `_work`, and `.cache` storage class and size. The OIDC helper blob is
+  byte-identical, so its pinned SHA-256 does not move. The implementation pin is
+  deliberately NOT advanced with the ARC role; pin convergence remains a
+  separate adoption change.
+- Capacity posture (TIN-4072): nix only, `min 0 / max 1`, no warm pool,
+  docker/dind off, Sting placement + the dedicated `compute-expansion`
+  toleration. Each runner gets generic-ephemeral 64 GiB `/nix`, 32 GiB `_work`,
+  and 32 GiB `.cache` claims on `local-path-sting-fast-ephemeral`; the existing
+  8/16 GiB container writable-layer envelope is unchanged.
 
 Private credentials stay outside Git:
 
@@ -153,11 +163,10 @@ operation (members, moderation, settings, stack) in
 Secret-free pull-request validation runs on `tinyland-nix` (TIN-3914) and
 therefore depends on this repository's ARC runner-group admission -- see the
 note below on why this is the one job here left `pull_request`-unfiltered.
-Cluster plans and applies remain operator-local; the
-first ARC plan and apply run from the operator machine (kubectl context
-`honey`). See
-[docs/implementation-overlay.md](docs/implementation-overlay.md) for the
-ordered runbook.
+TIN-4072 declares the exact one-slot Sting storage target but grants no local
+plan, apply, rollback, readback, or promotion authority. Runtime adoption must
+come from the version-pinned protected canonical-main carrier described in
+[docs/implementation-overlay.md](docs/implementation-overlay.md).
 
 Self-hosted admission has two independent gates, and satisfying only one is the
 failure mode TIN-3902 exists to close:
@@ -175,44 +184,26 @@ cutover plan; the ordered steps are in
 [docs/implementation-overlay.md](docs/implementation-overlay.md) under
 "Runner group cutover".
 
-## Operator Flow
+## Protected ARC carrier hold
 
-ARC plan/apply is an attended, operator-local operation. It must start from a
-clean, signed checkout of the current canonical `main` and the clean, signed
-role-specific GloriousFlywheel checkout at
-`11ace397282ff89aeb1dfeb4a32fcbed3200c2ff`:
+TIN-4072 is a source-only declaration. The signed GF pin, max-one tfvars, and
+64/32/32 GiB generic-ephemeral storage values may be reviewed and merged, but
+that merge does not authorize an operator-local plan, apply, rollback, or
+readback and does not release application PR #218.
 
-```bash
-export GF_CORE_PATH=/operator/path/GloriousFlywheel-implementation-2281
-export GF_ARC_CORE_PATH=/operator/path/GloriousFlywheel-arc-11ace
-export GF_ARC_CORE_CI_PATH=path:/operator/path/GloriousFlywheel-arc-11ace#ci
-export GFTB_ARC_KUBECONFIG=/operator/path/gftb-arc.kubeconfig
-# Export the RustFS access-key pair from operator custody.
-just enrollment-preflight
-GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-plan
-just arc-plan-show
-just arc-plan-scope-check
-GFTB_APPLY_CONFIRM=apply GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-apply
-GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-capacity-readback
-```
+The only admitted runtime chain is a version-pinned protected canonical-main
+planner, a subordinate executor that consumes the exact saved-plan bytes
+without replanning, and an identity-separated independent observer/readback
+that emits the promoted receipt. No such ARC carrier is active in this
+repository. Until it lands, the retained local scope guard must refuse
+`storage-adoption` and `storage-rollback`, `arc-apply` cannot consume the
+TIN-4072 delta, and live ARC state remains unchanged.
 
-`just arc-plan` runs the GloriousFlywheel ARC stack with this repo's
-`tofu/stacks/arc-runners/great-falls-tool-bus.tfvars` and backend config.
-`just enrollment-preflight` is read-only and reports ARC GitHub App secrets,
-live runner-set registration, and recent workflow blockers before any plan or
-apply. The pinned pre-#1208 GloriousFlywheel implementation still emits a legacy
-core-read-credential row; do not provision a key solely to satisfy that row.
-`just core-checkout` is this overlay's fail-closed source-authority check. App
-secret rotation remains a separate operator-local action through
-`just arc-app-secret-apply`; it is not part of ARC state plan/apply.
-
-`validate` is self-contained and does not fetch the private
-`tinyland-inc/GloriousFlywheel` repository. Source-dependent ARC module
-validation remains operator-local against an exact reviewed checkout. The other
-workflow declarations retain exact pins but are not the required validation
-authority; see [CI Credentials](docs/ci-credentials.md).
-
-ADMISSION HOLD RESOLVED (TIN-3914, PR #128, operator ruling 2026-08-22):
+Pure source validation continues to bind the exact GloriousFlywheel revision
+`e175a398c3c8f25f99c41eff8b584df6a360531e`, the tfvars, and the Sting
+StorageClass contract. Those checks are declaration evidence only, never a
+runtime or release receipt.
+ADMISSION HOLD RESOLVEDADMISSION HOLD RESOLVED (TIN-3914, PR #128, operator ruling 2026-08-22):
 `validate` requests `tinyland-nix`. For this org that label is published only
 by the `great-falls-tool-bus-nix` scale set, which binds to the
 `great-falls-tool-bus-infra` runner group; this repository (id `1286829099`)
@@ -225,76 +216,19 @@ no `pull_request` trigger at all) -- its compensating control is staying
 secret-free, not event-gated. See `config/organization.yaml`'s
 `runner_group` comment for the full standing-invariant rationale.
 
-There is no ARC plan/apply workflow and no repository ARC kubeconfig. The
-guarded Just recipes, an external operator-owned mode-0600 kubeconfig, and
-runtime RustFS credentials are the only ARC state-mutation path.
+There is no active protected ARC runtime carrier in this repository. The
+retained local `arc-plan-scope-check` body admits only the three historical
+capacity, runner-group cutover, and runner-group rollback shapes. It refuses
+the TIN-4072 max-four-to-max-one plus generic-ephemeral storage delta and its
+reverse; because `arc-apply` depends on that guard, the current declaration
+cannot be mutated through the local Just surface.
 
-`just arc-apply` runs an exact plan-scope guard backed by OpenTofu's JSON plan
-actions. The allowlist is keyed on resource address plus action plus the
-enumerated attribute paths that may change, and it fails closed: it admits
-exactly three plans and refuses every other update, create, delete, and
-replacement.
-
-1. **capacity** — one in-place `module.gh_nix.helm_release.arc_runner` update
-   whose only Helm-values delta is the runner container's `ephemeral-storage`
-   `4Gi -> 8Gi` request and `8Gi -> 16Gi` limit; the Helm `set` block is
-   compared whole here, so this shape cannot smuggle a `runnerGroup` move.
-   It requires live/state still at `4Gi`/`8Gi`. (This shape applied on
-   2026-08-17 as helm revision 6, decomposing the cutover below.)
-2. **cutover** — the TIN-3902 runner-group move: the `runnerGroup` Helm `set`
-   entry `default -> great-falls-tool-bus-infra`, the pinned runner image
-   digest, the new `GF_FLYWHEEL_PROFILE_STATE` runner env var, and
-   `template.spec.priorityClassName: arc-runner`; plus one create of the
-   state-only `terraform_data.runner_group_policy` and the nine new
-   source-derived root outputs the advanced ARC role pin adds. Its storage
-   transition is either `4Gi/8Gi -> 8Gi/16Gi` (the original combined shape)
-   or byte-identical `8Gi/16Gi` on both sides (the decomposed shape — the
-   live posture since the capacity apply).
-3. **rollback** — the byte-exact reverse of the cutover in either posture:
-   the group, image, env, and priorityClassName reversal plus the
-   `terraform_data.runner_group_policy` destroy, with storage retained at
-   `8Gi`/`16Gi` (the decomposed group-move reversal, the ratified fallback
-   from the post-cutover state) or demoted back to `4Gi`/`8Gi` (the combined
-   reversal — a deliberate capacity revert, never a rollback side effect); see
-   [docs/implementation-overlay.md](docs/implementation-overlay.md) "Rollback".
-
-The guard therefore no longer blocks the TIN-3902 carrier, and a rollback does
-not need an emergency contract change. It stays pinned to today's reviewed
-capacity and roster: a **future capacity change** — `nix_max_runners` 4 -> 8, a
-memory or CPU envelope move, a further `ephemeral-storage` step — or any
-roster, image-digest, or module-pin move needs its own reviewed scope-contract
-update before `just arc-apply` will run. The enumerated shapes are in
-[docs/implementation-overlay.md](docs/implementation-overlay.md) "Runner group
-cutover".
-
-The ARC S3 backend has no remote state lock. Hold an exclusive quiet window
-from before `arc-plan` through post-apply readback: no concurrent operator and
-no workflow may plan or mutate the same ARC state. Supply
-`GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive` as a one-shot value on each plan, apply,
-and readback command only after checking that condition. The normal promoted
-readback passes only when canonical state and the live scale set both report
-8Gi/16Gi in runner group `great-falls-tool-bus-infra`, the listener is one
-Ready zero-restart pod, and a refreshed plan is empty. If a
-localhost RustFS port-forward is lost after cluster mutation may have begun but
-before state is written, stop; the apply-attempt marker prevents blind reuse.
-Restore connectivity and reconcile the ambiguous attempt directly with
-`GFTB_ARC_READBACK_MODE=reconcile GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just
-arc-capacity-readback`. Reconciliation is keyed on the refreshed plan and the
-runner group, not the storage level: a pending plan the scope guard admits —
-in any admitted posture, including live 8/16 GiB with the decomposed
-runner-group cutover pending — is re-reviewed by `arc-plan-scope-check` and
-yields the pre-change receipt, while an empty refreshed plan certifies the
-landed state (promoted at the dedicated group; a converged group-`default`
-state requires an explicit `rolled-back` re-run). Every mode also requires
-canonical state and the live scale set to agree on `.spec.runnerGroup`, and
-`promoted` / `rolled-back` require it to be `great-falls-tool-bus-infra` /
-`default` respectively; `rolled-back` certifies convergence at either
-`4Gi`/`8Gi` (combined reversal) or the capacity-retained `8Gi`/`16Gi`
-(decomposed group-move reversal). It
-consumes the attempted plan bundle; only the pre-change outcome permits
-creating and reviewing a fresh plan.
-
-## Boundary
+The retained local readback proves only the historical capacity and
+runner-group outcomes. It has no storage-promotion or storage-rollback mode and
+cannot release application PR #218. A TIN-4072 promoted receipt can come only
+from the protected canonical-main planner, exact saved-plan executor, and
+independent observer/readback carrier above.
+## Boundary## Boundary
 
 This overlay targets the same Honey backend and cache substrate as the other
 overlays. That is an owner/auth boundary. It is not a new runner product and

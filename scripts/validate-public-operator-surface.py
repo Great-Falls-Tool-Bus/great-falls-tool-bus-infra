@@ -159,7 +159,7 @@ EDGE_RUNTIME_TF_VARS = {
 }
 
 GF_CORE_SHA = "2281b576bce0e8dd776a047b84e7464f5b508a62"
-ARC_CORE_SHA = "11ace397282ff89aeb1dfeb4a32fcbed3200c2ff"
+ARC_CORE_SHA = "e175a398c3c8f25f99c41eff8b584df6a360531e"
 ARC_GLOBAL_ASSIGNMENTS = {
     "gf_core": 'env_var_or_default("GF_CORE_PATH", "../GloriousFlywheel")',
     "gf_core_ci": (
@@ -167,7 +167,7 @@ ARC_GLOBAL_ASSIGNMENTS = {
         f'"github:tinyland-inc/GloriousFlywheel/{GF_CORE_SHA}#ci")'
     ),
     "gf_core_sha": f'"{GF_CORE_SHA}"',
-    "arc_core_default": '"../GloriousFlywheel-arc-11ace"',
+    "arc_core_default": '"../GloriousFlywheel-arc-e175a398"',
     "arc_core_sha": f'"{ARC_CORE_SHA}"',
     "arc_core_ci_default": (
         f'"github:tinyland-inc/GloriousFlywheel/{ARC_CORE_SHA}#ci"'
@@ -336,7 +336,7 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "b0a11061708fcdfe", "55054b2b9e1f118b", "5bd0ece868acb187", "bcca11c478cda72a"
     ),
     "_arc-runtime-contract": _receipt(
-        "f667efcef12ba025", "ab88b1f147ef3ad5", "fd33ddfdcd7aafe6", "88b797f7dd143dd0"
+        "8a59ff1ca6595adf", "bb9934899eafe485", "5171b55db261ce9d", "1a37af57fd39e919"
     ),
     "_arc-artifact-root-contract": _receipt(
         "3facf583d208268e", "ea605e546826e378", "115f0a222a718557", "a23fd2d2952e2bda"
@@ -7164,6 +7164,12 @@ def self_test() -> None:
             '    [[ "${target_uid}" == "{{ arc_target_uid }}" ]] ||',
             '    [[ -n "${target_uid}" ]] ||',
             "target UID removal",
+        ),
+        (
+            "_arc-runtime-contract",
+            '      and .parameters == {"nodePath": "/srv/fast-local/local-path"}',
+            '      and (.parameters.nodePath | startswith("/srv/fast-local"))',
+            "StorageClass node-path widening",
         ),
         (
             "_arc-kubeconfig-contract",

@@ -30,9 +30,10 @@ core:
   # or executes anything. This comment is a reader aid, not a declaration.
   # TIN-3902 advanced the pin from
   # df510574d17b85e7f15470caf3574fcabc4768f1 (2026-07-09) to
-  # 11ace397282ff89aeb1dfeb4a32fcbed3200c2ff (2026-08-18) because
-  # `runner_group` did not exist as an arc-runners stack input before
-  # GloriousFlywheel f13f8ad9 (TIN-3209, PR #1303).
+  # 11ace397282ff89aeb1dfeb4a32fcbed3200c2ff (2026-08-18) for runner_group.
+  # TIN-4072 advances the ARC/OIDC role to signed GloriousFlywheel #1594
+  # e175a398c3c8f25f99c41eff8b584df6a360531e so the top-level stack exposes
+  # the existing generic-ephemeral /nix, _work, and .cache inputs.
 
 substrate:
   cluster:
