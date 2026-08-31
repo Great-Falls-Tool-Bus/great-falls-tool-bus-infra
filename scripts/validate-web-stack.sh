@@ -135,7 +135,7 @@ jq -e '
 ' <<<"${kustomization_json}" >/dev/null ||
   fail "workload kustomization must remain the exact three-file surface with no patches, generators, or components"
 
-rbac_json_stream="$(yq eval-all -o=json -I=0 '.' "${rbac}")"
+rbac_docs_json="$(yq eval-all -o=json -I=0 '.' "${rbac}")"
 jq --slurp -e '
   length == 3
   and ([.[] | .kind] | sort) == ["Role","RoleBinding","ServiceAccount"]
@@ -192,7 +192,7 @@ jq --slurp -e '
     "roleRef":{"apiGroup":"rbac.authorization.k8s.io","kind":"Role","name":"web-apply"},
     "subjects":[{"kind":"ServiceAccount","name":"web-apply","namespace":"greatfallstoolbus-org-production"}]
   })
-' <<<"${rbac_json_stream}" >/dev/null ||
+' <<<"${rbac_docs_json}" >/dev/null ||
   fail "web-apply RBAC must be exactly one closed ServiceAccount/Role/RoleBinding document set"
 
 # --- gftb-site serving shape: containerPort 3000 + /health probes -----------
