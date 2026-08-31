@@ -3730,9 +3730,9 @@ def install_web_release_fixture_mocks(
                         )
                     )
                     legacy_policy["metadata"]["name"] = "allow-egress-dns-retained"
-                    rendered += "---\n" + json.dumps(
+                    rendered += "---\\n" + json.dumps(
                         legacy_policy, sort_keys=True
-                    ) + "\n"
+                    ) + "\\n"
                 if state == "render-secret":
                     rendered += "---\\napiVersion: v1\\nkind: Secret\\nmetadata:\\n  name: injected\\n  namespace: greatfallstoolbus-org-production\\n"
                 if state == "render-env-from":
