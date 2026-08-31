@@ -212,3 +212,37 @@ jobs:
             cat web-plan-rendered.yaml
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # TRANSIENT TIN-4227 proof (generation 42): PR-only, offline, secret-free.
+      # Removed byte-for-byte after the exact forward/reverse render digests are
+      # captured and pinned into web-generation-42-parity.yml (the #140 method).
+      - name: Derive exact generation-42 forward and reverse render receipts
+        if: ${{ always() && github.event_name == 'pull_request' && github.head_ref == 'jess/web-gen42-bounded-apply' }}
+        working-directory: overlay
+        run: |
+          set -euo pipefail
+          for nixbin in /nix/var/nix/profiles/default/bin "${HOME}/.nix-profile/bin"; do
+            if [ -d "${nixbin}" ]; then export PATH="${nixbin}:${PATH}"; fi
+          done
+          export WEB_APPLY_REPLICAS=2
+          export WEB_APPLY_IMAGE=ghcr.io/great-falls-tool-bus/gftb-site@sha256:f45bc7a644edfb297b6df8281e315c64a7fdb37b304ef5bba135743143bcee1a
+          export WEB_APPLY_SHA=9adae265731ec22011e562bc4d8f1bcc90d1629b
+          nix develop . -c just web-release-plan
+          mkdir -m 700 generation-42-render-proof
+          cp .k8s-plans/web-release.rendered.yaml generation-42-render-proof/forward.yaml
+          cp .k8s-plans/web-release.render-sha256 generation-42-render-proof/forward.sha256
+          export WEB_APPLY_IMAGE=ghcr.io/great-falls-tool-bus/gftb-site@sha256:0295c226bd0bc78c0fe392b8955971ffbbd4fb9a0684939558d4c3d170a35dee
+          export WEB_APPLY_SHA=06e8b2c390b9c057fd084540e1e5710411a76a93
+          nix develop . -c just web-release-plan
+          cp .k8s-plans/web-release.rendered.yaml generation-42-render-proof/reverse.yaml
+          cp .k8s-plans/web-release.render-sha256 generation-42-render-proof/reverse.sha256
+          chmod 600 generation-42-render-proof/*
+
+      - name: Upload exact generation-42 render receipts
+        if: ${{ always() && github.event_name == 'pull_request' && github.head_ref == 'jess/web-gen42-bounded-apply' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: generation-42-render-proof-${{ github.event.pull_request.head.sha }}
+          path: overlay/generation-42-render-proof
+          if-no-files-found: error
+          retention-days: 1
