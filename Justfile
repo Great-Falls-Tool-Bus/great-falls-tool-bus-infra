@@ -3949,14 +3949,28 @@ _web-release-apply-kubeconfig-contract:
     # AND on any diagnostic output, so an authorization transport error is a
     # refusal rather than a pass.
     for authz_contract in \
-      "get deployments.apps" "list deployments.apps" "watch deployments.apps" \
-      "create deployments.apps" "update deployments.apps" "patch deployments.apps" \
-      "get services" "create services" "update services" "patch services" \
-      "get networkpolicies.networking.k8s.io" \
+      "get deployments.apps/greatfallstoolbus-org" \
+      "list deployments.apps" "watch deployments.apps" "create deployments.apps" \
+      "update deployments.apps/greatfallstoolbus-org" \
+      "patch deployments.apps/greatfallstoolbus-org" \
+      "get services/greatfallstoolbus-org" "create services" \
+      "update services/greatfallstoolbus-org" \
+      "patch services/greatfallstoolbus-org" \
+      "get networkpolicies.networking.k8s.io/default-deny-ingress" \
+      "get networkpolicies.networking.k8s.io/allow-cloudflared-tunnel-ingress" \
+      "get networkpolicies.networking.k8s.io/allow-prometheus-scrape" \
+      "get networkpolicies.networking.k8s.io/default-deny-egress" \
       "create networkpolicies.networking.k8s.io" \
-      "update networkpolicies.networking.k8s.io" \
-      "patch networkpolicies.networking.k8s.io" \
-      "delete networkpolicies.networking.k8s.io"; do
+      "update networkpolicies.networking.k8s.io/default-deny-ingress" \
+      "update networkpolicies.networking.k8s.io/allow-cloudflared-tunnel-ingress" \
+      "update networkpolicies.networking.k8s.io/allow-prometheus-scrape" \
+      "update networkpolicies.networking.k8s.io/default-deny-egress" \
+      "patch networkpolicies.networking.k8s.io/default-deny-ingress" \
+      "patch networkpolicies.networking.k8s.io/allow-cloudflared-tunnel-ingress" \
+      "patch networkpolicies.networking.k8s.io/allow-prometheus-scrape" \
+      "patch networkpolicies.networking.k8s.io/default-deny-egress" \
+      "delete networkpolicies.networking.k8s.io/allow-egress-dns" \
+      "delete networkpolicies.networking.k8s.io/allow-egress-discuss-archive"; do
       read -r authz_verb authz_resource <<<"${authz_contract}"
       : > "${authz_stderr}"
       authz_decision="$(kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" auth can-i "${authz_verb}" "${authz_resource}" --namespace {{ web_stack_ns }} 2>"${authz_stderr}" || true)"

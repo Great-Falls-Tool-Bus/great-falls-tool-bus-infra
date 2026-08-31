@@ -173,7 +173,8 @@ jq --slurp -e '
       {"apiGroups":[""],"resources":["pods"],"verbs":["list"]},
       {"apiGroups":[""],"resources":["services"],"resourceNames":["greatfallstoolbus-org"],"verbs":["get","update","patch"]},
       {"apiGroups":[""],"resources":["services"],"verbs":["create"]},
-      {"apiGroups":["networking.k8s.io"],"resources":["networkpolicies"],"resourceNames":["default-deny-ingress","allow-cloudflared-tunnel-ingress","allow-prometheus-scrape","default-deny-egress"],"verbs":["get","update","patch","delete"]},
+      {"apiGroups":["networking.k8s.io"],"resources":["networkpolicies"],"resourceNames":["default-deny-ingress","allow-cloudflared-tunnel-ingress","allow-prometheus-scrape","default-deny-egress"],"verbs":["get","update","patch"]},
+      {"apiGroups":["networking.k8s.io"],"resources":["networkpolicies"],"resourceNames":["allow-egress-dns","allow-egress-discuss-archive"],"verbs":["delete"]},
       {"apiGroups":["networking.k8s.io"],"resources":["networkpolicies"],"verbs":["list","create"]},
       {"apiGroups":["discovery.k8s.io"],"resources":["endpointslices"],"verbs":["list"]}
     ]

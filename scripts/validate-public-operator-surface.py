@@ -472,7 +472,7 @@ WEB_RELEASE_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "271460cb71ceda56", "0bbca7e8b57d0ddf", "eb68c983d72ab455", "a44e713d9007bbf9"
     ),
     "_web-release-apply-kubeconfig-contract": _receipt(
-        "5cd12307160b8a71", "3ad1307f87ee1298", "5a28a484924cd275", "23f3bbd56a1e97fb"
+        "25bab53181e65ec9", "391ef4c90fa9e231", "cf74e4f1db70e3a0", "cd7bf3b9b9891fb8"
     ),
     "web-release-plan": _receipt(
         "4c521b684de15316", "694df6eec8402abd", "e6fb365e2cb8a4d1", "79d6b8a69379a844"
@@ -617,7 +617,7 @@ WEB_RELEASE_VALIDATION_SCRIPT = Path("scripts/validate-web-stack.sh")
 # Updated 2026-08-30 (PR #143): tracked web-apply RBAC is now validated
 # exactly and is proved absent from the workload render; this receipt co-moves.
 WEB_RELEASE_VALIDATION_SCRIPT_SHA256 = _receipt(
-    "ac673cd603383b99", "c2d144e1b58f38c4", "bc671b61f2dfae4b", "2716b662cd99c8c7"
+    "41900cb68a4e6395", "ab0e2f324f80a9be", "0b6d49e895398b99", "e070aab3a744ef53"
 )
 
 FLAKE_RELEASE_PACKAGES = ("crane", "curl")
@@ -4449,14 +4449,20 @@ def install_web_release_fixture_mocks(
               # The APPLY identity's grant matrix. Scoped to apply-* states so it
               # cannot loosen the proof-only identity the mutation-denial proof
               # depends on.
-              if [[ "${state}" == apply-* && "${scope}" == "namespaced" && -z "${resource_name}" && -z "${subresource}" ]]; then
-                case "${verb}:${base_resource}" in
-                  get:deployments.apps|list:deployments.apps|watch:deployments.apps|create:deployments.apps|update:deployments.apps|patch:deployments.apps|get:services|create:services|update:services|patch:services|get:networkpolicies.networking.k8s.io|create:networkpolicies.networking.k8s.io|update:networkpolicies.networking.k8s.io|patch:networkpolicies.networking.k8s.io|delete:networkpolicies.networking.k8s.io) allowed=1 ;;
-                esac
+              if [[ "${state}" == apply-* && "${scope}" == "namespaced" && -z "${subresource}" ]]; then
+                if [[ -z "${resource_name}" ]]; then
+                  case "${verb}:${base_resource}" in
+                    list:deployments.apps|watch:deployments.apps|create:deployments.apps|create:services|create:networkpolicies.networking.k8s.io) allowed=1 ;;
+                  esac
+                else
+                  case "${verb}:${base_resource}:${resource_name}" in
+                    get:deployments.apps:greatfallstoolbus-org|get:services:greatfallstoolbus-org|get:networkpolicies.networking.k8s.io:default-deny-ingress|get:networkpolicies.networking.k8s.io:allow-cloudflared-tunnel-ingress|get:networkpolicies.networking.k8s.io:allow-prometheus-scrape|get:networkpolicies.networking.k8s.io:default-deny-egress|update:deployments.apps:greatfallstoolbus-org|update:services:greatfallstoolbus-org|update:networkpolicies.networking.k8s.io:default-deny-ingress|update:networkpolicies.networking.k8s.io:allow-cloudflared-tunnel-ingress|update:networkpolicies.networking.k8s.io:allow-prometheus-scrape|update:networkpolicies.networking.k8s.io:default-deny-egress|patch:deployments.apps:greatfallstoolbus-org|patch:services:greatfallstoolbus-org|patch:networkpolicies.networking.k8s.io:default-deny-ingress|patch:networkpolicies.networking.k8s.io:allow-cloudflared-tunnel-ingress|patch:networkpolicies.networking.k8s.io:allow-prometheus-scrape|patch:networkpolicies.networking.k8s.io:default-deny-egress|delete:networkpolicies.networking.k8s.io:allow-egress-dns|delete:networkpolicies.networking.k8s.io:allow-egress-discuss-archive) allowed=1 ;;
+                  esac
+                fi
               fi
-              if [[ "${state}" == "apply-authz-denied-delete" && "${verb}:${base_resource}" == "delete:networkpolicies.networking.k8s.io" ]]; then allowed=0; fi
+              if [[ "${state}" == "apply-authz-denied-delete" && "${verb}:${base_resource}:${resource_name}" == "delete:networkpolicies.networking.k8s.io:allow-egress-discuss-archive" ]]; then allowed=0; fi
               if [[ "${state}" == "apply-authz-denied-create-policy" && "${verb}:${base_resource}" == "create:networkpolicies.networking.k8s.io" ]]; then allowed=0; fi
-              if [[ "${state}" == "apply-authz-transport-error" && "${verb}:${base_resource}" == "delete:networkpolicies.networking.k8s.io" ]]; then echo "mock authorization transport failure" >&2; exit 2; fi
+              if [[ "${state}" == "apply-authz-transport-error" && "${verb}:${base_resource}:${resource_name}" == "delete:networkpolicies.networking.k8s.io:allow-egress-discuss-archive" ]]; then echo "mock authorization transport failure" >&2; exit 2; fi
               if [[ "${allowed}" -eq 1 ]]; then printf 'yes\\n'; exit 0; fi
               printf 'no\\n'
               exit 1
@@ -5031,8 +5037,8 @@ def run_web_release_semantic_fixtures() -> None:
             )
         for state, diagnostic in (
             ("render-secret", "workload render must contain exactly Deployment/Service/three NetworkPolicies and no RBAC authority"),
-            ("render-missing-default-ingress", "workload render must contain exactly Deployment/Service/three NetworkPolicies and no RBAC authority"),
-            ("render-retained-legacy-egress", "workload render must contain exactly Deployment/Service/three NetworkPolicies and no RBAC authority"),
+            ("render-missing-default-ingress", "rendered object census mismatch"),
+            ("render-retained-legacy-egress", "rendered object census mismatch"),
             (
                 "render-init-container",
                 "rendered static-Caddy workload contract mismatch",
@@ -5969,21 +5975,31 @@ def run_web_release_semantic_fixtures() -> None:
 # The verbs web-release-apply's identity must hold before it touches anything,
 # in the exact order _web-release-apply-kubeconfig-contract asks for them.
 WEB_RELEASE_APPLY_AUTHZ_CONTRACT: tuple[tuple[str, str], ...] = (
-    ("get", "deployments.apps"),
+    ("get", "deployments.apps/greatfallstoolbus-org"),
     ("list", "deployments.apps"),
     ("watch", "deployments.apps"),
     ("create", "deployments.apps"),
-    ("update", "deployments.apps"),
-    ("patch", "deployments.apps"),
-    ("get", "services"),
+    ("update", "deployments.apps/greatfallstoolbus-org"),
+    ("patch", "deployments.apps/greatfallstoolbus-org"),
+    ("get", "services/greatfallstoolbus-org"),
     ("create", "services"),
-    ("update", "services"),
-    ("patch", "services"),
-    ("get", "networkpolicies.networking.k8s.io"),
+    ("update", "services/greatfallstoolbus-org"),
+    ("patch", "services/greatfallstoolbus-org"),
+    ("get", "networkpolicies.networking.k8s.io/default-deny-ingress"),
+    ("get", "networkpolicies.networking.k8s.io/allow-cloudflared-tunnel-ingress"),
+    ("get", "networkpolicies.networking.k8s.io/allow-prometheus-scrape"),
+    ("get", "networkpolicies.networking.k8s.io/default-deny-egress"),
     ("create", "networkpolicies.networking.k8s.io"),
-    ("update", "networkpolicies.networking.k8s.io"),
-    ("patch", "networkpolicies.networking.k8s.io"),
-    ("delete", "networkpolicies.networking.k8s.io"),
+    ("update", "networkpolicies.networking.k8s.io/default-deny-ingress"),
+    ("update", "networkpolicies.networking.k8s.io/allow-cloudflared-tunnel-ingress"),
+    ("update", "networkpolicies.networking.k8s.io/allow-prometheus-scrape"),
+    ("update", "networkpolicies.networking.k8s.io/default-deny-egress"),
+    ("patch", "networkpolicies.networking.k8s.io/default-deny-ingress"),
+    ("patch", "networkpolicies.networking.k8s.io/allow-cloudflared-tunnel-ingress"),
+    ("patch", "networkpolicies.networking.k8s.io/allow-prometheus-scrape"),
+    ("patch", "networkpolicies.networking.k8s.io/default-deny-egress"),
+    ("delete", "networkpolicies.networking.k8s.io/allow-egress-dns"),
+    ("delete", "networkpolicies.networking.k8s.io/allow-egress-discuss-archive"),
 )
 
 
@@ -6207,7 +6223,8 @@ def run_web_release_mutation_fixtures() -> None:
         for state, diagnostic in (
             (
                 "apply-authz-denied-delete",
-                f"cannot delete networkpolicies.networking.k8s.io in {namespace}",
+                f"cannot delete networkpolicies.networking.k8s.io/"
+                f"allow-egress-discuss-archive in {namespace}",
             ),
             (
                 "apply-authz-denied-create-policy",
