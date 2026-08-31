@@ -54,6 +54,7 @@ deploy="${dir}/deployment.yaml"
 svc="${dir}/service.yaml"
 netpol="${dir}/networkpolicy.yaml"
 kustomization="${dir}/kustomization.yaml"
+rbac="${dir}/web-apply-rbac.yaml"
 route_intent="${web_root}/../../tofu/intent/great-falls-tool-bus/web-oncluster-route.json"
 prenv_schema="${web_root}/../../tofu/intent/great-falls-tool-bus/pr-env-lanes.schema.json"
 secrets_contract="${web_root}/secrets.contract.yaml"
@@ -71,7 +72,7 @@ if ! printf "%s" "${yq_version}" | grep -qi "mikefarah" || ! printf "%s" "${yq_v
 command -v jq >/dev/null 2>&1 || fail "jq is required (JSON intent assertions)"
 command -v kubectl >/dev/null 2>&1 || fail "kubectl is required for kubectl kustomize"
 
-for f in "${deploy}" "${svc}" "${netpol}" "${kustomization}" \
+for f in "${deploy}" "${svc}" "${netpol}" "${kustomization}" "${rbac}" \
   "${route_intent}" "${prenv_schema}" "${secrets_contract}"; do
   require_file "${f}"
 done
@@ -121,6 +122,79 @@ fi
 if grep -REn "^kind:\s*Namespace" "${dir}" >/dev/null 2>&1; then
   fail "declare-only stack must NOT create the target namespace"
 fi
+
+# --- tracked authority source: exact, namespace-scoped, never self-applied -----
+# These are desired source bytes, not a claim about live equality. A protected
+# read-only live census remains mandatory before the permanent carrier may
+# issue its one-use credential. The workload kustomization has an exact finite
+# surface and cannot bootstrap or widen this Role.
+kustomization_json="$(yq eval -o=json -I=0 '.' "${kustomization}")"
+jq -e '
+  (. | keys | sort) == ["apiVersion","kind","labels","namespace","resources"]
+  and .resources == ["deployment.yaml","service.yaml","networkpolicy.yaml"]
+' <<<"${kustomization_json}" >/dev/null ||
+  fail "workload kustomization must remain the exact three-file surface with no patches, generators, or components"
+
+rbac_docs_json="$(yq eval-all -o=json -I=0 '.' "${rbac}")"
+jq --slurp -e '
+  length == 3
+  and ([.[] | .kind] | sort) == ["Role","RoleBinding","ServiceAccount"]
+  and (([.[] | select(.kind == "ServiceAccount")] | length) == 1)
+  and (([.[] | select(.kind == "Role")] | length) == 1)
+  and (([.[] | select(.kind == "RoleBinding")] | length) == 1)
+  and ((.[] | select(.kind == "ServiceAccount")) == {
+    "apiVersion":"v1",
+    "kind":"ServiceAccount",
+    "metadata":{
+      "name":"web-apply",
+      "namespace":"greatfallstoolbus-org-production",
+      "labels":{
+        "app.kubernetes.io/managed-by":"great-falls-tool-bus-infra",
+        "app.kubernetes.io/part-of":"great-falls-tool-bus"
+      }
+    },
+    "automountServiceAccountToken":false
+  })
+  and ((.[] | select(.kind == "Role")) == {
+    "apiVersion":"rbac.authorization.k8s.io/v1",
+    "kind":"Role",
+    "metadata":{
+      "name":"web-apply",
+      "namespace":"greatfallstoolbus-org-production",
+      "labels":{
+        "app.kubernetes.io/managed-by":"great-falls-tool-bus-infra",
+        "app.kubernetes.io/part-of":"great-falls-tool-bus"
+      }
+    },
+    "rules":[
+      {"apiGroups":["apps"],"resources":["deployments"],"resourceNames":["greatfallstoolbus-org"],"verbs":["get","update","patch"]},
+      {"apiGroups":["apps"],"resources":["deployments"],"verbs":["list","watch","create"]},
+      {"apiGroups":["apps"],"resources":["replicasets"],"verbs":["list"]},
+      {"apiGroups":[""],"resources":["pods"],"verbs":["list"]},
+      {"apiGroups":[""],"resources":["services"],"resourceNames":["greatfallstoolbus-org"],"verbs":["get","update","patch"]},
+      {"apiGroups":[""],"resources":["services"],"verbs":["create"]},
+      {"apiGroups":["networking.k8s.io"],"resources":["networkpolicies"],"resourceNames":["default-deny-ingress","allow-cloudflared-tunnel-ingress","allow-prometheus-scrape","default-deny-egress"],"verbs":["get","update","patch"]},
+      {"apiGroups":["networking.k8s.io"],"resources":["networkpolicies"],"resourceNames":["allow-egress-dns","allow-egress-discuss-archive"],"verbs":["delete"]},
+      {"apiGroups":["networking.k8s.io"],"resources":["networkpolicies"],"verbs":["list","create"]},
+      {"apiGroups":["discovery.k8s.io"],"resources":["endpointslices"],"verbs":["list"]}
+    ]
+  })
+  and ((.[] | select(.kind == "RoleBinding")) == {
+    "apiVersion":"rbac.authorization.k8s.io/v1",
+    "kind":"RoleBinding",
+    "metadata":{
+      "name":"web-apply",
+      "namespace":"greatfallstoolbus-org-production",
+      "labels":{
+        "app.kubernetes.io/managed-by":"great-falls-tool-bus-infra",
+        "app.kubernetes.io/part-of":"great-falls-tool-bus"
+      }
+    },
+    "roleRef":{"apiGroup":"rbac.authorization.k8s.io","kind":"Role","name":"web-apply"},
+    "subjects":[{"kind":"ServiceAccount","name":"web-apply","namespace":"greatfallstoolbus-org-production"}]
+  })
+' <<<"${rbac_docs_json}" >/dev/null ||
+  fail "web-apply RBAC must be exactly one closed ServiceAccount/Role/RoleBinding document set"
 
 # --- gftb-site serving shape: containerPort 3000 + /health probes -----------
 port="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == strenv(app)) | .ports[] | select(.name == "http") | .containerPort' "${deploy}")"
@@ -187,6 +261,24 @@ fi
 # a real, contained local path. Refuse before this render, and before
 # web-stack-render's own separate render, ever runs.
 bash scripts/guard-no-remote-kustomize-resources.sh "${dir}"
-kubectl kustomize "${dir}" >/dev/null
+rendered_json_stream="$(kubectl kustomize "${dir}" | yq eval-all -o=json -I=0 '.' -)"
+jq --slurp -e '
+  length == 5
+  and ([.[] | "\(.kind)/\(.metadata.name)"] | sort) == [
+    "Deployment/greatfallstoolbus-org",
+    "NetworkPolicy/allow-cloudflared-tunnel-ingress",
+    "NetworkPolicy/allow-prometheus-scrape",
+    "NetworkPolicy/default-deny-ingress",
+    "Service/greatfallstoolbus-org"
+  ]
+  and ([.[] | select(
+    .kind == "ServiceAccount"
+    or .kind == "Role"
+    or .kind == "RoleBinding"
+    or .kind == "ClusterRole"
+    or .kind == "ClusterRoleBinding"
+  )] | length) == 0
+' <<<"${rendered_json_stream}" >/dev/null ||
+  fail "workload render must contain exactly Deployment/Service/three NetworkPolicies and no RBAC authority"
 
-echo "web stack validation passed for ${app} in ${stack_ns}: ATTENDED-ONLY declare-only (replicas 2, image pinned to ${admitted_image_repo}@sha256:<64 hex>, no namespace, no workflow apply path -- the repository_dispatch CD carrier is retired and apply is attended-operator-only behind the promotion interlock), gftb-site static-origin ClusterIP 80->3000 with /health probes, default-deny + cloudflared-only public ingress, route+reaper fail-closed, no committed secrets"
+echo "web stack validation passed for ${app} in ${stack_ns}: ATTENDED-ONLY declare-only (replicas 2, image pinned to ${admitted_image_repo}@sha256:<64 hex>, no namespace, tracked exact web-apply RBAC excluded from workload kustomization, no workflow apply path -- the repository_dispatch CD carrier is retired and apply is attended-operator-only behind the promotion interlock), gftb-site static-origin ClusterIP 80->3000 with /health probes, default-deny + cloudflared-only public ingress, route+reaper fail-closed, no committed secrets"
