@@ -109,7 +109,7 @@ TIN-4072 binds the first proof to one Nix runner:
 - `nix_min_runners = 0`, `nix_max_runners = 1`
 - warm pool disabled
 - the container writable-layer request/limit remains 8 GiB/16 GiB
-- `/nix`, `/home/runner/_work`, and `/home/runner/.cache` mount per-runner
+- `/nix`, `_work`, and `.cache` mount per-runner
   generic-ephemeral PVCs on `local-path-sting-fast-ephemeral` at 64/32/32 GiB
 - runner selector, compute-expansion toleration, runner group, image, labels,
   and cache endpoints remain unchanged
@@ -145,7 +145,7 @@ local plan, local apply, rollback command, or local readback releases
 application PR #218. Kubernetes and backend credentials for the eventual
 carrier remain external to this public source tree and do not create authority
 by their presence.
-## Enrollment Preflight## Enrollment Preflight
+## Enrollment Preflight
 
 This read-only diagnostic is declaration troubleshooting only. It is not a
 plan/apply precondition, a promoted receipt, or authority to run the retained
@@ -185,306 +185,26 @@ must pin its implementation version and identities, refuse replanning, and
 emit the promoted receipt before #218 can be released. Until then live ARC
 state remains unchanged.
 
-## Historical runner group cutover (TIN-3902 only)
-## Runner group cutover
+## Historical runner-group boundary (TIN-3902)
 
-This section records the already-ratified TIN-3902 operator procedure for
-historical recovery only; it is not TIN-4072 authority. TIN-3902 moved
-`great-falls-tool-bus-nix` off GitHub's shared `Default` runner group onto the
-dedicated `great-falls-tool-bus-infra` group while `nix_min_runners = 0` and
-`nix_max_runners = 4` remained unchanged. TIN-4072 now declares max one with
-generic-ephemeral storage, but only the protected carrier above may adopt it.
+TIN-3902 already moved `great-falls-tool-bus-nix` from GitHub's shared
+`Default` group to the dedicated `great-falls-tool-bus-infra` group. The
+executable plan/apply/readback procedure belongs to the signed source and
+observed state that carried that cutover; Git history retains it. It is not a
+current runbook.
 
-### Why source alone is not enough
+Do not repoint that procedure at the e175a398 TIN-4072 source. Current tfvars
+declare max one plus the three generic-ephemeral claims, while the retained
+local plan guard and readback remain intentionally fixed to the historical
+non-storage shapes and max-four live state. A current-source local plan is
+refused and cannot become an adoption, rollback, promotion, or release receipt.
+Any future recovery starts from a new signed carrier and current independently
+observed state; it never reuses or relabels the historical command sequence.
 
-The GloriousFlywheel `arc-runners` stack declares only the `kubernetes` and
-`helm` providers and owns no `github_actions_runner_group` resource. It sets
-the group NAME on the ARC release; it does not create, name-check, or
-reconcile the group on GitHub. **The GitHub-side group must already exist when
-the first plan runs.** If it does not, `tofu` will still plan and apply
-happily, and the scale set will simply register into a group GitHub does not
-have — the same silent-idle failure this ticket is closing.
-
-### Step 0 — attended GitHub org-settings action (prerequisite)
-
-GitHub → organization `Great-Falls-Tool-Bus` → Settings → Actions → Runner
-groups. Create (or confirm) a group matching
-`config/organization.yaml` `runner_contract.runner_group` exactly:
-
-- name `great-falls-tool-bus-infra`
-- access: **selected repositories** (`visibility: selected`)
-- **enable "Allow public repositories"** (`allows_public_repositories: true`).
-  GitHub shows a warning here; accept it. Without this checkbox the public
-  `greatfallstoolbus.org` entry is inert and the cutover only half-lands.
-- **do not** restrict to selected workflows (`restricted_to_workflows: false`)
-- selected repositories: `gftb-site` (id `1336591141`) and
-  `greatfallstoolbus.org` (id `1287399122`)
-
-`greatfallstoolbus.org` is a public repository. Its admission — and therefore
-the "Allow public repositories" checkbox — is **accepted by operator ruling
-2026-08-18 (TIN-3902)**; TIN-3209's cross-tenant concern is acknowledged and
-tracked there. See "Organization Boundary" above. Enabling the checkbox does
-not widen access beyond the roster: `visibility: selected` still admits only
-the two ids above, and this repository (`great-falls-tool-bus-infra`, id
-`1286829099`) remains excluded.
-
-This repository (`great-falls-tool-bus-infra`, id `1286829099`) is public and
-is deliberately NOT selected. With "Allow public repositories" enabled, the
-roster is the ONLY control keeping it out — the public-repository checkbox is
-no longer a second lock — so do not add it to the selected set while carrying
-out this step. `just runner-group-contract` fails on that id unless an
-`infra_repo_admission_ruling:` field records an explicit operator decision. Its
-own self-hosted apply/drift jobs stop being
-admitted at cutover; that is the intended TIN-3209 posture, not a regression.
-
-Record the group as an operator receipt: source convergence proves nothing
-about the live GitHub configuration.
-
-### Step 1 — source review, offline
-
-```bash
-just core-checkout
-just arc-fmt-check
-just arc-validate
-```
-
-`arc-validate` is the one that proves the tfvars still matches the pinned
-module surface, so it must run against the advanced ARC role pin
-(`e175a398c3c8f25f99c41eff8b584df6a360531e`).
-
-### Step 2 — plan-scope contract (landed)
-
-`just arc-plan-scope-check` admits this cutover and its rollback, alongside the
-pre-existing `ephemeral-storage` capacity plan. The allowlist is keyed on
-resource address plus action plus the enumerated attribute paths that may
-change, and it fails closed on everything else. The three retained historical shapes are capacity, cutover, and rollback;
-the cutover's exact expected shape is recorded in Step 4 below.
-
-Do not work around the guard. Any change beyond the enumerated set — including
-a raise above `nix_max_runners = 1` — needs its own reviewed scope-contract
-update first.
-
-**Precondition: confirm which cutover posture is live.** The `cutover` shape
-admits exactly two storage transitions:
-
-- **Combined** — `ephemeral-storage` `4Gi -> 8Gi` request and `8Gi -> 16Gi`
-  limit riding the group move. This was the original TIN-3902 shape, valid
-  only while live and canonical state were still at `4Gi`/`8Gi`.
-- **Decomposed** — `before == after == 8Gi/16Gi`, zero storage delta: the
-  group move alone. This is the live posture since 2026-08-17, when the
-  TIN-2299 capacity promotion applied on its own as `helm_release`
-  `great-falls-tool-bus-nix` revision 6 with `runnerGroup` still `default`,
-  decomposing the cutover. The guard admits this shape byte-strictly: the
-  storage lines must be identical on both sides (mixed states such as
-  `8Gi/8Gi` are refused).
-
-Confirm the posture **before** opening the quiet window:
-
-```bash
-kubectl --context honey -n arc-runners \
-  get autoscalingrunnerset great-falls-tool-bus-nix \
-  -o jsonpath='{.spec.template.spec.containers[?(@.name=="runner")].resources.requests.ephemeral-storage}'
-```
-
-`4Gi` means the combined posture; `8Gi` means the decomposed posture (the
-current live state — do **not** stop; the guard admits the zero-storage-delta
-cutover). Anything else is a stop condition. The tfvars stay at `8Gi`/`16Gi`
-in both postures: the plan's storage delta follows from canonical/live state,
-not from a tfvars edit.
-
-### Step 3 — quiet window and plan
-
-The RustFS S3 backend has no remote state lock; hold the exclusive window
-described in "Exclusive state window" across every command below.
-
-```bash
-export GF_ARC_CORE_PATH=/operator/path/GloriousFlywheel-arc-e175a398
-export GF_ARC_CORE_CI_PATH=path:/operator/path/GloriousFlywheel-arc-e175a398#ci
-export GFTB_ARC_KUBECONFIG=/operator/path/gftb-arc.kubeconfig
-# Export the RustFS access-key pair from operator custody.
-just enrollment-preflight
-GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-plan
-just arc-plan-show
-just arc-plan-scope-check
-GFTB_APPLY_CONFIRM=apply GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-apply
-```
-
-### Step 4 — expected plan shape
-
-Review `just arc-plan-show` against this exactly. Anything else is a stop
-condition.
-
-**One in-place update, one state-only create, zero deletes, zero replacements,
-zero drift:**
-
-- `module.gh_nix.helm_release.arc_runner` — **update in place**. The only
-  deltas are the `runnerGroup` Helm `set` entry and the Helm-values changes
-  below (in the decomposed posture: one `image` line rewritten and three lines
-  added — `priorityClassName` plus the env name/value pair — with the storage
-  lines byte-identical; in the historical combined posture the two
-  `ephemeral-storage` lines were rewritten too):
-  - `runnerGroup`: `default` -> `great-falls-tool-bus-infra`. This rides the
-    release's `set` block, not the rendered `values` document; the scope guard
-    reviews it as a one-entry `set` delta and requires every other `set` entry
-    (`githubConfigUrl`, `maxRunners`, `scaleSetLabels[*]`, …) byte-identical.
-  - runner container `resources.requests.ephemeral-storage` and
-    `resources.limits.ephemeral-storage`: byte-identical at `8Gi`/`16Gi` on
-    both sides (decomposed posture, live since the 2026-08-17 revision-6
-    capacity apply), or `4Gi -> 8Gi` / `8Gi -> 16Gi` (combined posture,
-    historical)
-  - runner image digest advanced to the pinned
-    `ghcr.io/tinyland-inc/actions-runner-nix` digest carried by the new ARC
-    role pin
-  - new env var `GF_FLYWHEEL_PROFILE_STATE=shared-cache-backed`
-  - new `template.spec.priorityClassName: arc-runner`
-- `terraform_data.runner_group_policy` — **create**. This is the one
-  unavoidable create and it materializes nothing: it is a state-only policy
-  receipt whose preconditions reject any scale set left in `default` under
-  `runner_group_policy = "organization-restricted"`. It exists in the module
-  from GloriousFlywheel `f13f8ad9` onward and is new to this overlay only
-  because the ARC role pin advanced.
-- nine new **root outputs** appear as `create` output changes
-  (`nix_runner_group`, `docker_runner_group`, `dind_runner_group`,
-  `extra_runner_groups`, `overlay_tenant_legacy_shared_grant_owners`,
-  `tofu_plan_service_account`, `tofu_plan_token_secret`,
-  `tofu_plan_cluster_role`, `tofu_plan_secret_read_namespaces`). They are
-  source-derived receipts the advanced pin adds; creating them mutates nothing
-  outside tofu state. Every other output stays `no-op`.
-
-Rolling back is the same transaction read backwards: revert the ARC role pin
-and the group tfvars (storage tfvars stay put — see "Rollback" below), and the
-plan becomes one inverted `helm_release` update plus one `delete` of
-`terraform_data.runner_group_policy` and its nine outputs. The scope guard
-admits that shape too, so a rollback does not need a fresh contract change
-under time pressure.
-
-Everything else that appeared in the module between the old and new ARC role
-pins is gated off by inputs this overlay does not set
-(`create_runner_priority_classes`, `runner_sigkill_collector_*`,
-`tofu_plan_identity_*`, `overlay_tenant_legacy_shared_grants`,
-`runner_namespace_policy_enabled`, warm pool, docker/dind, longhorn), so it
-must not appear in the plan. `moved` blocks in the module (`arc_controller`,
-the priority classes) are no-ops here because this overlay owns none of those
-objects; any `moved`/`import` metadata in the plan JSON is a stop condition
-the scope guard already rejects.
-
-The `arc-runner` PriorityClass is cluster-scoped and already exists on `honey`
-(owned by the GF-primary state, value `-50`). This overlay consumes it and
-must not create it.
-
-### Step 5 — readback
-
-```bash
-GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-capacity-readback
-```
-
-`arc-capacity-readback` proves capacity convergence, runner-group convergence,
-and listener health. In the default `promoted` mode it now requires canonical
-state and the live AutoscalingRunnerSet to agree on **both** `8Gi`/`16Gi` and
-`.spec.runnerGroup: great-falls-tool-bus-infra`, so the receipt can no longer
-go green while the scale set is still idle in GitHub's `Default` group. It
-still does not — and cannot — prove GitHub-side *admission*, which is an org
-setting. Add the independent group and admission readbacks:
-
-```bash
-kubectl --context honey -n arc-runners \
-  get autoscalingrunnersets great-falls-tool-bus-nix \
-  -o jsonpath='{.spec.runnerGroup}'
-```
-
-Must print `great-falls-tool-bus-infra`. Printing `default` means the apply did
-not land the group, and no amount of GitHub-side configuration will fix it.
-
-Then confirm admission actually resumed, by watching the listener decide it has
-work:
-
-```bash
-kubectl --context honey -n arc-systems logs \
-  -l actions.github.com/scale-set-name=great-falls-tool-bus-nix,actions.github.com/scale-set-namespace=arc-runners,app.kubernetes.io/component=runner-scale-set-listener \
-  --tail=50 | grep 'Calculated target runner count'
-```
-
-While a real `gftb-site` or `greatfallstoolbus.org` CI run is queued,
-`"assigned job"` must go above `0`.
-A healthy, connected listener that keeps logging `"assigned job"=0` against
-live queued demand is the exact pre-cutover symptom and means admission is
-still broken — check the GitHub-side group roster from Step 0 before touching
-this stack again.
-
-### Rollback
-
-The cutover is source-reversible. Nothing running is destroyed: the only
-`destroy` in the reverse plan is the state-only
-`terraform_data.runner_group_policy` receipt, which materializes no GitHub or
-Kubernetes object.
-
-1. Revert the group tfvars change — `runner_group` and `runner_group_policy` —
-   and the ARC role pin advance (`Justfile` `arc_core_default` / `arc_core_sha`
-   / `arc_core_ci_default`, `scripts/validate-core-checkout.py` `ARC_CORE_PIN`,
-   `scripts/validate-public-operator-surface.py` `ARC_CORE_SHA` and the
-   `arc_core_default` fixture, `.github/workflows/flywheel-cache-proof.yml`
-   `GF_OIDC_PROFILE_REF`, and the pin prose in `README.md`,
-   `docs/implementation-overlay.md`, `docs/ci-credentials.md`).
-
-   **Leave `nix_ephemeral_storage_request` / `nix_ephemeral_storage_limit` at
-   `8Gi` / `16Gi`.** The rollback from the post-cutover state is the
-   group-move reversal alone (`8Gi/16Gi -> 8Gi/16Gi`, zero storage delta) —
-   the byte-exact reverse of the decomposed cutover. TIN-2299's capacity bump
-   (applied 2026-08-17 as helm revision 6, before the cutover) is not part of
-   the cutover and must not ride its rollback.
-
-   Reverting the storage tfvars back to `4Gi` / `8Gi` at the same time is
-   **not** the rollback: it is a **capacity revert** — the combined
-   `8/16Gi -> 4/8Gi` reversal, the undoing of TIN-2299 — and it is a separate,
-   deliberate act needing its own justification. Be aware the scope guard
-   **admits** that combined shape too (it is the byte-exact reverse of the
-   original combined cutover), and `arc-capacity-readback` will hand you a
-   green `rolled-back` receipt at `4Gi/8Gi + default`: a green receipt does
-   not distinguish an intended capacity revert from an over-revert. The
-   tfvars diff you land on `main` is the only place the distinction exists —
-   review it there.
-
-   One way to get this wrong that still costs a quiet window: reverting the
-   tfvars WITHOUT reverting the pin is not a valid state — `runner_group` is
-   a required input at the new pin and has no default.
-2. Land the revert on canonical `main` (every guarded ARC recipe requires a
-   clean, signed, current `main`).
-3. Restore the reverted-pin ARC core checkout and re-plan:
-   `GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-plan`, then
-   `just arc-plan-show` and `just arc-plan-scope-check`. The reverse plan is
-   again one in-place `module.gh_nix.helm_release.arc_runner` update plus the
-   **destroy** of the state-only `terraform_data.runner_group_policy` and its
-   nine source-derived outputs. The committed scope guard admits exactly that
-   shape — it was landed together with the forward cutover precisely so a
-   rollback never needs a new reviewed contract while the fleet is degraded.
-   The guard still requires the reversal to be byte-exact. The rollback
-   **must** carry the enumerated reversal — the `runnerGroup` set entry back
-   to `default`, the runner image digest `1ccce66d… -> 086a6c55…`, the
-   `GF_FLYWHEEL_PROFILE_STATE` pair and `priorityClassName` removed, with
-   storage byte-identical at `8Gi/16Gi` (or `8/16Gi -> 4/8Gi` only in the
-   deliberate combined capacity revert) — and the guard refuses a rollback
-   that goes beyond it: a different capacity step, a roster or group change,
-   another image, or any other Helm value.
-4. Prove the reversal landed:
-
-   ```bash
-   GFTB_ARC_READBACK_MODE=rolled-back GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive \
-     just arc-capacity-readback
-   ```
-
-   `rolled-back` is the converged group-`default` receipt: it requires state
-   and live to agree on `.spec.runnerGroup: default` and on storage at either
-   the capacity-retained `8Gi`/`16Gi` (the decomposed group-move reversal —
-   the normal rollback outcome) or `4Gi`/`8Gi` (the combined reversal, i.e. a
-   deliberate capacity revert), with a refreshed no-change plan and one Ready
-   zero-restart listener. The receipt names which of the two converged states
-   it certified. (Before TIN-3902 no readback mode could certify a completed
-   rollback — the pre-change branch demanded a *pending* plan, so a converged
-   rollback failed both branches. Before the post-capacity decomposition
-   amendment, `rolled-back` demanded `4Gi`/`8Gi`, so the decomposed reversal's
-   converged state — `8Gi/16Gi` + `default` — had no certifying mode either.)
-5. Leaving the GitHub-side group in place after a rollback is harmless — an
-   unused runner group admits nobody and starves nothing.
+The live GitHub-side boundary remains `visibility: selected`, public-repository
+admission enabled by the recorded operator ruling, and the exact roster in
+`config/organization.yaml`. The overlay's runner-group contract validates that
+source declaration without performing an organization-settings mutation.
 
 ## ARC GitHub App Secret
 

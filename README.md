@@ -178,11 +178,10 @@ failure mode TIN-3902 exists to close:
    repositories may be assigned that scale set's jobs.
 
 A registered scale set with no admitting group is a healthy, connected,
-permanently idle listener while its org's jobs sit queued. Create or confirm
-the `great-falls-tool-bus-infra` group in GitHub org settings **before** the
-cutover plan; the ordered steps are in
-[docs/implementation-overlay.md](docs/implementation-overlay.md) under
-"Runner group cutover".
+permanently idle listener while its org's jobs sit queued. TIN-3902's two-gate
+cutover is already applied. Its old operator procedure remains in Git history;
+current TIN-4072 source must not be fed to that historical plan/apply sequence.
+The live group and roster boundary is recorded in `config/organization.yaml`.
 
 ## Protected ARC carrier hold
 
@@ -203,7 +202,7 @@ Pure source validation continues to bind the exact GloriousFlywheel revision
 `e175a398c3c8f25f99c41eff8b584df6a360531e`, the tfvars, and the Sting
 StorageClass contract. Those checks are declaration evidence only, never a
 runtime or release receipt.
-ADMISSION HOLD RESOLVEDADMISSION HOLD RESOLVED (TIN-3914, PR #128, operator ruling 2026-08-22):
+ADMISSION HOLD RESOLVED (TIN-3914, PR #128, operator ruling 2026-08-22):
 `validate` requests `tinyland-nix`. For this org that label is published only
 by the `great-falls-tool-bus-nix` scale set, which binds to the
 `great-falls-tool-bus-infra` runner group; this repository (id `1286829099`)
@@ -228,7 +227,7 @@ runner-group outcomes. It has no storage-promotion or storage-rollback mode and
 cannot release application PR #218. A TIN-4072 promoted receipt can come only
 from the protected canonical-main planner, exact saved-plan executor, and
 independent observer/readback carrier above.
-## Boundary## Boundary
+## Boundary
 
 This overlay targets the same Honey backend and cache substrate as the other
 overlays. That is an owner/auth boundary. It is not a new runner product and
