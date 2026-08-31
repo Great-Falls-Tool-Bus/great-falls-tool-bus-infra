@@ -28,7 +28,7 @@ GFTB consumes one versioned upstream chain:
 | --- | --- |
 | `tinyland-inc/GloriousFlywheel` | Released GF-I09 `ApplicationRelease`, `OverlayBundle`, `ReleaseVerification`, and `VerifyReleaseHandoff` contract through Bazel/BCR |
 | `tinyland-inc/ci-templates` | Versioned, protected publisher, independent verifier, planner, exact-plan executor, observer, readback, and receipt workflow surfaces |
-| `tinyland-inc/owner-overlay-controller` | Bazel/BCR consumer with a non-nil, byte-preserving GF-I09 verifier and read-only admission path |
+| `tinyland-inc/owner-overlay-controller` | Bazel/BCR admission consumer of verifier-authored canonical bytes, invoking the pinned GF `VerifyReleaseHandoff` through a read-only path |
 | `tinyland-inc/site.scaffold` | One-carrier, main-to-production, freeze, and liveness doctrine/tests |
 | `Great-Falls-Tool-Bus/meta` | Workload scope, role selection, exceptions, and activation ruling |
 | this repository | GFTB binding, exact pins, desired state, protected identities, state, probes, and receipts |
@@ -83,26 +83,34 @@ request-derived ConfigMap, typed projection that discards canonical bytes,
 publisher-authored verification, controller-authored verification, or
 GFTB-local evidence schema is refused.
 
-The admission consumer must:
+Before GFTB may bind this path, owner-overlay-controller must release a
+byte-preserving evidence-consumer API/seam whose input includes, or is durably
+associated by its owning upstream contract with, the exact request UID,
+generation, and operand digest. The current operand-only
+`ApplicationReleaseVerifier` seam and request-derived ConfigMap prototype do
+not satisfy this prerequisite. GFTB must not supply an adapter or local schema
+to fill that gap.
 
-1. read the independently authored evidence with uncached/read-only API access;
-2. bind the evidence object to the exact request UID, generation, and operand
-   digest;
-3. reject deleting, owned, finalized, mutable, stale, replayed, or mismatched
-   evidence;
-4. construct the two publication observations from verifier-owned digests;
-5. call upstream `VerifyReleaseHandoff` with all three exact byte documents;
-6. bind the verified tenant, source, commit/tree, media types, payload and
+Through that released read-only admission surface, the consumer must:
+
+1. consume the independently authored verification and both exact published
+   payloads without discarding their canonical bytes;
+2. refuse absent, mutable, stale, replayed, mismatched, or incompletely bound
+   evidence under the upstream carrier's contract;
+3. construct the two GF `ReleasePublication` observations only from the
+   verifier-authored payload and descriptor digests;
+4. call upstream `VerifyReleaseHandoff` with all three exact byte documents;
+5. bind the verified tenant, source, commit/tree, media types, payload and
    descriptor digests, runtime image, overlay root, and policy fields; and
-7. after successful pinned `VerifyReleaseHandoff`, require
+6. after successful pinned `VerifyReleaseHandoff`, require
    `ApplicationReleaseOperand.InstallationDigest` to equal both
    `verified.Application.RuntimeImage.ResultImageDigest` and
    `verified.Verification.ApplicationReferences.RuntimeResultImageDigest`;
    any mismatch refuses.
 
 An OCI locator in a request is not verification evidence. If the canonical GF
-wire lacks a required repository-coordinate proof, GF must version the wire;
-the overlay and controller must not add a local extension.
+wire or controller seam lacks a required proof, its owning upstream package
+must version the contract; the overlay must not add a local extension.
 
 ## 4. Protected decision-to-execution chain
 
@@ -112,35 +120,35 @@ The only admitted phase-2 flow is:
 protected application main -> exact ApplicationRelease publication
 protected overlay main     -> exact OverlayBundle publication
 independent verifier       -> immutable ReleaseVerification evidence
-read-only controller       -> one final Accept | Refuse
-durable non-authorizing wake -> protected saved-plan producer
+read-only admission consumer -> one final Accept | typed Refuse
+protected owner coordinator -> consume the accepted decision/nonce once and emit an immutable saved plan
 subordinate executor       -> exact saved-plan bytes, no replan
 independent observer       -> live/readback/served/rollback evidence
 immutable receipt          -> one terminal outcome
 ```
 
-A wake contains identity only. It carries no operand bytes, command, plan,
-credential, or mutation authority. It must survive process loss and
-redelivery, and it cannot acknowledge away the sole due generation before an
-exact attempt handoff or a terminal pre-mutation outcome exists. Push,
+The decision handoff, retry, recovery, fencing, and receipt transport must come
+from released GF, controller, ci-templates, and site.scaffold contracts. This
+overlay does not name or implement a wake, queue, redelivery, acknowledgement,
+lease-arbitration, or recovery-successor protocol. Push,
 `repository_dispatch`, routine `workflow_dispatch`, runtime Git clone, a
-manual apply, or an attended side channel is not this carrier.
+manual apply, or an attended side channel is not the permanent carrier.
 
 The saved plan binds the exact accepted application, overlay, verification,
 policy, desired-state tree, pre-state, target, runner/workflow identity, and
-expiry. Apply consumes the admitted bytes without rendering or planning again.
-Every compare, lease, expiry, recovery, and finalization transition uses
-server-enforced identity/time and same-record version arbitration.
+expiry. Apply consumes those admitted bytes without rendering or planning
+again.
 
-The chain must prove:
+The chain must prove these upstream-defined outcomes:
 
-- exactly one decision, planner, executor, observer, and production mutator;
-- immutable attempt identity and exactly one canonical terminal outcome;
-- bounded retry and at most one bounded recovery successor;
+- one canonical production decision per admitted generation, one production
+  mutator, and separated planner, executor, and observer authorities;
+- immutable release and attempt identities with one canonical terminal outcome;
+- bounded retry and recovery without duplicate mutation;
 - no late result can overwrite a final decision or outcome;
 - failure before mutation is not rollback-eligible;
-- failure after a committed mutation is fenced and either recovered or
-  reversed by an independently admitted rollback operand;
+- a committed mutation failure is fenced, and rollback is an ordinary accepted
+  release of the prior immutable artifact through the same protected chain;
 - drift self-heal consumes the same protected declaration path, never a second
   controller or local script;
 - freeze/kill prevents new admission, preserves readback, and cannot strand an
@@ -150,7 +158,7 @@ The chain must prove:
 
 Generic retry, recovery, freeze, self-heal, executor, observer, liveness, and
 receipt semantics belong in their upstream packages and conformance tests.
-This overlay may only bind and prove them.
+This overlay may only bind released versions and prove their outcomes.
 
 ## 5. GFTB instance surface
 
@@ -161,7 +169,7 @@ bind the upstream chain:
 - exact application and overlay publication repositories and certificate/OIDC
   identities;
 - protected environments and least-privilege service accounts;
-- immutable typed object instances and writer-separated RBAC;
+- upstream-defined immutable byte-preserving evidence instances and writer-separated access controls;
 - workload target, namespace, container, image, replica, policy, and probe
   bindings;
 - protected backend/state and exact saved-plan retention;
@@ -175,31 +183,41 @@ It must not add a second workflow family, generic controller logic, cluster
 credentials to a source repo, source-CI apply authority, Cloudflare credentials,
 a second state owner, or secret values.
 
-## 6. One-mutator activation
+## 6. Inert installation and one-mutator activation
 
-Activation is one reviewed protected-main change that simultaneously:
+Installation and activation are separate reviewed protected-main changes.
+Before activation, the released controller API definitions, digest-pinned
+controller image, and separated read/write authorities must already be
+installed inert and observed healthy. Installation admits no GFTB binding,
+enables no production mutator, and preserves explicit upstream-defined
+disabled/unarmed state.
+
+The later activation change:
 
 1. proves every upstream released pin and hostile-mutation/conformance receipt;
-2. installs the typed CRDs, digest-pinned controller, and separated RBAC;
+2. proves the installed controller/API and separated authorities are healthy,
+   inert, and identical to the reviewed pins;
 3. declares exactly one GFTB binding and exact workload target;
-4. arms the permanent carrier;
+4. changes only the reviewed binding and upstream-defined enable/arm state
+   needed to make the permanent carrier sole;
 5. proves the generation-40 bootstrap bridge is deleted/disabled;
 6. proves legacy manual, dispatch, and attended workload mutation identities,
    queued work, credentials, and recreation paths are absent or fenced;
 7. proves one carrier and one mutator before the first admitted write; and
 8. emits independent liveness/readback evidence.
 
-No interval may have zero admission fencing or two production mutators.
-Historical `web-stack.yml` dispatch and `web-image-published` paths remain
-retired. The spent generation-40 bridge remains retired and cannot become a
-rollback or later-generation path.
+Admission remains fenced throughout the cutover, and no interval has two
+production mutators. Historical `web-stack.yml` dispatch and
+`web-image-published` paths remain retired. The spent generation-40 bridge
+remains retired and cannot become a rollback or later-generation path.
 
 ## 7. Acceptance and launch boundary
 
 Phase 2 is not active until protected evidence proves all of the following:
 
-- exact application and overlay bytes were independently published, signed,
-  reread, and verified;
+- the two fixed publisher identities separately published and signed the exact
+  application and overlay bytes, and the third identity independently reread
+  and verified both publications;
 - the controller consumed a non-nil verifier and accepted the exact handoff;
 - the saved-plan producer and subordinate executor used identical admitted
   bytes;
@@ -213,12 +231,18 @@ Phase 2 is not active until protected evidence proves all of the following:
 - the prior immutable operand and reviewed rollback declaration are known; and
 - the bridge and every legacy workload mutator are absent.
 
-Cloudflare Access remains unchanged until every TIN-2421 and TIN-4203 criterion
-also passes: naming consent, mail/list smoke, reviewer path, pre-flip sweep,
-signed edge declaration, dev/preview preservation, protected main-to-production
-edge execution, public external served SHA/digest proof, QR/phone and
-no-JS/keyboard/reduced-motion/contact checks, artifact receipt, and rollback
-digest. This spec alone never authorizes the flip.
+Cloudflare Access remains unchanged. TIN-2421 and TIN-4203 are the authoritative
+launch checklists; this file does not replace or narrow any current row. Every
+row must pass, including Wave-3 prose/design sign-off; the exact publish-set
+naming-consent sweep; mail receiving/list smoke; the consented reviewer path;
+the pre-flip name, OG-image, and SEO sweep; a signed reviewed edge carrier that
+drops only `web_apex`, `web_www`, and `web_apex_allow` while proving
+dev/preview unchanged; separately ratified protected main-to-production edge
+execution; external public apex and health proof with the exact served source
+SHA and release digest; QR/phone plus no-JS, keyboard, reduced-motion, and
+contact-path checks; the structured artifact and concise proof links required
+by TIN-4203, TIN-3816, and TIN-2664; and the confirmed rollback digest. This
+spec alone never authorizes the flip.
 
 ADR 0022 excludes the member runtime, database/migrations, worker, mail/list,
 payments, DNS, Tunnel, registrar, and every unnamed workload. They require
@@ -226,21 +250,26 @@ their own ratified bindings and cannot ride this static-web carrier.
 
 ## 8. Ordered implementation and holds
 
-1. Land and release the canonical GF verification contract as a signed,
+1. Land Meta #46 on protected Meta `main`; until then its role assignment is
+   not adoption authority.
+2. Land and release the canonical GF verification contract as a signed,
    immutable Bazel/BCR version.
-2. Land owner-overlay-controller repo-contract/Bazel/production-image
+3. Land owner-overlay-controller repo-contract/Bazel/production-image
    foundation, then pin that released GF target and lock.
-3. Land the application and overlay publishers plus independent verifier in
+4. Land the application and overlay publishers plus independent verifier in
    ci-templates with exact-head hostile-mutation proof and a ratified runner
    isolation contract.
-4. Replace the held controller ConfigMap prototype with the immutable typed
-   byte-preserving, read-only verifier; keep runtime installation held.
-5. Land reusable planner/executor/observer/retry/freeze/liveness contracts and
+5. Replace the held controller ConfigMap prototype and operand-only seam with
+   the released upstream-owned immutable, byte-preserving, read-only admission
+   surface; keep runtime installation held.
+6. Land reusable planner/executor/observer/retry/freeze/liveness contracts and
    conformance tests in their owning upstream SSOTs.
-6. Refit this PR once onto current signed infra main with only the GFTB binding,
+7. Refit this PR once onto current signed infra main with only the GFTB binding,
    pins, identities, probes, and receipt requirements.
-7. Land the protected one-mutator activation and prove the full acceptance
-   matrix before any Access change.
+8. Install the released controller/API and separated authorities inert in a
+   distinct reviewed change, then prove that installation healthy.
+9. Land the later protected one-mutator bind/arm activation and prove the full
+   acceptance matrix before any Access change.
 
 Current explicit holds:
 
