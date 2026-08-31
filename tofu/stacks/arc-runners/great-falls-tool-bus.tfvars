@@ -41,7 +41,8 @@ ghcr_pull_secret_name = "ghcr-pull"
 # NOT module-created: the GloriousFlywheel arc-runners stack loads only the
 # kubernetes and helm providers and owns no `github_actions_runner_group`
 # resource, so the GitHub-side group must exist BEFORE the first plan/apply.
-# See docs/implementation-overlay.md "Runner group cutover".
+# The applied boundary is recorded under docs/implementation-overlay.md
+# "Historical runner-group boundary"; its old procedure is not a runbook.
 runner_group        = "great-falls-tool-bus-infra"
 runner_group_policy = "organization-restricted"
 

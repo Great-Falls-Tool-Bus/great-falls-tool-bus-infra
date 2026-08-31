@@ -72,8 +72,9 @@ runner_contract:
   # arc-runners module surface does NOT create or reconcile the GitHub-side
   # group (the GloriousFlywheel arc-runners stack loads only the kubernetes and
   # helm providers and owns no `github_actions_runner_group` resource), so the
-  # group itself is an attended GitHub org-settings action; see
-  # docs/implementation-overlay.md "Runner group cutover".
+  # group itself was applied under TIN-3902. The historical procedure is not
+  # a current action; docs/implementation-overlay.md "Historical runner-group
+  # boundary" records why it must not be reused.
   #
   # The name intentionally matches this overlay's repository name because the
   # group is an owner/tenancy boundary, not a runner capability. It is NOT a
@@ -276,6 +277,6 @@ runner_contract:
       # that packet's reconciliation notes. GitHub-side
       # admission (the runner group's selected-repository list in org
       # Settings) is itself a separate, attended action this file does not
-      # perform; see docs/implementation-overlay.md "Runner group cutover"
-      # Step 0.
+      # perform. The historical action is recorded, not re-executable; see
+      # docs/implementation-overlay.md "Historical runner-group boundary".
       - 1286829099
