@@ -58,16 +58,48 @@ def load_allowlist() -> list[dict]:
     data = json.loads(ALLOWLIST.read_text())
     entries = data["allowed"]
     for e in entries:
-        for field in ("path_prefix", "interface", "provenance"):
+        for field in ("path_prefix", "kinds", "interface", "provenance"):
             if field not in e:
                 raise SystemExit(
                     f"allowlist entry missing {field!r} (provenance-carrying "
                     f"allowlists are the contract, TIN-2398 guardrail #2): {e}"
                 )
+        prefix = e["path_prefix"]
+        if (
+            not isinstance(prefix, str)
+            or not prefix
+            or prefix.startswith("/")
+            or any(part in (".", "..") for part in Path(prefix).parts)
+        ):
+            raise SystemExit(f"allowlist path_prefix must be a safe relative path: {e}")
+        kinds = e["kinds"]
+        if (
+            not isinstance(kinds, list)
+            or not kinds
+            or not all(isinstance(kind, str) for kind in kinds)
+            or len(kinds) != len(set(kinds))
+            or any(kind not in PATTERNS for kind in kinds)
+        ):
+            raise SystemExit(
+                f"allowlist kinds must be unique known reach classes: {e}"
+            )
         for field in ("decision", "date"):
             if field not in e["provenance"]:
                 raise SystemExit(f"allowlist provenance missing {field!r}: {e}")
     return entries
+
+
+def matching_allowlist_entry(
+    rel: Path, kind: str, allowed: list[dict]
+) -> dict | None:
+    """Match one reach by exact path or a real descendant path segment."""
+    rel_text = rel.as_posix()
+    for entry in allowed:
+        prefix = entry["path_prefix"].rstrip("/")
+        path_matches = rel_text == prefix or rel_text.startswith(prefix + "/")
+        if path_matches and kind in entry["kinds"]:
+            return entry
+    return None
 
 
 def scan(files: list[Path], allowed: list[dict]):
@@ -82,10 +114,7 @@ def scan(files: list[Path], allowed: list[dict]):
             for kind, rx in PATTERNS.items():
                 if not rx.search(line):
                     continue
-                entry = next(
-                    (e for e in allowed if str(rel).startswith(e["path_prefix"])),
-                    None,
-                )
+                entry = matching_allowlist_entry(rel, kind, allowed)
                 record = (str(rel), lineno, kind, line.strip()[:120])
                 (allowed_hits if entry else violations).append(record)
     return violations, allowed_hits
@@ -105,15 +134,35 @@ def self_test() -> None:
     clean = 'key = "tinyland-infra/attic/terraform.tfstate"  # fine'
     if any(rx.search(clean) for rx in PATTERNS.values()):
         raise SystemExit("self-test FAILED: false positive on clean line")
-    # allowlist suppression
-    allowed = [{"path_prefix": "tofu/modules/spoke-blahaj-app-install/",
-                "interface": "t", "provenance": {"decision": "t", "date": "t"}}]
-    v, a = [], []
-    entry = next((e for e in allowed
-                  if "tofu/modules/spoke-blahaj-app-install/main.tf".startswith(e["path_prefix"])), None)
-    (a if entry else v).append("x")
-    if v or not a:
-        raise SystemExit("self-test FAILED: allowlist suppression broken")
+    # An exact-file named interface suppresses only its reviewed reach class.
+    # String-prefix siblings must remain violations, and other reach classes in
+    # the exact file must not inherit the repo-reference exception.
+    allowed = [{
+        "path_prefix": "config/arc-storage-source-contract.json",
+        "kinds": ["repo-ref"],
+        "interface": "t",
+        "provenance": {"decision": "t", "date": "t"},
+    }]
+    exact = Path("config/arc-storage-source-contract.json")
+    if matching_allowlist_entry(exact, "repo-ref", allowed) is None:
+        raise SystemExit("self-test FAILED: exact-file allowlist did not match")
+    suffix_paths = (
+        Path("config/arc-storage-source-contract.json.evil"),
+        Path("config/arc-storage-source-contract.json.backup"),
+        Path("config/arc-storage-source-contract.jsonx"),
+    )
+    for suffix_path in suffix_paths:
+        if matching_allowlist_entry(suffix_path, "repo-ref", allowed) is not None:
+            raise SystemExit(
+                "self-test FAILED: suffix path was allowlisted instead of "
+                f"remaining a violation: {suffix_path}"
+            )
+    for other_kind in ("path-reach", "state-key"):
+        if matching_allowlist_entry(exact, other_kind, allowed) is not None:
+            raise SystemExit(
+                "self-test FAILED: exact-file exception leaked into reach class "
+                f"{other_kind}"
+            )
     print("substrate-boundary self-test passed")
 
 
