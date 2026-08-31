@@ -26,9 +26,11 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Base = infra main as of PR #149 (chore(web): pin gftb-site generation 42),
-  # the commit this bridge-adding squash merge's single parent must equal.
-  REVIEWED_BASE_SHA: 68944b8edc53ccc45a17fc521caa63ad5bd2315f
+  # Base = infra main at carrier merge time. It carries PR #149's generation-42
+  # desired-state pin unchanged (68944b8e); PR #150 after it touched a runbook
+  # only. This bridge-adding squash merge's single parent must equal it, so if
+  # main moves again before merge, re-bind this value and repin the validator.
+  REVIEWED_BASE_SHA: 4871be2e74520c6613b1b47b87bd16dee6b4c654
   TARGET_SOURCE_SHA: 9adae265731ec22011e562bc4d8f1bcc90d1629b
   TARGET_IMAGE: ghcr.io/great-falls-tool-bus/gftb-site@sha256:f45bc7a644edfb297b6df8281e315c64a7fdb37b304ef5bba135743143bcee1a
   # Forward render digest: derived on the tinyland-nix runner by the transient
