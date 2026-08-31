@@ -338,6 +338,40 @@ ARC_STORAGE_RUNTIME_TOKENS = (
 )
 
 
+# A command match needs a standalone executable token and standalone apply
+# subcommand. In particular, historical receipt paths such as
+# `.tofu-plans/arc-runners.apply-attempted` are data, not mutation commands.
+ARC_STORAGE_DIRECT_APPLY_COMMAND = re.compile(
+    r"(?m)(?<![A-Za-z0-9_./-])(?:tofu|terraform)(?=[ \t]|-chdir\b)"
+    r"[^\n]*?(?<![A-Za-z0-9_.-])apply(?=$|[ \t;&|()])"
+)
+ARC_STORAGE_JUST_ARC_APPLY_COMMAND = re.compile(
+    r"(?m)(?<![A-Za-z0-9_./-])just(?=[ \t])"
+    r"[^\n]*?(?<![A-Za-z0-9_.-])arc-apply(?=$|[ \t;&|()])"
+)
+ARC_STORAGE_CARRIER_ROOTS = (
+    (".github", "actions"),
+    (".github", "workflows"),
+    ("scripts",),
+    ("tools",),
+    ("bin",),
+)
+ARC_STORAGE_CARRIER_SUFFIXES = frozenset({".bash", ".py", ".sh"})
+ARC_STORAGE_CARRIER_EXCLUDED_PARTS = frozenset(
+    {
+        ".direnv",
+        ".git",
+        "build",
+        "dist",
+        "generated",
+        "node_modules",
+        "third_party",
+        "vendor",
+        "vendored",
+    }
+)
+
+
 ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     "enrollment-preflight": _receipt(
         "d83a90b6a0ec08c7", "5095b8d291c95c78", "050fc9bed756da81", "7509f17dabb99e4f"
@@ -1167,24 +1201,67 @@ def scan_arc_operator_contract_text(text: str, path: Path) -> list[Finding]:
     return findings
 
 
-def arc_storage_carrier_texts() -> dict[Path, str]:
-    """Read executable carrier sources; the contract itself remains source-only."""
-    paths = set(git_files(WORKFLOW_GLOBS + SCRIPT_GLOBS + COMPOSITE_ACTION_GLOBS))
-    paths.update(path.relative_to(REPO) for path in (REPO / "scripts").glob("**/*"))
-    for pattern in (*WORKFLOW_GLOBS, *COMPOSITE_ACTION_GLOBS):
-        paths.update(path.relative_to(REPO) for path in REPO.glob(pattern))
+def git_tracked_file_modes() -> dict[Path, str]:
+    """Return stage-zero tracked paths and modes without consulting untracked data."""
+    completed = subprocess.run(
+        ["git", "ls-files", "--stage", "-z"],
+        cwd=REPO,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    tracked: dict[Path, str] = {}
+    for entry in completed.stdout.split(b"\x00"):
+        if not entry:
+            continue
+        metadata, encoded_path = entry.split(b"\t", 1)
+        mode, _object_id, stage = metadata.split(b" ", 2)
+        if stage != b"0":
+            continue
+        tracked[Path(encoded_path.decode("utf-8", errors="surrogateescape"))] = (
+            mode.decode("ascii")
+        )
+    return tracked
 
+
+def is_arc_storage_carrier_source(path: Path, mode: str) -> bool:
+    """Select tracked executable source while excluding vendored/generated data."""
+    if mode not in {"100644", "100755"}:
+        return False
+    if any(part in ARC_STORAGE_CARRIER_EXCLUDED_PARTS for part in path.parts):
+        return False
+    under_carrier_root = any(
+        path.parts[: len(root)] == root for root in ARC_STORAGE_CARRIER_ROOTS
+    )
+    return (
+        under_carrier_root
+        or path.suffix.lower() in ARC_STORAGE_CARRIER_SUFFIXES
+        or mode == "100755"
+    )
+
+
+def arc_storage_carrier_texts() -> dict[Path, str]:
+    """Read tracked executable source; the contract itself remains source-only."""
     carriers: dict[Path, str] = {}
-    for rel in sorted(paths):
+    for rel, mode in sorted(
+        git_tracked_file_modes().items(), key=lambda item: item[0].as_posix()
+    ):
         path = REPO / rel
-        if rel == SELF or not path.is_file() or "__pycache__" in rel.parts:
+        if (
+            rel == SELF
+            or not is_arc_storage_carrier_source(rel, mode)
+            or not path.is_file()
+        ):
             continue
         raw = path.read_bytes()
-        if b"\x00" in raw or path.suffix in {".pyc", ".pyo", ".pyd"}:
+        if b"\x00" in raw:
             continue
-        carriers[rel] = raw.decode("utf-8", errors="replace")
+        try:
+            carriers[rel] = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            # A tracked executable binary is not a shell/Python carrier.
+            continue
     return carriers
-
 
 def scan_arc_storage_source_contract_text(
     contract: bytes,
@@ -1299,8 +1376,7 @@ def scan_arc_storage_source_contract_text(
                 )
             logical = "\n".join(shell_logical_lines(executable))
             direct_arc_apply = (
-                re.search(r"\b(?:tofu|terraform)\b[^\n]*\bapply\b", logical)
-                is not None
+                ARC_STORAGE_DIRECT_APPLY_COMMAND.search(logical) is not None
                 and ("arc-runners" in executable or "{{ arc_tfvars }}" in executable)
             )
             if direct_arc_apply and name != "arc-apply":
@@ -1318,20 +1394,21 @@ def scan_arc_storage_source_contract_text(
         observed_tokens = sorted(
             token for token in ARC_STORAGE_RUNTIME_TOKENS if token in text
         )
+        logical = "\n".join(shell_logical_lines(text))
         direct_arc_apply = (
-            re.search(r"\b(?:tofu|terraform)\b[^\n]*\bapply\b", text)
-            is not None
+            ARC_STORAGE_DIRECT_APPLY_COMMAND.search(logical) is not None
             and "arc-runners" in text
         )
-        invokes_arc_apply = re.search(r"\bjust\b[^\n]*\barc-apply\b", text)
+        invokes_arc_apply = ARC_STORAGE_JUST_ARC_APPLY_COMMAND.search(logical)
         if observed_tokens or direct_arc_apply or invokes_arc_apply:
             findings.append(
                 Finding(
                     "arc-storage-external-carrier",
                     path,
                     1,
-                    "Workflow, script, and action carriers must not activate the "
-                    "TIN-4072 storage delta; protected planner/executor/observer "
+                    "Tracked workflow/action, scripts/tools/bin, shell/Python, and "
+                    "executable-text carriers must not activate the TIN-4072 storage "
+                    "delta; protected planner/executor/observer "
                     "activation is external to this repository.",
                 )
             )
@@ -6582,6 +6659,27 @@ def self_test() -> None:
     storage_contract = (REPO / ARC_STORAGE_SOURCE_CONTRACT_PATH).read_bytes()
     storage_tfvars = (REPO / ARC_STORAGE_TFVARS_PATH).read_text(encoding="utf-8")
     storage_carriers = arc_storage_carrier_texts()
+    carrier_selection_cases = (
+        (Path("tools/storage-lane"), "100644", True),
+        (Path("bin/storage-lane"), "100644", True),
+        (Path("ops/storage-lane.py"), "100644", True),
+        (Path("ops/storage-lane.sh"), "100644", True),
+        (Path("ops/storage-lane"), "100755", True),
+        (Path("docs/storage-lane.md"), "100644", False),
+        (Path("vendor/tools/storage-lane.py"), "100755", False),
+        (Path("generated/bin/storage-lane"), "100755", False),
+        (Path("third_party/storage-lane.sh"), "100644", False),
+        (Path("bin/storage-lane"), "120000", False),
+    )
+    for carrier_path, carrier_mode, expected_selection in carrier_selection_cases:
+        observed_selection = is_arc_storage_carrier_source(
+            carrier_path, carrier_mode
+        )
+        if observed_selection is not expected_selection:
+            raise SystemExit(
+                "self-test FAILED: tracked carrier selection mismatch for "
+                f"{carrier_path} mode {carrier_mode}: {observed_selection!r}"
+            )
     storage_baseline = scan_arc_storage_source_contract_text(
         storage_contract, storage_tfvars, justfile, storage_carriers
     )
@@ -6589,6 +6687,26 @@ def self_test() -> None:
         rules = ", ".join(sorted({finding.rule for finding in storage_baseline}))
         raise SystemExit(
             f"self-test FAILED: ARC storage baseline is invalid ({rules})"
+        )
+
+    historical_attempt_marker = (
+        justfile
+        + "\narc-historical-attempt-marker:\n"
+        + "    test -f .tofu-plans/arc-runners.apply-attempted\n"
+    )
+    historical_attempt_findings = scan_arc_storage_source_contract_text(
+        storage_contract,
+        storage_tfvars,
+        historical_attempt_marker,
+        storage_carriers,
+    )
+    if historical_attempt_findings:
+        rules = ", ".join(
+            sorted({finding.rule for finding in historical_attempt_findings})
+        )
+        raise SystemExit(
+            "self-test FAILED: historical ARC apply-attempt receipt path was "
+            f"classified as executable mutation ({rules})"
         )
 
     contract_text = storage_contract.decode("utf-8")
@@ -6712,6 +6830,29 @@ def self_test() -> None:
             "arc-storage-tfvars-mismatch",
         )
 
+    max_four_pattern = re.compile(
+        r"(^[ \t]*nix_max_runners[ \t]*=[ \t]*)1([ \t]*(?:#.*)?$)",
+        flags=re.MULTILINE,
+    )
+    max_four_tfvars, count = max_four_pattern.subn(
+        lambda match: match.group(1) + "4" + match.group(2),
+        storage_tfvars,
+        count=1,
+    )
+    if count != 1:
+        raise SystemExit(
+            "self-test FAILED: could not construct historical max-one to "
+            "max-four tfvars fixture"
+        )
+    expect_arc_storage_contract_rejection(
+        storage_contract,
+        max_four_tfvars,
+        justfile,
+        storage_carriers,
+        "historical max-one to max-four drift",
+        "arc-storage-tfvars-mismatch",
+    )
+
     for label, block in ARC_STORAGE_TFVARS_REQUIRED_BLOCKS:
         mutated_tfvars = storage_tfvars.replace(block, block.replace("sting", "honey"), 1)
         expect_arc_storage_contract_rejection(
@@ -6811,6 +6952,35 @@ def self_test() -> None:
         "ad hoc ARC apply carrier",
         "arc-storage-external-carrier",
     )
+
+    outside_script_carrier_cases = (
+        (
+            Path("tools/storage-fixture.py"),
+            "tofu -chdir=tofu/stacks/arc-runners apply\n",
+            "tools direct ARC apply carrier",
+        ),
+        (
+            Path("bin/storage-fixture"),
+            "#!/usr/bin/env bash\njust arc-apply\n",
+            "bin attended ARC apply carrier",
+        ),
+        (
+            Path("ops/storage_fixture.py"),
+            'print("local-path-sting-fast-ephemeral")\n',
+            "outside-root Python storage carrier",
+        ),
+    )
+    for carrier_path, carrier_text, label in outside_script_carrier_cases:
+        outside_carriers = dict(storage_carriers)
+        outside_carriers[carrier_path] = carrier_text
+        expect_arc_storage_contract_rejection(
+            storage_contract,
+            storage_tfvars,
+            justfile,
+            outside_carriers,
+            label,
+            "arc-storage-external-carrier",
+        )
 
     attended_baseline = scan_attended_operator_contract_text(
         justfile, Path("Justfile")
