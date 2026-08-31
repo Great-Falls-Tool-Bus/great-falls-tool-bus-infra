@@ -3527,9 +3527,17 @@ def install_web_release_fixture_mocks(
         ):
             raise TypeError("fixture NetworkPolicy must have metadata")
         policy["metadata"].pop("uid", None)
+    # Keep the runtime legacy-policy fixtures, but make mocked kustomize
+    # match the current checked-in three-policy base.
+    current_render_policies = [
+        policy
+        for policy in rendered_policies
+        if policy["metadata"].get("name")
+        not in {"allow-egress-dns", "allow-egress-discuss-archive"}
+    ]
     render_fixture = WEB_RELEASE_RENDER_FIXTURE + "".join(
         "---\n" + json.dumps(policy, sort_keys=True) + "\n"
-        for policy in rendered_policies
+        for policy in current_render_policies
     )
     (fixture_dir / "render.yaml").write_text(render_fixture, encoding="utf-8")
     manifest = {
@@ -3709,11 +3717,22 @@ def install_web_release_fixture_mocks(
                         if '"name": "default-deny-ingress"' not in document
                     )
                 if state == "render-retained-legacy-egress" and kustomize_calls == 2:
-                    rendered = rendered.replace(
-                        '"name": "allow-egress-dns"',
-                        '"name": "allow-egress-dns-retained"',
-                        1,
+                    legacy = json.loads(
+                        (fixtures / "render-base-networkpolicies.json").read_text(
+                            encoding="utf-8"
+                        )
                     )
+                    legacy_policy = copy.deepcopy(
+                        next(
+                            policy
+                            for policy in legacy["items"]
+                            if policy["metadata"]["name"] == "allow-egress-dns"
+                        )
+                    )
+                    legacy_policy["metadata"]["name"] = "allow-egress-dns-retained"
+                    rendered += "---\n" + json.dumps(
+                        legacy_policy, sort_keys=True
+                    ) + "\n"
                 if state == "render-secret":
                     rendered += "---\\napiVersion: v1\\nkind: Secret\\nmetadata:\\n  name: injected\\n  namespace: greatfallstoolbus-org-production\\n"
                 if state == "render-env-from":
@@ -4984,8 +5003,8 @@ def run_web_release_semantic_fixtures() -> None:
             or "allow-egress-discuss-archive" in render.stdout
         ):
             raise SystemExit(
-                "self-test FAILED: render fixture did not replace legacy egress "
-                "allows with the exact default-deny policy"
+                "self-test FAILED: render fixture did not synthesize the exact "
+                "default-deny policy or retained a legacy egress allow"
             )
         render_log = log_path.read_text(encoding="utf-8").splitlines()
         if render_log.count("nested-just web-stack-validate") != 1 or sum(
