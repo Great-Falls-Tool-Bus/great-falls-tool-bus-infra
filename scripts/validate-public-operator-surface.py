@@ -617,7 +617,7 @@ WEB_RELEASE_VALIDATION_SCRIPT = Path("scripts/validate-web-stack.sh")
 # Updated 2026-08-30 (PR #143): tracked web-apply RBAC is now validated
 # exactly and is proved absent from the workload render; this receipt co-moves.
 WEB_RELEASE_VALIDATION_SCRIPT_SHA256 = _receipt(
-    "f67dac23be354e04", "d94384ad26440876", "c010c464b91d1a8c", "d22763f8bb1afcb9"
+    "421fdc81f946b9ca", "df340a9e09faca5a", "d14c4175c2cb66de", "9c28c5d726faa89b"
 )
 
 FLAKE_RELEASE_PACKAGES = ("crane", "curl")
