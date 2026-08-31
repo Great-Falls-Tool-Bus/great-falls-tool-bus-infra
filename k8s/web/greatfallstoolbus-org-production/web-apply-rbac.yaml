@@ -1,0 +1,80 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: web-apply
+  namespace: greatfallstoolbus-org-production
+  labels:
+    app.kubernetes.io/managed-by: great-falls-tool-bus-infra
+    app.kubernetes.io/part-of: great-falls-tool-bus
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: web-apply
+  namespace: greatfallstoolbus-org-production
+  labels:
+    app.kubernetes.io/managed-by: great-falls-tool-bus-infra
+    app.kubernetes.io/part-of: great-falls-tool-bus
+rules:
+  # Named mutations are resourceName-constrained. Kubernetes RBAC cannot
+  # constrain create by resourceName, so the create-only rules remain separate;
+  # the permanent carrier must verify the exact rendered objects before issuing
+  # its one-use credential.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["greatfallstoolbus-org"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["list", "watch", "create"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+  - apiGroups: [""]
+    resources: ["services"]
+    resourceNames: ["greatfallstoolbus-org"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["create"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    resourceNames:
+      - default-deny-ingress
+      - allow-cloudflared-tunnel-ingress
+      - allow-prometheus-scrape
+      - default-deny-egress
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    resourceNames:
+      - allow-egress-dns
+      - allow-egress-discuss-archive
+    verbs: ["delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["list", "create"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: web-apply
+  namespace: greatfallstoolbus-org-production
+  labels:
+    app.kubernetes.io/managed-by: great-falls-tool-bus-infra
+    app.kubernetes.io/part-of: great-falls-tool-bus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: web-apply
+subjects:
+  - kind: ServiceAccount
+    name: web-apply
+    namespace: greatfallstoolbus-org-production

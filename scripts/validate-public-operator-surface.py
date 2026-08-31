@@ -472,7 +472,7 @@ WEB_RELEASE_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "271460cb71ceda56", "0bbca7e8b57d0ddf", "eb68c983d72ab455", "a44e713d9007bbf9"
     ),
     "_web-release-apply-kubeconfig-contract": _receipt(
-        "5cd12307160b8a71", "3ad1307f87ee1298", "5a28a484924cd275", "23f3bbd56a1e97fb"
+        "25bab53181e65ec9", "391ef4c90fa9e231", "cf74e4f1db70e3a0", "cd7bf3b9b9891fb8"
     ),
     "web-release-plan": _receipt(
         "4c521b684de15316", "694df6eec8402abd", "e6fb365e2cb8a4d1", "79d6b8a69379a844"
@@ -614,8 +614,10 @@ WEB_RELEASE_VALIDATION_SCRIPT = Path("scripts/validate-web-stack.sh")
 # the same PR (same recompute command as above).
 # Updated 2026-08-29: the yq-go preflight now requires both the mikefarah
 # vendor marker and a v4 version marker; this receipt binds that exact fix.
+# Updated 2026-08-30 (PR #143): tracked web-apply RBAC is now validated
+# exactly and is proved absent from the workload render; this receipt co-moves.
 WEB_RELEASE_VALIDATION_SCRIPT_SHA256 = _receipt(
-    "c260f829e1531513", "3c4fa03db9443b1d", "55cf9d7e5fa02b78", "a6a56635fbab64c8"
+    "41900cb68a4e6395", "ab0e2f324f80a9be", "0b6d49e895398b99", "e070aab3a744ef53"
 )
 
 FLAKE_RELEASE_PACKAGES = ("crane", "curl")
@@ -3525,9 +3527,17 @@ def install_web_release_fixture_mocks(
         ):
             raise TypeError("fixture NetworkPolicy must have metadata")
         policy["metadata"].pop("uid", None)
+    # Keep the runtime legacy-policy fixtures, but make mocked kustomize
+    # match the current checked-in three-policy base.
+    current_render_policies = [
+        policy
+        for policy in rendered_policies
+        if policy["metadata"].get("name")
+        not in {"allow-egress-dns", "allow-egress-discuss-archive"}
+    ]
     render_fixture = WEB_RELEASE_RENDER_FIXTURE + "".join(
         "---\n" + json.dumps(policy, sort_keys=True) + "\n"
-        for policy in rendered_policies
+        for policy in current_render_policies
     )
     (fixture_dir / "render.yaml").write_text(render_fixture, encoding="utf-8")
     manifest = {
@@ -3707,11 +3717,22 @@ def install_web_release_fixture_mocks(
                         if '"name": "default-deny-ingress"' not in document
                     )
                 if state == "render-retained-legacy-egress" and kustomize_calls == 2:
-                    rendered = rendered.replace(
-                        '"name": "allow-egress-dns"',
-                        '"name": "allow-egress-dns-retained"',
-                        1,
+                    legacy = json.loads(
+                        (fixtures / "render-base-networkpolicies.json").read_text(
+                            encoding="utf-8"
+                        )
                     )
+                    legacy_policy = copy.deepcopy(
+                        next(
+                            policy
+                            for policy in legacy["items"]
+                            if policy["metadata"]["name"] == "allow-egress-dns"
+                        )
+                    )
+                    legacy_policy["metadata"]["name"] = "allow-egress-dns-retained"
+                    rendered += "---\\n" + json.dumps(
+                        legacy_policy, sort_keys=True
+                    ) + "\\n"
                 if state == "render-secret":
                     rendered += "---\\napiVersion: v1\\nkind: Secret\\nmetadata:\\n  name: injected\\n  namespace: greatfallstoolbus-org-production\\n"
                 if state == "render-env-from":
@@ -4428,14 +4449,20 @@ def install_web_release_fixture_mocks(
               # The APPLY identity's grant matrix. Scoped to apply-* states so it
               # cannot loosen the proof-only identity the mutation-denial proof
               # depends on.
-              if [[ "${state}" == apply-* && "${scope}" == "namespaced" && -z "${resource_name}" && -z "${subresource}" ]]; then
-                case "${verb}:${base_resource}" in
-                  get:deployments.apps|list:deployments.apps|watch:deployments.apps|create:deployments.apps|update:deployments.apps|patch:deployments.apps|get:services|create:services|update:services|patch:services|get:networkpolicies.networking.k8s.io|create:networkpolicies.networking.k8s.io|update:networkpolicies.networking.k8s.io|patch:networkpolicies.networking.k8s.io|delete:networkpolicies.networking.k8s.io) allowed=1 ;;
-                esac
+              if [[ "${state}" == apply-* && "${scope}" == "namespaced" && -z "${subresource}" ]]; then
+                if [[ -z "${resource_name}" ]]; then
+                  case "${verb}:${base_resource}" in
+                    list:deployments.apps|watch:deployments.apps|create:deployments.apps|create:services|create:networkpolicies.networking.k8s.io) allowed=1 ;;
+                  esac
+                else
+                  case "${verb}:${base_resource}:${resource_name}" in
+                    get:deployments.apps:greatfallstoolbus-org|get:services:greatfallstoolbus-org|get:networkpolicies.networking.k8s.io:default-deny-ingress|get:networkpolicies.networking.k8s.io:allow-cloudflared-tunnel-ingress|get:networkpolicies.networking.k8s.io:allow-prometheus-scrape|get:networkpolicies.networking.k8s.io:default-deny-egress|update:deployments.apps:greatfallstoolbus-org|update:services:greatfallstoolbus-org|update:networkpolicies.networking.k8s.io:default-deny-ingress|update:networkpolicies.networking.k8s.io:allow-cloudflared-tunnel-ingress|update:networkpolicies.networking.k8s.io:allow-prometheus-scrape|update:networkpolicies.networking.k8s.io:default-deny-egress|patch:deployments.apps:greatfallstoolbus-org|patch:services:greatfallstoolbus-org|patch:networkpolicies.networking.k8s.io:default-deny-ingress|patch:networkpolicies.networking.k8s.io:allow-cloudflared-tunnel-ingress|patch:networkpolicies.networking.k8s.io:allow-prometheus-scrape|patch:networkpolicies.networking.k8s.io:default-deny-egress|delete:networkpolicies.networking.k8s.io:allow-egress-dns|delete:networkpolicies.networking.k8s.io:allow-egress-discuss-archive) allowed=1 ;;
+                  esac
+                fi
               fi
-              if [[ "${state}" == "apply-authz-denied-delete" && "${verb}:${base_resource}" == "delete:networkpolicies.networking.k8s.io" ]]; then allowed=0; fi
+              if [[ "${state}" == "apply-authz-denied-delete" && "${verb}:${base_resource}:${resource_name}" == "delete:networkpolicies.networking.k8s.io:allow-egress-discuss-archive" ]]; then allowed=0; fi
               if [[ "${state}" == "apply-authz-denied-create-policy" && "${verb}:${base_resource}" == "create:networkpolicies.networking.k8s.io" ]]; then allowed=0; fi
-              if [[ "${state}" == "apply-authz-transport-error" && "${verb}:${base_resource}" == "delete:networkpolicies.networking.k8s.io" ]]; then echo "mock authorization transport failure" >&2; exit 2; fi
+              if [[ "${state}" == "apply-authz-transport-error" && "${verb}:${base_resource}:${resource_name}" == "delete:networkpolicies.networking.k8s.io:allow-egress-discuss-archive" ]]; then echo "mock authorization transport failure" >&2; exit 2; fi
               if [[ "${allowed}" -eq 1 ]]; then printf 'yes\\n'; exit 0; fi
               printf 'no\\n'
               exit 1
@@ -4982,8 +5009,8 @@ def run_web_release_semantic_fixtures() -> None:
             or "allow-egress-discuss-archive" in render.stdout
         ):
             raise SystemExit(
-                "self-test FAILED: render fixture did not replace legacy egress "
-                "allows with the exact default-deny policy"
+                "self-test FAILED: render fixture did not synthesize the exact "
+                "default-deny policy or retained a legacy egress allow"
             )
         render_log = log_path.read_text(encoding="utf-8").splitlines()
         if render_log.count("nested-just web-stack-validate") != 1 or sum(
@@ -5009,7 +5036,7 @@ def run_web_release_semantic_fixtures() -> None:
                 "self-test FAILED: render fixture retained an injected envFrom"
             )
         for state, diagnostic in (
-            ("render-secret", "rendered object census mismatch"),
+            ("render-secret", "workload render must contain exactly Deployment/Service/three NetworkPolicies and no RBAC authority"),
             ("render-missing-default-ingress", "rendered object census mismatch"),
             ("render-retained-legacy-egress", "rendered object census mismatch"),
             (
@@ -5948,21 +5975,31 @@ def run_web_release_semantic_fixtures() -> None:
 # The verbs web-release-apply's identity must hold before it touches anything,
 # in the exact order _web-release-apply-kubeconfig-contract asks for them.
 WEB_RELEASE_APPLY_AUTHZ_CONTRACT: tuple[tuple[str, str], ...] = (
-    ("get", "deployments.apps"),
+    ("get", "deployments.apps/greatfallstoolbus-org"),
     ("list", "deployments.apps"),
     ("watch", "deployments.apps"),
     ("create", "deployments.apps"),
-    ("update", "deployments.apps"),
-    ("patch", "deployments.apps"),
-    ("get", "services"),
+    ("update", "deployments.apps/greatfallstoolbus-org"),
+    ("patch", "deployments.apps/greatfallstoolbus-org"),
+    ("get", "services/greatfallstoolbus-org"),
     ("create", "services"),
-    ("update", "services"),
-    ("patch", "services"),
-    ("get", "networkpolicies.networking.k8s.io"),
+    ("update", "services/greatfallstoolbus-org"),
+    ("patch", "services/greatfallstoolbus-org"),
+    ("get", "networkpolicies.networking.k8s.io/default-deny-ingress"),
+    ("get", "networkpolicies.networking.k8s.io/allow-cloudflared-tunnel-ingress"),
+    ("get", "networkpolicies.networking.k8s.io/allow-prometheus-scrape"),
+    ("get", "networkpolicies.networking.k8s.io/default-deny-egress"),
     ("create", "networkpolicies.networking.k8s.io"),
-    ("update", "networkpolicies.networking.k8s.io"),
-    ("patch", "networkpolicies.networking.k8s.io"),
-    ("delete", "networkpolicies.networking.k8s.io"),
+    ("update", "networkpolicies.networking.k8s.io/default-deny-ingress"),
+    ("update", "networkpolicies.networking.k8s.io/allow-cloudflared-tunnel-ingress"),
+    ("update", "networkpolicies.networking.k8s.io/allow-prometheus-scrape"),
+    ("update", "networkpolicies.networking.k8s.io/default-deny-egress"),
+    ("patch", "networkpolicies.networking.k8s.io/default-deny-ingress"),
+    ("patch", "networkpolicies.networking.k8s.io/allow-cloudflared-tunnel-ingress"),
+    ("patch", "networkpolicies.networking.k8s.io/allow-prometheus-scrape"),
+    ("patch", "networkpolicies.networking.k8s.io/default-deny-egress"),
+    ("delete", "networkpolicies.networking.k8s.io/allow-egress-dns"),
+    ("delete", "networkpolicies.networking.k8s.io/allow-egress-discuss-archive"),
 )
 
 
@@ -6186,7 +6223,8 @@ def run_web_release_mutation_fixtures() -> None:
         for state, diagnostic in (
             (
                 "apply-authz-denied-delete",
-                f"cannot delete networkpolicies.networking.k8s.io in {namespace}",
+                f"cannot delete networkpolicies.networking.k8s.io/"
+                f"allow-egress-discuss-archive in {namespace}",
             ),
             (
                 "apply-authz-denied-create-policy",
