@@ -38,8 +38,17 @@ any one link is missing.
 >   pass; and
 > - the application receives no cluster-admin or broad Mailman credential.
 >
-> Before that gate, optional mail may remain unprovisioned. Operators must
-> not make it look automated by performing undocumented manual steps.
+> Before that gate, mail stays unprovisioned as a delayed entitlement, not an
+> optional one (decision 0024, 2026-08-31, §1.6: "a delayed mailbox is an
+> unmet projection, not an optional benefit"). Operators must not make it look
+> automated by performing undocumented manual steps.
+
+The quoted block above tracks the amended spec §7 text. Decision 0024
+(2026-08-31) also supplies the carrier values behind the `latoolb.us` capacity
+row: account ceiling 64, alert at 48, from the TIN-3813 acceptance gate
+(Amendment 1). Nothing in that decision opens this gate or authorizes a send:
+it rules the member entitlement and its periods, not this automation's
+readiness.
 
 Per the estate gap matrix (2026-08-23), all eight rows are open as of
 2026-08-29. **This gate governs the automated *account/mailbox projection*
