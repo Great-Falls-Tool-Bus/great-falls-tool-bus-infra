@@ -280,6 +280,64 @@ def _receipt(*chunks: str) -> str:
     return value
 
 
+ARC_STORAGE_SOURCE_CONTRACT_PATH = Path("config/arc-storage-source-contract.json")
+ARC_STORAGE_TFVARS_PATH = Path(
+    "tofu/stacks/arc-runners/great-falls-tool-bus.tfvars"
+)
+ARC_STORAGE_SOURCE_CONTRACT_SHA256 = _receipt(
+    "ddd66284216ef96f", "9ab3eed1a02ee8b1", "4bcf6273c48c14c9", "207bbbfa4484219e"
+)
+ARC_STORAGE_TFVARS_EXPECTED = {
+    "nix_min_runners": "0",
+    "nix_max_runners": "1",
+    "nix_cpu_limit": '"4"',
+    "nix_memory_limit": '"8Gi"',
+    "nix_ephemeral_storage_request": '"8Gi"',
+    "nix_ephemeral_storage_limit": '"16Gi"',
+    "nix_store_enabled": "false",
+    "nix_store_prepopulate_enabled": "false",
+    "nix_store_storage_class": '"openebs-bumble-zfs"',
+    "nix_store_size": '"50Gi"',
+    "nix_root_volume_storage_class": '"local-path-sting-fast-ephemeral"',
+    "nix_root_volume_size": '"64Gi"',
+    "nix_work_volume_storage_class": '"local-path-sting-fast-ephemeral"',
+    "nix_work_volume_size": '"32Gi"',
+    "nix_cache_volume_storage_class": '"local-path-sting-fast-ephemeral"',
+    "nix_cache_volume_size": '"32Gi"',
+    "nix_warm_pool_enabled": "false",
+    "deploy_docker_runner": "false",
+    "deploy_dind_runner": "false",
+    "deploy_longhorn": "false",
+}
+ARC_STORAGE_TFVARS_REQUIRED_BLOCKS = (
+    (
+        "shared runner Sting selector",
+        "shared_runner_node_selector = {\n"
+        '  "kubernetes.io/hostname" = "sting"\n'
+        "}",
+    ),
+    (
+        "shared Nix runner Sting selector",
+        "shared_nix_runner_node_selector = {\n"
+        '  "kubernetes.io/hostname" = "sting"\n'
+        "}",
+    ),
+)
+ARC_STORAGE_RUNTIME_TOKENS = (
+    "local-path-sting-fast-ephemeral",
+    "nix_root_volume_storage_class",
+    "nix_root_volume_size",
+    "nix_work_volume_storage_class",
+    "nix_work_volume_size",
+    "nix_cache_volume_storage_class",
+    "nix_cache_volume_size",
+    "storage-adoption",
+    "storage-rollback",
+    "storage-promotion",
+    "storage-readback",
+)
+
+
 ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     "enrollment-preflight": _receipt(
         "d83a90b6a0ec08c7", "5095b8d291c95c78", "050fc9bed756da81", "7509f17dabb99e4f"
@@ -336,7 +394,7 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "b0a11061708fcdfe", "55054b2b9e1f118b", "5bd0ece868acb187", "bcca11c478cda72a"
     ),
     "_arc-runtime-contract": _receipt(
-        "8a59ff1ca6595adf", "bb9934899eafe485", "5171b55db261ce9d", "1a37af57fd39e919"
+        "f667efcef12ba025", "ab88b1f147ef3ad5", "fd33ddfdcd7aafe6", "88b797f7dd143dd0"
     ),
     "_arc-artifact-root-contract": _receipt(
         "3facf583d208268e", "ea605e546826e378", "115f0a222a718557", "a23fd2d2952e2bda"
@@ -1107,6 +1165,189 @@ def scan_arc_operator_contract_text(text: str, path: Path) -> list[Finding]:
             )
         )
     return findings
+
+
+
+def arc_storage_carrier_texts() -> dict[Path, str]:
+    """Read executable carrier sources; the contract itself remains source-only."""
+    paths = set(git_files(WORKFLOW_GLOBS + SCRIPT_GLOBS + COMPOSITE_ACTION_GLOBS))
+    paths.update(path.relative_to(REPO) for path in (REPO / "scripts").glob("**/*"))
+    for pattern in (*WORKFLOW_GLOBS, *COMPOSITE_ACTION_GLOBS):
+        paths.update(path.relative_to(REPO) for path in REPO.glob(pattern))
+
+    carriers: dict[Path, str] = {}
+    for rel in sorted(paths):
+        path = REPO / rel
+        if rel == SELF or not path.is_file() or "__pycache__" in rel.parts:
+            continue
+        raw = path.read_bytes()
+        if b"\x00" in raw or path.suffix in {".pyc", ".pyo", ".pyd"}:
+            continue
+        carriers[rel] = raw.decode("utf-8", errors="replace")
+    return carriers
+
+
+def scan_arc_storage_source_contract_text(
+    contract: bytes,
+    tfvars: str,
+    justfile: str,
+    carriers: dict[Path, str],
+) -> list[Finding]:
+    """Bind TIN-4072 source while refusing every local storage carrier."""
+    findings: list[Finding] = []
+    observed_contract_hash = hashlib.sha256(contract).hexdigest()
+    if observed_contract_hash != ARC_STORAGE_SOURCE_CONTRACT_SHA256:
+        findings.append(
+            Finding(
+                "arc-storage-source-contract-mismatch",
+                ARC_STORAGE_SOURCE_CONTRACT_PATH,
+                1,
+                "The TIN-4072 source-only contract must remain byte-exact at "
+                f"{ARC_STORAGE_SOURCE_CONTRACT_SHA256}; observed "
+                f"{observed_contract_hash}.",
+            )
+        )
+
+    for name, expected in ARC_STORAGE_TFVARS_EXPECTED.items():
+        observed = [
+            value.strip()
+            for value in re.findall(
+                rf"^[ \\t]*{re.escape(name)}[ \\t]*=[ \\t]*([^\\n#]+)",
+                tfvars,
+                flags=re.MULTILINE,
+            )
+        ]
+        if observed != [expected]:
+            findings.append(
+                Finding(
+                    "arc-storage-tfvars-mismatch",
+                    ARC_STORAGE_TFVARS_PATH,
+                    1,
+                    f"{name} must be declared exactly once as {expected!r}; "
+                    f"observed {observed!r}.",
+                )
+            )
+
+    for label, block in ARC_STORAGE_TFVARS_REQUIRED_BLOCKS:
+        if tfvars.count(block) != 1:
+            findings.append(
+                Finding(
+                    "arc-storage-tfvars-block-mismatch",
+                    ARC_STORAGE_TFVARS_PATH,
+                    1,
+                    f"The {label} must appear exactly once.",
+                )
+            )
+
+    definitions = all_just_recipe_blocks(justfile)
+    required_recipes = ("arc-plan-scope-check", "arc-apply", "arc-capacity-readback")
+    for name in required_recipes:
+        if len(definitions.get(name, [])) != 1:
+            findings.append(
+                Finding(
+                    "arc-storage-historical-recipe-missing",
+                    Path("Justfile"),
+                    1,
+                    f"Historical non-storage recipe {name!r} must exist exactly once.",
+                )
+            )
+
+    apply_recipes = definitions.get("arc-apply", [])
+    if len(apply_recipes) == 1:
+        line, dependencies, _ = apply_recipes[0]
+        if "arc-plan-scope-check" not in dependencies.split():
+            findings.append(
+                Finding(
+                    "arc-storage-apply-guard-missing",
+                    Path("Justfile"),
+                    line,
+                    "arc-apply must remain subordinate to arc-plan-scope-check; "
+                    "the current storage delta has no local apply authority.",
+                )
+            )
+
+    readback_recipes = definitions.get("arc-capacity-readback", [])
+    if len(readback_recipes) == 1:
+        line, _, body = readback_recipes[0]
+        executable = executable_recipe_text(body)
+        if executable.count("and .spec.maxRunners == 4") != 1:
+            findings.append(
+                Finding(
+                    "arc-storage-readback-scope-expanded",
+                    Path("Justfile"),
+                    line,
+                    "The retained readback must stay fixed to historical max-four "
+                    "non-storage state; it cannot promote or release TIN-4072.",
+                )
+            )
+
+    for name, declarations in definitions.items():
+        for line, _, body in declarations:
+            executable = executable_recipe_text(body)
+            observed_tokens = sorted(
+                token for token in ARC_STORAGE_RUNTIME_TOKENS if token in executable
+            )
+            if observed_tokens:
+                findings.append(
+                    Finding(
+                        "arc-storage-local-carrier",
+                        Path("Justfile"),
+                        line,
+                        f"{name} carries TIN-4072 storage runtime token(s) "
+                        f"{observed_tokens!r}; source declaration is the only "
+                        "repo-local surface.",
+                    )
+                )
+            logical = "\n".join(shell_logical_lines(executable))
+            direct_arc_apply = (
+                re.search(r"\\b(?:tofu|terraform)\\b[^\\n]*\\bapply\\b", logical)
+                is not None
+                and ("arc-runners" in executable or "{{ arc_tfvars }}" in executable)
+            )
+            if direct_arc_apply and name != "arc-apply":
+                findings.append(
+                    Finding(
+                        "arc-storage-local-apply-carrier",
+                        Path("Justfile"),
+                        line,
+                        f"{name} can apply the ARC stack outside the one historical, "
+                        "scope-guarded arc-apply recipe.",
+                    )
+                )
+
+    for path, text in carriers.items():
+        observed_tokens = sorted(
+            token for token in ARC_STORAGE_RUNTIME_TOKENS if token in text
+        )
+        direct_arc_apply = (
+            re.search(r"\\b(?:tofu|terraform)\\b[^\\n]*\\bapply\\b", text)
+            is not None
+            and "arc-runners" in text
+        )
+        invokes_arc_apply = re.search(r"\\bjust\\b[^\\n]*\\barc-apply\\b", text)
+        if observed_tokens or direct_arc_apply or invokes_arc_apply:
+            findings.append(
+                Finding(
+                    "arc-storage-external-carrier",
+                    path,
+                    1,
+                    "Workflow, script, and action carriers must not activate the "
+                    "TIN-4072 storage delta; protected planner/executor/observer "
+                    "activation is external to this repository.",
+                )
+            )
+    return findings
+
+
+def scan_arc_storage_source_contract() -> list[Finding]:
+    contract_path = REPO / ARC_STORAGE_SOURCE_CONTRACT_PATH
+    tfvars_path = REPO / ARC_STORAGE_TFVARS_PATH
+    return scan_arc_storage_source_contract_text(
+        contract_path.read_bytes() if contract_path.is_file() else b"",
+        tfvars_path.read_text(encoding="utf-8") if tfvars_path.is_file() else "",
+        (REPO / "Justfile").read_text(encoding="utf-8"),
+        arc_storage_carrier_texts(),
+    )
 
 
 def scan_attended_operator_contract_text(text: str, path: Path) -> list[Finding]:
@@ -2800,6 +3041,26 @@ def expect_arc_contract_rejection(
         observed = sorted({finding.rule for finding in findings})
         raise SystemExit(
             f"self-test FAILED: ARC contract accepted {label}; findings={observed!r}"
+        )
+
+
+
+def expect_arc_storage_contract_rejection(
+    contract: bytes,
+    tfvars: str,
+    justfile: str,
+    carriers: dict[Path, str],
+    label: str,
+    expected_rule: str,
+) -> None:
+    findings = scan_arc_storage_source_contract_text(
+        contract, tfvars, justfile, carriers
+    )
+    if not any(finding.rule == expected_rule for finding in findings):
+        observed = sorted({finding.rule for finding in findings})
+        raise SystemExit(
+            f"self-test FAILED: ARC storage contract accepted {label}; "
+            f"findings={observed!r}"
         )
 
 
@@ -6318,6 +6579,233 @@ def self_test() -> None:
         rules = ", ".join(sorted({finding.rule for finding in baseline}))
         raise SystemExit(f"self-test FAILED: ARC baseline is invalid ({rules})")
 
+
+    storage_contract = (REPO / ARC_STORAGE_SOURCE_CONTRACT_PATH).read_bytes()
+    storage_tfvars = (REPO / ARC_STORAGE_TFVARS_PATH).read_text(encoding="utf-8")
+    storage_carriers = arc_storage_carrier_texts()
+    storage_baseline = scan_arc_storage_source_contract_text(
+        storage_contract, storage_tfvars, justfile, storage_carriers
+    )
+    if storage_baseline:
+        rules = ", ".join(sorted({finding.rule for finding in storage_baseline}))
+        raise SystemExit(
+            f"self-test FAILED: ARC storage baseline is invalid ({rules})"
+        )
+
+    contract_text = storage_contract.decode("utf-8")
+    contract_mutations = (
+        ('"max_runners": 1', '"max_runners": 2', "max-one width"),
+        (
+            '"input": "nix_root_volume",\n        "size": "64Gi"',
+            '"input": "nix_root_volume",\n        "size": "65Gi"',
+            "root volume size",
+        ),
+        (
+            '"input": "nix_work_volume",\n        "size": "32Gi"',
+            '"input": "nix_work_volume",\n        "size": "33Gi"',
+            "work volume size",
+        ),
+        (
+            '"input": "nix_cache_volume",\n        "size": "32Gi"',
+            '"input": "nix_cache_volume",\n        "size": "33Gi"',
+            "cache volume size",
+        ),
+        ('"request": "8Gi"', '"request": "9Gi"', "8Gi request envelope"),
+        ('"limit": "16Gi"', '"limit": "17Gi"', "16Gi limit envelope"),
+        (
+            '"node_hostname": "sting"',
+            '"node_hostname": "honey"',
+            "Sting storage placement",
+        ),
+        (
+            '"name": "nix-volume-init"',
+            '"name": "other-init"',
+            "initializer identity",
+        ),
+        (
+            '"mount_segments": [\n            "work-target"\n          ]',
+            '"mount_segments": [\n            "other-target"\n          ]',
+            "initializer work mount",
+        ),
+        (
+            '"runner_mount_segments": [\n          "home",\n          "runner",\n          "_work"\n        ]',
+            '"runner_mount_segments": [\n          "other"\n        ]',
+            "runner work mount",
+        ),
+        (
+            '"initializer": null',
+            '"initializer": {"name": "invented"}',
+            "cache initializer absence",
+        ),
+        (
+            '"activation": "external-protected-carrier-required"',
+            '"activation": "local-carrier"',
+            "external activation hold",
+        ),
+        (
+            '"exact-saved-plan-bytes"',
+            '"replanned-bytes"',
+            "exact saved-plan executor",
+        ),
+        ('"no-replanning"', '"replanning-allowed"', "no-replanning hold"),
+        (
+            '"identity-separated"',
+            '"shared-identity"',
+            "observer identity separation",
+        ),
+        (
+            '"independent-readback"',
+            '"executor-readback"',
+            "independent observer readback",
+        ),
+        ('"released": false', '"released": true', "application release hold"),
+    )
+    for old, new, label in contract_mutations:
+        if contract_text.count(old) != 1:
+            raise SystemExit(
+                f"self-test FAILED: could not construct {label} contract fixture"
+            )
+        expect_arc_storage_contract_rejection(
+            contract_text.replace(old, new, 1).encode("utf-8"),
+            storage_tfvars,
+            justfile,
+            storage_carriers,
+            label,
+            "arc-storage-source-contract-mismatch",
+        )
+
+    for name, expected in ARC_STORAGE_TFVARS_EXPECTED.items():
+        pattern = re.compile(
+            rf"(^[ \\t]*{re.escape(name)}[ \\t]*=[ \\t]*)"
+            rf"{re.escape(expected)}([ \\t]*$)",
+            flags=re.MULTILINE,
+        )
+        replacement = (
+            "2"
+            if expected in {"0", "1"}
+            else "true"
+            if expected == "false"
+            else expected[:-1] + "-mutated\""
+        )
+        mutated_tfvars, count = pattern.subn(
+            lambda match: match.group(1) + replacement + match.group(2),
+            storage_tfvars,
+            count=1,
+        )
+        if count != 1:
+            raise SystemExit(
+                f"self-test FAILED: could not construct {name} tfvars fixture"
+            )
+        expect_arc_storage_contract_rejection(
+            storage_contract,
+            mutated_tfvars,
+            justfile,
+            storage_carriers,
+            f"{name} drift",
+            "arc-storage-tfvars-mismatch",
+        )
+
+    for label, block in ARC_STORAGE_TFVARS_REQUIRED_BLOCKS:
+        mutated_tfvars = storage_tfvars.replace(block, block.replace("sting", "honey"), 1)
+        expect_arc_storage_contract_rejection(
+            storage_contract,
+            mutated_tfvars,
+            justfile,
+            storage_carriers,
+            f"{label} drift",
+            "arc-storage-tfvars-block-mismatch",
+        )
+
+    unguarded_apply = mutate_recipe_dependencies(
+        justfile,
+        "arc-apply",
+        tuple(
+            dependency
+            for dependency in ARC_RECIPE_DEPENDENCIES["arc-apply"]
+            if dependency != "arc-plan-scope-check"
+        ),
+        "storage apply guard removal",
+    )
+    expect_arc_storage_contract_rejection(
+        storage_contract,
+        storage_tfvars,
+        unguarded_apply,
+        storage_carriers,
+        "storage apply guard removal",
+        "arc-storage-apply-guard-missing",
+    )
+
+    expanded_readback = mutate_recipe_body(
+        justfile,
+        "arc-capacity-readback",
+        "      and .spec.maxRunners == 4",
+        "      and .spec.maxRunners == 1",
+        "storage readback expansion",
+    )
+    expect_arc_storage_contract_rejection(
+        storage_contract,
+        storage_tfvars,
+        expanded_readback,
+        storage_carriers,
+        "storage readback expansion",
+        "arc-storage-readback-scope-expanded",
+    )
+
+    local_storage_carrier = (
+        justfile
+        + "\narc-storage-inspect:\n"
+        + "    echo local-path-sting-fast-ephemeral\n"
+    )
+    expect_arc_storage_contract_rejection(
+        storage_contract,
+        storage_tfvars,
+        local_storage_carrier,
+        storage_carriers,
+        "local storage carrier",
+        "arc-storage-local-carrier",
+    )
+
+    local_apply_carrier = (
+        justfile
+        + "\narc-storage-apply:\n"
+        + "    tofu -chdir=tofu/stacks/arc-runners apply\n"
+    )
+    expect_arc_storage_contract_rejection(
+        storage_contract,
+        storage_tfvars,
+        local_apply_carrier,
+        storage_carriers,
+        "local ARC apply carrier",
+        "arc-storage-local-apply-carrier",
+    )
+
+    workflow_carriers = dict(storage_carriers)
+    workflow_carriers[Path(".github/workflows/storage-fixture.yml")] = (
+        "steps:\n  - run: echo local-path-sting-fast-ephemeral\n"
+    )
+    expect_arc_storage_contract_rejection(
+        storage_contract,
+        storage_tfvars,
+        justfile,
+        workflow_carriers,
+        "workflow storage carrier",
+        "arc-storage-external-carrier",
+    )
+
+    script_carriers = dict(storage_carriers)
+    script_carriers[Path("scripts/storage-fixture.sh")] = (
+        "tofu -chdir=tofu/stacks/arc-runners apply\n"
+    )
+    expect_arc_storage_contract_rejection(
+        storage_contract,
+        storage_tfvars,
+        justfile,
+        script_carriers,
+        "ad hoc ARC apply carrier",
+        "arc-storage-external-carrier",
+    )
+
+
     attended_baseline = scan_attended_operator_contract_text(
         justfile, Path("Justfile")
     )
@@ -7164,12 +7652,6 @@ def self_test() -> None:
             '    [[ "${target_uid}" == "{{ arc_target_uid }}" ]] ||',
             '    [[ -n "${target_uid}" ]] ||',
             "target UID removal",
-        ),
-        (
-            "_arc-runtime-contract",
-            '      and .parameters == {"nodePath": "/srv/fast-local/local-path"}',
-            '      and (.parameters.nodePath | startswith("/srv/fast-local"))',
-            "StorageClass node-path widening",
         ),
         (
             "_arc-kubeconfig-contract",
@@ -8308,6 +8790,7 @@ def main() -> int:
 
     findings = (
         scan_docs()
+        + scan_arc_storage_source_contract()
         + scan_workflows()
         + scan_edge_workflow_contract()
         + scan_scripts()

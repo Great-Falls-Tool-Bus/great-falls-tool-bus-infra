@@ -198,10 +198,14 @@ repository. Until it lands, the retained local scope guard must refuse
 `storage-adoption` and `storage-rollback`, `arc-apply` cannot consume the
 TIN-4072 delta, and live ARC state remains unchanged.
 
-Pure source validation continues to bind the exact GloriousFlywheel revision
-`e175a398c3c8f25f99c41eff8b584df6a360531e`, the tfvars, and the Sting
-StorageClass contract. Those checks are declaration evidence only, never a
-runtime or release receipt.
+The required `just public-surface` gate binds
+`config/arc-storage-source-contract.json` byte-for-byte, validates the exact
+max-one, 64/32/32 GiB, 8/16 GiB, and Sting declarations in the tfvars, and
+rejects a Just, workflow, script, or action carrier for that storage delta. The
+contract content-addresses both the GloriousFlywheel runner-package blobs and
+the authoritative `blahaj` StorageClass blobs, including the initializer and
+mount-path facts. This is declaration evidence only, never runtime or release
+proof; planner, executor, and observer activation remains external.
 ADMISSION HOLD RESOLVED (TIN-3914, PR #128, operator ruling 2026-08-22):
 `validate` requests `tinyland-nix`. For this org that label is published only
 by the `great-falls-tool-bus-nix` scale set, which binds to the

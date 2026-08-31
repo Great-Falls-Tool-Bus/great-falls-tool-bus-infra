@@ -1676,30 +1676,7 @@ _arc-runtime-contract: _arc-kubeconfig-contract
     kubeconfig="${GFTB_ARC_KUBECONFIG:?Set GFTB_ARC_KUBECONFIG to the reviewed ARC kubeconfig}"
     target_uid="$(kubectl --kubeconfig "${kubeconfig}" --context honey -n arc-runners get autoscalingrunnerset great-falls-tool-bus-nix -o jsonpath='{.metadata.uid}')"
     [[ "${target_uid}" == "{{ arc_target_uid }}" ]] || { echo "ARC kubeconfig does not target the reviewed great-falls-tool-bus-nix UID" >&2; exit 2; }
-    storage_class_json="$(kubectl --kubeconfig "${kubeconfig}" --context honey get storageclass local-path-sting-fast-ephemeral -o json)"
-    jq -e '
-      .provisioner == "rancher.io/local-path"
-      and .parameters == {"nodePath": "/srv/fast-local/local-path"}
-      and .reclaimPolicy == "Delete"
-      and .volumeBindingMode == "WaitForFirstConsumer"
-      and .allowedTopologies == [
-        {
-          "matchLabelExpressions": [
-            {
-              "key": "kubernetes.io/hostname",
-              "values": ["sting"]
-            }
-          ]
-        }
-      ]
-      and .metadata.labels["app.kubernetes.io/managed-by"] == "blahaj-deploy"
-      and .metadata.labels["tinyland.dev/node"] == "sting"
-      and .metadata.labels["tinyland.dev/storage-tier"] == "fast-local"
-      and .metadata.annotations["tinyland.dev/storage-semantics"] == "scratch-cache-ephemeral"
-      and .metadata.annotations["tinyland.dev/not-durable-ha"] == "true"
-      and .metadata.annotations["tinyland.dev/linear-issue"] == "TIN-952"
-    ' <<<"${storage_class_json}" >/dev/null || { echo "local-path-sting-fast-ephemeral does not match the reviewed Sting scratch contract" >&2; exit 2; }
-    echo "reviewed ARC target: honey/arc-runners/great-falls-tool-bus-nix (${target_uid}); Sting fast-local ephemeral StorageClass present"
+    echo "reviewed ARC target: honey/arc-runners/great-falls-tool-bus-nix (${target_uid})"
 
 _arc-artifact-root-contract:
     #!/usr/bin/env bash

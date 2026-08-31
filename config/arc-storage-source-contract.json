@@ -1,0 +1,142 @@
+{
+  "schema": "tinyland.dev/gftb-arc-storage-source-contract/v1",
+  "linear_issue": "TIN-4072",
+  "source_authorities": {
+    "runner_package": {
+      "repository": "tinyland-inc/GloriousFlywheel",
+      "commit": "e175a398c3c8f25f99c41eff8b584df6a360531e",
+      "objects": {
+        "tofu/modules/arc-runner/locals.tf": "9e3a6b01364fc8fe9b8a21c659dc76112d7ddc35",
+        "tofu/modules/arc-runner/main.tf": "f851fc72ea24f907b89e3907e8316a34fb2f7fbb",
+        "tofu/modules/arc-runner/variables.tf": "6346f76c5d4a7b58fa97137d0d758956d1475e8d",
+        "tofu/stacks/arc-runners/main.tf": "53dba9a241891a9de502569f739b76916c19459e",
+        "tofu/stacks/arc-runners/variables.tf": "7ad7eaf117cafdf63b4f72e812365e778976aeea"
+      }
+    },
+    "storage_class": {
+      "repository": "tinyland-inc/blahaj",
+      "commit": "b56b1d69aaace4630bb400504bad50d2a033db09",
+      "objects": {
+        "deploy/honey/local-path-sting.yaml": "47e894344ebf245c1560f01f94e78be8eb58d197",
+        "deploy/honey/local-path-config-patch.yaml": "ffccfb3ce31cb8944ea9c81e2e19839a0555df60",
+        "tests/test_local_path_storage_contract.py": "92c7804c87fd2228ae2fc21e218f8555116ac9da"
+      }
+    }
+  },
+  "storage_class": {
+    "name": "local-path-sting-fast-ephemeral",
+    "provisioner": "rancher.io/local-path",
+    "node_path_segments": [
+      "srv",
+      "fast-local",
+      "local-path"
+    ],
+    "node_hostname": "sting",
+    "reclaim_policy": "Delete",
+    "volume_binding_mode": "WaitForFirstConsumer",
+    "semantics": "scratch-cache-ephemeral"
+  },
+  "runner": {
+    "min_runners": 0,
+    "max_runners": 1,
+    "cpu_limit": "4",
+    "memory_limit": "8Gi",
+    "container_ephemeral_storage": {
+      "request": "8Gi",
+      "limit": "16Gi"
+    },
+    "node_hostname": "sting",
+    "warm_pool_enabled": false,
+    "docker_enabled": false,
+    "dind_enabled": false,
+    "longhorn_enabled": false,
+    "volumes": [
+      {
+        "input": "nix_root_volume",
+        "size": "64Gi",
+        "runner_mount_segments": [
+          "nix"
+        ],
+        "initializer": {
+          "name": "nix-volume-init",
+          "run_as_user": 0,
+          "run_as_group": 0,
+          "mount_segments": [
+            "nix-target",
+            "nix"
+          ]
+        }
+      },
+      {
+        "input": "nix_work_volume",
+        "size": "32Gi",
+        "runner_mount_segments": [
+          "home",
+          "runner",
+          "_work"
+        ],
+        "initializer": {
+          "name": "nix-volume-init",
+          "run_as_user": 0,
+          "run_as_group": 0,
+          "mount_segments": [
+            "work-target"
+          ],
+          "owner_uid": 1001,
+          "owner_gid": 1001
+        }
+      },
+      {
+        "input": "nix_cache_volume",
+        "size": "32Gi",
+        "runner_mount_segments": [
+          "home",
+          "runner",
+          ".cache"
+        ],
+        "initializer": null
+      }
+    ]
+  },
+  "runtime_hold": {
+    "status": "source-only-unreleased",
+    "activation": "external-protected-carrier-required",
+    "required_chain": [
+      {
+        "role": "planner",
+        "requirements": [
+          "version-pinned",
+          "protected-canonical-main"
+        ]
+      },
+      {
+        "role": "executor",
+        "requirements": [
+          "exact-saved-plan-bytes",
+          "no-replanning"
+        ]
+      },
+      {
+        "role": "observer",
+        "requirements": [
+          "identity-separated",
+          "independent-readback"
+        ]
+      }
+    ],
+    "local_storage_entrypoints": {
+      "adoption": "refused",
+      "rollback": "refused",
+      "promotion": "refused",
+      "readback": "refused",
+      "workflow_dispatch": "absent",
+      "repository_dispatch": "absent",
+      "ad_hoc": "refused"
+    },
+    "application_release": {
+      "repository": "Great-Falls-Tool-Bus/greatfallstoolbus.org",
+      "pull_request": 218,
+      "released": false
+    }
+  }
+}

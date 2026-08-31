@@ -168,8 +168,13 @@ for that row; `just core-checkout` is the source-authority gate.
 
 The TIN-4072 desired delta is exact: max runners four to one plus the signed
 e175a398 generic-ephemeral package for `/nix`, `_work`, and `.cache`.
-Pure validators bind that declaration, the Sting StorageClass provisioner and
-node path, the fixed initializer, and the unchanged runner envelope.
+`config/arc-storage-source-contract.json` records the content-addressed
+GloriousFlywheel module and authoritative `blahaj` StorageClass objects, the
+initializer and mount paths, and the external planner/executor/observer hold.
+The required `just public-surface` gate binds that file byte-for-byte, checks the
+max-one 64/32/32 GiB Sting declarations and unchanged 8/16 GiB envelope in the
+tfvars, preserves the historical max-four readback, and rejects a new local,
+workflow, script, or action storage carrier. It performs no runtime activation.
 
 The retained local `arc-plan-scope-check` is deliberately restored to its
 three historical shapes: capacity, runner-group cutover, and runner-group
