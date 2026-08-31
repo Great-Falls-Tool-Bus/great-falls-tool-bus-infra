@@ -80,14 +80,11 @@ RETIRED_WEB_GENERATION40_BRIDGE_WORKFLOW = Path(".github/workflows/web-generatio
 # generation-40 bridge above: its complete bytes are receipt-bound, its only
 # hosted operator calls are path-scoped below, and the desired-state tuple
 # stays frozen until it self-retires after its terminal receipt.
-# PLACEHOLDER: WEB_GENERATION42_BRIDGE_SHA256 is the sha256 of the DRAFT
-# workflow bytes as of this worktree. It WILL change once BRIDGE_PR_NUMBER,
-# META_MAIN_SHA, META_ADR_BLOB, META_ADR_SHA256, TARGET_RENDER_SHA256, and
-# ROLLBACK_RENDER_SHA256 are filled in on the workflow -- recompute
-# (sha256sum .github/workflows/web-generation-42-parity.yml) after that and
-# before opening the bridge PR.
+# WEB_GENERATION42_BRIDGE_SHA256 is the sha256 of the exact workflow bytes;
+# recompute it (sha256sum .github/workflows/web-generation-42-parity.yml)
+# after any edit, including the final meta-ratification fill.
 WEB_GENERATION42_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-42-parity.yml")
-WEB_GENERATION42_BRIDGE_SHA256 = "0ade2f9f3ab13346dbedce65ca2b3735aedd622b78c39fefdafff0a108530cd6"
+WEB_GENERATION42_BRIDGE_SHA256 = "0ed75884b28e21c5e9b07cf1026bff9501a21bbe2de4767b1a6febbed483655f"
 WEB_GENERATION42_BRIDGE_RECIPES = frozenset(
     {"web-release-candidate-proof", "web-release-plan", "web-release-server-dry-run", "web-release-apply"}
 )

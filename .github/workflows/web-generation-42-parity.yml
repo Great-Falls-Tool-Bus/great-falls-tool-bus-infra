@@ -31,18 +31,16 @@ env:
   REVIEWED_BASE_SHA: 68944b8edc53ccc45a17fc521caa63ad5bd2315f
   TARGET_SOURCE_SHA: 9adae265731ec22011e562bc4d8f1bcc90d1629b
   TARGET_IMAGE: ghcr.io/great-falls-tool-bus/gftb-site@sha256:f45bc7a644edfb297b6df8281e315c64a7fdb37b304ef5bba135743143bcee1a
-  # PLACEHOLDER: render `just web-release-candidate-proof && just
-  # web-release-plan` for TARGET_IMAGE/TARGET_SOURCE_SHA on a host with a
-  # working nix devshell (this worktree's host cannot build the devshell:
-  # aarch64-darwin, no remote builder for the required derivations) and paste
-  # `.k8s-plans/web-release.render-sha256` here before this bridge is opened
-  # as a PR.
-  TARGET_RENDER_SHA256: PLACEHOLDER_TARGET_RENDER_SHA256
+  # Forward render digest: derived on the tinyland-nix runner by the transient
+  # PR-only proof step (validate run 33361784682, artifact 9746990457), then
+  # that step was restored byte-for-byte.
+  TARGET_RENDER_SHA256: 46b0b981969c6192e79ce5801467667e4b7bc5af642dc940e07ef711fefed874
   ROLLBACK_SOURCE_SHA: 06e8b2c390b9c057fd084540e1e5710411a76a93
   ROLLBACK_IMAGE: ghcr.io/great-falls-tool-bus/gftb-site@sha256:0295c226bd0bc78c0fe392b8955971ffbbd4fb9a0684939558d4c3d170a35dee
-  # PLACEHOLDER: same as TARGET_RENDER_SHA256 above, but for
-  # ROLLBACK_IMAGE/ROLLBACK_SOURCE_SHA (generation 40, currently RUNNING).
-  ROLLBACK_RENDER_SHA256: PLACEHOLDER_ROLLBACK_RENDER_SHA256
+  # Reverse render digest (generation 40 on this base), same proof run. It
+  # equals the generation-40 bridge's own forward digest: the render depends
+  # on image and source SHA only.
+  ROLLBACK_RENDER_SHA256: 2244dedfa372c52fb32a891c8e6c6e547ef4bdbc64aa948a259fd495746c29bf
   WEB_APPLY_REPLICAS: "2"
   # PLACEHOLDER: meta main sha, ADR blob sha, and ADR sha256 for the merged
   # decisions/0022 amendment 2 in the meta repo. Fill in after
@@ -51,10 +49,9 @@ env:
   META_ADR_PATH: decisions/0022-gftb-site-main-prod-gfi09-carrier-2026-08-30.md
   META_ADR_BLOB: PLACEHOLDER_META_ADR_BLOB
   META_ADR_SHA256: PLACEHOLDER_META_ADR_SHA256
-  # PLACEHOLDER: the PR number of THIS bridge-adding PR in
-  # great-falls-tool-bus-infra, known only once it is opened. Referenced below
-  # by the authority step and embedded in the parity receipt.
-  BRIDGE_PR_NUMBER: PLACEHOLDER_BRIDGE_PR_NUMBER
+  # The bridge-adding PR in great-falls-tool-bus-infra; the authority step
+  # binds the merge to it and the parity receipt embeds it.
+  BRIDGE_PR_NUMBER: "151"
 
 jobs:
   parity:
