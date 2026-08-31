@@ -136,11 +136,21 @@ jobs:
           echo "${tools_dir}" >> "${GITHUB_PATH}"
           echo "installed pinned flywheel-github-oidc-profile (sha256 ${actual})"
 
+      # 2026-08-31: GloriousFlywheel is private (TIN-4015), so the action's
+      # unauthenticated releases/download fetch 404s (runs 33366365913,
+      # 33367833121). ci-templates v2.12.2+ (TIN-3066) resolves the release
+      # asset through the REST API when a contents:read token is supplied;
+      # v3.1.0 matches this estate's spoke-ci pin. GF_RELEASE_READ_TOKEN is a
+      # fine-grained token, single repository tinyland-inc/GloriousFlywheel,
+      # Contents: read only (docs/ci-credentials.md). While the secret is
+      # absent the input is empty and the action falls back to the
+      # unauthenticated path, so this change cannot regress the lane.
       - name: Install released GF credential helper
-        uses: tinyland-inc/ci-templates/.github/actions/gf-credhelper-install@v2.11.0
+        uses: tinyland-inc/ci-templates/.github/actions/gf-credhelper-install@v3.1.0
         with:
           version: v0.2.0
           sha256: 178fbf71b4892505e28ef5a05611485701fed8ba7ba1ada91d4d737b994f0cd2
+          token: ${{ secrets.GF_RELEASE_READ_TOKEN }}
 
       - name: Cache-backed org-tenancy Bazel proof
         shell: bash
