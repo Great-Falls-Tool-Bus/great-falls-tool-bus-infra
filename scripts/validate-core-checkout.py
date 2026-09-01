@@ -45,6 +45,13 @@ EXPECTED_WORKFLOWS = {
     "validate.yml",
     "web-crs.yml",
     "web-plan.yml",
+    # TIN-4227 fifth one-use bridge (operator ruling 2026-09-01;
+    # decisions/0022 Amendment 3, third and final use). Declares no reusable
+    # GloriousFlywheel core checkout -- see the EXPECTED_CORE_CHECKOUTS
+    # comment below -- so it carries no EXPECTED_CORE_CHECKOUTS /
+    # EXPECTED_CORE_PINS entry, matching the retired generation-40,
+    # generation-42, and generation-43 bridges' census shape.
+    "web-generation-45-parity.yml",
 }
 
 # One entry per workflow that declares the reusable core checkout. Values are
@@ -82,6 +89,7 @@ EXPECTED_ACTION_CHECKOUTS = {
     "validate.yml": 1,
     "web-crs.yml": 2,
     "web-plan.yml": 1,
+    "web-generation-45-parity.yml": 1,
 }
 
 EXPECTED_CORE_CI_PATH_EXPORTS = {
@@ -96,10 +104,15 @@ EXPECTED_CORE_CI_PATH_EXPORTS = {
     "validate.yml": 0,
     "web-crs.yml": 1,
     "web-plan.yml": 0,
+    "web-generation-45-parity.yml": 0,
 }
 
 EXPECTED_PERMISSIONS = {
-    workflow: (("contents: read", "id-token: write") if workflow == "flywheel-cache-proof.yml" else ("contents: read",))
+    workflow: (
+        ("actions: read", "contents: read", "pull-requests: read")
+        if workflow == "web-generation-45-parity.yml"
+        else (("contents: read", "id-token: write") if workflow == "flywheel-cache-proof.yml" else ("contents: read",))
+    )
     for workflow in EXPECTED_WORKFLOWS
 }
 
