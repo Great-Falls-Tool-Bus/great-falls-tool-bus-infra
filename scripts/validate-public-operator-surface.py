@@ -94,51 +94,15 @@ RETIRED_WEB_GENERATION42_BRIDGE_WORKFLOW = Path(".github/workflows/web-generatio
 # its expiry (2026-09-07) or receipt cap, or until W14 promotes the carrier
 # to the standing GF-I09 phase-2 executor.
 RETIRED_WEB_GENERATION43_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-43-parity.yml")
-# TIN-4227 fourth one-use bridge (operator ruling 2026-09-01;
-# decisions/0022 Amendment 3, second use (receipt 2 of 3)). Same shape
-# as the retired generation-40 and generation-42 bridges above: its complete
-# bytes are receipt-bound, its only hosted operator calls are path-scoped
-# below, and the desired-state tuple stays frozen until it self-retires after
-# its terminal receipt. This is a SCAFFOLD: WEB_GENERATION44_BRIDGE_SHA256 and
-# the two TARGET constants below are still PLACEHOLDER_* tokens shared
-# verbatim with the workflow's own env block and inline assertions, so a
-# single fill pass keeps both files in agreement.
-# WEB_GENERATION44_BRIDGE_SHA256 is the sha256 of the exact workflow bytes;
-# recompute it (sha256sum .github/workflows/web-generation-44-parity.yml)
-# after any edit, including the final meta-ratification fill.
-WEB_GENERATION44_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-44-parity.yml")
-WEB_GENERATION44_BRIDGE_SHA256 = "ed912ad4b3a37b11ac74ba1444a3c48dd3cefae2520987f10c8d4730561943d1"
-WEB_GENERATION44_BRIDGE_RECIPES = frozenset(
-    {"web-release-candidate-proof", "web-release-plan", "web-release-server-dry-run", "web-release-apply"}
-)
-WEB_GENERATION44_TARGET_SOURCE = "8de5e2857f56c6ada86a4971cd2fad7be132f2d3"
-WEB_GENERATION44_TARGET_IMAGE = "ghcr.io/great-falls-tool-bus/gftb-site@sha256:bf3ccd175d553f5b1a73f518c27d31c852aca1c97323d00d6b22a4767b5c63bc"
-WEB_GENERATION44_DEPLOYMENT = Path("k8s/web/greatfallstoolbus-org-production/deployment.yaml")
-# Render-input freeze digests, recomputed from the current tree at branch-cut.
-# k8s/web/greatfallstoolbus-org-production/deployment.yaml still carries the
-# generation-42 target image (this bridge has not been filled yet), so this
-# row is byte-identical to the retired generation-42 map; it MUST be
-# recomputed once the generation-44 TARGET_SOURCE_SHA/TARGET_IMAGE pin merges
-# and changes deployment.yaml.
-# The bridge re-freezes the same nine render inputs inline, in its own
-# `sha256sum --check --strict` heredoc. Nothing previously asserted that the
-# workflow's copy and the map below agree, so a stale inline digest could ride
-# a green validator and only refuse at apply time. This regex lets
-# scan_web_generation44_bridge_contract compare the two.
-WEB_GENERATION44_INLINE_FREEZE = re.compile(
-    r"sha256sum --check --strict <<'HASHES'\n(.*?)\n *HASHES\n", re.DOTALL
-)
-WEB_GENERATION44_FROZEN_INPUT_SHA256 = {
-    Path("Justfile"): "b474e8263558721d2330c452a3a29cfd1cdd26fdad1688599dd791813cd67f6b",
-    Path("flake.lock"): "33150ce2f846aef01539145f74a8eb1a04d45df5d960494ce188111a80e170e3",
-    Path("flake.nix"): "7f1249c2c291282f724e6d49eaeafc05d7a1009eb00a5724ff6ca633c2c30879",
-    Path("k8s/web/greatfallstoolbus-org-production/deployment.yaml"): "d906089fc2a902cbdcef4301100e2b5171583754a83893af2a6d5e9c4b052e77",
-    Path("k8s/web/greatfallstoolbus-org-production/kustomization.yaml"): "8ef176b50c24ac3de40b72c4958eab5cc2a849d3a212c09e7b6c75fa0b57d9af",
-    Path("k8s/web/greatfallstoolbus-org-production/networkpolicy.yaml"): "de5cb3b7ce2bc4edb4565d2d8f2d542a20fbd036f0cb9ce23d914565549023cd",
-    Path("k8s/web/greatfallstoolbus-org-production/service.yaml"): "527a87425fc3a90a2a72d2adb59e1bfa7596d03e7f579a610ccfe841a48459d2",
-    Path("scripts/guard-no-remote-kustomize-resources.sh"): "aacf50ada42c322a8e12eee0af40d55d77598f5468b73c1df574a8b50cc3be17",
-    Path("scripts/validate-web-stack.sh"): "41900cb68a4e6395ab0e2f324f80a9be0b6d49e895398b99e070aab3a744ef53",
-}
+# TIN-4227 generation-44 bridge: RETIRED 2026-09-01 after its terminal
+# success receipt (decisions/0022 Amendment 3 (d), "each apply retires its
+# bridge after its terminal receipt"; run 33543115842, receipt artifact
+# 9814527607, carrier 59754b76). Operator ruling: delete outright, same as
+# the earlier bridges above. Re-adding the file fails the public surface;
+# the final bounded apply (generation 45, receipt 3 of 3) re-arms a fresh
+# bridge from history, after which the amendment is spent and promotion
+# rides the W14 standing executor or a fresh amendment.
+RETIRED_WEB_GENERATION44_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-44-parity.yml")
 WORKFLOW_REPOSITORY_DISPATCH = re.compile(r"^\s*repository_dispatch\s*:")
 JUST_COMMAND_START = re.compile(r"\bjust\b")
 JUST_OPTIONS_WITH_VALUES = {
@@ -206,13 +170,6 @@ HOSTED_WORKFLOW_JUST_ALLOWLIST = {
     "web-stack-drift-check",
     "web-stack-render",
     "web-stack-validate",
-    # Exact, byte-pinned TIN-4227 fourth bridge only. scan_workflows subtracts
-    # these from the operator-local set for that one path; every other
-    # workflow still receives workflow-arc-operator-recipe for the same calls.
-    "web-release-candidate-proof",
-    "web-release-plan",
-    "web-release-server-dry-run",
-    "web-release-apply",
 }
 
 EDGE_RUNTIME_TF_VARS = {
@@ -1894,58 +1851,6 @@ def scan_workflow_text(
     return findings
 
 
-def scan_web_generation44_bridge_contract(
-    workflow_text: str, deployment_text: str
-) -> list[Finding]:
-    findings: list[Finding] = []
-    observed_digest = hashlib.sha256(workflow_text.encode("utf-8")).hexdigest()
-    if observed_digest != WEB_GENERATION44_BRIDGE_SHA256:
-        findings.append(
-            Finding(
-                "web-generation44-bridge-bytes",
-                WEB_GENERATION44_BRIDGE_WORKFLOW,
-                1,
-                "The fourth one-time parity bridge changed outside its exact reviewed receipt; replace it only through the receiver-first GF-I09 cutover.",
-            )
-        )
-    image_values = re.findall(
-        r"^\s*image:\s*(ghcr\.io/great-falls-tool-bus/gftb-site@sha256:[0-9a-f]{64})\s*$",
-        deployment_text,
-        re.MULTILINE,
-    )
-    if image_values != [WEB_GENERATION44_TARGET_IMAGE]:
-        findings.append(
-            Finding(
-                "web-generation44-desired-state-freeze",
-                WEB_GENERATION44_DEPLOYMENT,
-                1,
-                "Until GF-I09 replaces the bridge, the web desired state must remain the exact generation-44 target; unrelated infra changes may proceed.",
-            )
-        )
-    for path, expected_digest in WEB_GENERATION44_FROZEN_INPUT_SHA256.items():
-        candidate = REPO / path
-        observed_digest = hashlib.sha256(candidate.read_bytes()).hexdigest() if candidate.is_file() else "missing"
-        if observed_digest != expected_digest:
-            findings.append(Finding("web-generation44-render-input-freeze", path, 1, "The third one-time bridge admits only the exact reviewed render and recipe inputs until receiver-first GF-I09 cutover."))
-    inline_match = WEB_GENERATION44_INLINE_FREEZE.search(workflow_text)
-    inline_freeze: dict[Path, str] = {}
-    if inline_match is not None:
-        for line in inline_match.group(1).splitlines():
-            fields = line.split()
-            if len(fields) == 2:
-                inline_freeze[Path(fields[1])] = fields[0]
-    if inline_freeze != WEB_GENERATION44_FROZEN_INPUT_SHA256:
-        findings.append(
-            Finding(
-                "web-generation44-inline-freeze-agreement",
-                WEB_GENERATION44_BRIDGE_WORKFLOW,
-                1,
-                "The bridge's inline sha256sum freeze must name exactly the reviewed render inputs and digests; a stale inline copy refuses only at apply time.",
-            )
-        )
-    return findings
-
-
 def scan_workflows() -> list[Finding]:
     findings: list[Finding] = []
     observed_calls: set[str] = set()
@@ -2020,22 +1925,18 @@ def scan_workflows() -> list[Finding]:
             )
         )
 
-    gen43_bridge_path = REPO / WEB_GENERATION44_BRIDGE_WORKFLOW
-    gen43_deployment_path = REPO / WEB_GENERATION44_DEPLOYMENT
-    if not gen43_bridge_path.is_file() or not gen43_deployment_path.is_file():
+    retired_gen44_bridge = REPO / RETIRED_WEB_GENERATION44_BRIDGE_WORKFLOW
+    if retired_gen44_bridge.exists() or retired_gen44_bridge.is_symlink():
         findings.append(
             Finding(
-                "web-generation44-bridge-missing",
-                WEB_GENERATION44_BRIDGE_WORKFLOW,
+                "retired-web-generation44-bridge-retained",
+                RETIRED_WEB_GENERATION44_BRIDGE_WORKFLOW,
                 1,
-                "The fourth one-time parity bridge and its frozen desired-state carrier must remain together until the receiver-first GF-I09 cutover.",
-            )
-        )
-    else:
-        findings.extend(
-            scan_web_generation44_bridge_contract(
-                gen43_bridge_path.read_text(encoding="utf-8"),
-                gen43_deployment_path.read_text(encoding="utf-8"),
+                "Delete web-generation-44-parity.yml; this one-time parity "
+                "bridge retired with its terminal receipt (decisions/0022 "
+                "Amendment 3 (d)). The next bounded apply re-arms a fresh "
+                "bridge from history; ordinary generations ship through the "
+                "declare-only pin path.",
             )
         )
 
@@ -2052,8 +1953,6 @@ def scan_workflows() -> list[Finding]:
         )
         observed_calls.update(calls)
         scoped_forbidden = forbidden_recipes
-        if rel == WEB_GENERATION44_BRIDGE_WORKFLOW:
-            scoped_forbidden = forbidden_recipes - set(WEB_GENERATION44_BRIDGE_RECIPES)
         findings.extend(
             scan_workflow_text(
                 workflow_text,
@@ -8467,41 +8366,13 @@ def self_test() -> None:
     ):
         raise SystemExit("self-test FAILED: a re-added generation-43 bridge was accepted")
 
-    # NOTE: the four checks below require WEB_GENERATION44_BRIDGE_SHA256,
-    # WEB_GENERATION44_TARGET_SOURCE, and WEB_GENERATION44_TARGET_IMAGE to
-    # already be filled (not PLACEHOLDER_* tokens) -- see FILL.md. Until this
-    # bridge is filled, the first check below fails closed by design, the
-    # same way the workflow's own authority-step placeholder guard refuses to
-    # run.
-    gen43_bridge_text = (REPO / WEB_GENERATION44_BRIDGE_WORKFLOW).read_text(encoding="utf-8")
-    gen43_deployment_text = (REPO / WEB_GENERATION44_DEPLOYMENT).read_text(encoding="utf-8")
-    if scan_web_generation44_bridge_contract(gen43_bridge_text, gen43_deployment_text):
-        raise SystemExit("self-test FAILED: committed generation-44 bridge contract drifted")
-    mutated_gen43_bridge = gen43_bridge_text.replace(WEB_GENERATION44_TARGET_SOURCE, "0" * 40, 1)
+    if (REPO / RETIRED_WEB_GENERATION44_BRIDGE_WORKFLOW).exists():
+        raise SystemExit("self-test FAILED: the retired generation-44 bridge workflow is present")
     if not any(
-        finding.rule == "web-generation44-bridge-bytes"
-        for finding in scan_web_generation44_bridge_contract(mutated_gen43_bridge, gen43_deployment_text)
+        finding.rule == "retired-web-generation44-bridge-retained"
+        for finding in scan_workflows_with_retired_gen44_bridge_fixture()
     ):
-        raise SystemExit("self-test FAILED: generation-44 bridge mutation was accepted")
-    mutated_gen43_deployment = gen43_deployment_text.replace(WEB_GENERATION44_TARGET_IMAGE, "ghcr.io/great-falls-tool-bus/gftb-site@sha256:" + "0" * 64, 1)
-    if not any(
-        finding.rule == "web-generation44-desired-state-freeze"
-        for finding in scan_web_generation44_bridge_contract(gen43_bridge_text, mutated_gen43_deployment)
-    ):
-        raise SystemExit("self-test FAILED: generation-44 desired-state drift was accepted")
-    for stale_digest in sorted(WEB_GENERATION44_FROZEN_INPUT_SHA256.values()):
-        stale_inline = gen43_bridge_text.replace(stale_digest, "0" * 64, 1)
-        if not any(
-            finding.rule == "web-generation44-inline-freeze-agreement"
-            for finding in scan_web_generation44_bridge_contract(stale_inline, gen43_deployment_text)
-        ):
-            raise SystemExit("self-test FAILED: a stale inline render-input freeze digest was accepted")
-    dropped_inline = WEB_GENERATION44_INLINE_FREEZE.sub("sha256sum --check --strict <<'HASHES'\nHASHES\n", gen43_bridge_text, count=1)
-    if not any(
-        finding.rule == "web-generation44-inline-freeze-agreement"
-        for finding in scan_web_generation44_bridge_contract(dropped_inline, gen43_deployment_text)
-    ):
-        raise SystemExit("self-test FAILED: a gutted inline render-input freeze was accepted")
+        raise SystemExit("self-test FAILED: a re-added generation-44 bridge was accepted")
 
     run_web_release_semantic_fixtures()
     run_web_release_mutation_fixtures()
@@ -8541,6 +8412,18 @@ def scan_workflows_with_retired_gen43_bridge_fixture() -> list[Finding]:
     try:
         path.write_text("name: retired fixture\n", encoding="utf-8")
         return [finding for finding in scan_workflows() if finding.rule == "retired-web-generation43-bridge-retained"]
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def scan_workflows_with_retired_gen44_bridge_fixture() -> list[Finding]:
+    """Negative control: a re-added generation-44 bridge file must raise the retained finding."""
+    path = REPO / RETIRED_WEB_GENERATION44_BRIDGE_WORKFLOW
+    if path.exists():
+        raise SystemExit("self-test FAILED: fixture path already exists")
+    try:
+        path.write_text("name: retired fixture\n", encoding="utf-8")
+        return [finding for finding in scan_workflows() if finding.rule == "retired-web-generation44-bridge-retained"]
     finally:
         path.unlink(missing_ok=True)
 
