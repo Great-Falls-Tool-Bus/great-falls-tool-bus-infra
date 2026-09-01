@@ -149,20 +149,21 @@ spec:
         - name: greatfallstoolbus-org
           # Digest-pinned production image: the promoted gftb-site static
           # origin (ADR 0010 §5 cutover shape; TIN-3899 promotion). Candidate
-          # 0c92ec1c (signed gftb-site main; carries PR #47 home goals + hours
-          # band + GitHub nav, #48 privacy archive-account clock, the operator's
-          # 2026-08-14 log edit, and #50's pin fix), generation 43. The immutable
-          # candidate was published by GitHub Actions run 33381373277 on 2026-08-31;
-          # anonymous public GHCR manifest resolution of tag sha-0c92ec1c
-          # returned exactly the digest pinned below. Previous pins (rollback
-          # candidates): generation 42 sha256:f45bc7a644edfb297b6df8281e315c64a7fdb37b304ef5bba135743143bcee1a (RUNNING),
+          # 8de5e285 (signed gftb-site main; carries PR #49's contact panel
+          # flatten and inverse-token retirement on top of generation 43),
+          # generation 44. The immutable candidate was published by GitHub
+          # Actions run 33540070087 on 2026-09-01; anonymous public GHCR
+          # manifest resolution of tag sha-8de5e285... returned exactly the
+          # digest pinned below. Previous pins (rollback candidates):
+          # generation 43 sha256:3096c166a25300581e89101effa078dcf4100c638b0ce357f473f485624d6862 (RUNNING),
+          # generation 42 sha256:f45bc7a644edfb297b6df8281e315c64a7fdb37b304ef5bba135743143bcee1a,
           # generation 41 sha256:2e80301da28d99edfad7f4caeccdc5aed109f8aaa74ee54efc1f646d8ecaa4da,
           # generation 40 sha256:0295c226bd0bc78c0fe392b8955971ffbbd4fb9a0684939558d4c3d170a35dee.
           # This commit records reviewed desired release truth; merge applies
           # nothing. The apply carrier is the standing-bounded protected
           # automatic apply ruled 2026-08-31 (decisions/0022 Amendment 3,
           # TIN-4227 16b95236); PINNED/RUNNING/SERVED are post-apply evidence.
-          image: ghcr.io/great-falls-tool-bus/gftb-site@sha256:3096c166a25300581e89101effa078dcf4100c638b0ce357f473f485624d6862
+          image: ghcr.io/great-falls-tool-bus/gftb-site@sha256:bf3ccd175d553f5b1a73f518c27d31c852aca1c97323d00d6b22a4767b5c63bc
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
