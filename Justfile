@@ -33,8 +33,11 @@ default:
     @just --list
 
 check-hosted:
+    @bash scripts/remote-only-guard.sh check-hosted
     just workflow-lint
     just secrets-scan-dir
+    # history-mode gitleaks (hosted home of the removed local-only secrets-scan recipe)
+    gitleaks git --config .gitleaks.toml --redact --verbose .
     just public-surface-selftest
     just public-surface
     just public-pii
@@ -69,11 +72,8 @@ check: check-hosted
 
 # Gitleaks scan of working tree files (AGENTS.md hard rule: no secrets in Git)
 secrets-scan-dir:
+    @bash scripts/remote-only-guard.sh secrets-scan-dir
     gitleaks dir --config .gitleaks.toml --redact --verbose .
-
-# Gitleaks scan of git history
-secrets-scan:
-    gitleaks git --config .gitleaks.toml --redact --verbose .
 
 # Keep public docs/workflows pointed at audited Justfile recipes, not raw
 # tofu/kubectl copy-paste snippets.
@@ -101,9 +101,6 @@ core-checkout:
 core-checkout-selftest:
     python3 -B scripts/validate-core-checkout.py --self-test
 
-core-checkout-bazel:
-    bazelisk test --lockfile_mode=off //:core_checkout_contract_tests
-
 # TIN-3902 runner-group admission contract. config/organization.yaml declares
 # the GitHub-side roster and the ARC tfvars binds the scale sets to it; nothing
 # else holds the two together, because the GloriousFlywheel arc-runners module
@@ -118,6 +115,7 @@ workflow-lint:
     #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
     set +x
     set -euo pipefail
+    bash scripts/remote-only-guard.sh workflow-lint
     export LC_ALL=C
     command -v actionlint >/dev/null 2>&1 || {
       echo "actionlint is required (nix develop provides it)" >&2
@@ -272,6 +270,7 @@ flywheel-enroll repo="Great-Falls-Tool-Bus/great-falls-tool-bus.github.io":
 # recipe bakes none and never hard-fails when they are absent. NOT part of
 # `check` (it needs the on-cluster cache substrate).
 flywheel-cache-proof:
+    @bash scripts/remote-only-guard.sh flywheel-cache-proof
     GFW_EXPECTED_INSTANCE_NAME=org-great-falls-tool-bus bash scripts/flywheel-cache-proof.sh
 
 arc-fmt-check:
@@ -280,6 +279,7 @@ arc-fmt-check:
     # devshell is the fallback for machines without tofu installed. GF_CORE_CI_PATH
     # defaults to a pinned GitHub flake ref, not a sibling checkout.
     set -euo pipefail
+    bash scripts/remote-only-guard.sh arc-fmt-check
     if command -v tofu >/dev/null 2>&1; then
         tofu fmt -check {{ arc_tfvars }}
     else
@@ -1825,6 +1825,7 @@ edge_zones_backend := env_var_or_default("EDGE_ZONES_BACKEND", "tofu/backend/hon
 edge-zones-fmt-check:
     #!/usr/bin/env bash
     set -euo pipefail
+    bash scripts/remote-only-guard.sh edge-zones-fmt-check
     if command -v tofu >/dev/null 2>&1; then
         tofu fmt -check -recursive {{ edge_zones_stack }}
     else
@@ -1839,6 +1840,7 @@ edge-zones-lock:
 edge-zones-validate:
     #!/usr/bin/env bash
     set -euo pipefail
+    bash scripts/remote-only-guard.sh edge-zones-validate
     tf_data_dir="$(mktemp -d -t great-falls-tool-bus-infra-edge-zones-tofu-data.XXXXXX)"
     trap 'rm -rf "${tf_data_dir}"' EXIT
     if command -v tofu >/dev/null 2>&1; then
@@ -1851,6 +1853,7 @@ edge-zones-validate:
 edge-zones-init:
     #!/usr/bin/env bash
     set -euo pipefail
+    bash scripts/remote-only-guard.sh edge-zones-init
     backend="{{ edge_zones_backend }}"
     test -f "${backend}"
     if [[ "${backend}" != /* ]]; then
@@ -1859,23 +1862,28 @@ edge-zones-init:
     tofu -chdir={{ edge_zones_stack }} init -reconfigure -backend-config="${backend}"
 
 edge-zones-plan:
+    @bash scripts/remote-only-guard.sh edge-zones-plan
     mkdir -p .tofu-plans
     tofu -chdir={{ edge_zones_stack }} plan -out="$(pwd)/.tofu-plans/edge.tfplan"
 
 _edge-zones-plan-json:
+    @bash scripts/remote-only-guard.sh _edge-zones-plan-json
     test -f .tofu-plans/edge.tfplan
     tofu -chdir={{ edge_zones_stack }} show -json "$(pwd)/.tofu-plans/edge.tfplan" > .tofu-plans/edge.tfplan.json
 
 _edge-zones-plan-text:
+    @bash scripts/remote-only-guard.sh _edge-zones-plan-text
     @tofu -chdir={{ edge_zones_stack }} plan -no-color
 
 edge-zones-plan-show:
+    @bash scripts/remote-only-guard.sh edge-zones-plan-show
     test -f .tofu-plans/edge.tfplan
     tofu -chdir={{ edge_zones_stack }} show -no-color "$(pwd)/.tofu-plans/edge.tfplan"
 
 edge-zones-plan-destroy-check:
     #!/usr/bin/env bash
     set -euo pipefail
+    bash scripts/remote-only-guard.sh edge-zones-plan-destroy-check
     test -f .tofu-plans/edge.tfplan
     plan_json="$(mktemp "${TMPDIR:-/tmp}/gftb-edge-zones-plan.XXXXXX.json")"
     trap 'rm -f "${plan_json}"' EXIT
@@ -1902,6 +1910,7 @@ edge-zones-plan-destroy-check:
     echo "edge plan destroy guard passed."
 
 edge-zones-apply: edge-zones-plan-destroy-check
+    @bash scripts/remote-only-guard.sh edge-zones-apply
     test -f .tofu-plans/edge.tfplan
     tofu -chdir={{ edge_zones_stack }} apply "$(pwd)/.tofu-plans/edge.tfplan"
 
@@ -1914,6 +1923,7 @@ edge-zones-apply: edge-zones-plan-destroy-check
 mail_cr_dir := "k8s/mail/latoolb-us-production"
 
 mail-cr-validate:
+    @bash scripts/remote-only-guard.sh mail-cr-validate
     bash scripts/validate-mail-crs.sh {{ mail_cr_dir }}
 
 _mail-kubeconfig-inputs:
@@ -1942,9 +1952,11 @@ _mail-kubeconfig-inputs:
     PY
 
 mail-cr-server-dry-run: mail-cr-validate _mail-kubeconfig-inputs
+    @bash scripts/remote-only-guard.sh mail-cr-server-dry-run
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply --dry-run=server -k {{ mail_cr_dir }}
 
 mail-cr-apply: mail-cr-server-dry-run
+    @bash scripts/remote-only-guard.sh mail-cr-apply
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ mail_cr_dir }}
 
 # --- GFTB Mailman 3 list stack (TIN-2380) -----------------------------------
@@ -1959,12 +1971,15 @@ mail-cr-apply: mail-cr-server-dry-run
 list_stack_dir := "k8s/list/latoolb-us-production"
 
 list-stack-validate:
+    @bash scripts/remote-only-guard.sh list-stack-validate
     bash scripts/validate-list-stack.sh {{ list_stack_dir }}
 
 list-stack-server-dry-run: list-stack-validate _mail-kubeconfig-inputs
+    @bash scripts/remote-only-guard.sh list-stack-server-dry-run
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply --dry-run=server -k {{ list_stack_dir }}
 
 list-stack-apply: list-stack-server-dry-run
+    @bash scripts/remote-only-guard.sh list-stack-apply
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ list_stack_dir }}
 
 _list-member-add-inputs:
@@ -2087,6 +2102,7 @@ list-member-add: _list-member-add-inputs _reviewed-clean-main _operator-apply-co
 listsync_stack_dir := "k8s/list-sync/latoolb-us-production"
 
 listsync-stack-validate:
+    @bash scripts/remote-only-guard.sh listsync-stack-validate
     bash scripts/validate-listsync-stack.sh {{ listsync_stack_dir }}
 
 listsync-stack-server-dry-run: listsync-stack-validate _mail-kubeconfig-inputs
@@ -2107,6 +2123,7 @@ listsync-stack-apply: listsync-stack-server-dry-run
 form_stack_dir := "k8s/form/latoolb-us-production"
 
 form-stack-validate:
+    @bash scripts/remote-only-guard.sh form-stack-validate
     bash scripts/validate-form-stack.sh {{ form_stack_dir }}
 
 # Offline ALTCHA challenge/solve/verify round-trip against the shipping server.py
@@ -2173,9 +2190,11 @@ form-altcha-secret-apply: _mail-kubeconfig-inputs _reviewed-clean-main _operator
     echo "Secret applied and a replacement form-handler pod is Ready. Run the challenge and delivery smoke."
 
 form-stack-server-dry-run: form-stack-validate _mail-kubeconfig-inputs
+    @bash scripts/remote-only-guard.sh form-stack-server-dry-run
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply --dry-run=server -k {{ form_stack_dir }}
 
 form-stack-apply: form-stack-server-dry-run
+    @bash scripts/remote-only-guard.sh form-stack-apply
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ form_stack_dir }}
 
 # --- GFTB public discuss@ archive stack (TIN-2528) --------------------------
@@ -2196,12 +2215,15 @@ form-stack-apply: form-stack-server-dry-run
 archive_stack_dir := "k8s/archive/latoolb-us-production"
 
 archive-stack-validate:
+    @bash scripts/remote-only-guard.sh archive-stack-validate
     bash scripts/validate-archive-stack.sh {{ archive_stack_dir }}
 
 archive-stack-server-dry-run: archive-stack-validate _mail-kubeconfig-inputs
+    @bash scripts/remote-only-guard.sh archive-stack-server-dry-run
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply --dry-run=server -k {{ archive_stack_dir }}
 
 archive-stack-apply: archive-stack-server-dry-run
+    @bash scripts/remote-only-guard.sh archive-stack-apply
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ archive_stack_dir }}
 
 # --- GFTB on-cluster web serving (TIN-2541 skeleton; TIN-2543 cutover) -------
@@ -2265,6 +2287,12 @@ guard-no-remote-kustomize-resources:
 guard-no-remote-kustomize-resources-selftest:
     bash scripts/guard-no-remote-kustomize-resources.sh --self-test
 
+# REMOTE-ONLY-GUARD EXEMPTION (deliberate, operator ruling 2026-09-01): this
+# recipe is the receipt-pinned WEB_RELEASE_VALIDATION_CALLEE and the reviewed
+# web-release-render invokes it under `env -i PATH=... HOME=...`, which strips
+# GITHUB_ACTIONS. A guard line here would break the ratified attended release
+# ceremony (and the public-surface self-test fixture that executes it) while
+# adding nothing: every recipe-level entrypoint that reaches it is guarded.
 web-stack-validate:
     bash scripts/validate-web-stack.sh {{ web_stack_dir }}
 
@@ -2309,6 +2337,7 @@ web-stack-validate:
 # `just` recipe, so this stays outside the web-release-* closure exactly as
 # before.
 web-stack-render:
+    @bash scripts/remote-only-guard.sh web-stack-render
     bash scripts/guard-no-remote-kustomize-resources.sh {{ web_stack_dir }}
     kubectl kustomize {{ web_stack_dir }}
 
@@ -4143,6 +4172,7 @@ web-release-apply: _reviewed-clean-main _operator-apply-confirm _web-release-app
 _k8s-drift-check kubeconfig namespace dir label:
     #!/usr/bin/env bash
     set -uo pipefail
+    bash scripts/remote-only-guard.sh _k8s-drift-check || exit 3
     test -n "{{ kubeconfig }}" || { echo "kubeconfig path is required"; exit 1; }
     test -f "{{ kubeconfig }}" || { echo "kubeconfig not found at {{ kubeconfig }}"; exit 1; }
     kubectl --kubeconfig "{{ kubeconfig }}" --namespace {{ namespace }} diff -k {{ dir }} > "{{ label }}-drift.txt" 2>&1
@@ -4160,15 +4190,19 @@ _k8s-drift-check kubeconfig namespace dir label:
     fi
 
 mail-cr-drift-check: _mail-kubeconfig-inputs
+    @bash scripts/remote-only-guard.sh mail-cr-drift-check
     just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ mail_cr_dir }} mail-cr
 
 list-stack-drift-check: _mail-kubeconfig-inputs
+    @bash scripts/remote-only-guard.sh list-stack-drift-check
     just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ list_stack_dir }} list-stack
 
 form-stack-drift-check: _mail-kubeconfig-inputs
+    @bash scripts/remote-only-guard.sh form-stack-drift-check
     just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ form_stack_dir }} form-stack
 
 archive-stack-drift-check: _mail-kubeconfig-inputs
+    @bash scripts/remote-only-guard.sh archive-stack-drift-check
     just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ archive_stack_dir }} archive-stack
 
 # TIN-3813 EDIT-2 (infra #122 review): "activation is an operator decision in
@@ -4177,6 +4211,7 @@ archive-stack-drift-check: _mail-kubeconfig-inputs
 # (or a dry-run/secret/list-pair patch) shows up here instead of silently
 # taking effect between scheduled runs.
 listsync-stack-drift-check: _mail-kubeconfig-inputs
+    @bash scripts/remote-only-guard.sh listsync-stack-drift-check
     just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ listsync_stack_dir }} listsync-stack
 
 # rung 1 tree honesty (2026-08-21): see the _k8s-drift-check header -- the web
@@ -4190,6 +4225,7 @@ listsync-stack-drift-check: _mail-kubeconfig-inputs
 web-stack-drift-check: _web-apply-kubeconfig-only
     #!/usr/bin/env bash
     set -euo pipefail
+    bash scripts/remote-only-guard.sh web-stack-drift-check
     repo_root="$(git rev-parse --show-toplevel)"
     export KUBECTL_EXTERNAL_DIFF="${repo_root}/scripts/web-stack-diff.sh"
     just _k8s-drift-check "${WEB_APPLY_KUBECONFIG}" {{ web_stack_ns }} {{ web_stack_dir }} web-stack
