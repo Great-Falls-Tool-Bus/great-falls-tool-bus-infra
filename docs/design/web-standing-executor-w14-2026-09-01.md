@@ -95,12 +95,16 @@ executor exactly as it did to every bridge run.
 
 ### 1.1 The operand source: merge-of-pin is the production decision
 
-decisions/0022:320-322 defines the operand: "Each apply is of an exact
-operand: the newest signed `gftb-site` `main` head with a green CI run and a
-green publisher run, pinned by a merged declare-only pin PR in infra." That
-sentence is the whole interface. Under 0022 §1 phase-2 semantics, **merging
-the declare-only pin PR is the production decision**; the executor is
-subordinate to it and decides nothing.
+decisions/0022:320-322 stated the operand under Amendment 3: "Each apply is
+of an exact operand: the newest signed `gftb-site` `main` head with a green
+CI run and a green publisher run, pinned by a merged declare-only pin PR in
+infra." Spent as authority, carried here as the interface definition (§0's
+rule, applied the way §5.2 applies it) — that sentence is the whole
+interface. Under 0022 §1 phase-2 semantics — "After activation, merge to the
+canonical protected `main` declarations is the production decision for
+ordinary generations" (0022:36-38) — **merging the declare-only pin PR is
+the production decision**; the executor is subordinate to it and decides
+nothing.
 
 The pin is `k8s/web/greatfallstoolbus-org-production/deployment.yaml` on
 infra `main`. Post-W13 it declares both operand fields in tracked bytes:
@@ -247,14 +251,45 @@ branch, any repo" and unowned (TIN-2609 `68f54044`). Therefore:
   `PublishedOverlayBundle`; its receipt carries an explicit `gfI09` honesty
   block recording the absent upstream legs (§5.3), and it never fabricates
   publisher, verifier, or controller evidence.
-- It fills **only the §3.1 subordinate executor role** (0022:166-169 assigns
-  publisher/verifier/controller elsewhere; 0022:182-185 refuses every local
-  substitute), plus the observer/readback and receipt legs this spec adds.
+- It fills **only the subordinate exact-plan executor surface of the §3
+  composition** (0022:104-106), plus the observer/readback and receipt legs
+  this spec adds. §3.1 assigns no executor: it fixes "the previously
+  unassigned publication and installation-digest roles" only (0022:161-162)
+  — two publishers, the verifier/installation-digest source, and the
+  admission consumer (0022:166-169), each barred from plan/apply, the
+  consumer explicitly from "applying the workload directly" (0022:169). The
+  executor's infra placement rests on the §3 authority table —
+  `great-falls-tool-bus-infra` owns "protected apply, probes/receipts"
+  (0022:115) — and 0022:182-185 refuses every local substitute on the
+  evidence path.
 - The implementation lands with a fail-closed arming constant (the bridge's
   placeholder-guard shape, bridge:97-101): until the operator records §7's
   arming event, every run refuses at step 0 with a receipt, mutating
   nothing. Arming is a reviewed one-line change to the executor file — which
   never triggers an apply (§2.1).
+
+**The local-implementation boundary, named rather than cited around.**
+0022:108-110 rules that GFTB repos "may declare their instance, binding,
+pins, and workload probes" but "must not locally implement self-heal, retry,
+freeze, executor, observer, controller-loop, or generic receipt logic", and
+0022:131-138 places the "semantics, APIs, safety bounds, implementations,
+conformance tests, and reusable workflow tests" of exactly those properties
+in the owning GloriousFlywheel, owner-overlay-controller, ci-templates, and
+site.scaffold packages. A standing workflow authored in this repository sits
+in real tension with that letter. The bridges ran under explicit Meta
+amendments (Meta owns exceptions, 0022:114), and Amendment 3 — which
+recorded that "the executor already lives in this repository" and named W14
+as the promotion "under section 3" (0022:376-379, 385-390) — is spent and
+may not be re-invoked by inference (0022:383). This spec therefore does not
+claim the tension away; ratification must rule the placement question
+explicitly, one of: **(a)** infra's "protected apply, probes/receipts"
+ownership (0022:115) covers this instance, with the upstream packages owning
+the conformance doctrine/tests the implementation adopts before arming
+(0022:131-138); or **(b)** the executor mechanics land as a versioned
+reusable surface in ci-templates/site.scaffold, instantiated from infra the
+way §3.1's verifier row is (0022:168), with this document as that surface's
+specification. Every other section here is compatible with either answer;
+arming (§7) waits for the ruling either way.
 
 ## 3. Observer split: the second identity
 
@@ -446,8 +481,10 @@ The ladder, in order, each rung gated on the one before it:
    evidence, and this spec's render derivations (§1.2) bind to the post-W13
    tree, not gen-45 constants.
 2. **This spec is ratified by the operator** (comment on TIN-4255), which
-   also authorizes the two attended prerequisites it names: the `web-observe`
-   environment + RBAC carrier, and the §4 service-token edge change.
+   also rules the §2.4 placement question (local instance vs upstream
+   reusable surface) and authorizes the two attended prerequisites it names:
+   the `web-observe` environment + RBAC carrier, and the §4 service-token
+   edge change.
 3. **Implementation PR(s)** land the standing workflow (disarmed, §2.4), the
    observer RBAC manifest, the environments/secrets, and the site-side
    marker if needed — each through ordinary review; none of them mutates the
@@ -473,9 +510,10 @@ The nine (0022:140-146), each with its receipt source and current state:
 
 Rows 1-3 are the honest gap: this spec cannot close them and does not
 pretend to (0022:131-138 forbids a local substitute; §2.4 forbids claiming
-them). Rows 4-9 are the GFTB-side legs W14 builds, as the standing
-subordinate the §3 composition binds to when rows 1-3 exist — with the
-planner/verifier seam left typed in the receipt (`gfI09` block) but unarmed.
+them). Rows 4-9 are the GFTB-side legs W14 builds — in whichever placement
+shape rung 2 rules (§2.4) — as the standing subordinate the §3 composition
+binds to when rows 1-3 exist, with the planner/verifier seam left typed in
+the receipt (`gfI09` block) but unarmed.
 
 ## 8. Non-goals
 
