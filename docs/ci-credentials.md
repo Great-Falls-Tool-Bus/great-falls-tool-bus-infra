@@ -1,6 +1,8 @@
 # CI Credentials
 
-Hosted validation (`validate.yml`, the required status check) is
+Hosted validation (`validate.yml`, the required status check, and
+`web-plan.yml`, the PR-side render/validate status slated to join the
+required list — W17/TIN-4256, an attended ruleset step) is
 self-contained: it checks out only this public overlay and does not fetch
 GloriousFlywheel or receive a cross-repository credential. The nine
 core-consuming workflows below are different: GloriousFlywheel went private
