@@ -702,13 +702,31 @@ not by any hosted check. It is the stated pre-merge gate for the PR that removes
 their delete lane and RBAC `delete` verb (TIN-4254 W13): merging before the
 census would leave no in-repo code path or RBAC to remove a straggler.
 
-1. Attended, with the web-apply kubeconfig, run exactly:
+1. Attended, read through the exact
+   `system:serviceaccount:greatfallstoolbus-org-production:web-apply`
+   authorization subject. Use either the custody-compliant web-apply
+   kubeconfig:
 
    ```sh
    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" \
      --namespace greatfallstoolbus-org-production \
      get networkpolicies -o name
    ```
+
+   or an operator-custody kubeconfig with Kubernetes impersonation of that
+   exact subject:
+
+   ```sh
+   kubectl --kubeconfig "${OPERATOR_KUBECONFIG}" \
+     --as=system:serviceaccount:greatfallstoolbus-org-production:web-apply \
+     --namespace greatfallstoolbus-org-production \
+     get networkpolicies -o name
+   ```
+
+   The second form does not substitute operator authority for the subject:
+   Kubernetes authorizes the read as `web-apply`, and the receipt must name
+   which form was used. A broad operator read without impersonation is not a
+   census receipt.
 
 2. **Pass condition (an exact set, not a floor):** precisely the four committed
    policies — `allow-cloudflared-tunnel-ingress`, `allow-prometheus-scrape`,
