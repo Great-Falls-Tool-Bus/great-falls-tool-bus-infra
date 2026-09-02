@@ -10,10 +10,19 @@
 # assigned this scale set's work is the runner_group boundary below.
 #
 # CONSERVATIVE CAPACITY POSTURE (TIN-2165/TIN-2234 pod-cap crunch): nix lane
-# only, max 4, min 0, no warm pool, docker/dind lanes OFF. Sting placement +
-# the dedicated compute-expansion toleration mirror the tinyland-goo-nix
-# anchor shape in the older personal-account overlay (honey is pod-count full; sting carries
-# the dedicated.tinyland.dev/compute-expansion taint).
+# only, max 4, min 0, no warm pool, docker/dind lanes OFF. Runner placement
+# rides the substrate's compute-expansion capability with the paired
+# dedicated.tinyland.dev/compute-expansion toleration, mirroring the
+# tinyland-goo-nix anchor shape in the older personal-account overlay (the
+# anchor node is pod-count full; the compute-expansion node carries the taint).
+#
+# SUBSTRATE-BOUNDARY MIGRATION (TIN-4246 rung 5; contract ratified 2026-08-31;
+# GF-A11): every node selector below is a capability expression over
+# `capability.tinyland.dev/*` labels owned by the cluster substrate (declared
+# in blahaj ansible/inventory/host_vars via the rke2_node_placement carrier).
+# Hostname pins are forbidden; scripts/validate-overlay-runner-taxonomy.py
+# enforces this. Which physical node carries each capability is a
+# substrate-side decision -- this overlay names only the capability it needs.
 
 cluster_context       = "honey"
 github_config_url     = "https://github.com/Great-Falls-Tool-Bus"
@@ -51,8 +60,11 @@ create_runner_namespace     = false
 
 controller_chart_version = "0.14.0"
 
+# ARC controller: CI control-plane glue. Selects the substrate's stable CI
+# control-plane anchor capability, outside the preemptible compute-expansion
+# domain (resolves to the honey anchor node today).
 controller_node_selector = {
-  "kubernetes.io/hostname" = "honey"
+  "capability.tinyland.dev/ci-control-plane" = "true"
 }
 
 nix_runner_name    = "great-falls-tool-bus-nix"
@@ -91,12 +103,17 @@ nix_ephemeral_storage_request = "12Gi"
 nix_ephemeral_storage_limit   = "24Gi"
 nix_store_enabled             = false
 nix_store_prepopulate_enabled = false
-nix_store_storage_class       = "openebs-bumble-zfs"
-nix_store_size                = "50Gi"
-nix_warm_pool_enabled         = false
-deploy_docker_runner          = false
-deploy_dind_runner            = false
-deploy_longhorn               = false
+# SUBSTRATE-OWNED MIGRATION DEBT (TIN-4246 rung 5): `openebs-bumble-zfs` is a
+# provider StorageClass name owned by the cluster substrate (blahaj
+# deploy/bumble/openebs-storageclasses.yaml). The substrate publishes no
+# StorageClass alias mechanism today, so the raw class name stays behind this
+# variable until an alias exists. Inert while nix_store_enabled = false.
+nix_store_storage_class = "openebs-bumble-zfs"
+nix_store_size          = "50Gi"
+nix_warm_pool_enabled   = false
+deploy_docker_runner    = false
+deploy_dind_runner      = false
+deploy_longhorn         = false
 
 # Shared-cache-backed wiring for the primary nix lane: the runner injects
 # BAZEL_REMOTE_CACHE + GF_BAZEL_SUBSTRATE_MODE=shared-cache-backed and the
@@ -129,12 +146,16 @@ nix_env_vars = [
   }
 ]
 
+# Runner payloads select the substrate's compute-expansion capability (LIVE
+# today: declared in blahaj ansible/inventory/host_vars/sting.yml and resolving
+# to sting), paired with the dedicated.tinyland.dev/compute-expansion
+# toleration below.
 shared_runner_node_selector = {
-  "kubernetes.io/hostname" = "sting"
+  "capability.tinyland.dev/compute-expansion" = "true"
 }
 
 shared_nix_runner_node_selector = {
-  "kubernetes.io/hostname" = "sting"
+  "capability.tinyland.dev/compute-expansion" = "true"
 }
 
 shared_runner_tolerations = [
@@ -148,11 +169,12 @@ shared_runner_tolerations = [
 shared_runner_affinity = {}
 
 # Listeners are request-less ARC intake plumbing (no resource requests), so the
-# sting pod-cap rationale above applies to runner payloads only. Keep listeners
-# off sting after the 2026-07-09 total-intake outage (TIN-2455/TIN-2677;
-# mirrors GloriousFlywheel PR #1067).
+# pod-cap rationale above applies to runner payloads only. Keep listeners off
+# the compute-expansion node after the 2026-07-09 total-intake outage
+# (TIN-2455/TIN-2677; mirrors GloriousFlywheel PR #1067): they select the
+# substrate's CI-intake capability instead (resolves to bumble today).
 listener_node_selector = {
-  "kubernetes.io/hostname" = "bumble"
+  "capability.tinyland.dev/ci-intake" = "true"
 }
 
 listener_tolerations = [

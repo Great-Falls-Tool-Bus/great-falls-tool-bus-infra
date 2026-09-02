@@ -333,6 +333,27 @@ def validate_rbe_wiring(runner: RunnerSet) -> list[str]:
     return errors
 
 
+def validate_substrate_boundary(path: Path) -> list[str]:
+    """Forbid node-identity placement pins in consumer overlay tfvars.
+
+    The 2026-08-31 substrate-boundary contract (TIN-4246 rung 5; GF-A11:
+    "A hostname or provider class is not a core placement primitive") moves
+    physical node identity behind cluster-substrate-owned capability labels.
+    A consumer overlay may select `capability.tinyland.dev/*` labels and
+    tolerate `dedicated.tinyland.dev/*` taints; it may never pin
+    `kubernetes.io/hostname`.
+    """
+    errors: list[str] = []
+    for line_number, raw_line in enumerate(path.read_text().splitlines(), start=1):
+        if "kubernetes.io/hostname" in strip_comment(raw_line):
+            errors.append(
+                f"{path}:{line_number}: node placement must be a substrate-owned "
+                "capability expression; kubernetes.io/hostname pins are forbidden "
+                "(substrate-boundary contract 2026-08-31, TIN-4246)"
+            )
+    return errors
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Validate overlay runner labels stay capability-shaped.",
@@ -351,6 +372,7 @@ def main() -> int:
     all_errors: list[str] = []
 
     for path in args.paths:
+        all_errors.extend(validate_substrate_boundary(path))
         for line_number, label in parse_literal_assignments(path, "runner_label"):
             for error in label_errors(label):
                 all_errors.append(f"{path}:{line_number}: runner_label {label!r}: {error}")

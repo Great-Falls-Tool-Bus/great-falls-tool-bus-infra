@@ -115,4 +115,20 @@ EOF
 python3 "${VALIDATOR}" "${TMP_DIR}/repo-scope.tfvars" >"${TMP_DIR}/out" 2>&1 && fail "repo-scoped config URL unexpectedly passed without anchor flag"
 grep -q "repo scoped" "${TMP_DIR}/out" || fail "missing repo-scope error"
 
+# 8. Substrate boundary (TIN-4246 rung 5): a kubernetes.io/hostname placement
+#    pin -> FAIL; the capability-shaped selector -> PASS.
+cat >"${TMP_DIR}/hostname-pin.tfvars" <<'EOF'
+listener_node_selector = {
+  "kubernetes.io/hostname" = "bumble"
+}
+EOF
+run "${TMP_DIR}/hostname-pin.tfvars" && fail "hostname-pinned selector unexpectedly passed"
+grep -q "kubernetes.io/hostname pins are forbidden" "${TMP_DIR}/out" || fail "missing substrate-boundary error"
+cat >"${TMP_DIR}/capability-pin.tfvars" <<'EOF'
+listener_node_selector = {
+  "capability.tinyland.dev/ci-intake" = "true"
+}
+EOF
+run "${TMP_DIR}/capability-pin.tfvars" || fail "capability-shaped selector unexpectedly failed"
+
 echo "overlay runner taxonomy RBE-wiring self-test passed"

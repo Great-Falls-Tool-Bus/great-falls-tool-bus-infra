@@ -1,8 +1,14 @@
 # Persistent volumes for the Mailman 3 stack. Sized for a tiny community org
-# (single small list). storageClassName pinned to local-path-retain: honey has
-# no default StorageClass, and list DB + archive + subscriber state must
-# survive a PVC reclaim (Retain), matching the house mail-data pattern
-# (tinyland-dev-production mail replicas use *-retain classes).
+# (single small list).
+#
+# SUBSTRATE-OWNED MIGRATION DEBT (TIN-4246 rung 5; substrate-boundary contract
+# 2026-08-31): `local-path-retain` is a provider StorageClass name owned by the
+# cluster substrate (blahaj), not by this consumer overlay. The cluster
+# publishes no default StorageClass and no class-alias mechanism today, so the
+# raw class literal stays pinned here; swap it for the substrate-published
+# alias when one exists. Retain semantics are load-bearing: list DB + archive +
+# subscriber state must survive a PVC reclaim, matching the house mail-data
+# pattern (tinyland-dev-production mail replicas use *-retain classes).
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
