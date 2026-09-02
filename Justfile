@@ -54,7 +54,6 @@ check-hosted:
     just archive-stack-validate
     just guard-no-remote-kustomize-resources-selftest
     just web-stack-validate
-    just web-stack-diff-selftest
     just grafana-dashboards-validate
     just arc-fmt-check
     just edge-zones-fmt-check
@@ -2302,29 +2301,27 @@ web-stack-validate:
 # ratification basis: operator interview 2026-08-21, register L71 Q2 = rungs
 # 1+2, L73). Render the COMMITTED declare-only tree to stdout: kustomize only,
 # nothing else. This is deliberately NOT web-release-render: it takes no
-# WEB_APPLY_IMAGE/WEB_APPLY_SHA, resolves no GHCR candidate, injects no
-# source-sha annotation, and synthesizes no default-deny-egress NetworkPolicy.
+# WEB_APPLY_IMAGE/WEB_APPLY_SHA and resolves no GHCR candidate. (Since
+# TIN-4254 neither recipe injects or synthesizes anything -- web-release-render
+# emits these same kustomize bytes verbatim and merely ASSERTS that the
+# committed pin equals its reviewed inputs -- so what separates them is the
+# candidate resolution and the assertion contract, not the bytes.)
 # It calls no `just` recipe at all, so it cannot reach -- directly or
 # transitively -- any member of the web-release-* reviewed candidate-
 # promotion family (scripts/validate-public-operator-surface.py
 # WEB_RELEASE_OPERATOR_LOCAL_ROOTS): that family stays exactly what TIN-3899 /
 # decisions/0016 made it, attended-operator-only and unreachable from every
 # CI workflow, and this recipe is written to stay outside its closure by
-# construction rather than by a validator exemption. Since rung 1
-# (deployment.yaml's "TREE HONESTY" fix) the committed tree already matches
-# web-release-render's own contract for every field except THREE it still
-# names as ceremony-only residuals -- in order of consequence: (1) the
-# PER-RELEASE CONTAINER IMAGE DIGEST (the field that decides what code
-# production actually runs; this render shows whatever digest is currently
-# committed, which is NOT necessarily what the next release ceremony will
-# pin), (2) the per-release source-sha annotation, and (3) the synthesized
-# default-deny-egress NetworkPolicy -- so this render is close to, but not
-# byte-identical with, what the attended ceremony would apply. Say that
-# honestly, and name the digest explicitly, in anything that consumes this
-# output; do not call it "the exact apply-time bytes". (The ceremony also
-# prunes two legacy egress NetworkPolicies at apply time -- that is an
-# apply-time-only concern, not a render residual: those two objects are not
-# in the committed tree at all, so this render never carries them either.)
+# construction rather than by a validator exemption. Since TIN-4254 (W13)
+# there are NO ceremony-only residuals left: the source-sha annotation and
+# the default-deny-egress NetworkPolicy are committed tree truth, the legacy
+# egress allows are pruned everywhere, and web-release-render itself emits
+# these same kustomize bytes verbatim -- so this render IS byte-identical
+# with what the attended ceremony applies, PROVIDED the committed pin is the
+# pin the ceremony reviews (web-release-render asserts exactly that and
+# refuses otherwise). The one honest caveat left for consumers: this shows
+# the digest currently committed, which is not necessarily what the NEXT
+# release ceremony will pin.
 #
 # Runs the standalone remote-resource ALLOWLIST guard
 # (scripts/guard-no-remote-kustomize-resources.sh; round 4 after adversarial
@@ -2366,9 +2363,10 @@ web-stack-server-dry-run: web-stack-validate _web-apply-inputs
 # legacy adapter-node carrier and the reviewed web-release chain both mutate
 # Deployment/greatfallstoolbus-org in {{ web_stack_ns }}. Once the gftb-site
 # static origin is promoted in place, re-running this carrier would re-pin the
-# adapter-node image over it and `apply -k` would recreate allow-egress-dns /
-# allow-egress-discuss-archive -- silently reverting the promotion and falsifying
-# the SERVED proof.
+# adapter-node image over it -- silently reverting the promotion and falsifying
+# the SERVED proof. (Until TIN-4254 pruned them from every surface, a tree
+# apply would also have recreated the two legacy allow-egress policies; the
+# committed tree now declares default-deny-egress instead.)
 #
 # The carrier USED TO be fired unattended by web-stack.yml's
 # `repository_dispatch: web-image-published` (sent by greatfallstoolbus.org's
@@ -2619,15 +2617,21 @@ web-release-candidate-proof: _web-release-candidate-inputs
     test -s "${proof_dir}/image.tar" || { echo "anonymous candidate pull produced no image" >&2; exit 1; }
     echo "anonymous candidate proof passed: source=${WEB_APPLY_SHA} digest=${expected_digest}"
 
-# Render the exact static-Caddy workload to stdout for the given
-# WEB_APPLY_IMAGE/WEB_APPLY_SHA. The checked-in base (rung 1 tree honesty,
-# 2026-08-21) already carries the static-Caddy shape -- this transform's
-# per-container overrides are now idempotent no-ops for everything except the
-# per-release image, source-sha annotation, and the synthesized
-# default-deny-egress NetworkPolicy (see k8s/web/.../deployment.yaml and
-# networkpolicy.yaml headers). This recipe never writes back to the checked-in
-# manifest; callers may redirect stdout only to a caller-owned temporary
-# receipt. No cluster or registry is contacted here.
+# Render the reviewed release bytes to stdout for the given
+# WEB_APPLY_IMAGE/WEB_APPLY_SHA. Since TIN-4254 (W13) this recipe emits the
+# committed tree's `kubectl kustomize {{ web_stack_dir }}` bytes VERBATIM --
+# no yq/jq mutation lane, no re-serialization, no synthesis: the source-sha
+# annotation and the default-deny-egress NetworkPolicy the render used to
+# stamp/synthesize are committed tree truth (see k8s/web/.../deployment.yaml
+# and networkpolicy.yaml headers), so the rendered bytes ARE the kustomize
+# bytes and re-render byte-identically. The reviewed inputs are ASSERTED, not
+# injected: the committed pin (image digest + source-sha template annotation)
+# must equal WEB_APPLY_IMAGE/WEB_APPLY_SHA or the render refuses ("commit the
+# pin first"), and the census/workload/NetworkPolicy contracts below hold the
+# committed shape to exactly what the ceremony has always applied. This
+# recipe never writes back to the checked-in manifest; callers may redirect
+# stdout only to a caller-owned temporary receipt. No cluster or registry is
+# contacted here.
 web-release-render: _web-release-candidate-inputs
     #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
     set +x
@@ -2665,76 +2669,22 @@ web-release-render: _web-release-candidate-inputs
     trap 'rm -rf "${render_dir}"' EXIT
     mkdir -m 700 "${render_dir}/home"
     env -i PATH="${PATH}" HOME="${render_dir}/home" just web-stack-validate >/dev/null
-    base="${render_dir}/base.yaml"
     rendered="${render_dir}/rendered.yaml"
-    kubectl kustomize {{ web_stack_dir }} > "${base}"
-    # Keep YAML parsing/serialization in mikefarah yq-go and all mutation
-    # semantics in jq; -I=0 produces one JSON document per input document.
-    yq eval-all -o=json -I=0 '.' "${base}" \
-      | jq --arg image "${WEB_APPLY_IMAGE}" --arg sha "${WEB_APPLY_SHA}" '
-      if .kind == "NetworkPolicy" and (.metadata.name == "allow-egress-dns" or .metadata.name == "allow-egress-discuss-archive") then
-        empty
-      elif .kind == "Deployment" and .metadata.name == "greatfallstoolbus-org" and .metadata.namespace == "greatfallstoolbus-org-production" then
-        .spec.replicas = 2
-        | .spec.template.metadata.annotations["app.tinyland.dev/source-sha"] = $sha
-        | .spec.template.spec.automountServiceAccountToken = false
-        | .spec.template.spec.enableServiceLinks = false
-        | .spec.template.spec.securityContext = {
-            "runAsNonRoot": true,
-            "runAsUser": 65532,
-            "runAsGroup": 65532,
-            "fsGroup": 65532,
-            "seccompProfile": {"type": "RuntimeDefault"}
-          }
-        | del(
-            .spec.template.spec.hostNetwork,
-            .spec.template.spec.hostPID,
-            .spec.template.spec.hostIPC,
-            .spec.template.spec.shareProcessNamespace
-          )
-        | .spec.template.spec.containers |= map(
-            if .name == "greatfallstoolbus-org" then
-              .image = $image
-              | .securityContext = {
-                  "allowPrivilegeEscalation": false,
-                  "readOnlyRootFilesystem": true,
-                  "capabilities": {"drop": ["ALL"]}
-                }
-              | del(.command, .args, .env, .envFrom, .volumeMounts, .lifecycle, .workingDir, .stdin, .stdinOnce, .tty)
-              | .ports |= map(del(.hostIP, .hostPort))
-            else . end
-          )
-      elif .kind == "NetworkPolicy" and .metadata.name == "default-deny-ingress" and .metadata.namespace == "greatfallstoolbus-org-production" then
-        .,
-        {
-          "apiVersion": "networking.k8s.io/v1",
-          "kind": "NetworkPolicy",
-          "metadata": {
-            "name": "default-deny-egress",
-            "namespace": "greatfallstoolbus-org-production",
-            "labels": {
-              "app.kubernetes.io/managed-by": "great-falls-tool-bus-infra",
-              "app.kubernetes.io/part-of": "great-falls-tool-bus",
-              "app.tinyland.dev/lifecycle": "declare-only",
-              "app.tinyland.dev/tenant": "great-falls-tool-bus"
-            }
-          },
-          "spec": {
-            "podSelector": {
-              "matchLabels": {
-                "app.kubernetes.io/name": "greatfallstoolbus-org",
-                "app.kubernetes.io/component": "web"
-              }
-            },
-            "policyTypes": ["Egress"],
-            "egress": []
-          }
-        }
-      else . end
-      ' \
-      | yq eval-all -p=json -o=yaml -P '.' - > "${rendered}"
-    # The later mutation lane must explicitly delete the two omitted legacy
-    # adapter-node egress policies; `kubectl apply` does not prune omissions.
+    # VERBATIM: the committed kustomize bytes are the release bytes. Any
+    # yq/jq round-trip on this path would be synthesis-time re-serialization
+    # variance and break digest equality with `kubectl kustomize` output.
+    kubectl kustomize {{ web_stack_dir }} > "${rendered}"
+    # The reviewed inputs are asserted against the COMMITTED pin, never
+    # injected. A mismatch means the operator has not committed the pin step
+    # for this release yet.
+    yq eval-all -o=json -I=0 '.' "${rendered}" \
+      | jq --slurp -e --arg image "${WEB_APPLY_IMAGE}" --arg sha "${WEB_APPLY_SHA}" '
+      [.[] | select(.kind == "Deployment" and .metadata.name == "greatfallstoolbus-org" and .metadata.namespace == "greatfallstoolbus-org-production")] as $deployments
+      | ($deployments | length) == 1
+        and ($deployments[0].spec.template.spec.containers | length) == 1
+        and ($deployments[0].spec.template.spec.containers[0].image == $image)
+        and ($deployments[0].spec.template.metadata.annotations["app.tinyland.dev/source-sha"] == $sha)
+      ' >/dev/null || { echo "committed pin does not match reviewed inputs; commit the pin first" >&2; exit 1; }
     expected_census=$'Deployment\tgreatfallstoolbus-org\tgreatfallstoolbus-org-production\nNetworkPolicy\tallow-cloudflared-tunnel-ingress\tgreatfallstoolbus-org-production\nNetworkPolicy\tallow-prometheus-scrape\tgreatfallstoolbus-org-production\nNetworkPolicy\tdefault-deny-egress\tgreatfallstoolbus-org-production\nNetworkPolicy\tdefault-deny-ingress\tgreatfallstoolbus-org-production\nService\tgreatfallstoolbus-org\tgreatfallstoolbus-org-production'
     actual_census="$(
       yq eval-all -o=json -I=0 '.' "${rendered}" \
@@ -2794,6 +2744,28 @@ web-release-render: _web-release-candidate-inputs
         and ($services[0].spec.ports == [{"name": "http", "port": 80, "protocol": "TCP", "targetPort": "http"}])
         and ([.[] | select(.kind == "Namespace" or .kind == "Secret" or .kind == "SecretList")] | length) == 0
       ' >/dev/null || { echo "rendered static-Caddy workload contract mismatch" >&2; exit 1; }
+    yq eval-all -o=json -I=0 '.' "${rendered}" \
+      | jq --slurp -e '
+      [.[] | select(.kind == "NetworkPolicy" and .metadata.name == "default-deny-egress" and .metadata.namespace == "greatfallstoolbus-org-production")] as $deny
+      | ($deny | length) == 1
+        and ($deny[0].apiVersion == "networking.k8s.io/v1")
+        and ($deny[0].metadata.labels == {
+              "app.kubernetes.io/managed-by": "great-falls-tool-bus-infra",
+              "app.kubernetes.io/part-of": "great-falls-tool-bus",
+              "app.tinyland.dev/lifecycle": "declare-only",
+              "app.tinyland.dev/tenant": "great-falls-tool-bus"
+            })
+        and ($deny[0].spec == {
+              "podSelector": {
+                "matchLabels": {
+                  "app.kubernetes.io/name": "greatfallstoolbus-org",
+                  "app.kubernetes.io/component": "web"
+                }
+              },
+              "policyTypes": ["Egress"],
+              "egress": []
+            })
+      ' >/dev/null || { echo "committed default-deny-egress NetworkPolicy shape mismatch" >&2; exit 1; }
     rendered_network_policies_semantic="$(
       yq eval-all -o=json -I=0 '.' "${rendered}" \
         | jq --slurp -S -c '
@@ -3191,9 +3163,7 @@ _web-release-kubeconfig-inputs:
       "networkpolicies.networking.k8s.io|allow-cloudflared-tunnel-ingress|namespaced" \
       "networkpolicies.networking.k8s.io|allow-prometheus-scrape|namespaced" \
       "networkpolicies.networking.k8s.io|default-deny-egress|namespaced" \
-      "networkpolicies.networking.k8s.io|default-deny-ingress|namespaced" \
-      "networkpolicies.networking.k8s.io|allow-egress-dns|namespaced" \
-      "networkpolicies.networking.k8s.io|allow-egress-discuss-archive|namespaced"; do
+      "networkpolicies.networking.k8s.io|default-deny-ingress|namespaced"; do
       IFS='|' read -r resource resource_name scope <<<"${named_contract}"
       if [[ "${scope}" == "namespaced" ]]; then auth_scope=(--namespace {{ web_stack_ns }}); else auth_scope=(--all-namespaces); fi
       for verb in update patch delete; do
@@ -3969,16 +3939,16 @@ _web-release-plan-root-contract:
 # tree, and no ambient KUBECONFIG allowed to shadow it.
 #
 # It also runs the AUTHORIZATION PREFLIGHT for the whole mutating chain, before
-# any mutation is attempted. `apply --dry-run=server` authorizes only the objects
-# it applies; it does NOT authorize the NetworkPolicy delete web-release-apply
-# performs afterwards, and the render introduces a NetworkPolicy object that does
-# not exist yet (default-deny-egress), so `create networkpolicies` is a new verb
-# too. Without this preflight the realistic failure is: dry-run green -> apply
-# succeeds (the Deployment now runs the gftb-site image) -> delete denied ->
-# `set -e` aborts before the rollout wait, leaving the promotion half-done with
-# allow-egress-dns still additively permitting egress and the stated "no egress
-# at all" invariant silently false. Mirrors the auth can-i preflights the ARC and
-# proof recipes already use.
+# any mutation is attempted. `apply --dry-run=server` can miss verbs the real
+# apply needs (a `create` on an object that does not exist yet reaches a
+# different authorization path than the dry-run's checks), so every verb the
+# chain uses is probed up front and any non-"yes" -- or any diagnostic output
+# at all -- refuses before the first mutation. Mirrors the auth can-i
+# preflights the ARC and proof recipes already use. (Until TIN-4254 this
+# preflight also authorized the apply-time delete of the two legacy
+# allow-egress policies; that delete lane is retired -- every gen 37..43
+# apply already ran it, and live absence is receipted by an attended
+# read-only census, not by CI.)
 _web-release-apply-kubeconfig-contract:
     #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
     set +x
@@ -4010,10 +3980,9 @@ _web-release-apply-kubeconfig-contract:
     trap 'rm -rf "${authz_dir}"' EXIT
     authz_stderr="${authz_dir}/authz.stderr"
     # Every verb the chain needs, in {{ web_stack_ns }}: `apply -f` on the three
-    # rendered kinds (get/create/update/patch), `rollout status` (get/list/watch
-    # deployments), and the NetworkPolicy prune (delete). Fail closed on a "no"
-    # AND on any diagnostic output, so an authorization transport error is a
-    # refusal rather than a pass.
+    # rendered kinds (get/create/update/patch) and `rollout status` (get/list/
+    # watch deployments). Fail closed on a "no" AND on any diagnostic output,
+    # so an authorization transport error is a refusal rather than a pass.
     for authz_contract in \
       "get deployments.apps/greatfallstoolbus-org" \
       "list deployments.apps" "watch deployments.apps" "create deployments.apps" \
@@ -4034,9 +4003,7 @@ _web-release-apply-kubeconfig-contract:
       "patch networkpolicies.networking.k8s.io/default-deny-ingress" \
       "patch networkpolicies.networking.k8s.io/allow-cloudflared-tunnel-ingress" \
       "patch networkpolicies.networking.k8s.io/allow-prometheus-scrape" \
-      "patch networkpolicies.networking.k8s.io/default-deny-egress" \
-      "delete networkpolicies.networking.k8s.io/allow-egress-dns" \
-      "delete networkpolicies.networking.k8s.io/allow-egress-discuss-archive"; do
+      "patch networkpolicies.networking.k8s.io/default-deny-egress"; do
       read -r authz_verb authz_resource <<<"${authz_contract}"
       : > "${authz_stderr}"
       authz_decision="$(kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" auth can-i "${authz_verb}" "${authz_resource}" --namespace {{ web_stack_ns }} 2>"${authz_stderr}" || true)"
@@ -4103,8 +4070,10 @@ web-release-server-dry-run: _web-release-apply-kubeconfig-contract _web-release-
 # ATTENDED APPLY. Gated exactly like arc-apply: a clean, signed checkout equal to
 # canonical main, GFTB_APPLY_CONFIRM=apply, an operator-custody kubeconfig, and a
 # plan that still reproduces byte-for-byte. It dry-runs, applies the recorded
-# bytes, prunes the two legacy adapter-node egress policies the render omits
-# (`kubectl apply` does not prune omissions), and waits for the rollout.
+# bytes, and waits for the rollout. (The apply-time prune of the two legacy
+# adapter-node egress policies is retired by TIN-4254: every gen 37..43 apply
+# already ran the delete, the committed tree declares default-deny-egress, and
+# live absence is receipted by an attended read-only census on the pruning PR.)
 web-release-apply: _reviewed-clean-main _operator-apply-confirm _web-release-apply-kubeconfig-contract _web-release-plan-preflight
     #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
     set +x
@@ -4113,7 +4082,6 @@ web-release-apply: _reviewed-clean-main _operator-apply-confirm _web-release-app
     plan="${repo_root}/.k8s-plans/web-release.rendered.yaml"
     kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply --dry-run=server -f "${plan}"
     kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply -f "${plan}"
-    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} delete networkpolicy allow-egress-dns allow-egress-discuss-archive --ignore-not-found
     kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} rollout status deployment/greatfallstoolbus-org --timeout=300s
     echo "web release applied; now run the PINNED/RUNNING and SERVED proofs"
 
@@ -4143,32 +4111,23 @@ web-release-apply: _reviewed-clean-main _operator-apply-confirm _web-release-app
 # the gftb-site promotion. It wasn't by design; it was this declarative
 # record never being updated at promotion time.
 #
-# WHY WEB IS REACHABLE-ZERO-DIFF, NOT GUARANTEED-RED (adversarial review B2):
-# the web-release-* ceremony's render step (`web-release-render`)
-# unconditionally stamps `app.tinyland.dev/source-sha` onto the live
-# Deployment's pod-template annotations at every release; the checked-in base
-# deliberately never carries a static value for it (the value changes every
-# release, so no committed value could ever be "correct"). A raw `kubectl
-# diff -k` would therefore report that one annotation as drift on EVERY run,
-# forever, making a fail-on-diff gate permanently red for a reason that is
-# not drift. `web-stack-drift-check` below wires `scripts/web-stack-diff.sh`
-# in as `KUBECTL_EXTERNAL_DIFF` to strip exactly that one known-synthesized
-# annotation from both sides before diffing -- see that script for the full
-# rationale. This is scoped to the web caller only; the other five stacks
-# below are untouched and still use kubectl's own default differ.
+# WEB IS TRUE-ZERO-DIFF SINCE TIN-4254 (W13): the committed tree now carries
+# the per-release `app.tinyland.dev/source-sha` pod-template annotation and
+# the `default-deny-egress` NetworkPolicy the ceremony used to stamp/
+# synthesize at render time, and `web-release-render` applies the kustomize
+# bytes verbatim -- so the web caller uses kubectl's own default differ like
+# every other stack, and ANY web diff (the source-sha annotation included) is
+# real drift. The retired `scripts/web-stack-diff.sh` external differ used to
+# strip that annotation from both sides; keeping it would now MASK real
+# live/tree divergence of the release identity.
 #
-# WHAT THIS GATE CANNOT SEE, EVEN AFTER THAT FIX: `kubectl diff -k` compares
-# the rendered LOCAL manifest set against LIVE and has no prune awareness --
-# it is blind to any object that exists ONLY on the cluster. The
-# web-release-* ceremony also synthesizes a `default-deny-egress`
-# NetworkPolicy at render time that the checked-in base does not declare;
-# that object will NEVER surface as a diff here, for any input, by
-# construction of `kubectl diff -k` itself -- there is nothing on the LOCAL
-# side to diff it against. A clean run of this gate is not evidence that
-# NetworkPolicy is absent or correct; it is simply invisible to this specific
-# check (see k8s/web/greatfallstoolbus-org-production/networkpolicy.yaml and
-# k8s/web/README.md). This check is read-only and therefore not interlocked;
-# the attended mutating carrier is (see _web-stack-promotion-interlock).
+# WHAT THIS GATE STILL CANNOT SEE: `kubectl diff -k` compares the rendered
+# LOCAL manifest set against LIVE and has no prune awareness -- it is blind
+# to any object that exists ONLY on the cluster (for the web stack, e.g. the
+# two legacy allow-egress policies if they ever reappeared out of band; their
+# live ABSENCE is receipted by an attended read-only census, not by this
+# gate). This check is read-only and therefore not interlocked; the attended
+# mutating carrier is (see _web-stack-promotion-interlock).
 _k8s-drift-check kubeconfig namespace dir label:
     #!/usr/bin/env bash
     set -uo pipefail
@@ -4214,30 +4173,10 @@ listsync-stack-drift-check: _mail-kubeconfig-inputs
     @bash scripts/remote-only-guard.sh listsync-stack-drift-check
     just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ listsync_stack_dir }} listsync-stack
 
-# rung 1 tree honesty (2026-08-21): see the _k8s-drift-check header -- the web
-# declaration now names the same repository the promoted static origin
-# actually runs, so a diff here is a real signal, not by-design noise.
-# KUBECTL_EXTERNAL_DIFF is set to scripts/web-stack-diff.sh (this caller
-# ONLY) so the one ceremony-synthesized `source-sha` annotation doesn't make
-# this gate permanently red -- see the _k8s-drift-check header and that
-# script for why, and for the separate default-deny-egress NetworkPolicy
-# residual this gate can never observe regardless.
+# TIN-4254 (W13): the committed tree carries the source-sha annotation and
+# default-deny-egress, so the web caller diffs with kubectl's default differ
+# like every other stack -- see the _k8s-drift-check header. Any diff here,
+# the release-identity annotation included, is real drift.
 web-stack-drift-check: _web-apply-kubeconfig-only
-    #!/usr/bin/env bash
-    set -euo pipefail
-    bash scripts/remote-only-guard.sh web-stack-drift-check
-    repo_root="$(git rev-parse --show-toplevel)"
-    export KUBECTL_EXTERNAL_DIFF="${repo_root}/scripts/web-stack-diff.sh"
+    @bash scripts/remote-only-guard.sh web-stack-drift-check
     just _k8s-drift-check "${WEB_APPLY_KUBECONFIG}" {{ web_stack_ns }} {{ web_stack_dir }} web-stack
-
-# Reconciliation-safety review (PR #135, E3): scripts/web-stack-diff.sh had
-# ZERO tests (`git grep web-stack-diff` returned only Justfile wiring and
-# doc comments) even though its own header has demanded since round 2 that
-# it "MUST be exercised with two directories in any test, never two bare
-# files, or a regression here reads as passing again." This runs the five
-# fixture cases that proved the yq-go/jq rewrite (sweep g1, 2026-08-29)
-# actually works, folded into `just check-hosted` so the next calling-convention
-# change cannot ship blind. Requires real yq-go + jq on PATH; flake.nix pins
-# both for the repo devshell and remote validation.
-web-stack-diff-selftest:
-    ./scripts/test-web-stack-diff.sh

@@ -687,21 +687,70 @@ legacy-CD invariant below).
 to canonical `main` (`_reviewed-clean-main`), `GFTB_APPLY_CONFIRM=apply` is set,
 the kubeconfig satisfies its custody contract **and passes an authorization
 preflight**, and the plan still reproduces byte-for-byte. It server-dry-runs,
-applies the recorded bytes, deletes the two legacy adapter-node egress policies
-the render deliberately omits (`allow-egress-dns`,
-`allow-egress-discuss-archive` — `kubectl apply` does not prune omissions), and
-waits for the rollout.
+applies the recorded bytes, and waits for the rollout. (Before TIN-4254 it also
+deleted the two legacy adapter-node egress policies `allow-egress-dns` /
+`allow-egress-discuss-archive`; that delete lane is retired — every gen 37→45
+apply already ran it, and the committed tree now declares `default-deny-egress`
+instead.)
+
+### Attended READ-ONLY census (pre-merge gate for the TIN-4254 pruning PR)
+
+Because `kubectl diff -k` has no prune awareness and CI is structurally blind to
+objects that exist only on the cluster, live **absence** of the two retired
+legacy allow-egress policies is receipted by this attended, read-only census —
+not by any hosted check. It is the stated pre-merge gate for the PR that removes
+their delete lane and RBAC `delete` verb (TIN-4254 W13): merging before the
+census would leave no in-repo code path or RBAC to remove a straggler.
+
+1. Attended, read through the exact
+   `system:serviceaccount:greatfallstoolbus-org-production:web-apply`
+   authorization subject. Use either the custody-compliant web-apply
+   kubeconfig:
+
+   ```sh
+   kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" \
+     --namespace greatfallstoolbus-org-production \
+     get networkpolicies -o name
+   ```
+
+   or an operator-custody kubeconfig with Kubernetes impersonation of that
+   exact subject:
+
+   ```sh
+   kubectl --kubeconfig "${OPERATOR_KUBECONFIG}" \
+     --as=system:serviceaccount:greatfallstoolbus-org-production:web-apply \
+     --namespace greatfallstoolbus-org-production \
+     get networkpolicies -o name
+   ```
+
+   The second form does not substitute operator authority for the subject:
+   Kubernetes authorizes the read as `web-apply`, and the receipt must name
+   which form was used. A broad operator read without impersonation is not a
+   census receipt.
+
+2. **Pass condition (an exact set, not a floor):** precisely the four committed
+   policies — `allow-cloudflared-tunnel-ingress`, `allow-prometheus-scrape`,
+   `default-deny-egress`, `default-deny-ingress` — and in particular neither
+   `allow-egress-dns` nor `allow-egress-discuss-archive` appears. Any extra or
+   missing name fails the census; do not arm, and remediate attended and
+   out-of-band before re-running.
+
+3. **Receipt:** paste the verbatim command output with a timestamp and the
+   operator's name as a comment on TIN-4254 and on the pruning PR, *before* the
+   PR is armed. (Context that is not a substitute: the gen-44/45 bridge applies
+   re-ran the retired delete lane, and `web-release-pinned-running-proof`
+   asserts the same four-policy census during releases — but this gate is the
+   attended enumeration itself, receipted where the pruning decision lives.)
 
 The authorization preflight lives in `_web-release-apply-kubeconfig-contract` and
 runs `kubectl auth can-i` for every verb the chain needs in
 `greatfallstoolbus-org-production` — `get`/`list`/`watch`/`create`/`update`/`patch`
 on `deployments.apps`, `get`/`create`/`update`/`patch` on `services` and
-`networkpolicies.networking.k8s.io`, and **`delete networkpolicies`** — refusing
-before anything is touched if any answer is not `yes` or if the review emits any
-diagnostic. `apply --dry-run=server` authorizes only the objects it applies; it
-does not authorize the delete. Without the preflight the realistic failure is a
-green dry-run, a successful apply, a denied delete, and a half-done promotion
-running the new image with `allow-egress-dns` still additively permitting egress.
+`networkpolicies.networking.k8s.io` — refusing before anything is touched if any
+answer is not `yes` or if the review emits any diagnostic. `apply
+--dry-run=server` can miss verbs the real apply needs (a `create` on an object
+that does not exist yet reaches a different authorization path), so every verb
+the chain uses is probed up front rather than inferred from the dry-run.
 
 **Rollback** has two shapes, and only one of them runs through the chain:
 
@@ -722,10 +771,12 @@ running the new image with `allow-egress-dns` still additively permitting egress
   `kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace
   greatfallstoolbus-org-production set image deployment/greatfallstoolbus-org
   greatfallstoolbus-org=<receipt-line-12 greatfallstoolbus.org@sha256:…>`.
-  Once the live image is no longer gftb-site the interlock reopens, and a
-  `web-stack.yml` `workflow_dispatch` (`confirm=apply`, `image=<that digest>`)
-  restores the two egress NetworkPolicies (`allow-egress-dns`,
-  `allow-egress-discuss-archive`) that the promotion deleted. Record the
+  Once the live image is no longer gftb-site the interlock reopens. Note that
+  since TIN-4254 the committed tree declares `default-deny-egress` and no longer
+  carries `allow-egress-dns` / `allow-egress-discuss-archive` at all, so a tree
+  apply will **not** restore the egress allows the retired adapter-node origin
+  needed; re-establishing those is an explicit, attended, out-of-band step.
+  Record the
   imperative `set image` in the release notes as an out-of-band mutation; the
   receipt-line-12 "rollback rehearsal" **cannot** be rehearsed through the chain
   for the first promotion, and the receipt must say so rather than claim a
@@ -799,10 +850,13 @@ Where each line comes from in this chain:
   `Deployment/greatfallstoolbus-org` in `greatfallstoolbus-org-production` — the
   same object this promotion cuts over. Unchecked it would have (a) imperatively
   re-pinned the adapter-node digest back over the gftb-site static origin and (b)
-  re-applied the committed kustomization, which **recreates** `allow-egress-dns`
-  and `allow-egress-discuss-archive` that `web-release-apply` deletes --
-  omissions are not pruned -- undoing the empty-egress invariant. The next green
-  push to the site repo would have silently falsified the SERVED proof.
+  re-applied the committed kustomization, which at the time **recreated**
+  `allow-egress-dns` and `allow-egress-discuss-archive` that `web-release-apply`
+  then deleted -- omissions are not pruned -- undoing the empty-egress
+  invariant. (Since TIN-4254 the tree carries neither policy and declares
+  `default-deny-egress` instead, so this specific recreation path is closed at
+  the source.) The next green push to the site repo would have silently
+  falsified the SERVED proof.
 
   **TIN-3899 (Phase 5 step 2) removed the trigger, both ends.** The workflow is
   deleted here; the `signal-cd` job is deleted in the site repo. Three things now
@@ -854,8 +908,7 @@ Where each line comes from in this chain:
   scan refuses a `kubectl` tree-apply (`-k`, `-f`, `--kustomize`, `--filename`)
   aimed at `{{ web_stack_dir }}` (or its literal path) from any recipe other than
   `web-stack-apply` and `web-stack-server-dry-run`, because a fresh
-  tree-apply would recreate `allow-egress-dns`/`allow-egress-discuss-archive`
-  and re-pin the tree's adapter-node digest without ever passing through
+  tree-apply would mutate the release surface without ever passing through
   `_web-stack-promotion-interlock` (only `web-stack-apply` is bound to it).
   Both scans are textual and do **not** see shell *variable indirection*
   (`KC=kubectl; "${KC}" … set image`, a patch body assembled into a variable

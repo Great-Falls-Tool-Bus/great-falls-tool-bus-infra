@@ -77,9 +77,11 @@ name: Web Stack Plan (rung 2)
 # `web-release-render` / `web-release-plan` / `web-release-candidate-proof`
 # or any other member of the reviewed web-release-* candidate-promotion
 # family, and `web-stack-render` calls no `just` recipe at all so it cannot
-# reach that family even transitively. That family is where the real
-# per-release inputs live (the GHCR candidate digest, the source-sha
-# annotation, the synthesized default-deny-egress NetworkPolicy) and
+# reach that family even transitively. That family is where the reviewed
+# per-release candidate inputs live (the GHCR candidate digest resolution and
+# the anonymous candidate proof; since TIN-4254 the source-sha annotation and
+# the default-deny-egress NetworkPolicy are committed tree truth, rendered
+# here too) and
 # `scripts/validate-public-operator-surface.py`
 # (`WEB_RELEASE_OPERATOR_LOCAL_ROOTS`, the `workflow-arc-operator-recipe` /
 # `web-release-unreceipted-operator-wrapper` checks) already enforces, as a
@@ -88,18 +90,15 @@ name: Web Stack Plan (rung 2)
 # That rule predates this change and exists so no CI code path is ever one
 # step from `web-release-apply`; rung 2 is built to respect that boundary,
 # not to get a reviewed exception carved into it. The practical honesty this
-# buys: since rung 1 (deployment.yaml's "TREE HONESTY" fix) the committed
-# tree already matches web-release-render's own contract for every field
-# except THREE it still names as ceremony-only residuals, in order of
-# consequence -- (1) the PER-RELEASE CONTAINER IMAGE DIGEST, the single field
-# that decides what code production actually runs (this render shows
-# whatever digest is currently committed, which is NOT necessarily what the
-# next release ceremony will pin), (2) the per-release source-sha annotation,
-# and (3) the synthesized default-deny-egress NetworkPolicy -- so this render
-# is CLOSE to, but is not, the exact apply-time bytes. Say so plainly,
-# including the digest, wherever this output is consumed; the true
-# apply-time bytes are visible only via the attended `web-release-plan`'s own
-# output, exactly as designed. There is also no Tofu stack for the k8s/web
+# buys: since TIN-4254 (W13) there are ZERO ceremony-only residuals. The
+# source-sha annotation and the default-deny-egress NetworkPolicy are
+# committed tree truth, and `web-release-render` emits these same
+# `kubectl kustomize` bytes VERBATIM -- so this render IS the apply-time
+# bytes for the currently committed pin. The one honest caveat left: this
+# shows the digest committed to main today, which is NOT necessarily what
+# the NEXT release ceremony will pin (the ceremony asserts the committed pin
+# equals its reviewed inputs and refuses otherwise). Say so plainly,
+# including the digest, wherever this output is consumed. There is also no Tofu stack for the k8s/web
 # workload at all (tofu/stacks holds only arc-runners/edge/edge-dns), so
 # there is no `-detailed-exitcode` tofu plan to run here either -- this
 # offline kustomize render/validate pair is the complete plan surface this
@@ -217,20 +216,22 @@ jobs:
           {
             echo "## GFTB web stack plan (rung 2 -- committed-tree render, no cluster, no credential)"
             echo ""
-            echo "This is the COMMITTED declare-only tree, not the reviewed"
-            echo "candidate-promotion ceremony's output. The ceremony still"
-            echo "supplies three things this render cannot, in order of"
-            echo "consequence:"
+            echo "This is the COMMITTED declare-only tree. Since TIN-4254"
+            echo "(W13) it is also, byte for byte, what the reviewed"
+            echo "candidate-promotion ceremony applies: the source-sha"
+            echo "annotation and the \`default-deny-egress\` NetworkPolicy are"
+            echo "committed here, and \`web-release-render\` emits these same"
+            echo "kustomize bytes verbatim rather than synthesizing them."
             echo ""
-            echo "1. **The per-release container image digest** -- the field"
-            echo "   that decides what code production actually runs. This"
-            echo "   render shows the digest currently committed to main"
-            echo "   (below); it is NOT necessarily what the next release"
-            echo "   ceremony will pin."
-            echo "2. The per-release \`app.tinyland.dev/source-sha\` annotation."
-            echo "3. The synthesized \`default-deny-egress\` NetworkPolicy."
+            echo "The one thing this render cannot tell you: **the per-release"
+            echo "container image digest** -- the field that decides what code"
+            echo "production actually runs -- is shown below as committed to"
+            echo "main today, which is NOT necessarily what the next release"
+            echo "ceremony will pin."
             echo ""
             echo "**Committed image digest:** \`${image}\`"
+            echo ""
+            echo "**Rendered-bytes sha256 (determinism receipt input):** \`$(sha256sum web-plan-rendered.yaml | cut -d' ' -f1)\`"
             echo ""
             echo "See the workflow header for the full explanation."
             echo ""

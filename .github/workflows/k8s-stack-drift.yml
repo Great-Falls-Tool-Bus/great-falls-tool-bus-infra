@@ -35,26 +35,22 @@ name: K8s Stack Drift (zero-diff where applicable)
 # TWO KNOWN GAPS BETWEEN THE CHECKED-IN BASE AND WHAT THE RELEASE CEREMONY
 # ACTUALLY PRODUCES (adversarial review B2, 2026-08-21) -- handled two
 # different ways, not both "expected to show up":
-#   1. `web-release-render` unconditionally stamps
-#      `app.tinyland.dev/source-sha` onto the live Deployment at every
-#      release; the base can't carry a static value (it changes every
-#      release). This job's `kubectl diff -k` runs with
-#      `KUBECTL_EXTERNAL_DIFF=scripts/web-stack-diff.sh` (Justfile
-#      `web-stack-drift-check`), which strips exactly that one annotation
-#      from both sides before diffing -- so it does NOT show up here, and a
-#      clean run is meaningful rather than permanently red for a
-#      non-drift reason.
-#   2. `web-release-render` also synthesizes a `default-deny-egress`
-#      NetworkPolicy at render time that the checked-in base does not
-#      declare. This one CANNOT be normalized the same way and will NEVER
-#      show up here, clean run or not: `kubectl diff -k` compares the
-#      rendered LOCAL manifest set against LIVE and has no prune awareness,
-#      so it is structurally blind to any object that exists only on the
-#      cluster. A clean run of this job is not evidence that NetworkPolicy
-#      is correct -- see deployment.yaml/networkpolicy.yaml headers and
-#      k8s/web/README.md for that residual.
-# See Justfile `_k8s-drift-check` and `scripts/web-stack-diff.sh` for the
-# full rationale.
+# RESOLVED BY TIN-4254 (W13). Both former residuals are committed tree truth
+# now, so this job uses kubectl's own default differ like every other stack:
+#   1. `app.tinyland.dev/source-sha` is committed on the pod template, and
+#      `web-release-render` emits the committed kustomize bytes verbatim
+#      instead of stamping it. The retired `scripts/web-stack-diff.sh`
+#      external differ used to strip that annotation from both sides;
+#      keeping it would now MASK real divergence of the release identity,
+#      so ANY diff here -- that annotation included -- is real drift.
+#   2. `default-deny-egress` is committed in networkpolicy.yaml, so it is
+#      on the LOCAL side of the comparison and no longer invisible.
+# STILL STRUCTURALLY BLIND: `kubectl diff -k` compares the rendered LOCAL
+# manifest set against LIVE and has no prune awareness, so any object that
+# exists ONLY on the cluster (e.g. the two legacy allow-egress policies, if
+# they ever reappeared out of band) cannot surface here. Their live absence
+# is receipted by an attended read-only census, not by this job.
+# See Justfile `_k8s-drift-check` for the full rationale.
 #
 # CREDENTIALS: reuses the SAME namespace-scoped kubeconfig secrets the
 # existing apply lanes already use -- no new secret is introduced here.
@@ -327,23 +323,6 @@ jobs:
             echo "::error::GloriousFlywheel checkout mismatch: expected ${GF_CORE_REF}, got ${actual}"
             exit 1
           fi
-
-      - name: Self-test web-stack-diff.sh (reconciliation-safety review E3)
-        # Runs BEFORE the kubeconfig even exists -- this needs no cluster
-        # access, only the same GF-core `ci` devshell (real yq-go + jq) the
-        # real diff step below uses. Fixture proof that the yq-go/jq rewrite
-        # (sweep g1) actually works. `just check-hosted` runs the same fixture;
-        # this drift-lane copy is defense in depth beside the real comparison.
-        if: steps.secrets.outputs.kubeconfig-present == 'true'
-        uses: ./GloriousFlywheel/.github/actions/nix-job
-        with:
-          push-cache: "false"
-          command: |
-            set -euo pipefail
-            cd overlay
-            export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH="path:${GF_CORE_PATH}#ci"
-            nix develop "${GF_CORE_CI_PATH}" -c just web-stack-diff-selftest
 
       - name: Materialize web-apply kubeconfig
         if: steps.secrets.outputs.kubeconfig-present == 'true'

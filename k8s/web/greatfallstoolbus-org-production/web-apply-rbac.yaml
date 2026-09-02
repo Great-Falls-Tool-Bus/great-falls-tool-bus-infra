@@ -51,12 +51,6 @@ rules:
     verbs: ["get", "update", "patch"]
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
-    resourceNames:
-      - allow-egress-dns
-      - allow-egress-discuss-archive
-    verbs: ["delete"]
-  - apiGroups: ["networking.k8s.io"]
-    resources: ["networkpolicies"]
     verbs: ["list", "create"]
   - apiGroups: ["discovery.k8s.io"]
     resources: ["endpointslices"]

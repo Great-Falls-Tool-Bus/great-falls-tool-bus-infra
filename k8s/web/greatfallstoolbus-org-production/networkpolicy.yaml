@@ -11,15 +11,18 @@
 # Prometheus scrape is admitted from the tinyland-dev-production monitoring
 # namespace on 3000. No 0.0.0.0/0, and no other backend.
 #
-# TREE HONESTY (rung 1, 2026-08-21). This file previously also declared
-# allow-egress-dns and allow-egress-discuss-archive — egress rules the retired
-# legacy adapter-node origin needed for its request-time discuss-archive fetch.
-# The gftb-site static origin makes zero outbound calls (it serves files off
-# disk), so those two policies are gone here now, matching what the
-# web-release-* ceremony has always pruned at promotion time (Justfile
-# `web-release-render`, which also always synthesizes a default-deny-egress
-# NetworkPolicy at render time — that one object is not yet committed here;
-# see the PR body for why, and ../README.md).
+# TREE HONESTY (rung 1, 2026-08-21; completed by TIN-4254 W13). This file
+# previously also declared allow-egress-dns and allow-egress-discuss-archive —
+# egress rules the retired legacy adapter-node origin needed for its
+# request-time discuss-archive fetch. The gftb-site static origin makes zero
+# outbound calls (it serves files off disk), so those two policies are gone
+# here, and the default-deny-egress NetworkPolicy the web-release-* ceremony
+# used to synthesize at render time is now COMMITTED below (TIN-4254,
+# decisions/0022 Amendment 3): `kubectl kustomize` of this directory IS the
+# ceremony's applied bytes, with no render-time synthesis left. It carries
+# only the lifecycle label here; kustomization.yaml's labels transformer
+# supplies managed-by/part-of/tenant, so the rendered object is exactly what
+# the ceremony always applied.
 #
 # FAIL-CLOSED note: these policies select on the web pod labels. The Deployment
 # ships replicas: 2 and a digest-pinned image, so these rules are NOT inert —
@@ -91,3 +94,21 @@ spec:
       ports:
         - protocol: TCP
           port: 3000
+---
+# Committed truth of the ceremony's egress posture (TIN-4254 W13): the
+# gftb-site static origin gets NO egress at all — empty egress rule list under
+# policyTypes [Egress] denies every outbound flow from the web pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+  namespace: greatfallstoolbus-org-production
+  labels:
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: greatfallstoolbus-org
+      app.kubernetes.io/component: web
+  policyTypes: [Egress]
+  egress: []

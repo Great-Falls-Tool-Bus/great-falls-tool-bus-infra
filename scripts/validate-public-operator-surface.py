@@ -174,7 +174,6 @@ HOSTED_WORKFLOW_JUST_ALLOWLIST = {
     "mail-cr-drift-check",
     "mail-cr-server-dry-run",
     "mail-cr-validate",
-    "web-stack-diff-selftest",
     "web-stack-drift-check",
     "web-stack-render",
     "web-stack-validate",
@@ -492,11 +491,16 @@ WEB_RELEASE_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     # Updated 2026-08-29: yq-go now owns only YAML/JSON conversion; jq
     # owns release mutation and slurp semantics. The public-surface fixtures
     # execute both this renderer and the exact-one kubeconfig guard.
+    # Updated 2026-08-31 (TIN-4254 W13): the renderer now emits the committed
+    # `kubectl kustomize` bytes VERBATIM and asserts the committed pin equals
+    # the reviewed inputs; the mutation/synthesis jq lane is deleted.
     "web-release-render": _receipt(
-        "bafec28ca138b218", "93c7bb2f1374d48a", "f096847a301b966a", "0ce6033f3a7d039c"
+        "e1cd0a828ede1938", "2f003979c09df6ad", "b1186ed9a1c08c1d", "cc2ff69fa616b70b"
     ),
+    # Updated 2026-08-31 (TIN-4254 W13): the pruned legacy allow-egress
+    # policies left the named mutation-denial enumeration.
     "_web-release-kubeconfig-inputs": _receipt(
-        "916de1b406d43ca1", "f7a2870af5898faf", "4f51aa497b5876b9", "65f0a9f9b8d0b819"
+        "1c116d26ea90c7ee", "c13e1abf52409212", "0417cc4dd45d1362", "057614a01b035d21"
     ),
     "web-release-pinned-running-proof": _receipt(
         "bb9f757c5e1a3dcf", "c48e67ad1aa40b11", "0f25466fc6db04e7", "159d31d0968b28ab"
@@ -507,8 +511,10 @@ WEB_RELEASE_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     "_web-release-plan-root-contract": _receipt(
         "271460cb71ceda56", "0bbca7e8b57d0ddf", "eb68c983d72ab455", "a44e713d9007bbf9"
     ),
+    # Updated 2026-08-31 (TIN-4254 W13): the delete-lane authz rows for the
+    # pruned legacy allow-egress policies are retired.
     "_web-release-apply-kubeconfig-contract": _receipt(
-        "25bab53181e65ec9", "391ef4c90fa9e231", "cf74e4f1db70e3a0", "cd7bf3b9b9891fb8"
+        "e039d9cd09969c19", "70355a659eed775b", "3232101df9752db0", "df7c77a079053bdc"
     ),
     "web-release-plan": _receipt(
         "4c521b684de15316", "694df6eec8402abd", "e6fb365e2cb8a4d1", "79d6b8a69379a844"
@@ -519,8 +525,10 @@ WEB_RELEASE_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     "web-release-server-dry-run": _receipt(
         "b478fca65de1ae58", "a37038565e80d6f6", "23d5318412fc919d", "77382267087b8707"
     ),
+    # Updated 2026-08-31 (TIN-4254 W13): the apply-time NetworkPolicy prune is
+    # retired; the recipe dry-runs, applies the recorded bytes, and waits.
     "web-release-apply": _receipt(
-        "027bfae6f72ee45f", "6bd86a57e1b5d921", "d5df538b3905589c", "f111051c06f3da5e"
+        "fee7187cf1bffb78", "e47fd45fc8f05f08", "cff8047b05dd2759", "2adf88989c4452c0"
     ),
     # The legacy adapter-node carrier's promotion interlock. It is not part of
     # the web-release dependency graph -- it hangs off web-stack-apply, the
@@ -595,8 +603,7 @@ IMPERATIVE_PIN_ALLOWED_RECIPES = frozenset({"web-stack-apply"})
 
 # A brand-new recipe running `kubectl ... apply -k/-f` against the web stack
 # tree (`{{ web_stack_dir }}` or its literal path) is not an imperative pin, but
-# it would recreate allow-egress-dns / allow-egress-discuss-archive and re-pin
-# the tree's adapter-node digest WITHOUT passing through
+# it would mutate the release surface WITHOUT passing through
 # _web-stack-promotion-interlock, which only web-stack-apply is bound to. Only
 # the legacy carrier and its server dry-run may apply the tree; the reviewed
 # release chain applies rendered plan bytes (`apply -f "${plan}"`), never the
@@ -652,8 +659,11 @@ WEB_RELEASE_VALIDATION_SCRIPT = Path("scripts/validate-web-stack.sh")
 # vendor marker and a v4 version marker; this receipt binds that exact fix.
 # Updated 2026-08-30 (PR #143): tracked web-apply RBAC is now validated
 # exactly and is proved absent from the workload render; this receipt co-moves.
+# Updated 2026-08-31 (TIN-4254 W13): the committed default-deny-egress
+# NetworkPolicy is now positively asserted, the render census is six objects,
+# and the legacy allow-egress delete rule left the exact web-apply Role.
 WEB_RELEASE_VALIDATION_SCRIPT_SHA256 = _receipt(
-    "41900cb68a4e6395", "ab0e2f324f80a9be", "0b6d49e895398b99", "e070aab3a744ef53"
+    "c4c3bc53977330af", "bb79be1f90a78311", "6960a56f9ccf38d5", "7f89936da686d1b3"
 )
 
 FLAKE_RELEASE_PACKAGES = ("crane", "curl")
@@ -2970,41 +2980,48 @@ WEB_RELEASE_FIXTURE_TAG = (
     "ghcr.io/great-falls-tool-bus/gftb-site:sha-" + WEB_RELEASE_FIXTURE_SHA
 )
 
-WEB_RELEASE_RENDER_FIXTURE = """\
+# Since TIN-4254 (W13) the mocked kustomize output models the COMMITTED tree:
+# the render recipe emits these bytes verbatim, so the fixture must already
+# carry the pin (fixture image + source-sha annotation) and the full hardened
+# pod shape the workload contract asserts, instead of relying on a retired
+# mutation lane to fix a stale base.
+WEB_RELEASE_RENDER_FIXTURE = f"""\
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: greatfallstoolbus-org
   namespace: greatfallstoolbus-org-production
 spec:
-  replicas: 0
+  replicas: 2
   selector:
     matchLabels:
       app.kubernetes.io/name: greatfallstoolbus-org
       app.kubernetes.io/component: web
   template:
     metadata:
-      annotations: {}
+      annotations:
+        app.tinyland.dev/source-sha: {WEB_RELEASE_FIXTURE_SHA}
       labels:
         app.kubernetes.io/name: greatfallstoolbus-org
         app.kubernetes.io/component: web
         app.kubernetes.io/part-of: great-falls-tool-bus
     spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
       securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: greatfallstoolbus-org
-          image: PLACEHOLDER
+          image: {WEB_RELEASE_FIXTURE_IMAGE}
           ports:
             - name: http
               containerPort: 3000
               protocol: TCP
-          command: ["node"]
-          args: ["build/index.js"]
-          env:
-            - name: PORT
-              value: "3000"
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -3386,6 +3403,16 @@ def web_release_runtime_objects() -> tuple[dict[str, object], ...]:
                 {"podSelector": {}, "policyTypes": ["Ingress"]},
                 app_label=False,
             ),
+            network_policy(
+                6,
+                "default-deny-egress",
+                {
+                    "podSelector": policy_selector,
+                    "policyTypes": ["Egress"],
+                    "egress": [],
+                },
+                app_label=False,
+            ),
         ]
     }
     network_policies = {
@@ -3396,18 +3423,6 @@ def web_release_runtime_objects() -> tuple[dict[str, object], ...]:
             not in {"allow-egress-dns", "allow-egress-discuss-archive"}
         ]
     }
-    network_policies["items"].append(
-        network_policy(
-            6,
-            "default-deny-egress",
-            {
-                "podSelector": policy_selector,
-                "policyTypes": ["Egress"],
-                "egress": [],
-            },
-            app_label=False,
-        )
-    )
     return (
         deployment,
         replicasets,
@@ -3624,7 +3639,8 @@ def install_web_release_fixture_mocks(
             raise TypeError("fixture NetworkPolicy must have metadata")
         policy["metadata"].pop("uid", None)
     # Keep the runtime legacy-policy fixtures, but make mocked kustomize
-    # match the current checked-in three-policy base.
+    # match the current checked-in four-policy base (default-deny-egress is
+    # committed tree truth since TIN-4254 W13).
     current_render_policies = [
         policy
         for policy in rendered_policies
@@ -4446,23 +4462,6 @@ def install_web_release_fixture_mocks(
                 )
                 raise SystemExit(0)
             if args == namespace_prefix + [
-                "delete",
-                "networkpolicy",
-                "allow-egress-dns",
-                "allow-egress-discuss-archive",
-                "--ignore-not-found",
-            ]:
-                if state == "apply-delete-fails":
-                    sys.stderr.write(
-                        'Error from server (Forbidden): networkpolicies '
-                        '"allow-egress-dns" is forbidden\\n'
-                    )
-                    raise SystemExit(1)
-                sys.stdout.write(
-                    'networkpolicy.networking.k8s.io "allow-egress-dns" deleted\\n'
-                )
-                raise SystemExit(0)
-            if args == namespace_prefix + [
                 "rollout",
                 "status",
                 "deployment/greatfallstoolbus-org",
@@ -4552,13 +4551,12 @@ def install_web_release_fixture_mocks(
                   esac
                 else
                   case "${verb}:${base_resource}:${resource_name}" in
-                    get:deployments.apps:greatfallstoolbus-org|get:services:greatfallstoolbus-org|get:networkpolicies.networking.k8s.io:default-deny-ingress|get:networkpolicies.networking.k8s.io:allow-cloudflared-tunnel-ingress|get:networkpolicies.networking.k8s.io:allow-prometheus-scrape|get:networkpolicies.networking.k8s.io:default-deny-egress|update:deployments.apps:greatfallstoolbus-org|update:services:greatfallstoolbus-org|update:networkpolicies.networking.k8s.io:default-deny-ingress|update:networkpolicies.networking.k8s.io:allow-cloudflared-tunnel-ingress|update:networkpolicies.networking.k8s.io:allow-prometheus-scrape|update:networkpolicies.networking.k8s.io:default-deny-egress|patch:deployments.apps:greatfallstoolbus-org|patch:services:greatfallstoolbus-org|patch:networkpolicies.networking.k8s.io:default-deny-ingress|patch:networkpolicies.networking.k8s.io:allow-cloudflared-tunnel-ingress|patch:networkpolicies.networking.k8s.io:allow-prometheus-scrape|patch:networkpolicies.networking.k8s.io:default-deny-egress|delete:networkpolicies.networking.k8s.io:allow-egress-dns|delete:networkpolicies.networking.k8s.io:allow-egress-discuss-archive) allowed=1 ;;
+                    get:deployments.apps:greatfallstoolbus-org|get:services:greatfallstoolbus-org|get:networkpolicies.networking.k8s.io:default-deny-ingress|get:networkpolicies.networking.k8s.io:allow-cloudflared-tunnel-ingress|get:networkpolicies.networking.k8s.io:allow-prometheus-scrape|get:networkpolicies.networking.k8s.io:default-deny-egress|update:deployments.apps:greatfallstoolbus-org|update:services:greatfallstoolbus-org|update:networkpolicies.networking.k8s.io:default-deny-ingress|update:networkpolicies.networking.k8s.io:allow-cloudflared-tunnel-ingress|update:networkpolicies.networking.k8s.io:allow-prometheus-scrape|update:networkpolicies.networking.k8s.io:default-deny-egress|patch:deployments.apps:greatfallstoolbus-org|patch:services:greatfallstoolbus-org|patch:networkpolicies.networking.k8s.io:default-deny-ingress|patch:networkpolicies.networking.k8s.io:allow-cloudflared-tunnel-ingress|patch:networkpolicies.networking.k8s.io:allow-prometheus-scrape|patch:networkpolicies.networking.k8s.io:default-deny-egress) allowed=1 ;;
                   esac
                 fi
               fi
-              if [[ "${state}" == "apply-authz-denied-delete" && "${verb}:${base_resource}:${resource_name}" == "delete:networkpolicies.networking.k8s.io:allow-egress-discuss-archive" ]]; then allowed=0; fi
               if [[ "${state}" == "apply-authz-denied-create-policy" && "${verb}:${base_resource}" == "create:networkpolicies.networking.k8s.io" ]]; then allowed=0; fi
-              if [[ "${state}" == "apply-authz-transport-error" && "${verb}:${base_resource}:${resource_name}" == "delete:networkpolicies.networking.k8s.io:allow-egress-discuss-archive" ]]; then echo "mock authorization transport failure" >&2; exit 2; fi
+              if [[ "${state}" == "apply-authz-transport-error" && "${verb}:${base_resource}:${resource_name}" == "patch:networkpolicies.networking.k8s.io:default-deny-egress" ]]; then echo "mock authorization transport failure" >&2; exit 2; fi
               if [[ "${allowed}" -eq 1 ]]; then printf 'yes\\n'; exit 0; fi
               printf 'no\\n'
               exit 1
@@ -5105,8 +5103,8 @@ def run_web_release_semantic_fixtures() -> None:
             or "allow-egress-discuss-archive" in render.stdout
         ):
             raise SystemExit(
-                "self-test FAILED: render fixture did not synthesize the exact "
-                "default-deny policy or retained a legacy egress allow"
+                "self-test FAILED: render fixture did not carry the committed "
+                "default-deny-egress policy or retained a legacy egress allow"
             )
         render_log = log_path.read_text(encoding="utf-8").splitlines()
         if render_log.count("nested-just web-stack-validate") != 1 or sum(
@@ -5117,22 +5115,23 @@ def run_web_release_semantic_fixtures() -> None:
                 "self-test FAILED: render fixture did not execute the reviewed "
                 "validator and exact local kustomize path"
             )
-        render_env_from = expect_web_release_fixture_result(
+        # The renderer emits committed bytes verbatim (TIN-4254 W13); a pin
+        # that does not match the reviewed inputs is a refusal, not a stamp.
+        expect_web_release_fixture_result(
             just_binary,
             "web-release-render",
             state_path,
             log_path,
-            base_environment,
-            "render-env-from",
-            success=True,
-            diagnostic=WEB_RELEASE_FIXTURE_IMAGE,
+            {**base_environment, "WEB_APPLY_SHA": "c" * 40},
+            "ok",
+            success=False,
+            diagnostic="committed pin does not match reviewed inputs; commit the pin first",
         )
-        if "envFrom:" in render_env_from.stdout:
-            raise SystemExit(
-                "self-test FAILED: render fixture retained an injected envFrom"
-            )
         for state, diagnostic in (
-            ("render-secret", "workload render must contain exactly Deployment/Service/three NetworkPolicies and no RBAC authority"),
+            ("render-secret", "workload render must contain exactly Deployment/Service/four NetworkPolicies and no RBAC authority"),
+            # An injected envFrom used to be silently stripped by the retired
+            # mutation lane; the verbatim renderer must refuse it instead.
+            ("render-env-from", "rendered static-Caddy workload contract mismatch"),
             ("render-missing-default-ingress", "rendered object census mismatch"),
             ("render-retained-legacy-egress", "rendered object census mismatch"),
             (
@@ -5324,8 +5323,6 @@ def run_web_release_semantic_fixtures() -> None:
                         "allow-prometheus-scrape",
                         "default-deny-egress",
                         "default-deny-ingress",
-                        "allow-egress-dns",
-                        "allow-egress-discuss-archive",
                     )
                 ),
             )
@@ -6094,8 +6091,6 @@ WEB_RELEASE_APPLY_AUTHZ_CONTRACT: tuple[tuple[str, str], ...] = (
     ("patch", "networkpolicies.networking.k8s.io/allow-cloudflared-tunnel-ingress"),
     ("patch", "networkpolicies.networking.k8s.io/allow-prometheus-scrape"),
     ("patch", "networkpolicies.networking.k8s.io/default-deny-egress"),
-    ("delete", "networkpolicies.networking.k8s.io/allow-egress-dns"),
-    ("delete", "networkpolicies.networking.k8s.io/allow-egress-discuss-archive"),
 )
 
 
@@ -6297,31 +6292,25 @@ def run_web_release_mutation_fixtures() -> None:
                 "self-test FAILED: web-release-apply mutated before finishing "
                 "its authorization preflight"
             )
+        # TIN-4254 (W13): the apply-time legacy-egress prune is retired, so the
+        # mutating lane is exactly dry-run -> apply -> rollout wait. A delete
+        # reappearing here is a regression, not a prune.
         expected_mutations = [
             f"--kubeconfig {kubeconfig} --namespace {namespace} apply "
             f"--dry-run=server -f {plan}",
             f"--kubeconfig {kubeconfig} --namespace {namespace} apply -f {plan}",
-            f"--kubeconfig {kubeconfig} --namespace {namespace} delete "
-            "networkpolicy allow-egress-dns allow-egress-discuss-archive "
-            "--ignore-not-found",
             f"--kubeconfig {kubeconfig} --namespace {namespace} rollout status "
             "deployment/greatfallstoolbus-org --timeout=300s",
         ]
         if cluster_mutations(apply_calls) != expected_mutations:
             raise SystemExit(
                 "self-test FAILED: web-release-apply did not dry-run, apply the "
-                "recorded bytes, prune the legacy egress policies with "
-                "--ignore-not-found, and then wait for the rollout, in that "
+                "recorded bytes, and then wait for the rollout, in that "
                 f"order: {cluster_mutations(apply_calls)!r}"
             )
 
         # REFUSALS. Each must refuse with nothing applied.
         for state, diagnostic in (
-            (
-                "apply-authz-denied-delete",
-                f"cannot delete networkpolicies.networking.k8s.io/"
-                f"allow-egress-discuss-archive in {namespace}",
-            ),
             (
                 "apply-authz-denied-create-policy",
                 f"cannot create networkpolicies.networking.k8s.io in {namespace}",
@@ -6348,26 +6337,10 @@ def run_web_release_mutation_fixtures() -> None:
                     f"{cluster_mutations(kubectl_calls())!r}"
                 )
 
-        # A denied delete is caught by the preflight, so the half-done promotion
-        # the preflight exists to prevent must be unreachable; prove the recipe
-        # would in fact abort there if it ever were.
-        expect_web_release_fixture_result(
-            just_binary,
-            "web-release-apply",
-            state_path,
-            log_path,
-            environment,
-            "apply-delete-fails",
-            success=False,
-            diagnostic="is forbidden",
-        )
-        if any(
-            "rollout status" in call for call in cluster_mutations(kubectl_calls())
-        ):
-            raise SystemExit(
-                "self-test FAILED: web-release-apply reported a rollout after a "
-                "failed egress prune"
-            )
+        # TIN-4254 (W13) retired the apply-time prune, and with it the
+        # "denied/failed delete leaves a half-done promotion" scenario the
+        # `apply-authz-denied-delete` and `apply-delete-fails` fixtures
+        # existed to close. There is no delete in the lane to deny or fail.
 
         # THE LEGACY-CD PROMOTION INTERLOCK.
         expect_web_release_fixture_result(

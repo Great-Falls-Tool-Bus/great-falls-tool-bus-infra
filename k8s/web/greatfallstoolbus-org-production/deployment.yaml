@@ -45,12 +45,16 @@
 #
 # The pod-template fields below (securityContext, no command/env override) match
 # the exact contract Justfile's `web-release-render` asserts on the rendered
-# workload byte-for-byte (see the `jq -e` contract in that recipe), so the
-# checked-in base and the ceremony's render step now describe the same shape —
-# the ceremony still supplies (and this file cannot fix in advance) the
-# per-release image digest, source-sha annotation, and the
-# default-deny-egress NetworkPolicy it synthesizes at render time (tracked as a
-# residual; see the PR body / ../README.md).
+# workload byte-for-byte (see the `jq -e` contract in that recipe). Since
+# TIN-4254 (W13) there are NO ceremony-only residuals left: the per-release
+# source-sha annotation is committed on the pod template below, the
+# default-deny-egress NetworkPolicy is committed in networkpolicy.yaml, and
+# `web-release-render` emits `kubectl kustomize` bytes VERBATIM — it asserts
+# the committed pin equals the reviewed WEB_APPLY_IMAGE/WEB_APPLY_SHA inputs
+# instead of stamping them. The pin-step invariant extends accordingly: each
+# release ceremony's pin commit updates the image digest AND the
+# app.tinyland.dev/source-sha template annotation together, in the same
+# commit.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -78,6 +82,13 @@ spec:
       app.kubernetes.io/component: web
   template:
     metadata:
+      # Committed release identity (TIN-4254 W13): the full gftb-site source
+      # commit behind the digest pinned below. The pin step updates the image
+      # digest AND this annotation in the same commit; `web-release-render`
+      # refuses to plan when either differs from the reviewed
+      # WEB_APPLY_IMAGE/WEB_APPLY_SHA inputs.
+      annotations:
+        app.tinyland.dev/source-sha: 836857bce295dec206cb4ebd6ba45f2956bc8aed
       labels:
         app.kubernetes.io/name: greatfallstoolbus-org
         app.kubernetes.io/component: web
