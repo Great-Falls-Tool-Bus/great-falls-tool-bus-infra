@@ -291,6 +291,19 @@ way §3.1's verifier row is (0022:168), with this document as that surface's
 specification. Every other section here is compatible with either answer;
 arming (§7) waits for the ruling either way.
 
+RATIFICATION RECORD (operator ruling 2026-09-01, TIN-4255 comment
+d3130332): ratified with placement (a), the local instance in this
+overlay, under an explicit humility bound. The ruling declines to make a
+confident doctrine claim: federation through the overlay and the canonical
+SSOT remains the preferred end state, and that preference must not block
+implementation. This executor is therefore interim, inherently
+supersedable substrate work.
+TODO(gf-v4): absorb this surface into GF or GF-infra governance when the
+v4 substrates exist — as a bzlmod module or an infra-upstream reusable
+surface in the 0022:131-138 shape — and retire this local instance. Until
+then the conformance doctrine and tests the implementation adopts before
+arming still come from the owning upstream packages.
+
 ## 3. Observer split: the second identity
 
 TIN-4255: "a second read-only ServiceAccount in a distinct protected
