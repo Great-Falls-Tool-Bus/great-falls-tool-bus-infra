@@ -693,6 +693,37 @@ deleted the two legacy adapter-node egress policies `allow-egress-dns` /
 apply already ran it, and the committed tree now declares `default-deny-egress`
 instead.)
 
+### Attended READ-ONLY census (pre-merge gate for the TIN-4254 pruning PR)
+
+Because `kubectl diff -k` has no prune awareness and CI is structurally blind to
+objects that exist only on the cluster, live **absence** of the two retired
+legacy allow-egress policies is receipted by this attended, read-only census —
+not by any hosted check. It is the stated pre-merge gate for the PR that removes
+their delete lane and RBAC `delete` verb (TIN-4254 W13): merging before the
+census would leave no in-repo code path or RBAC to remove a straggler.
+
+1. Attended, with the web-apply kubeconfig, run exactly:
+
+   ```sh
+   kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" \
+     --namespace greatfallstoolbus-org-production \
+     get networkpolicies -o name
+   ```
+
+2. **Pass condition (an exact set, not a floor):** precisely the four committed
+   policies — `allow-cloudflared-tunnel-ingress`, `allow-prometheus-scrape`,
+   `default-deny-egress`, `default-deny-ingress` — and in particular neither
+   `allow-egress-dns` nor `allow-egress-discuss-archive` appears. Any extra or
+   missing name fails the census; do not arm, and remediate attended and
+   out-of-band before re-running.
+
+3. **Receipt:** paste the verbatim command output with a timestamp and the
+   operator's name as a comment on TIN-4254 and on the pruning PR, *before* the
+   PR is armed. (Context that is not a substitute: the gen-44/45 bridge applies
+   re-ran the retired delete lane, and `web-release-pinned-running-proof`
+   asserts the same four-policy census during releases — but this gate is the
+   attended enumeration itself, receipted where the pruning decision lives.)
+
 The authorization preflight lives in `_web-release-apply-kubeconfig-contract` and
 runs `kubectl auth can-i` for every verb the chain needs in
 `greatfallstoolbus-org-production` — `get`/`list`/`watch`/`create`/`update`/`patch`
