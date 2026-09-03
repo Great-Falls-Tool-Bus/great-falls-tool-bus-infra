@@ -353,7 +353,7 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "49a0e25c1cc8c8ff", "b15096271b4271a4", "fe1d38e06e5abf79", "905f0b0d50110b7a"
     ),
     "_reviewed-clean-main": _receipt(
-        "d267466bea4bb170", "7a15527cac4e3b92", "7c25c8b63fe7b52d", "c9f858b312b7637d"
+        "f55b80a79cb3c1ec", "2b243fb82e0fb9e9", "5712d6d62e9f42b7", "ccf201c28aee1e4f"
     ),
     "_reviewed-implementation-core": _receipt(
         "180f8edd55babb51", "43e15dac40bbad2a", "bffe444ff6221c04", "7c64836ae0c2cfc6"
@@ -6331,6 +6331,31 @@ def run_web_release_mutation_fixtures() -> None:
             )
 
         # REFUSALS. Each must refuse with nothing applied.
+        git_config_environment = {
+            **environment,
+            "GIT_CONFIG": str(root / "untrusted-repository.config"),
+        }
+        expect_web_release_fixture_result(
+            just_binary,
+            "web-release-apply",
+            state_path,
+            log_path,
+            git_config_environment,
+            "apply-ok",
+            success=False,
+            diagnostic="refuses ambient GIT_CONFIG",
+        )
+        git_calls = [
+            line
+            for line in log_path.read_text(encoding="utf-8").splitlines()
+            if line.startswith("git ")
+        ]
+        if git_calls or cluster_mutations(kubectl_calls()):
+            raise SystemExit(
+                "self-test FAILED: ambient GIT_CONFIG reached Git or the cluster: "
+                f"git={git_calls!r}, kubectl={cluster_mutations(kubectl_calls())!r}"
+            )
+
         for state, diagnostic in (
             (
                 "apply-git-config-error",
