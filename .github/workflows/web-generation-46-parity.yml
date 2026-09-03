@@ -32,10 +32,10 @@ concurrency:
 
 env:
   # Exact generation-46 pin merge; it must remain the carrier's sole parent.
-  REVIEWED_BASE_SHA: b2d8b3db84523e910740252f3b87573cbaa23660
+  REVIEWED_BASE_SHA: 7d4ae781b8c4d8e694be21b7196bfe677d496bcb
   PIN_PR_NUMBER: "176"
   PIN_HEAD_SHA: 96befeaaaa69ccdb34a0209aedd27ed04ae34239
-  PIN_MERGE_SHA: b2d8b3db84523e910740252f3b87573cbaa23660
+  PIN_MERGE_SHA: 7d4ae781b8c4d8e694be21b7196bfe677d496bcb
   ROLLBACK_INFRA_SHA: 8ecf26987896659727fc623142e170779ff92d41
   TARGET_SOURCE_SHA: 642c935b65db123ea957765ad42ada1378ddfc04
   TARGET_IMAGE: ghcr.io/great-falls-tool-bus/gftb-site@sha256:f0e618ed5d27e6cf2ea9439d90d2f3111fa0189a29800b7feb5b95a2e7511702
