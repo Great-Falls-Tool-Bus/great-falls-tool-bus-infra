@@ -353,7 +353,7 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "49a0e25c1cc8c8ff", "b15096271b4271a4", "fe1d38e06e5abf79", "905f0b0d50110b7a"
     ),
     "_reviewed-clean-main": _receipt(
-        "f55b80a79cb3c1ec", "2b243fb82e0fb9e9", "5712d6d62e9f42b7", "ccf201c28aee1e4f"
+        "4be50b3b8ed8b077", "9c6bf429e73a0ae2", "69844f1733364353", "1aca4a316233e22a"
     ),
     "_reviewed-implementation-core": _receipt(
         "180f8edd55babb51", "43e15dac40bbad2a", "bffe444ff6221c04", "7c64836ae0c2cfc6"
@@ -4739,6 +4739,9 @@ def install_web_release_fixture_mocks(
                 if state == "apply-git-local-http-config":
                     print("local\\thttp.proxy")
                     raise SystemExit(0)
+                if state == "apply-git-local-excludes-config":
+                    print("local\\tcore.excludesfile")
+                    raise SystemExit(0)
                 raise SystemExit(1)
             elif args in (["rev-parse", "HEAD"], ["rev-parse", "origin/main"]):
                 print(head)
@@ -6363,6 +6366,10 @@ def run_web_release_mutation_fixtures() -> None:
             ),
             (
                 "apply-git-local-http-config",
+                "refuses local/worktree Git configuration",
+            ),
+            (
+                "apply-git-local-excludes-config",
                 "refuses local/worktree Git configuration",
             ),
             (

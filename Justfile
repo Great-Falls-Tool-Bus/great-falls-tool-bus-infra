@@ -1525,6 +1525,7 @@ _reviewed-clean-main:
              name == "core.sshcommand" ||
              name == "core.worktree" ||
              name == "core.fsmonitor" ||
+             name == "core.excludesfile" ||
              name == "status.showuntrackedfiles" ||
              name ~ /^include\./ ||
              name ~ /^includeif\./ ||
