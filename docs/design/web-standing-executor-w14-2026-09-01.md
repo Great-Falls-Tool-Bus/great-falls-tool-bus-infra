@@ -1,6 +1,10 @@
 # W14 — standing GF-I09 phase-2 web executor for the GFTB web workload (design for ratification)
 
-- **Status:** Proposed — design only. This PR lands no workflow, no RBAC, no
+- **Status:** Proposed — design only; SUPERSEDED IN PART (2026-09-03) —
+  Amendment-class interim design subordinate to the TIN-2611
+  gated-convergence spec (docs/spec/gftb-gated-convergence-2026-08-13.md,
+  PR #104). See meta decisions/0022 Amendment 4 (meta PR #57, pending
+  operator signature). This PR lands no workflow, no RBAC, no
   secret, and no schedule change. Implementation follows W13 (#159) + its
   attended census + operator ratification of this document (see §7).
 - **Date:** 2026-09-01
@@ -47,6 +51,9 @@ Consequences this design stands on:
    governs. This spec does not request a fourth amendment and defines no
    local substitute authority (0022:131-138: neither Meta nor a GFTB repo may
    define one).
+
+   > *Annotation (2026-09-03):* Amendment 4 (meta #57) was subsequently
+   > drafted as exactly that per-generation-class interim.
 3. **Generation 46+ therefore cannot reach production until §7's ladder
    completes** — GF-I09 phase 2 arms only "after the owning SSOTs
    independently prove publisher, verifier, controller, exact-plan executor,
@@ -54,6 +61,17 @@ Consequences this design stands on:
    paths" (0022:140-146). If the operator wants an interim bounded lane
    before the upstream legs exist, that is a fresh Meta decision outside this
    spec (§8).
+
+> **SUPERSEDED IN PART (2026-09-03, operator ruling, 2026-09-02 interview)** —
+> Meta took exactly that fresh decision: decisions/0022 Amendment 4 (meta PR
+> #57) is the bounded interim lane for generation 46+. Separately, this
+> design's §2 trigger model (a push-triggered standing apply) conflicts with
+> the ratified TIN-2611 conversion: under that spec the sole mutation
+> authority is owner-overlay-controller #5's Accept|Refuse on typed
+> requests, parallel mutation workflows are forbidden, and ADR 0022 §3.1
+> assigns publisher/verifier/admission roles only. Before any arming, §2
+> must be re-derived under the TIN-2611 chain. Retained text below stands
+> unedited per the house no-silent-rewrite convention.
 
 `.github/workflows/` on infra `main` today contains no `web-generation-*`
 file, and `scripts/validate-public-operator-surface.py` fails the public
@@ -487,6 +505,10 @@ the executor attempts nothing further (§5.1's bound).
 
 The ladder, in order, each rung gated on the one before it:
 
+> *Annotation (2026-09-03):* rungs 3–5 now proceed in parallel with the
+> Amendment-4 interim lane (meta PR #57) rather than strictly before any
+> further generation ships.
+
 1. **W13 (#159) merges**, honoring its own gate: the attended READ-ONLY
    census confirming both legacy egress policies are absent live
    (`docs/runbooks/oncluster-web-cutover.md`, the #159 gate note) — the
@@ -544,5 +566,9 @@ the receipt (`gfI09` block) but unarmed.
 - **No interim authority request.** This spec does not ask Meta for a fourth
   amendment; if generations must ship before §7 rung 4 completes, that
   decision and its bounds belong to the operator and Meta, not this document.
+
+  > *Annotation (2026-09-03):* the statement remains true of this spec; Meta
+  > subsequently took that decision on its own authority (Amendment 4, meta
+  > PR #57).
 - **No second reconciler, no schedule, no dispatch** — one trigger, one
   mutator, one receipt per pin.
