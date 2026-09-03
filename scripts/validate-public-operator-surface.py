@@ -353,7 +353,7 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "49a0e25c1cc8c8ff", "b15096271b4271a4", "fe1d38e06e5abf79", "905f0b0d50110b7a"
     ),
     "_reviewed-clean-main": _receipt(
-        "ab5768da9dca9203", "6872031e65202d72", "87ceb29bb0a1b1ae", "7298cadc531c7d33"
+        "b764093a374ac0cb", "1d8439dbd4c9b0eb", "1e6f1e16ef7aa094", "9d5e6c7c48347a6a"
     ),
     "_reviewed-implementation-core": _receipt(
         "180f8edd55babb51", "43e15dac40bbad2a", "bffe444ff6221c04", "7c64836ae0c2cfc6"
@@ -4753,6 +4753,8 @@ def install_web_release_fixture_mocks(
                     raise SystemExit("mock git requires system config disabled")
                 if os.environ.get("GIT_CONFIG_GLOBAL") != "/dev/null":
                     raise SystemExit("mock git requires global config disabled")
+                if os.environ.get("GIT_ATTR_NOSYSTEM") != "1":
+                    raise SystemExit("mock git requires system attributes disabled")
                 if state == "apply-git-config-error":
                     raise SystemExit(2)
                 if state == "apply-git-local-http-config":
@@ -4816,10 +4818,23 @@ def install_web_release_fixture_mocks(
                 print(head)
             elif args == ["branch", "--show-current"]:
                 print("main")
-            elif args in (
-                ["status", "--porcelain", "--untracked-files=all"],
-                ["ls-files", "-v"],
+            elif args == [
+                "-c", "core.excludesFile=/dev/null",
+                "-c", "core.attributesFile=/dev/null",
+                "status", "--porcelain", "--untracked-files=all",
+            ]:
+                if os.environ.get("GIT_ATTR_NOSYSTEM") != "1":
+                    raise SystemExit("mock status requires system attributes disabled")
+                if state == "apply-git-default-ignore-steering":
+                    print("?? override.tf")
+            elif (
+                args == ["status", "--porcelain", "--untracked-files=all"]
+                and state == "apply-git-default-ignore-steering"
             ):
+                # Without the command-scoped /dev/null sources the injected
+                # user-global ignore hides override.tf and reports a false clean.
+                pass
+            elif args == ["ls-files", "-v"]:
                 pass
             elif args == ["remote", "get-url", "origin"]:
                 if state == "apply-git-origin-secret":
@@ -6415,6 +6430,7 @@ def run_web_release_mutation_fixtures() -> None:
             "GIT_CONFIG",
             "GIT_REFERENCE_BACKEND",
             "GIT_ATTR_SOURCE",
+            "GIT_ATTR_NOSYSTEM",
         ):
             steered_git_environment = {
                 **environment,
@@ -6490,6 +6506,10 @@ def run_web_release_mutation_fixtures() -> None:
             (
                 "apply-git-info-attributes-symlink",
                 "refuses non-regular repository-local Git metadata",
+            ),
+            (
+                "apply-git-default-ignore-steering",
+                "requires a clean worktree",
             ),
             (
                 "apply-authz-denied-create-policy",

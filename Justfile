@@ -1504,10 +1504,11 @@ _reviewed-clean-main:
     # The developer/CI toolchain PATH is an explicit input; privileged bash
     # refuses imported functions and startup files, while Git config below is
     # isolated from system/global state before repository state is inspected.
-    for name in GIT_CONFIG GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_SYSTEM GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_DIR GIT_WORK_TREE GIT_IMPLICIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_QUARANTINE_PATH GIT_REPLACE_REF_BASE GIT_NO_REPLACE_OBJECTS GIT_NAMESPACE GIT_REFERENCE_BACKEND GIT_SHALLOW_FILE GIT_ATTR_SOURCE GIT_EXEC_PATH GIT_SSH_COMMAND GIT_ASKPASS; do
+    for name in GIT_CONFIG GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_SYSTEM GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_DIR GIT_WORK_TREE GIT_IMPLICIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_QUARANTINE_PATH GIT_REPLACE_REF_BASE GIT_NO_REPLACE_OBJECTS GIT_NAMESPACE GIT_REFERENCE_BACKEND GIT_SHALLOW_FILE GIT_ATTR_SOURCE GIT_ATTR_NOSYSTEM GIT_EXEC_PATH GIT_SSH_COMMAND GIT_ASKPASS; do
       [[ -z "${!name:-}" ]] || { echo "Guarded ARC operation refuses ambient ${name}" >&2; exit 2; }
     done
     export GIT_NO_REPLACE_OBJECTS=1
+    export GIT_ATTR_NOSYSTEM=1
     export GIT_CONFIG_NOSYSTEM=1
     export GIT_CONFIG_GLOBAL=/dev/null
     set +e
@@ -1578,7 +1579,7 @@ _reviewed-clean-main:
       fi
     done
     [[ "$(git branch --show-current)" == "main" ]] || { echo "Guarded ARC operation requires the main branch" >&2; exit 2; }
-    [[ -z "$(git status --porcelain --untracked-files=all)" ]] || { echo "Guarded ARC operation requires a clean worktree" >&2; exit 2; }
+    [[ -z "$(git -c core.excludesFile=/dev/null -c core.attributesFile=/dev/null status --porcelain --untracked-files=all)" ]] || { echo "Guarded ARC operation requires a clean worktree" >&2; exit 2; }
     index_flags="$(git ls-files -v | awk '$1 != "H"')"
     [[ -z "${index_flags}" ]] || { echo "Guarded ARC operation refuses assume-unchanged, skip-worktree, or non-cached index flags: ${index_flags}" >&2; exit 2; }
     canonical_remote="https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git"
