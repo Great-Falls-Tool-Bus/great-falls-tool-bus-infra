@@ -1504,11 +1504,13 @@ _reviewed-clean-main:
     # The developer/CI toolchain PATH is an explicit input; privileged bash
     # refuses imported functions and startup files, while Git config below is
     # isolated from system/global state before repository state is inspected.
-    for name in GIT_CONFIG GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_SYSTEM GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_DIR GIT_WORK_TREE GIT_IMPLICIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_QUARANTINE_PATH GIT_REPLACE_REF_BASE GIT_NO_REPLACE_OBJECTS GIT_NAMESPACE GIT_REFERENCE_BACKEND GIT_SHALLOW_FILE GIT_ATTR_SOURCE GIT_ATTR_NOSYSTEM GIT_EXEC_PATH GIT_SSH_COMMAND GIT_ASKPASS; do
+    export LC_ALL=C
+    for name in GIT_CONFIG GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_SYSTEM GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_DIR GIT_WORK_TREE GIT_IMPLICIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_QUARANTINE_PATH GIT_REPLACE_REF_BASE GIT_NO_REPLACE_OBJECTS GIT_NAMESPACE GIT_REFERENCE_BACKEND GIT_SHALLOW_FILE GIT_ATTR_SOURCE GIT_ATTR_NOSYSTEM GIT_OPTIONAL_LOCKS GIT_EXEC_PATH GIT_SSH_COMMAND GIT_ASKPASS; do
       [[ -z "${!name:-}" ]] || { echo "Guarded ARC operation refuses ambient ${name}" >&2; exit 2; }
     done
     export GIT_NO_REPLACE_OBJECTS=1
     export GIT_ATTR_NOSYSTEM=1
+    export GIT_OPTIONAL_LOCKS=0
     export GIT_CONFIG_NOSYSTEM=1
     export GIT_CONFIG_GLOBAL=/dev/null
     set +e
@@ -1895,6 +1897,7 @@ _arc-plan-input-preflight: _reviewed-clean-main _reviewed-arc-core _arc-backend-
     test "${target_uid}" = "$(tr -d '\n' < .tofu-plans/arc-runners.target-uid)" || { echo "ARC plan was created for a different target cluster/release" >&2; exit 2; }
 
 _operator-apply-confirm:
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
     [[ "${GFTB_APPLY_CONFIRM:-}" == "apply" ]] || { echo "Set GFTB_APPLY_CONFIRM=apply for this attended mutation" >&2; exit 2; }
 
 _arc-exclusive-confirm:

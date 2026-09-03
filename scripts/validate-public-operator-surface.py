@@ -354,7 +354,7 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "49a0e25c1cc8c8ff", "b15096271b4271a4", "fe1d38e06e5abf79", "905f0b0d50110b7a"
     ),
     "_reviewed-clean-main": _receipt(
-        "dffb055a287f4a2b", "8a812c67565a7e41", "49a58eb1851c873a", "949afbdf6b962710"
+        "a150da8501b19226", "aaa2dd5d11201170", "c445ea09645439b0", "855ad36f37510540"
     ),
     "_reviewed-implementation-core": _receipt(
         "180f8edd55babb51", "43e15dac40bbad2a", "bffe444ff6221c04", "7c64836ae0c2cfc6"
@@ -384,7 +384,7 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "6a5f69b8b73bb5d2", "285e9effeb9111c3", "8f5fbe0c34a07813", "51fe2e4ebf574cc1"
     ),
     "_operator-apply-confirm": _receipt(
-        "6487928ae4f59860", "9a786fc78d5d0e9d", "7a1077a7ff8f4ecb", "966d483dd92058a0"
+        "1858a391b5fd7061", "ffce7683cb03a7cf", "c1eac68badc61b8a", "8cc3c1556e23edc1"
     ),
     "_arc-exclusive-confirm": _receipt(
         "9c8565974cf6f3b0", "f2aca232a5ff6978", "8d566d4ae8c96152", "900813ed27e88e7a"
@@ -4756,6 +4756,10 @@ def install_web_release_fixture_mocks(
                     raise SystemExit("mock git requires global config disabled")
                 if os.environ.get("GIT_ATTR_NOSYSTEM") != "1":
                     raise SystemExit("mock git requires system attributes disabled")
+                if os.environ.get("GIT_OPTIONAL_LOCKS") != "0":
+                    raise SystemExit("mock git requires optional index locks disabled")
+                if os.environ.get("LC_ALL") != "C":
+                    raise SystemExit("mock git requires locale-neutral config parsing")
                 if state == "apply-git-config-error":
                     raise SystemExit(2)
                 if state == "apply-git-local-http-config":
@@ -4780,6 +4784,9 @@ def install_web_release_fixture_mocks(
                 }.get(state)
                 if stat_key is not None:
                     print("local\\t" + stat_key)
+                    raise SystemExit(0)
+                if state == "apply-git-local-mixed-case-stat-config":
+                    print("local\\tcore.IgnoreStat")
                     raise SystemExit(0)
                 if state == "apply-git-worktree-attr-tree-config":
                     print("worktree\\tattr.tree")
@@ -4833,6 +4840,8 @@ def install_web_release_fixture_mocks(
             ]:
                 if os.environ.get("GIT_ATTR_NOSYSTEM") != "1":
                     raise SystemExit("mock status requires system attributes disabled")
+                if os.environ.get("GIT_OPTIONAL_LOCKS") != "0":
+                    raise SystemExit("mock status requires optional index locks disabled")
                 if state == "apply-git-status-error":
                     raise SystemExit(2)
                 if state == "apply-git-default-ignore-steering":
@@ -6458,6 +6467,7 @@ def run_web_release_mutation_fixtures() -> None:
             "GIT_REFERENCE_BACKEND",
             "GIT_ATTR_SOURCE",
             "GIT_ATTR_NOSYSTEM",
+            "GIT_OPTIONAL_LOCKS",
         ):
             steered_git_environment = {
                 **environment,
@@ -6571,6 +6581,27 @@ def run_web_release_mutation_fixtures() -> None:
                     "reached the cluster after refusing: "
                     f"{cluster_mutations(kubectl_calls())!r}"
                 )
+
+        locale_steered_environment = {
+            **environment,
+            "LC_ALL": "C.UTF-8",
+            "LANG": "C.UTF-8",
+        }
+        expect_web_release_fixture_result(
+            just_binary,
+            "web-release-apply",
+            state_path,
+            log_path,
+            locale_steered_environment,
+            "apply-git-local-mixed-case-stat-config",
+            success=False,
+            diagnostic="refuses local/worktree Git configuration",
+        )
+        if cluster_mutations(kubectl_calls()):
+            raise SystemExit(
+                "self-test FAILED: locale-steered mixed-case Git config "
+                "reached the cluster"
+            )
 
         secret_origin_marker = "ghp_" + "a" * 36
         secret_origin_result = expect_web_release_fixture_result(
@@ -7491,6 +7522,12 @@ def self_test() -> None:
     body_mutations = (
         (
             "_reviewed-clean-main",
+            "    export LC_ALL=C",
+            "    export LC_ALL=C.UTF-8",
+            "locale-neutral Git parsing removal",
+        ),
+        (
+            "_reviewed-clean-main",
             "             name ~ /^http\\./)) {",
             "             false)) {",
             "Git HTTP steering refusal removal",
@@ -7500,6 +7537,12 @@ def self_test() -> None:
             "    export GIT_NO_REPLACE_OBJECTS=1",
             "    true # export GIT_NO_REPLACE_OBJECTS=1",
             "replacement-object refusal removal",
+        ),
+        (
+            "_reviewed-clean-main",
+            "    export GIT_OPTIONAL_LOCKS=0",
+            "    export GIT_OPTIONAL_LOCKS=1",
+            "optional index-write suppression removal",
         ),
         (
             "_reviewed-clean-main",
