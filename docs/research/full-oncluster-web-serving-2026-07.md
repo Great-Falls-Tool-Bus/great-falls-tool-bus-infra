@@ -508,6 +508,6 @@ brief as reversing ADR 0003. Instead:
   `.gitleaks.toml`, `docs/ci-credentials.md`, `tofu/backend/{honey.s3.hcl,honey-edge.s3.hcl}`,
   `tofu/stacks/edge*`, `k8s/{form,list,mail}/latoolb-us-production/`,
   `docs/runbooks/form-intake.md`, `docs/mvp-decision-packet.md`,
-  `docs/implementation-overlay.md`.
+  the retired ARC implementation-overlay runbook.
 - `tinyland-inc/site.scaffold`: `tinyland.repo.json` + `.gitleaks.toml`
   (source of the boundaries schema + gitleaks rules the spoke inherits).

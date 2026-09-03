@@ -164,53 +164,38 @@ flowchart TD
     pfx --- rsp
 ```
 
-## 4. Bazel and GloriousFlywheel flow
+## 4. GloriousFlywheel v4 flow
 
-**Claim.** The public spoke's `ci.yml` is a thin wrapper over
-`tinyland-inc/ci-templates` `spoke-ci.yml`, pinned at `v2.9.0`, running on the
-`tinyland-nix` runner class (honey/sting pool). Bazel work goes through the
-`scripts/gloriousflywheel-bazel.sh` wrapper, which holds the endpoint authority
-and injects `--remote_cache` (and, only when executor mode is selected,
-`--remote_executor`) so `.bazelrc.flywheel` stays endpoint-free. Registries
-resolve `tinyland-inc/bazel-registry` first, then BCR. The shared cache is
-read-only on PRs (`--remote_upload_local_results=false`); the `gf-reapi-cell`
-executor is configured as a documented substrate fact but is opt-in and not
-wired into the primary lane, and cache-write publication is blocked pending
-TIN-1147.
-
-**Sources of truth.** Runner class and template pin:
-`greatfallstoolbus.org` `.github/workflows/ci.yml`
-(`uses: tinyland-inc/ci-templates/.github/workflows/spoke-ci.yml@v2.9.0`,
-`default_runner_class: tinyland-nix`, `flywheel_config: flywheel`,
-`cache_backed: true`). Registry chain and endpoint-free posture:
-`greatfallstoolbus.org` `.bazelrc` (two `--registry` lines, bazel-registry
-first) and `.bazelrc.flywheel` (`remote_upload_local_results=false`, TIN-1147
-invariant, `flywheel-executor` config separate and tag-gated). Wrapper
-authority: `greatfallstoolbus.org` `scripts/gloriousflywheel-bazel.sh` and
-`Justfile` `flywheel-*` recipes. Executor endpoint as documented-only fact:
-this repo's `README.md` ("Shared Bazel executor
-`grpc://gf-reapi-cell.gf-rbe.svc.cluster.local:8980`, documented substrate
-fact, NOT wired into the primary lane yet").
+**Claim.** GFTB owns immutable demand declarations; provider topology remains
+opaque. An application repository names an exact action through the immutable
+v4 template. The image-custodied client resolves its GFTB binding from the
+controller catalog and sends the action to the pooled REAPI/CAS fabric. ARC,
+when present, is only a thin GitHub edge.
 
 ```mermaid
-flowchart TD
-    ci["Spoke ci.yml"]
-    tmpl["ci-templates spoke-ci.yml@v2.9.0<br/>runs-on tinyland-nix (honey/sting)"]
-    wrapper["scripts/gloriousflywheel-bazel.sh<br/>endpoint authority<br/>injects --remote_cache / --remote_executor"]
-    rc[".bazelrc.flywheel<br/>endpoint-free<br/>upload_local_results=false"]
-    cache["GF shared Bazel cache<br/>read-only on PRs<br/>cache-write blocked TIN-1147"]
-    exec["gf-reapi-cell executor<br/>configured, opt-in<br/>NOT in primary lane"]
-    reg1["Registry 1<br/>tinyland-inc/bazel-registry"]
-    reg2["Registry 2<br/>BCR"]
+flowchart LR
+    app["application repo<br/>ActionPlan"]
+    template["immutable ci-templates v4"]
+    edge["thin GitHub edge"]
+    overlay["GFTB -infra<br/>signed demand + revocation"]
+    appinstall["GFTB GitHub App installation"]
+    controller["owner controller<br/>verified demand"]
+    supply["provider<br/>verified supply"]
+    catalog["immutable resolved binding catalog"]
+    client["image-custodied action client"]
+    reapi["pooled REAPI / CAS<br/>action scheduler"]
 
-    ci -->|"uses"| tmpl
-    tmpl -->|"bazel via"| wrapper
-    wrapper -->|"reads"| rc
-    wrapper -->|"--remote_cache"| cache
-    wrapper -.->|"--remote_executor (opt-in)"| exec
-    wrapper -->|"resolve first"| reg1
-    reg1 -->|"fallback"| reg2
+    app --> template --> edge --> client
+    overlay --> controller
+    appinstall --> controller
+    controller --> catalog
+    supply --> catalog
+    catalog --> client --> reapi
 ```
+
+There is no arrow from provider supply back into the GFTB repository and no
+consumer registration row in GF core. Missing authority stops before execution;
+it never selects a local, cache-only, hosted, or direct-endpoint path.
 
 ## 5. Public -> cluster HTTP edge path
 

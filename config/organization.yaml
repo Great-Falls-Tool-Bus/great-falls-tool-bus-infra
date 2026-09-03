@@ -71,8 +71,7 @@ runner_contract:
   # arc-runners module surface does NOT create or reconcile the GitHub-side
   # group (the GloriousFlywheel arc-runners stack loads only the kubernetes and
   # helm providers and owns no `github_actions_runner_group` resource), so the
-  # group itself is an attended GitHub org-settings action; see
-  # docs/implementation-overlay.md "Runner group cutover".
+  # group itself is an attended GitHub org-settings action.
   #
   # The name intentionally matches this overlay's repository name because the
   # group is an owner/tenancy boundary, not a runner capability. It is NOT a
@@ -105,10 +104,10 @@ runner_contract:
     # What makes admission safe in THIS repository: no `pull_request_target`
     # trigger exists anywhere in it, and no `pull_request`-triggered job
     # reaches `tinyland-nix` unaccountably — every one of this repository's
-    # 16 `tinyland-nix` jobs (11 workflows) falls into one of three
-    # enumerated, reviewed classes. (1) An explicit event-gate `if:` on 11
-    # jobs: 7 first-jobs (archive-stack, edge-plan, flywheel-cache-proof,
-    # form-crs, list-crs, mail-crs, web-crs) carry the PR #110
+    # 15 `tinyland-nix` jobs (10 workflows) falls into one of three
+    # enumerated, reviewed classes. (1) An explicit event-gate `if:` on 10
+    # jobs: 6 first-jobs (archive-stack, edge-plan, form-crs, list-crs,
+    # mail-crs, web-crs) carry the PR #110
     # (`ae7cb63a`) `if: github.event_name == 'push' || github.event_name ==
     # 'workflow_dispatch'`; the 4 `environment: mail` credentialed `server`
     # jobs (archive-stack, form-crs, list-crs, mail-crs) carry a narrower
@@ -177,11 +176,11 @@ runner_contract:
     # in the convergence program alongside TIN-4004, not rediscovered
     # per-repo by the next reviewer.
     #
-    # Admission unblocks all ten of this repository's self-hosted
+    # Admission unblocks all nine of this repository's self-hosted
     # `tinyland-nix` workflows (archive-stack, edge-drift, edge-plan,
-    # flywheel-cache-proof, form-crs, k8s-stack-drift, list-crs, mail-crs,
-    # web-crs, web-plan) — each had zero eligible runners while this
-    # repository was excluded. `validate.yml` (PR #116) is the eleventh.
+    # form-crs, k8s-stack-drift, list-crs, mail-crs, web-crs, web-plan) — each
+    # had zero eligible runners while this repository was excluded.
+    # `validate.yml` (PR #116) is the tenth.
     #
     # TIN-4004 (High, security): admission RE-ARMS a dormant credential
     # carrier; it does not merely leave shared substrate unchanged.
@@ -213,8 +212,8 @@ runner_contract:
     #
     # TIN-4015 (2026-08-22, infra PR #130): GloriousFlywheel went private,
     # breaking every self-hosted workflow's unauthenticated core checkout the
-    # moment this admission gave them an actual runner. Nine workflows
-    # (archive-stack, edge-drift, edge-plan, flywheel-cache-proof, form-crs,
+    # moment this admission gave them an actual runner. Eight workflows
+    # (archive-stack, edge-drift, edge-plan, form-crs,
     # k8s-stack-drift, list-crs, mail-crs, web-crs) now carry the repository
     # secret `GF_CORE_DEPLOY_KEY` (read-only, `contents: read` on
     # `tinyland-inc/GloriousFlywheel` only — docs/ci-credentials.md) on their
@@ -231,7 +230,7 @@ runner_contract:
     # already covers, not an `environment:`. That framing's own text stays
     # TRUE (no `if:`/`on:` changed by #130 — checked and re-checked by
     # adversarial review), but its illustrative "credentialed ⇔
-    # `environment:`-protected" enumeration is now an undercount: seven
+    # `environment:`-protected" enumeration is now an undercount: six
     # `push`-triggered first-jobs carry a repository secret with no
     # `environment:` at all. Acceptable — a push to `main` is post-merge and
     # trusted, and TIN-3902/TIN-3914's public-repo-admission posture already
@@ -265,7 +264,7 @@ runner_contract:
       - 1287399122
       # Great-Falls-Tool-Bus/great-falls-tool-bus-infra — public; this
       # repository. Admitted under operator ruling 2026-08-22 (L76; TIN-3914)
-      # per `infra_repo_admission_ruling` above. Unblocks all ten of this
+      # per `infra_repo_admission_ruling` above. Unblocks all nine of this
       # repository's self-hosted `tinyland-nix` workflows (see the
       # `runner_group` comment above), starved since roster exclusion —
       # rung-2 `web-plan.yml` (merged `749b8f8d`) is the flagship example but
@@ -281,6 +280,5 @@ runner_contract:
       # that packet's reconciliation notes. GitHub-side
       # admission (the runner group's selected-repository list in org
       # Settings) is itself a separate, attended action this file does not
-      # perform; see docs/implementation-overlay.md "Runner group cutover"
-      # Step 0.
+      # perform.
       - 1286829099

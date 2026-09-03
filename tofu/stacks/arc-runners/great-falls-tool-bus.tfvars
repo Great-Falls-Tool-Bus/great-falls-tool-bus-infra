@@ -41,7 +41,6 @@ ghcr_pull_secret_name = "ghcr-pull"
 # NOT module-created: the GloriousFlywheel arc-runners stack loads only the
 # kubernetes and helm providers and owns no `github_actions_runner_group`
 # resource, so the GitHub-side group must exist BEFORE the first plan/apply.
-# See docs/implementation-overlay.md "Runner group cutover".
 runner_group        = "great-falls-tool-bus-infra"
 runner_group_policy = "organization-restricted"
 
@@ -73,8 +72,7 @@ dind_runner_scale_set_name   = "great-falls-tool-bus-dind"
 # at the 16Gi limit on the second Bazel build of the platform spoke (GF seat,
 # run 33373351388); this is the bounded TIN-4246 exception (operator-ratified
 # via the GF seat interview, recorded on TIN-4246/TIN-4227) that raises the
-# envelope to 12Gi/24Gi. docs/implementation-overlay.md defines the measured
-# soak gate. Capacity is unchanged by TIN-3902: the runner-group cutover is an
+# envelope to 12Gi/24Gi. Capacity is unchanged by TIN-3902: the runner-group cutover is an
 # admission fix, not a capacity change. min 0 / max 4 is the reviewed
 # TIN-2165/TIN-2234 posture and must stay non-zero: a dedicated group with
 # zero capacity admits nobody, which was the defect in the unmerged
@@ -97,37 +95,6 @@ nix_warm_pool_enabled         = false
 deploy_docker_runner          = false
 deploy_dind_runner            = false
 deploy_longhorn               = false
-
-# Shared-cache-backed wiring for the primary nix lane: the runner injects
-# BAZEL_REMOTE_CACHE + GF_BAZEL_SUBSTRATE_MODE=shared-cache-backed and the
-# Attic substituter (arc-runner module locals.tf cache_env_vars).
-# EXECUTOR FLIP (later, deliberate): adding
-#   bazel_executor_endpoint = "grpc://gf-reapi-cell.gf-rbe.svc.cluster.local:8980"
-# here flips the injected mode to executor-backed for ALL GFTB runner pods;
-# do that only together with arming FLYWHEEL_EXECUTOR_ENABLED in consumers and
-# a registry substrate_mode update.
-attic_server         = "http://attic.nix-cache.svc.cluster.local"
-attic_cache          = "main"
-attic_public_key     = "main:eaUydxuDu7xBoy5cCo3MdknYAkVyTIASQ7DGuwxa+XA="
-bazel_cache_endpoint = "grpc://bazel-cache.nix-cache.svc.cluster.local:9092"
-
-# GloriousFlywheel hosted token-exchange front door for the GFTB org nix lane
-# (TIN-2364 L5 org-mint soak). The oidc-profile helper reads
-# GF_REAPI_TOKEN_EXCHANGE_ENDPOINT to exchange the job's GitHub Actions OIDC
-# identity for a short-lived gf-reapi-cell token. This is a cluster-internal
-# Service endpoint value, committed here under the same discipline as
-# bazel_cache_endpoint and attic_server above; it mirrors the honey.tfvars
-# export that covers the shared tinyland-nix lanes (GloriousFlywheel PR #1066).
-nix_env_vars = [
-  {
-    name  = "GF_REAPI_TOKEN_EXCHANGE_ENDPOINT"
-    value = "http://gf-reapi-token-exchange.gf-rbe.svc.cluster.local:8081/v1/token/exchange"
-  },
-  {
-    name  = "GF_REAPI_CACHE_FRONTDOOR_ENDPOINT"
-    value = "grpc://gf-reapi-cell.gf-rbe.svc.cluster.local:8980"
-  }
-]
 
 shared_runner_node_selector = {
   "kubernetes.io/hostname" = "sting"
