@@ -1526,6 +1526,8 @@ _reviewed-clean-main:
              name == "core.worktree" ||
              name == "core.fsmonitor" ||
              name == "core.excludesfile" ||
+             name == "core.attributesfile" ||
+             name ~ /^filter\./ ||
              name == "status.showuntrackedfiles" ||
              name ~ /^include\./ ||
              name ~ /^includeif\./ ||

@@ -353,7 +353,7 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "49a0e25c1cc8c8ff", "b15096271b4271a4", "fe1d38e06e5abf79", "905f0b0d50110b7a"
     ),
     "_reviewed-clean-main": _receipt(
-        "4be50b3b8ed8b077", "9c6bf429e73a0ae2", "69844f1733364353", "1aca4a316233e22a"
+        "db4cd73dbf6f21b3", "35c9eda72d40bf4c", "6b03dadc54be34c7", "d5d8884ae7b56339"
     ),
     "_reviewed-implementation-core": _receipt(
         "180f8edd55babb51", "43e15dac40bbad2a", "bffe444ff6221c04", "7c64836ae0c2cfc6"
@@ -4742,6 +4742,12 @@ def install_web_release_fixture_mocks(
                 if state == "apply-git-local-excludes-config":
                     print("local\\tcore.excludesfile")
                     raise SystemExit(0)
+                if state == "apply-git-local-attributes-config":
+                    print("local\\tcore.attributesfile")
+                    raise SystemExit(0)
+                if state == "apply-git-local-filter-config":
+                    print("local\\tfilter.hide.clean")
+                    raise SystemExit(0)
                 raise SystemExit(1)
             elif args in (["rev-parse", "HEAD"], ["rev-parse", "origin/main"]):
                 print(head)
@@ -6370,6 +6376,14 @@ def run_web_release_mutation_fixtures() -> None:
             ),
             (
                 "apply-git-local-excludes-config",
+                "refuses local/worktree Git configuration",
+            ),
+            (
+                "apply-git-local-attributes-config",
+                "refuses local/worktree Git configuration",
+            ),
+            (
+                "apply-git-local-filter-config",
                 "refuses local/worktree Git configuration",
             ),
             (
