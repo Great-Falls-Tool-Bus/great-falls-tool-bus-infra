@@ -1501,8 +1501,16 @@ arc-enrollment-plan: enrollment-preflight arc-plan
 _reviewed-clean-main:
     #!/usr/bin/env bash
     set -euo pipefail
+    for name in GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_SYSTEM GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_REPLACE_REF_BASE GIT_SHALLOW_FILE GIT_EXEC_PATH GIT_SSH_COMMAND GIT_ASKPASS; do
+      [[ -z "${!name:-}" ]] || { echo "Guarded ARC operation refuses ambient ${name}" >&2; exit 2; }
+    done
     [[ "$(git branch --show-current)" == "main" ]] || { echo "Guarded ARC operation requires the main branch" >&2; exit 2; }
     [[ -z "$(git status --porcelain)" ]] || { echo "Guarded ARC operation requires a clean worktree" >&2; exit 2; }
+    if git config --show-scope --name-only --get-regexp '^(url\..*\.insteadof|gpg\.program|gpg\..*\.program|core\.sshcommand|include\..*|includeif\..*|http\..*)$' |
+      awk '$1 == "local" || $1 == "worktree" { found=1 } END { exit(found ? 0 : 1) }'; then
+      echo "Guarded ARC operation refuses Git configuration that can redirect remote, TLS, proxy, or signature verification" >&2
+      exit 2
+    fi
     index_flags="$(git ls-files -v | awk '$1 != "H"')"
     [[ -z "${index_flags}" ]] || { echo "Guarded ARC operation refuses assume-unchanged, skip-worktree, or non-cached index flags: ${index_flags}" >&2; exit 2; }
     canonical_remote="https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git"
@@ -1515,10 +1523,18 @@ _reviewed-clean-main:
     head_sha="$(git rev-parse HEAD)"
     origin_sha="$(git rev-parse origin/main)"
     [[ "${head_sha}" == "${origin_sha}" ]] || { echo "Guarded ARC operation HEAD ${head_sha} is not origin/main ${origin_sha}" >&2; exit 2; }
-    remote_sha="$(git ls-remote --exit-code "${canonical_remote}" refs/heads/main | awk 'NR == 1 { print $1 }')"
+    remote_sha="$(
+      env -i \
+        PATH="${PATH}" \
+        HOME=/ \
+        GIT_CONFIG_NOSYSTEM=1 \
+        GIT_CONFIG_GLOBAL=/dev/null \
+        git -C / ls-remote --exit-code "${canonical_remote}" refs/heads/main |
+        awk 'NR == 1 { print $1 }'
+    )"
     [[ "${remote_sha}" =~ ^[0-9a-f]{40}$ ]] || { echo "Could not resolve the current remote main SHA" >&2; exit 2; }
     [[ "${head_sha}" == "${remote_sha}" ]] || { echo "Guarded ARC operation HEAD ${head_sha} is not current remote main ${remote_sha}" >&2; exit 2; }
-    git verify-commit "${head_sha}" >/dev/null
+    git -c gpg.format=openpgp -c gpg.program=gpg -c gpg.openpgp.program=gpg verify-commit "${head_sha}" >/dev/null
     echo "reviewed infra carrier: ${head_sha}"
 
 # Enrollment and GitHub App Secret materialization use the implementation-role

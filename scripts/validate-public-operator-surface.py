@@ -353,7 +353,7 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "49a0e25c1cc8c8ff", "b15096271b4271a4", "fe1d38e06e5abf79", "905f0b0d50110b7a"
     ),
     "_reviewed-clean-main": _receipt(
-        "fe9e048cffbba33b", "36e25d7e15eff9f0", "2ef7dca85552e144", "3b2bf9865a24d32e"
+        "8059eefae943ab2e", "b6d0380f75aac90f", "1562d9670ebfa6a3", "6c0eb4e85ddad599"
     ),
     "_reviewed-implementation-core": _receipt(
         "180f8edd55babb51", "43e15dac40bbad2a", "bffe444ff6221c04", "7c64836ae0c2cfc6"
@@ -7218,8 +7218,26 @@ def self_test() -> None:
     body_mutations = (
         (
             "_reviewed-clean-main",
-            '    git verify-commit "${head_sha}" >/dev/null',
-            '    true # git verify-commit "${head_sha}" >/dev/null',
+            "    if git config --show-scope --name-only --get-regexp "
+            "'^(url\\..*\\.insteadof|gpg\\.program|gpg\\..*\\.program|"
+            "core\\.sshcommand|include\\..*|includeif\\..*|http\\..*)$' |",
+            "    if git config --show-scope --name-only --get-regexp "
+            "'^(url\\..*\\.insteadof|gpg\\.program|gpg\\..*\\.program|"
+            "core\\.sshcommand|include\\..*|includeif\\..*)$' |",
+            "Git HTTP steering refusal removal",
+        ),
+        (
+            "_reviewed-clean-main",
+            '        git -C / ls-remote --exit-code "${canonical_remote}" refs/heads/main |',
+            '        git ls-remote --exit-code "${canonical_remote}" refs/heads/main |',
+            "remote main read restored repository configuration",
+        ),
+        (
+            "_reviewed-clean-main",
+            "    git -c gpg.format=openpgp -c gpg.program=gpg "
+            '-c gpg.openpgp.program=gpg verify-commit "${head_sha}" >/dev/null',
+            "    true # git -c gpg.format=openpgp -c gpg.program=gpg "
+            '-c gpg.openpgp.program=gpg verify-commit "${head_sha}" >/dev/null',
             "comment-spoofed commit verification",
         ),
         (
