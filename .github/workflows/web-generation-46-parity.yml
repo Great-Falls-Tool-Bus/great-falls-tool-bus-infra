@@ -122,11 +122,17 @@ jobs:
                 --max-redirs 0 "$2"
             ' _ "${RUNNER_TEMP}" "$1"
           }
-          public_api() {
-            clean_curl "$1"
-          }
           test "${REVIEWED_BASE_SHA}" = "${PIN_MERGE_SHA}"
           test "${AMENDMENT4_RECEIPT_ORDINAL}" = 1
+          # gftb-site is private and this overlay deliberately carries no
+          # cross-repository source credential. The signed pin review bound
+          # its exact main/CI/publisher evidence; the pre-credential candidate
+          # proof below independently re-resolves and pulls the public OCI
+          # digest and requires its source label to equal TARGET_SOURCE_SHA.
+          test "${TARGET_SOURCE_SHA}" = 642c935b65db123ea957765ad42ada1378ddfc04
+          test "${TARGET_IMAGE}" = ghcr.io/great-falls-tool-bus/gftb-site@sha256:f0e618ed5d27e6cf2ea9439d90d2f3111fa0189a29800b7feb5b95a2e7511702
+          test "${SOURCE_CI_RUN_ID}" = 33797417225
+          test "${SOURCE_PUBLISH_RUN_ID}" = 33797416853
           nix develop . --command python3 -I - "${BRIDGE_EXPIRES_AT}" <<'PY'
           from datetime import datetime, timezone
           import sys
@@ -174,25 +180,6 @@ jobs:
           test "$(api "repos/${GITHUB_REPOSITORY}/git/commits/${PIN_MERGE_SHA}" --jq .tree.sha)" = "$(api "repos/${GITHUB_REPOSITORY}/git/commits/${PIN_HEAD_SHA}" --jq .tree.sha)"
           test "$(api "repos/${GITHUB_REPOSITORY}/commits/${PIN_HEAD_SHA}" --jq .commit.verification.verified)" = true
           test "$(api "repos/${GITHUB_REPOSITORY}/commits/${PIN_HEAD_SHA}" --jq .commit.verification.reason)" = valid
-
-          site_ref="$(public_api https://api.github.com/repos/Great-Falls-Tool-Bus/gftb-site/git/ref/heads/main)"
-          jq -e --arg source "${TARGET_SOURCE_SHA}" '.object.type == "commit" and .object.sha == $source' <<<"${site_ref}" >/dev/null
-          site_commit="$(public_api "https://api.github.com/repos/Great-Falls-Tool-Bus/gftb-site/commits/${TARGET_SOURCE_SHA}")"
-          jq -e --arg source "${TARGET_SOURCE_SHA}" '
-            .sha == $source
-            and .commit.verification.verified == true
-            and .commit.verification.reason == "valid"
-          ' <<<"${site_commit}" >/dev/null
-          source_ci="$(public_api "https://api.github.com/repos/Great-Falls-Tool-Bus/gftb-site/actions/runs/${SOURCE_CI_RUN_ID}")"
-          jq -e --arg source "${TARGET_SOURCE_SHA}" '
-            .head_sha == $source and .head_branch == "main" and .event == "push"
-            and .status == "completed" and .conclusion == "success"
-          ' <<<"${source_ci}" >/dev/null
-          source_publish="$(public_api "https://api.github.com/repos/Great-Falls-Tool-Bus/gftb-site/actions/runs/${SOURCE_PUBLISH_RUN_ID}")"
-          jq -e --arg source "${TARGET_SOURCE_SHA}" '
-            .head_sha == $source and .head_branch == "main" and .event == "push"
-            and .status == "completed" and .conclusion == "success"
-          ' <<<"${source_publish}" >/dev/null
 
           ruleset="$(api "repos/${GITHUB_REPOSITORY}/rulesets/20930684")"
           jq -e --arg source "${GITHUB_REPOSITORY}" '
