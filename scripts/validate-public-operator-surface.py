@@ -397,8 +397,19 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
 ATTENDED_RECIPE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     "_mail-kubeconfig-inputs": (),
     "_list-member-add-inputs": (),
+    "_list-discuss-writer-gate-inputs": (),
     "list-member-add": (
         "_list-member-add-inputs",
+        "_reviewed-clean-main",
+        "_operator-apply-confirm",
+    ),
+    "list-discuss-writer-gate-close": (
+        "_list-discuss-writer-gate-inputs",
+        "_reviewed-clean-main",
+        "_operator-apply-confirm",
+    ),
+    "list-discuss-writer-gate-probe": (
+        "_list-discuss-writer-gate-inputs",
         "_reviewed-clean-main",
         "_operator-apply-confirm",
     ),
@@ -416,8 +427,26 @@ ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     "_list-member-add-inputs": _receipt(
         "8609c78a7ae5fb64", "8eb23bcb5e7352fc", "c21405b9c5c96605", "6df235e504c66699"
     ),
+    "_list-discuss-writer-gate-inputs": _receipt(
+        "7352e826ba2020da",
+        "1904f312cb78adb1",
+        "93d66178690e06e3",
+        "366af29bacd76350",
+    ),
     "list-member-add": _receipt(
         "86c91e13b7181939", "cc9fbdbf60931341", "6a9cb4d544265d41", "fbc321f6d1a32c86"
+    ),
+    "list-discuss-writer-gate-close": _receipt(
+        "3641d3e046ca41f8",
+        "755cf5bcd15b5ebb",
+        "b7f91a72de648d87",
+        "280e9ed231226de9",
+    ),
+    "list-discuss-writer-gate-probe": _receipt(
+        "4e7e3989ab9d69a6",
+        "186509a28c2ddec2",
+        "c4355558128c178d",
+        "36b2273582e92edd",
     ),
     "form-altcha-secret-apply": _receipt(
         "d394883ac79138f4", "b78253e99505ee18", "f0931c8607f62fa9", "f5c1b30b25c115ce"
@@ -426,7 +455,10 @@ ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
 
 ATTENDED_OPERATOR_LOCAL_ROOTS = {
     "_list-member-add-inputs",
+    "_list-discuss-writer-gate-inputs",
     "list-member-add",
+    "list-discuss-writer-gate-close",
+    "list-discuss-writer-gate-probe",
     "form-altcha-secret-apply",
 }
 
@@ -7054,6 +7086,30 @@ def self_test() -> None:
         "attended-recipe-dependencies-mismatch",
     )
 
+    unconfirmed_writer_gate_close = mutate_recipe_dependencies(
+        justfile,
+        "list-discuss-writer-gate-close",
+        ("_list-discuss-writer-gate-inputs", "_reviewed-clean-main"),
+        "apply confirmation removal from writer-gate close",
+    )
+    expect_attended_contract_rejection(
+        unconfirmed_writer_gate_close,
+        "apply confirmation removal from writer-gate close",
+        "attended-recipe-dependencies-mismatch",
+    )
+
+    unconfirmed_writer_gate_probe = mutate_recipe_dependencies(
+        justfile,
+        "list-discuss-writer-gate-probe",
+        ("_list-discuss-writer-gate-inputs", "_reviewed-clean-main"),
+        "apply confirmation removal from writer-gate probe",
+    )
+    expect_attended_contract_rejection(
+        unconfirmed_writer_gate_probe,
+        "apply confirmation removal from writer-gate probe",
+        "attended-recipe-dependencies-mismatch",
+    )
+
     unconfirmed_altcha = mutate_recipe_dependencies(
         justfile,
         "form-altcha-secret-apply",
@@ -7096,6 +7152,30 @@ def self_test() -> None:
             '    core_pod="$(jq -er \'[.items[] | select(.metadata.deletionTimestamp == null)] as $active | if (($active | length) == 1 and',
             '    core_pod="$(jq -er \'[.items[] | select(.metadata.deletionTimestamp == null)] as $active | if (($active | length) >= 1 and',
             "Mailman pod cardinality weakening",
+        ),
+        (
+            "list-discuss-writer-gate-close",
+            '    test "${status}" = "204" ||',
+            '    test "${status}" != "500" ||',
+            "writer-gate PATCH status weakening",
+        ),
+        (
+            "list-discuss-writer-gate-probe",
+            '    test "${status}" = "202" ||',
+            '    test "${status}" != "500" ||',
+            "writer-gate refusal status weakening",
+        ),
+        (
+            "list-discuss-writer-gate-probe",
+            '    test "${membership_count}" = "0" ||',
+            '    test "${membership_count}" -ge "0" ||',
+            "writer-gate absence proof weakening",
+        ),
+        (
+            "list-discuss-writer-gate-probe",
+            '    test "${discard_status}" = "204" ||',
+            '    test "${discard_status}" != "500" ||',
+            "writer-gate cleanup status weakening",
         ),
         (
             "form-altcha-secret-apply",

@@ -2166,7 +2166,7 @@ list-discuss-writer-gate-close: _list-discuss-writer-gate-inputs _reviewed-clean
 # 201, the hole); under `moderate` it parks (HTTP 202). The parked request is
 # then discarded (no mail to the probe address). Record the emitted receipt
 # lines on TIN-4268.
-list-discuss-writer-gate-probe: _list-discuss-writer-gate-inputs _reviewed-clean-main
+list-discuss-writer-gate-probe: _list-discuss-writer-gate-inputs _reviewed-clean-main _operator-apply-confirm
     #!/usr/bin/env bash
     set -euo pipefail
     namespace="latoolb-us-production"
@@ -2179,7 +2179,7 @@ list-discuss-writer-gate-probe: _list-discuss-writer-gate-inputs _reviewed-clean
         --user "restadmin:${MAILMAN_REST_PASSWORD}" \
         "http://$(hostname -i):8001/3.1/lists/discuss.latoolb.us/config/subscription_policy"
     ' | jq -er '.subscription_policy')"
-    test "${policy}" = "moderate" || { echo "Probe precondition failed: discuss@ subscription_policy is ${policy}, not moderate. Run just list-discuss-writer-gate-close." >&2; exit 2; }
+    test "${policy}" = "moderate" || { echo "Probe precondition failed: discuss@ subscription_policy is ${policy}, not moderate. Run the writer-gate close recipe first." >&2; exit 2; }
     status="$(printf '%s\n' "${probe_subscriber}" | \
       kubectl --kubeconfig "${GFTB_LIST_KUBECONFIG}" --namespace "${namespace}" exec -i "${core_pod}" --container mailman-core -- sh -eu -c '
         IFS= read -r subscriber

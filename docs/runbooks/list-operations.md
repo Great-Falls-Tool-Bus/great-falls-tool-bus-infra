@@ -334,9 +334,9 @@ and a clean, signed, current `main` checkout:
 # One-time close (idempotent; refuses unexpected pre-states), then probes:
 GFTB_APPLY_CONFIRM=apply just list-discuss-writer-gate-close
 
-# Re-runnable refusal probe on its own (read-mostly; parks then discards one
-# probe request):
-just list-discuss-writer-gate-probe
+# Re-runnable refusal probe on its own (purpose-bounded mutation; parks then
+# discards one probe request):
+GFTB_APPLY_CONFIRM=apply just list-discuss-writer-gate-probe
 ```
 
 The probe emulates the self-serve join exactly — a subscribe attempt with no
