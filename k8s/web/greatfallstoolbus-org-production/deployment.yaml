@@ -88,7 +88,7 @@ spec:
       # refuses to plan when either differs from the reviewed
       # WEB_APPLY_IMAGE/WEB_APPLY_SHA inputs.
       annotations:
-        app.tinyland.dev/source-sha: bc0a2a0f58f4bd7aa1d6c274903fb619941a829a
+        app.tinyland.dev/source-sha: 642c935b65db123ea957765ad42ada1378ddfc04
       labels:
         app.kubernetes.io/name: greatfallstoolbus-org
         app.kubernetes.io/component: web
@@ -160,10 +160,11 @@ spec:
         - name: greatfallstoolbus-org
           # Digest-pinned production image: the promoted gftb-site static
           # origin (ADR 0010 §5 cutover shape; TIN-3899 promotion). Candidate
-          # bc0a2a0f (signed gftb-site main; operator-ratified bus photographs,
-          # their goal/log mounts, and the reusable optional featured-image
-          # rendering), generation 46. The immutable candidate was published
-          # by GitHub Actions run 33790392585 on 2026-09-03; anonymous public
+          # 642c935b (signed gftb-site main; operator-ratified bus photographs,
+          # their goal/log mounts, the reusable optional featured-image
+          # rendering, and the subsequent AGENTS-only D14 contract update),
+          # generation 46. The immutable candidate was published by GitHub
+          # Actions run 33797416853 on 2026-09-03; anonymous public
           # GHCR manifest resolution of the full-sha tag returned exactly the
           # digest pinned below. Previous pins (rollback candidates):
           # generation 45 sha256:498b9715ed123ac8b5e1be0c35a5355ede6880e655e77809b85bf83c8f34f24c (RUNNING),
@@ -173,7 +174,7 @@ spec:
           # nothing. The apply carrier is the standing-bounded protected
           # automatic apply ratified 2026-09-03 (decisions/0022 Amendment 4);
           # PINNED/RUNNING/SERVED are post-apply evidence.
-          image: ghcr.io/great-falls-tool-bus/gftb-site@sha256:13eb13292076a5ba2919a92df62c972ab2be36b975a01b9930002a0f1cb7aad3
+          image: ghcr.io/great-falls-tool-bus/gftb-site@sha256:f0e618ed5d27e6cf2ea9439d90d2f3111fa0189a29800b7feb5b95a2e7511702
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
