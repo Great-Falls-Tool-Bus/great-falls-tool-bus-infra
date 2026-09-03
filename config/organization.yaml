@@ -13,7 +13,26 @@ owner:
 core:
   repository: tinyland-inc/GloriousFlywheel
   module_name: attic-iac
+  # Implementation role pin. Governs the edge/DNS, mail, list, form, archive,
+  # and web consumers only. It is deliberately NOT advanced by TIN-3902: the
+  # arc-runners stack is consumed through the separate ARC role pin below, so
+  # moving this one would import six unrelated stack surfaces for no
+  # runner-group benefit.
   pinned_commit: 2281b576bce0e8dd776a047b84e7464f5b508a62
+  # ARC/OIDC role pin. What actually binds the arc-runners STACK to a commit is
+  # the Justfile: `arc_core_default` / `arc_core_ci_default` select the checkout
+  # and #ci devshell that `tofu -chdir=<core>/tofu/stacks/arc-runners` runs
+  # from, and `_reviewed-arc-core` refuses to proceed unless that checkout is
+  # clean, signed, canonical, and exactly `arc_core_sha`.
+  # scripts/validate-core-checkout.py ARC_CORE_PIN and
+  # scripts/validate-public-operator-surface.py ARC_CORE_SHA pin those Justfile
+  # strings so they cannot drift; neither validator names the arc-runners path
+  # or executes anything. This comment is a reader aid, not a declaration.
+  # TIN-3902 advanced the pin from
+  # df510574d17b85e7f15470caf3574fcabc4768f1 (2026-07-09) to
+  # 11ace397282ff89aeb1dfeb4a32fcbed3200c2ff (2026-08-18) because
+  # `runner_group` did not exist as an arc-runners stack input before
+  # GloriousFlywheel f13f8ad9 (TIN-3209, PR #1303).
 
 substrate:
   cluster:
@@ -44,3 +63,224 @@ runner_contract:
     - repo-specific runner labels
     - project identity labels
     - personal-account runner groups
+
+  # TIN-3902. GitHub runner-group admission, which is a separate boundary from
+  # ARC registration: org-scoped registration reaches every GFTB repo, but only
+  # the repositories selected below may be assigned work from this org's scale
+  # sets. This block is the reviewed declaration of that boundary. The GFTB
+  # arc-runners module surface does NOT create or reconcile the GitHub-side
+  # group (the GloriousFlywheel arc-runners stack loads only the kubernetes and
+  # helm providers and owns no `github_actions_runner_group` resource), so the
+  # group itself is an attended GitHub org-settings action; see
+  # docs/implementation-overlay.md "Runner group cutover".
+  #
+  # The name intentionally matches this overlay's repository name because the
+  # group is an owner/tenancy boundary, not a runner capability. It is NOT a
+  # runner label: workflows keep requesting the shared `tinyland-*` capability
+  # labels above, and the `forbidden` list above still holds.
+  runner_group:
+    name: great-falls-tool-bus-infra
+    visibility: selected
+    # Public repository admission accepted by operator ruling 2026-08-18
+    # (TIN-3902). `Great-Falls-Tool-Bus/greatfallstoolbus.org` is a public
+    # repository, and every entry in the roster below is meant to be
+    # EFFECTIVE, not merely recorded — so public admission must be on or the
+    # roster entry would be inert. TIN-3209's cross-tenant concern (a public
+    # repository's workflows reaching GF-substrate runners) is acknowledged
+    # and tracked there, not re-litigated here.
+    #
+    # Admission is not blanket: `visibility: selected` still means only the
+    # repository ids below are admitted. `great-falls-tool-bus-infra` itself
+    # (repository id 1286829099, public) is ADMITTED under operator ruling
+    # 2026-08-22 (session register L76: "OPERATOR RULED infra-repo admission
+    # to tinyland-nix"; Linear TIN-3914) — see `infra_repo_admission_ruling`
+    # below. This replaces the superseded rationale that used to live here
+    # ("remains EXCLUDED ... its hosted `validate` job already runs on a
+    # GitHub-hosted runner"): that hosted job was never what kept
+    # PR-authored content off `tinyland-nix` — the roster was, and PR #116
+    # (landed alongside this text) is what actually moves `validate.yml` off
+    # `ubuntu-24.04`, onto `tinyland-nix` as the deliberate exception class
+    # (3) below.
+    #
+    # What makes admission safe in THIS repository: no `pull_request_target`
+    # trigger exists anywhere in it, and no `pull_request`-triggered job
+    # reaches `tinyland-nix` unaccountably — every one of this repository's
+    # 16 `tinyland-nix` jobs (11 workflows) falls into one of three
+    # enumerated, reviewed classes. (1) An explicit event-gate `if:` on 11
+    # jobs: 7 first-jobs (archive-stack, edge-plan, flywheel-cache-proof,
+    # form-crs, list-crs, mail-crs, web-crs) carry the PR #110
+    # (`ae7cb63a`) `if: github.event_name == 'push' || github.event_name ==
+    # 'workflow_dispatch'`; the 4 `environment: mail` credentialed `server`
+    # jobs (archive-stack, form-crs, list-crs, mail-crs) carry a narrower
+    # `if: github.event_name == 'workflow_dispatch'` only. (2) Trigger
+    # absence on 3: `edge-drift.yml` and `k8s-stack-drift.yml`'s two jobs
+    # declare only `schedule` + `workflow_dispatch` triggers and never see
+    # `pull_request` at all. (3) The two
+    # deliberate exceptions, both UNFILTERED on every `pull_request` with no
+    # event gate, by design. First, `validate.yml`'s `validate` job (PR
+    # #116): it is this repository's sole required status check and an
+    # always-executing, always-reporting home for the rung-2 web-stack
+    # PR-side render, and BOTH of those functions require running on every
+    # PR, which a #110-style gate would defeat. Second, `web-plan.yml`'s
+    # `web-plan` job (W17 / TIN-4256): it is the intended PR-required
+    # `web-plan` status context (a gated job reports `skipped`, which
+    # SATISFIES required checks — rubber stamp; a path-filtered required
+    # check freezes unrelated PRs at "Expected"), so it dropped the #110
+    # gate it had carried since PR #127 round 3 (comment 5377613179) and
+    # runs its credential-free render+validate body on every PR. The
+    # compensating control for both is staying secret-free (`permissions:
+    # contents: read`, zero `environment:`/`secrets.*` references) rather
+    # than event-gated — plus, for the kustomize render paths, the round-4
+    # allowlist guard `scripts/guard-no-remote-kustomize-resources.sh`;
+    # adversarial review of #116
+    # (comment 5381265081) confirmed this and ruled the posture acceptable —
+    # see below for why. STANDING INVARIANT, not a snapshot of any one head:
+    # any workflow admitted to (or migrated within) this class must land in
+    # one of these three enumerated classes, checked at merge time, not
+    # assumed from this comment. A `pull_request`-unfiltered job with a
+    # protected `environment:` or a `secrets.*` reference is NOT covered by
+    # class (3) and needs its own review.
+    #
+    # This invariant is REPO-SCOPED, not class-scoped, and #116's review
+    # found the fact that closes that gap, previously nowhere in this repo:
+    # roster member `Great-Falls-Tool-Bus/greatfallstoolbus.org` (public,
+    # `allow_forking: true`, id 1287399122) already runs `pull_request`
+    # jobs on this exact `tinyland-nix` pool, admitted before this comment
+    # existed. Verified empirically (PR #116 comment 5381265081): `ci.yml`
+    # (a `tinyland-inc/ci-templates` reusable-workflow wrapper, `secrets:
+    # inherit`, `permissions: contents: read` PLUS `statuses: write`) runs 4
+    # jobs on `tinyland-nix` on every PR with NO event gate at all;
+    # `container-ghcr.yml`'s `verify-public-gf-core` job runs
+    # `if: github.event_name == 'pull_request'` — deliberately PR-ONLY;
+    # `production-health.yml`'s `gate-health` job runs on `tinyland-nix` on
+    # every PR, ungated. Per-job ephemeral pods were confirmed empirically
+    # (distinct runner name per job) — that bounds persistence, not network
+    # reach. So the class-level property "no `pull_request` job reaches
+    # `tinyland-nix` without justification" was already NOT true estate-wide
+    # before `validate.yml` joined it; #116 does not create that exposure, it
+    # joins a class another admitted public repository already occupies, with
+    # a smaller footprint (`contents: read` only, zero secrets, zero write
+    # scopes) than that repository's own accepted jobs.
+    #
+    # OPEN ITEM, not closed by this admission or by #116: there is no egress
+    # NetworkPolicy for the ARC runner namespace (PR #116 comment 5381265081
+    # searched for one and found none in `tofu/stacks/arc-runners/` or
+    # GloriousFlywheel's NetworkPolicy set). Runner pods share in-cluster
+    # reach to `attic.nix-cache.svc.cluster.local`,
+    # `bazel-cache.nix-cache.svc.cluster.local:9092`,
+    # `gf-reapi-cell.gf-rbe.svc.cluster.local:8980`, and
+    # `tofu-state-rustfs.nix-cache.svc:9000` (this file's `substrate` block)
+    # regardless of which repositories are on the roster or which mechanism
+    # class their jobs fall into. A default-deny-egress-plus-allowlist policy
+    # for that namespace is the class-wide fix (owned by
+    # `tinyland-inc/tinyland-infra`, the `arc_controller_owner`) and belongs
+    # in the convergence program alongside TIN-4004, not rediscovered
+    # per-repo by the next reviewer.
+    #
+    # Admission unblocks all ten of this repository's self-hosted
+    # `tinyland-nix` workflows (archive-stack, edge-drift, edge-plan,
+    # flywheel-cache-proof, form-crs, k8s-stack-drift, list-crs, mail-crs,
+    # web-crs, web-plan) — each had zero eligible runners while this
+    # repository was excluded. `validate.yml` (PR #116) is the eleventh.
+    #
+    # TIN-4004 (High, security): admission RE-ARMS a dormant credential
+    # carrier; it does not merely leave shared substrate unchanged.
+    # `edge-plan.yml` (`runs-on: tinyland-nix`, `environment: edge` — a plain
+    # environment with no required-reviewer rule, confirmed via the GitHub
+    # environments API) is handed `ARC_RUNNERS_RUSTFS_ACCESS_KEY`/`_SECRET_KEY`
+    # on `workflow_dispatch action=apply` — the literal S3 credential for the
+    # `tofu-state` bucket at `tofu-state-rustfs.nix-cache.svc:9000` (the same
+    # bucket that backs `arc-runners`' own state; see `tofu/backend/*.s3.hcl`
+    # and `docs/ci-credentials.md` "Edge Backend Secrets"). Before this PR,
+    # that job could never execute — no eligible runner — so the credential
+    # was configured but inert. After the GitHub-side admission step (see the
+    # attended apply packet), it is live: reachable only by a deliberate
+    # `workflow_dispatch`, not by PR content, but with no reviewer gate in
+    # front of it.
+    #
+    # TIN-4004 step-0 disposition: RULED, session register L77 (2026-08-22
+    # late night), Q1, verbatim: "main===prod in proper gitops CD --- such a
+    # rule for reviewership muddies up *how* code moves to main with the
+    # statefulness implied by its existence on main" → selected "3. Accept
+    # documented". An environment reviewer-gate on `edge-plan.yml` was
+    # REJECTED on principle, not on cost — the operator's position is that a
+    # human-approval gate is itself a defect in a proper gitops CD model, not
+    # a mitigation for one. Disposition: admission proceeds with this
+    # exposure documented (this paragraph is that record); no environment
+    # gate is added to `edge-plan.yml`; TIN-4004 stays OPEN, owned by the
+    # convergence program (mechanically-infallible main==prod), which is the
+    # ruled fix vehicle — not by any approval-gate follow-up to this PR.
+    #
+    # TIN-4015 (2026-08-22, infra PR #130): GloriousFlywheel went private,
+    # breaking every self-hosted workflow's unauthenticated core checkout the
+    # moment this admission gave them an actual runner. Nine workflows
+    # (archive-stack, edge-drift, edge-plan, flywheel-cache-proof, form-crs,
+    # k8s-stack-drift, list-crs, mail-crs, web-crs) now carry the repository
+    # secret `GF_CORE_DEPLOY_KEY` (read-only, `contents: read` on
+    # `tinyland-inc/GloriousFlywheel` only — docs/ci-credentials.md) on their
+    # core-repository checkout step. Stated plainly, not buried: this is the
+    # FIRST time a `push`-triggered job with no protected `environment:` in
+    # this repository carries a cross-repository credential — every credential
+    # before it (`MAIL_APPLY_KUBECONFIG_B64`, `WEB_APPLY_KUBECONFIG_B64`,
+    # `CLOUDFLARE_API_TOKEN_GFTB_ZONES`, `ARC_RUNNERS_RUSTFS_*`) sat behind a
+    # protected `environment:` (`mail`, `web-apply`, `edge`) and/or a
+    # `workflow_dispatch`-only gate. `GF_CORE_DEPLOY_KEY` sits behind neither —
+    # its containment is entirely the class (1)/(2) trigger gate (`if:
+    # github.event_name == 'push' || 'workflow_dispatch'`, or no
+    # `pull_request` trigger at all) this comment's three-class framing
+    # already covers, not an `environment:`. That framing's own text stays
+    # TRUE (no `if:`/`on:` changed by #130 — checked and re-checked by
+    # adversarial review), but its illustrative "credentialed ⇔
+    # `environment:`-protected" enumeration is now an undercount: seven
+    # `push`-triggered first-jobs carry a repository secret with no
+    # `environment:` at all. Acceptable — a push to `main` is post-merge and
+    # trusted, and TIN-3902/TIN-3914's public-repo-admission posture already
+    # accepted worse — but recorded here per the #116/#128 standing-record
+    # discipline rather than left implicit.
+    #
+    # WARNING: with `allows_public_repositories: true` the roster below is the
+    # ONLY control keeping a repository out — the public-repository flag is
+    # not a second lock. Any future removal of id 1286829099 is equally an
+    # explicit, reviewed operator decision, not a default.
+    # scripts/validate-runner-group-contract.py fails on that id unless an
+    # `infra_repo_admission_ruling:` field records it (below).
+    allows_public_repositories: true
+    # Workflow-ref filtering is a different control and is not a substitute for
+    # the selected-repository roster.
+    restricted_to_workflows: false
+    # Operator ruling recording id 1286829099's admission (session register
+    # L76, 2026-08-22; Linear TIN-3914). Required by
+    # scripts/validate-runner-group-contract.py whenever that id is present in
+    # selected_repository_ids below; do not remove without also removing the
+    # roster entry it justifies.
+    infra_repo_admission_ruling: TIN-3914-L76-2026-08-22
+    selected_repository_ids:
+      # Great-Falls-Tool-Bus/gftb-site — private.
+      - 1336591141
+      # Great-Falls-Tool-Bus/greatfallstoolbus.org — public; admitted under the
+      # 2026-08-18 operator ruling above. When TIN-3815 moves this CI into the
+      # private successor spoke, add that repository's id here too (the repo
+      # does not exist yet); removing this entry afterwards is a separate
+      # operator decision, not automatic.
+      - 1287399122
+      # Great-Falls-Tool-Bus/great-falls-tool-bus-infra — public; this
+      # repository. Admitted under operator ruling 2026-08-22 (L76; TIN-3914)
+      # per `infra_repo_admission_ruling` above. Unblocks all ten of this
+      # repository's self-hosted `tinyland-nix` workflows (see the
+      # `runner_group` comment above), starved since roster exclusion —
+      # rung-2 `web-plan.yml` (merged `749b8f8d`) is the flagship example but
+      # not the only one, and admission also re-arms the TIN-4004 credential
+      # carrier in `edge-plan.yml` (see above — RULED accept-documented, L77,
+      # no environment gate added). Sequencing: this roster entry merges
+      # first; the GitHub-side admission step (packet Step 3) is what makes
+      # the ruled-open TIN-4004 exposure live; PR #116 (moves `validate.yml`
+      # off `ubuntu-24.04` onto `tinyland-nix` as the deliberate exception
+      # class (3) above, adversarial-reviewed and LAND-WITH-EDITS per comment
+      # 5381265081) lands after, per the attended apply packet; DRAFT PR #120
+      # (TIN-3914 Phase B) is superseded by #116 and closes, not merges — see
+      # that packet's reconciliation notes. GitHub-side
+      # admission (the runner group's selected-repository list in org
+      # Settings) is itself a separate, attended action this file does not
+      # perform; see docs/implementation-overlay.md "Runner group cutover"
+      # Step 0.
+      - 1286829099

@@ -1,12 +1,14 @@
 name: Web Stack
 
-# TIN-2541: GFTB on-cluster web serving DECLARE-ONLY skeleton (SvelteKit
-# adapter-node -> ClusterIP 80->3000 -> honey-ingress cloudflared tunnel,
-# mirroring the MassageIthaca full-on-cluster pattern).
+# TIN-2541: GFTB on-cluster web serving DECLARE-ONLY skeleton (the promoted
+# gftb-site static Caddy origin -> ClusterIP 80->3000 -> honey-ingress
+# cloudflared tunnel, mirroring the MassageIthaca full-on-cluster pattern).
 #
-# This workflow is VALIDATION-ONLY. It runs the repo validator, including the
-# render check, and enforces the fail-closed invariants (replicas 0, placeholder
-# image, no namespace, no secret, fail-closed route/reaper intent).
+# This workflow is VALIDATION-ONLY. The Validate Overlay covers pull
+# requests; this private-runner job runs only on trusted push/manual events. It
+# runs the repo validator, including the render check, and enforces the
+# fail-closed invariants (replicas 2, digest-pinned image, no namespace, no
+# secret, fail-closed route/reaper intent).
 # There is intentionally NO server-dry-run/apply job: applying this skeleton is
 # not a supported operation. A live cutover is operator-gated under a superseding
 # hosting ADR, out of band. See k8s/web/README.md and
@@ -40,6 +42,7 @@ env:
 jobs:
   validate:
     name: Validate web stack (declare-only)
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: tinyland-nix
     steps:
       - name: Checkout overlay
@@ -47,12 +50,13 @@ jobs:
         with:
           path: overlay
           persist-credentials: false
-      - name: Checkout public GloriousFlywheel core
+      - name: Checkout pinned GloriousFlywheel core
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: tinyland-inc/GloriousFlywheel
           ref: ${{ env.GF_CORE_REF }}
           path: GloriousFlywheel
+          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
           persist-credentials: false
       - name: Verify GloriousFlywheel core checkout
         run: |
@@ -70,5 +74,5 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            export GF_CORE_CI_PATH="path:${GF_CORE_PATH}#ci"
             nix develop "${GF_CORE_CI_PATH}" -c just web-stack-validate

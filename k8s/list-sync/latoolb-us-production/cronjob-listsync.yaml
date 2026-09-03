@@ -1,0 +1,135 @@
+# TIN-3813 lane — the keyholders -> discuss add-only reconciler CronJob.
+#
+# PLACEMENT (meta spec launch-member-v0 "Repository responsibilities" +
+# decisions/0014 ruling 3): Mailman owns list membership and account-controller
+# owns mail RESOURCE reconciliation only (MailDomain/MailAccount/MailAlias into
+# Dovecot/Postfix), so a list-membership invariant belongs to neither of them —
+# it is a GFTB product workload, and this repo is the sole GFTB apply plane for
+# workloads and runtime receipts. Re-homing it into account-controller/blahaj
+# would push GFTB product authority into replaceable shared substrate.
+#
+# CREDENTIAL SCOPING — DECLARED GAP (TIN-3813): GNU Mailman core 3.3.10 has
+# exactly ONE REST identity ([webservice] admin_user/admin_pass, Basic auth).
+# There are no per-list or role-scoped REST users, and the restricted Mailman
+# proxy TIN-3813 calls for (add/remove/readback on only the exact approved
+# lists) does not exist in this stack yet. Until that proxy lands, whatever the
+# operator puts in the dedicated Secret below is necessarily the global REST
+# admin credential; the narrowing here is OPERATIONAL and COMPENSATING, not
+# cryptographic:
+#   - the Job mounts a DEDICATED Secret (mailman-listsync-rest) that this repo
+#     never creates and no agent mints — the operator does. It never mounts
+#     mailman-app, so it rotates and revokes independently of the engine.
+#   - the program's method allowlist is GET/POST and the list pair is pinned
+#     (see configmap-listsync.yaml): no removal path, no other lists.
+#   - NetworkPolicy pins the pod's egress to DNS + mailman-core:8001 only.
+#   - automountServiceAccountToken: false — no kubeconfig, no k8s API identity.
+#
+# ACTIVATION SEQUENCE (all three steps are attended operator actions; see
+# docs/runbooks/list-operations.md section 8). Steps 2 and 3 are GIT edits
+# that must travel with a dated ruling in operator-activation.yaml in this
+# directory — the offline validator fails any relaxation without one (the
+# ARC runner-group admission-ruling pattern) — followed by the attended
+# `just listsync-stack-apply`:
+#   1. mint Secret mailman-listsync-rest (key MAILMAN_REST_PASSWORD); until
+#      then the Job cannot start (the secretKeyRef is required, not optional).
+#   2. set `suspend: false` here + record the ruling — runs are DRY-RUN:
+#      read-only roster observation receipts, no mutation.
+#   3. after reviewing dry-run receipts, set LISTSYNC_DRY_RUN "false" here +
+#      extend the ruling.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mailman-listsync
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: mailman-listsync
+    app.kubernetes.io/component: list-membership-sync
+spec:
+  # Four times a day is plenty for a roster invariant whose only other write
+  # path is the attended `just list-member-add` lane.
+  schedule: "23 */6 * * *"
+  # OPERATOR GATE: stays suspended until the dedicated Secret exists and the
+  # operator deliberately enables the schedule (activation step 2).
+  suspend: true
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  # Failed Jobs are the dead-letter surface: they stay visible (with their
+  # receipt logs) until superseded, and the next scheduled run is the retry.
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 300
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: mailman-listsync
+            app.kubernetes.io/component: list-membership-sync
+        spec:
+          restartPolicy: Never
+          # Narrow workload identity (TIN-3813): the reconciler talks to the
+          # Mailman REST API only; it holds no cluster credential at all.
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            fsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: listsync
+              # Same digest-pinned upstream python runtime the form-handler
+              # runs; the application is the ConfigMap-mounted stdlib script.
+              image: python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df
+              command: ["python3", "/app/listsync.py"]
+              env:
+                # Runtime declaration of the pinned pair: listsync.py refuses
+                # to run unless these match its baked-in constants, so a config
+                # edit alone can never point the reconciler at another list.
+                - name: LISTSYNC_SOURCE_LIST
+                  value: "keyholders.latoolb.us"
+                - name: LISTSYNC_TARGET_LIST
+                  value: "discuss.latoolb.us"
+                # DRY-RUN DEFAULT-ON (activation step 3 flips it): "true" means
+                # read-only observation receipts, zero mutation.
+                - name: LISTSYNC_DRY_RUN
+                  value: "true"
+                # Core binds REST to its pod IP, so the Service DNAT
+                # (mailman-core:8001 -> podIP:8001) works from OTHER pods; the
+                # broken-hairpin caveat in the runbook applies only to the
+                # co-located web tier dialling itself.
+                - name: MAILMAN_REST_URL
+                  value: "http://mailman-core:8001"
+                - name: MAILMAN_REST_USER
+                  value: "restadmin"
+                - name: MAILMAN_REST_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      # DEDICATED, OPERATOR-MINTED Secret (activation step 1).
+                      # Deliberately NOT optional and deliberately NOT
+                      # mailman-app: absence keeps the gate closed, and the
+                      # credential lifecycle stays separate from the engine's.
+                      name: mailman-listsync-rest
+                      key: MAILMAN_REST_PASSWORD
+              volumeMounts:
+                - name: src
+                  mountPath: /app
+                  readOnly: true
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+          volumes:
+            - name: src
+              configMap:
+                name: mailman-listsync-src

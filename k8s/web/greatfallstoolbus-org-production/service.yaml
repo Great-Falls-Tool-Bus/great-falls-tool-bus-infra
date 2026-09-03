@@ -1,7 +1,8 @@
 # DECLARE-ONLY — NOT APPLIED (TIN-2541).
 #
-# Plain ClusterIP, port 80 -> targetPort 3000 (adapter-node), internal DNS only
-# and never internet-exposed directly. This mirrors MI's Service exactly
+# Plain ClusterIP, port 80 -> targetPort 3000 (gftb-site static Caddy origin),
+# internal DNS only and never internet-exposed directly. This mirrors MI's
+# Service exactly
 # (blahaj:tofu/stacks/massageithaca/main.tf ~L587): the ONLY public path is the
 # in-cluster cloudflared tunnel forwarding to
 # http://greatfallstoolbus-org.greatfallstoolbus-org-production.svc.cluster.local:80

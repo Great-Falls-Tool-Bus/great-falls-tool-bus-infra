@@ -1,0 +1,79 @@
+# NetworkPolicies for the mailman-listsync reconciler, default-deny posture
+# (each selected pod becomes default-deny for the selected direction except
+# what is allowed here). Mirrors the archive stack's additive-ingress shape.
+#
+# Two policies:
+#   1. mailman-listsync — pins the reconciler pod itself: no ingress at all,
+#      egress only DNS + the Mailman core REST port. This is the network half
+#      of the TIN-3813 compensating narrowing (see cronjob-listsync.yaml): even
+#      with the global REST credential in hand, the pod cannot reach anything
+#      except mailman-core:8001.
+#   2. mailman-core-listsync-ingress — ADDITIVE admission on the mailman-core
+#      pod for the reconciler on 8001, the same pattern as the archive stack's
+#      mailman-core-archive-ingress policy: the list stack's own policy file
+#      keeps its exact port assertions, and this stack unions in its one leg.
+#
+# PORT SUBTLETY (same as the archive stack's 8080->8000 note): the reconciler
+# dials the mailman-core Service on 8001, and NetworkPolicy evaluates the
+# POST-DNAT destination — the core pod IP and container port 8001 (Service
+# port and targetPort are both 8001 here, so the numbers coincide). Core binds
+# REST to its POD IP, not loopback, so the Service-DNAT'd connection from a
+# DIFFERENT pod lands on a listening socket; the runbook's port-forward warning
+# is about localhost inside the pod netns, and the broken-hairpin caveat is
+# about the co-located web tier dialling its own Service.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mailman-listsync
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: mailman-listsync
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mailman-listsync
+  policyTypes: [Ingress, Egress]
+  # No ingress rules: nothing may dial the reconciler.
+  ingress: []
+  egress:
+    - to: [] # DNS
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Reconciler -> Mailman core REST only.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mailman-core
+      ports:
+        - protocol: TCP
+          port: 8001
+---
+# ADDITIVE ingress on the mailman-core pod: admit the reconciler to core REST
+# (8001). Lives in THIS stack (not k8s/list/) so the list stack's networkpolicy
+# file and its offline validator stay byte-for-byte authoritative for their own
+# legs, exactly like the archive stack's additive policy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mailman-core-listsync-ingress
+  namespace: latoolb-us-production
+  labels:
+    app.kubernetes.io/name: mailman-core
+    app.kubernetes.io/component: list-membership-sync
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mailman-core
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mailman-listsync
+      ports:
+        - protocol: TCP
+          port: 8001

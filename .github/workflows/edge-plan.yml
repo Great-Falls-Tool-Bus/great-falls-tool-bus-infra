@@ -1,13 +1,13 @@
 name: Edge Zone Stack
 
-# TIN-2378 prep + TIN-2385 implementation: plan-on-PR/push for
-# tofu/stacks/edge (console-created zones, zone-scoped token), apply only
-# via manual workflow_dispatch action=apply — the same operator-gated
-# chassis as deploy-arc-runners.yml. The job binds to the protected `edge`
+# TIN-2378 prep + TIN-2385 implementation: the Validate Overlay covers pull
+# requests; this private-runner job plans trusted pushes and manual dispatches
+# for tofu/stacks/edge (console-created zones, zone-scoped token), with apply
+# only via manual workflow_dispatch action=apply. The job binds to the protected `edge`
 # environment, which holds the zone-scoped Cloudflare token plus the
 # operator-custody Access allowlist JSON (names only here; mint + rotation:
 # docs/runbooks/edge-token-and-zones.md). FAIL-SOFT: until those secrets
-# exist, PR/push runs skip green with a notice — the house skip-green idiom;
+# exist, trusted push runs skip green with a notice — the house skip-green idiom;
 # manual action=apply fails closed instead. Google SSO is the live-lane
 # exception: whenever ENABLE_GOOGLE_SSO=true, missing OAuth credentials fail
 # every event red before planning so defaults can never request IdP deletion.
@@ -63,6 +63,7 @@ env:
 jobs:
   plan-apply:
     name: Plan or apply GFTB edge zones
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: tinyland-nix
     timeout-minutes: 30
     # The zone-scoped token secret lives ONLY in this `edge` environment,
@@ -131,13 +132,14 @@ jobs:
           path: overlay
           persist-credentials: false
 
-      - name: Checkout public GloriousFlywheel core
+      - name: Checkout pinned GloriousFlywheel core
         if: steps.secrets.outputs.edge-deploy-secrets-present == 'true'
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: tinyland-inc/GloriousFlywheel
           ref: ${{ env.GF_CORE_REF }}
           path: GloriousFlywheel
+          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
           persist-credentials: false
 
       - name: Verify GloriousFlywheel core checkout
@@ -186,7 +188,7 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            export GF_CORE_CI_PATH="path:${GF_CORE_PATH}#ci"
             nix develop "${GF_CORE_CI_PATH}" -c just edge-zones-fmt-check
             nix develop "${GF_CORE_CI_PATH}" -c just edge-zones-validate
             nix develop "${GF_CORE_CI_PATH}" -c just edge-zones-init
@@ -208,7 +210,8 @@ jobs:
         run: |
           set -euo pipefail
           cd overlay
-          export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+          export GF_CORE_PATH=../GloriousFlywheel
+          export GF_CORE_CI_PATH="path:${GF_CORE_PATH}#ci"
           nix develop "${GF_CORE_CI_PATH}" -c python3 - <<'PY'
           import json
           import os
@@ -291,6 +294,6 @@ jobs:
             set -euo pipefail
             cd overlay
             export GF_CORE_PATH=../GloriousFlywheel
-            export GF_CORE_CI_PATH="github:tinyland-inc/GloriousFlywheel/${GF_CORE_REF}#ci"
+            export GF_CORE_CI_PATH="path:${GF_CORE_PATH}#ci"
             nix develop "${GF_CORE_CI_PATH}" -c just edge-zones-plan-destroy-check
             nix develop "${GF_CORE_CI_PATH}" -c just edge-zones-apply

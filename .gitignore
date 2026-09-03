@@ -9,6 +9,7 @@ result
 *.tfstate
 *.tfstate.*
 .tofu-plans/
+.k8s-plans/
 tofu/backend/*.local.hcl
 tofu/backend/*.secret.hcl
 
@@ -21,6 +22,17 @@ kubeconfig*
 *.swp
 *~
 .gstack/
+
+__pycache__/
+*.py[cod]
+
+# Read-only `kubectl diff` transcripts written into the repo ROOT by
+# _k8s-drift-check (mail-cr-, list-stack-, form-stack-, archive-stack-,
+# web-stack-drift.txt; the recipe writes "{{ label }}-drift.txt" relative to the
+# justfile directory). They are live-cluster state, not repo content, and leaving
+# them untracked keeps `_reviewed-clean-main` honest after a drift run. Rooted so
+# a future docs/<name>-drift.txt is never silently swallowed.
+/*-drift.txt
 
 # Bazel convenience symlinks + lockfile for the org-tenancy cache proof workspace
 bazel-*

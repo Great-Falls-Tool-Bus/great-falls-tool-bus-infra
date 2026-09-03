@@ -9,14 +9,28 @@
 #
 # The web pod's ONLY public path is: cloudflared (tunnel) --3000--> this pod.
 # Prometheus scrape is admitted from the tinyland-dev-production monitoring
-# namespace on 3000. Egress is least-privilege: DNS only (the adapter-node app
-# serves static+prerendered content and needs no outbound data plane in this
-# skeleton; a cutover adds explicit allows for any real backend).
+# namespace on 3000. No 0.0.0.0/0, and no other backend.
 #
-# FAIL-CLOSED note: these policies select on the web pod labels. Because the
-# Deployment ships replicas:0 and the namespace is not created by this stack,
-# NOTHING is admitted or served until an operator materializes the namespace,
-# pins a real image, and flips replicas — none of which this file does.
+# TREE HONESTY (rung 1, 2026-08-21; completed by TIN-4254 W13). This file
+# previously also declared allow-egress-dns and allow-egress-discuss-archive —
+# egress rules the retired legacy adapter-node origin needed for its
+# request-time discuss-archive fetch. The gftb-site static origin makes zero
+# outbound calls (it serves files off disk), so those two policies are gone
+# here, and the default-deny-egress NetworkPolicy the web-release-* ceremony
+# used to synthesize at render time is now COMMITTED below (TIN-4254,
+# decisions/0022 Amendment 3): `kubectl kustomize` of this directory IS the
+# ceremony's applied bytes, with no render-time synthesis left. It carries
+# only the lifecycle label here; kustomization.yaml's labels transformer
+# supplies managed-by/part-of/tenant, so the rendered object is exactly what
+# the ceremony always applied.
+#
+# FAIL-CLOSED note: these policies select on the web pod labels. The Deployment
+# ships replicas: 2 and a digest-pinned image, so these rules are NOT inert —
+# they take effect whenever an attended operator runs the web-release-* or
+# (legacy, now permanently interlocked-off) web-stack-apply carrier. What
+# merging this file cannot do is apply anything: this stack creates no
+# Namespace (the namespace-scoped web-apply SA cannot either), and the public
+# tunnel route stays fail-closed and dashboard-managed.
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -81,13 +95,15 @@ spec:
         - protocol: TCP
           port: 3000
 ---
+# Committed truth of the ceremony's egress posture (TIN-4254 W13): the
+# gftb-site static origin gets NO egress at all — empty egress rule list under
+# policyTypes [Egress] denies every outbound flow from the web pods.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-dns
+  name: default-deny-egress
   namespace: greatfallstoolbus-org-production
   labels:
-    app.kubernetes.io/name: greatfallstoolbus-org
     app.tinyland.dev/lifecycle: declare-only
 spec:
   podSelector:
@@ -95,49 +111,4 @@ spec:
       app.kubernetes.io/name: greatfallstoolbus-org
       app.kubernetes.io/component: web
   policyTypes: [Egress]
-  egress:
-    - to: [] # cluster DNS only
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
----
-# DISCUSS-SNAPSHOT READER egress (greatfallstoolbus.org data plane, ADR 0010).
-# Post-cutover (TIN-2543, prerender flipped off) the adapter-node site pod does
-# the REQUEST-TIME fetch of the PUBLIC discuss@ archive from the HyperKitty web
-# tier in latoolb-us-production. This is the reciprocal of the mailman-core
-# web-tier ingress allowance for this namespace (list stack networkpolicy.yaml).
-#
-# PORT SUBTLETY (same as the archive gate leg): the app dials the mailman-web
-# Service on 8080, but NetworkPolicy egress evaluates the POST-DNAT destination
-# — the mailman-core pod's real container port 8000 — so this rule targets the
-# mailman-core podSelector on 8000, NOT the Service's 8080. Scoped to that one
-# pod in that one namespace; no 0.0.0.0/0, no broad egress. Until cutover this
-# is inert (the Deployment ships replicas:0). Build-time prerender fetches do
-# NOT use this rule (they run in arc-runners, not this pod).
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-egress-discuss-archive
-  namespace: greatfallstoolbus-org-production
-  labels:
-    app.kubernetes.io/name: greatfallstoolbus-org
-    app.tinyland.dev/lifecycle: declare-only
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: greatfallstoolbus-org
-      app.kubernetes.io/component: web
-  policyTypes: [Egress]
-  egress:
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: latoolb-us-production
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: mailman-core
-      ports:
-        - protocol: TCP
-          port: 8000
+  egress: []

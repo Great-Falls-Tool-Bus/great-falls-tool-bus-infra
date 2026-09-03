@@ -1,6 +1,7 @@
 # 0001 — PR-gated ephemeral preview deploys (reaper/on-cluster vs Cloudflare Pages)
 
-- Status: **Proposed (operator decision required)**
+- Status: **Proposed (operator decision required); SUPERSEDED IN PART (2026-08-21)
+  — see `0003-preview-cd-authority-companion-2026-08-21.md`**
 - Date: 2026-07-05
 - Ticket: TIN-2535
 - Scope: **PREVIEW deploys only** — per-PR ephemeral review environments. This is
@@ -107,18 +108,35 @@ hand-placed namespace.
 
 ## Decision (recommended) — **Option A**, with C's escape hatch parked
 
-Adopt/extend the **Cloudflare Pages managed preview** (Option A): merge the
-TIN-2515 `dev`-default shadow deploy and, on operator ruling, enable per-PR preview
-deployments on the `greatfallstoolbus-org` Pages project, reusing the existing
-account-level `*.pages.dev` Access gate. **Do not build an on-cluster per-PR
-reaper.** The old honey pod-cap blocker is retired, but the
-dashboard-managed tunnel-route constraint and missing preview/reaper ownership
-remain, and the lane is redundant with the incumbent.
+> **SUPERSEDED IN PART (2026-08-21) — see
+> `0003-preview-cd-authority-companion-2026-08-21.md`.** Option A's premise
+> (production stays on Cloudflare Pages) no longer holds: production moved
+> on-cluster and the Cloudflare Pages project was deleted outright (site ADR
+> `0010-on-prem-is-the-production-host.md`, Amendment 2, 2026-07-07,
+> TIN-2560, run `28801030150`). `0003` supersedes the Option A recommendation
+> below and names the ratified interim (`tailscale serve` /
+> `just preview-tailnet`) and target (`staging.greatfallstoolbus.org`
+> promote-on-PR). Per the house no-silent-rewrite convention
+> (`greatfallstoolbus.org:docs/decisions/0010-...md:171-174`,
+> `0008-...md:10-13`; this repo's own
+> `docs/research/full-oncluster-web-serving-2026-07.md:319`,
+> `docs/mvp-decision-packet.md:53`), the text below is retained as the
+> historical record, not deleted or reworded.
 
-Because GFTB has **no internal reaper**, this ADR does not "adopt ours" — it
-**adopts the external managed pattern** (CF Pages' dual-URL preview model) and
-records the blahaj/MI on-cluster reaper as **the reference we deliberately decline
-to clone**, consistent with blahaj's own "legacy/transitional, do not clone" note.
+**Superseded text (retained per the no-silent-rewrite rule):**
+
+> ~~Adopt/extend the **Cloudflare Pages managed preview** (Option A): merge the
+> TIN-2515 `dev`-default shadow deploy and, on operator ruling, enable per-PR preview
+> deployments on the `greatfallstoolbus-org` Pages project, reusing the existing
+> account-level `*.pages.dev` Access gate. **Do not build an on-cluster per-PR
+> reaper.** The old honey pod-cap blocker is retired, but the
+> dashboard-managed tunnel-route constraint and missing preview/reaper ownership
+> remain, and the lane is redundant with the incumbent.~~
+>
+> ~~Because GFTB has **no internal reaper**, this ADR does not "adopt ours" — it
+> **adopts the external managed pattern** (CF Pages' dual-URL preview model) and
+> records the blahaj/MI on-cluster reaper as **the reference we deliberately decline
+> to clone**, consistent with blahaj's own "legacy/transitional, do not clone" note.~~
 
 **Parked, not adopted (Option C):** if a same-origin/Anubis preview need is ever
 *proven* AND TIN-991 route authority is brought under IaC so a hostname is not a
