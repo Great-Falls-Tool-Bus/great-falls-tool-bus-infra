@@ -353,7 +353,7 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "49a0e25c1cc8c8ff", "b15096271b4271a4", "fe1d38e06e5abf79", "905f0b0d50110b7a"
     ),
     "_reviewed-clean-main": _receipt(
-        "13ddc64a44daef61", "c56bc25b898738fb", "0152a854086b86fd", "556b35bf2f284dd6"
+        "d267466bea4bb170", "7a15527cac4e3b92", "7c25c8b63fe7b52d", "c9f858b312b7637d"
     ),
     "_reviewed-implementation-core": _receipt(
         "180f8edd55babb51", "43e15dac40bbad2a", "bffe444ff6221c04", "7c64836ae0c2cfc6"
