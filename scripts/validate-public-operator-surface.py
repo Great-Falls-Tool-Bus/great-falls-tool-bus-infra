@@ -117,7 +117,7 @@ RETIRED_WEB_GENERATION45_BRIDGE_WORKFLOW = Path(".github/workflows/web-generatio
 # The shared TIN-2611 GF v4 owner-controller chain is the permanent successor;
 # this exception does not arm the superseded local W14 executor.
 WEB_GENERATION46_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-46-parity.yml")
-WEB_GENERATION46_BRIDGE_SHA256 = "PLACEHOLDER_GENERATION46_BRIDGE_SHA256"
+WEB_GENERATION46_BRIDGE_SHA256 = "12b2ab6d534de87b4812026d4d27e7f1dda0b34377dd6e747972b302f0569ded"
 WEB_GENERATION46_BRIDGE_RECIPES = frozenset(
     {
         "web-release-candidate-proof",
@@ -535,7 +535,7 @@ WEB_RELEASE_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     # `kubectl kustomize` bytes VERBATIM and asserts the committed pin equals
     # the reviewed inputs; the mutation/synthesis jq lane is deleted.
     "web-release-render": _receipt(
-        "e1cd0a828ede1938", "2f003979c09df6ad", "b1186ed9a1c08c1d", "cc2ff69fa616b70b"
+        "0284c5c5fac17f9d", "54f428b19813dbc6", "d01c48bff18148b3", "bd9372feedda22ec"
     ),
     # Updated 2026-08-31 (TIN-4254 W13): the pruned legacy allow-egress
     # policies left the named mutation-denial enumeration.
