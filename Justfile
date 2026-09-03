@@ -1503,6 +1503,13 @@ _reviewed-clean-main:
     set -euo pipefail
     [[ "$(git branch --show-current)" == "main" ]] || { echo "Guarded ARC operation requires the main branch" >&2; exit 2; }
     [[ -z "$(git status --porcelain)" ]] || { echo "Guarded ARC operation requires a clean worktree" >&2; exit 2; }
+    for name in GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_SYSTEM GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_SSH_COMMAND GIT_ASKPASS; do
+      [[ -z "${!name:-}" ]] || { echo "Guarded ARC operation refuses ambient ${name}" >&2; exit 2; }
+    done
+    if git config --get-regexp '^(url\..*\.insteadOf|gpg\.program|gpg\..*\.program|core\.sshCommand|include\..*|includeIf\..*)$'; then
+      echo "Guarded ARC operation refuses Git configuration that can redirect remote or signature verification" >&2
+      exit 2
+    fi
     index_flags="$(git ls-files -v | awk '$1 != "H"')"
     [[ -z "${index_flags}" ]] || { echo "Guarded ARC operation refuses assume-unchanged, skip-worktree, or non-cached index flags: ${index_flags}" >&2; exit 2; }
     canonical_remote="https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git"
@@ -1518,7 +1525,7 @@ _reviewed-clean-main:
     remote_sha="$(git ls-remote --exit-code "${canonical_remote}" refs/heads/main | awk 'NR == 1 { print $1 }')"
     [[ "${remote_sha}" =~ ^[0-9a-f]{40}$ ]] || { echo "Could not resolve the current remote main SHA" >&2; exit 2; }
     [[ "${head_sha}" == "${remote_sha}" ]] || { echo "Guarded ARC operation HEAD ${head_sha} is not current remote main ${remote_sha}" >&2; exit 2; }
-    git verify-commit "${head_sha}" >/dev/null
+    git -c gpg.format=openpgp -c gpg.program=gpg -c gpg.openpgp.program=gpg verify-commit "${head_sha}" >/dev/null
     echo "reviewed infra carrier: ${head_sha}"
 
 # Enrollment and GitHub App Secret materialization use the implementation-role
@@ -2668,14 +2675,23 @@ web-release-render: _web-release-candidate-inputs
     render_dir="$(mktemp -d "${temp_root}/gftb-web-render.XXXXXX")"
     trap 'rm -rf "${render_dir}"' EXIT
     mkdir -m 700 "${render_dir}/home"
-    render_root="${PWD}"
-    if [[ -n "${WEB_RELEASE_RENDER_COMMIT:-}" ]]; then
-      render_commit="${WEB_RELEASE_RENDER_COMMIT}"
-      [[ "${render_commit}" =~ ^[0-9a-f]{40}$ ]] || { echo "WEB_RELEASE_RENDER_COMMIT must be 40 lowercase hex characters" >&2; exit 2; }
-      [[ -z "$(git status --porcelain)" ]] || { echo "alternate release rendering requires a clean carrier checkout" >&2; exit 2; }
-      git cat-file -e "${render_commit}^{commit}" 2>/dev/null || { echo "alternate release render commit does not exist" >&2; exit 2; }
-      git merge-base --is-ancestor "${render_commit}" HEAD >/dev/null 2>&1 || { echo "alternate release render commit is not an ancestor of the carrier" >&2; exit 2; }
-      git -c gpg.format=openpgp -c gpg.program=gpg -c gpg.openpgp.program=gpg verify-commit "${render_commit}" >/dev/null 2>&1 || { echo "alternate release render commit is not validly signed" >&2; exit 2; }
+    [[ -z "${WEB_RELEASE_RENDER_COMMIT:-}" ]] || { echo "WEB_RELEASE_RENDER_COMMIT is not an admitted release input" >&2; exit 2; }
+    render_target="{{ web_stack_dir }}"
+    case "${GFTB_AMENDMENT4_GEN46_REVERSE:-}" in
+    "")
+      env -i PATH="${PATH}" HOME="${render_dir}/home" just web-stack-validate >/dev/null
+      ;;
+    1)
+      [[ "${WEB_APPLY_IMAGE}" == "ghcr.io/great-falls-tool-bus/gftb-site@sha256:498b9715ed123ac8b5e1be0c35a5355ede6880e655e77809b85bf83c8f34f24c" ]] || { echo "Amendment 4 reverse image is not the exact generation-45 operand" >&2; exit 2; }
+      [[ "${WEB_APPLY_SHA}" == "836857bce295dec206cb4ebd6ba45f2956bc8aed" ]] || { echo "Amendment 4 reverse source is not the exact generation-45 operand" >&2; exit 2; }
+      env -i PATH="${PATH}" HOME="${render_dir}/home" GNUPGHOME="${GNUPGHOME:-}" just _reviewed-clean-main >/dev/null
+      bridge_path=".github/workflows/web-generation-46-parity.yml"
+      bridge_entry="$(GIT_NO_REPLACE_OBJECTS=1 git ls-tree HEAD -- "${bridge_path}")"
+      [[ "$(awk '{print $1 " " $2}' <<<"${bridge_entry}")" == "100644 blob" ]] || { echo "Amendment 4 reverse requires its tracked generation-46 bridge" >&2; exit 2; }
+      render_commit="8ecf26987896659727fc623142e170779ff92d41"
+      GIT_NO_REPLACE_OBJECTS=1 git cat-file -e "${render_commit}^{commit}" 2>/dev/null || { echo "Amendment 4 reverse commit does not exist" >&2; exit 2; }
+      GIT_NO_REPLACE_OBJECTS=1 git merge-base --is-ancestor "${render_commit}" HEAD >/dev/null 2>&1 || { echo "Amendment 4 reverse commit is not an ancestor of the carrier" >&2; exit 2; }
+      GIT_NO_REPLACE_OBJECTS=1 git -c gpg.format=openpgp -c gpg.program=gpg -c gpg.openpgp.program=gpg verify-commit "${render_commit}" >/dev/null 2>&1 || { echo "Amendment 4 reverse commit is not validly signed" >&2; exit 2; }
       render_root="${render_dir}/tree"
       closed_inputs=(
         k8s/web/greatfallstoolbus-org-production/deployment.yaml
@@ -2688,19 +2704,23 @@ web-release-render: _web-release-candidate-inputs
         tofu/intent/great-falls-tool-bus/pr-env-lanes.schema.json
       )
       for input in "${closed_inputs[@]}"; do
-        [[ "$(git ls-tree "${render_commit}" -- "${input}" | awk '{print $1 " " $2}')" == "100644 blob" ]] || { echo "alternate release render input is not one regular blob: ${input}" >&2; exit 2; }
+        [[ "$(GIT_NO_REPLACE_OBJECTS=1 git ls-tree "${render_commit}" -- "${input}" | awk '{print $1 " " $2}')" == "100644 blob" ]] || { echo "Amendment 4 reverse input is not one regular blob: ${input}" >&2; exit 2; }
         mkdir -p "${render_root}/$(dirname "${input}")"
-        git cat-file blob "${render_commit}:${input}" > "${render_root}/${input}"
+        GIT_NO_REPLACE_OBJECTS=1 git cat-file blob "${render_commit}:${input}" > "${render_root}/${input}"
       done
       env -i PATH="${PATH}" HOME="${render_dir}/home" bash scripts/validate-web-stack.sh "${render_root}/{{ web_stack_dir }}" >/dev/null
-    else
-      env -i PATH="${PATH}" HOME="${render_dir}/home" just web-stack-validate >/dev/null
-    fi
+      render_target="${render_root}/{{ web_stack_dir }}"
+      ;;
+    *)
+      echo "GFTB_AMENDMENT4_GEN46_REVERSE must be unset or exactly 1" >&2
+      exit 2
+      ;;
+    esac
     rendered="${render_dir}/rendered.yaml"
     # VERBATIM: the committed kustomize bytes are the release bytes. Any
     # yq/jq round-trip on this path would be synthesis-time re-serialization
     # variance and break digest equality with `kubectl kustomize` output.
-    kubectl kustomize "${render_root}/{{ web_stack_dir }}" > "${rendered}"
+    kubectl kustomize "${render_target}" > "${rendered}"
     # The reviewed inputs are asserted against the COMMITTED pin, never
     # injected. A mismatch means the operator has not committed the pin step
     # for this release yet.

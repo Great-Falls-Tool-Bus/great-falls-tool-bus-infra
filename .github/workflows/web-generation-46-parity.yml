@@ -33,16 +33,16 @@ concurrency:
 env:
   # Exact generation-46 pin merge; it must remain the carrier's sole parent.
   REVIEWED_BASE_SHA: b2d8b3db84523e910740252f3b87573cbaa23660
-  PIN_PR_NUMBER: "174"
-  PIN_HEAD_SHA: 60f128f389c8383813a359e06f3aa2fcd83444be
+  PIN_PR_NUMBER: "176"
+  PIN_HEAD_SHA: 96befeaaaa69ccdb34a0209aedd27ed04ae34239
   PIN_MERGE_SHA: b2d8b3db84523e910740252f3b87573cbaa23660
   ROLLBACK_INFRA_SHA: 8ecf26987896659727fc623142e170779ff92d41
-  TARGET_SOURCE_SHA: bc0a2a0f58f4bd7aa1d6c274903fb619941a829a
-  TARGET_IMAGE: ghcr.io/great-falls-tool-bus/gftb-site@sha256:13eb13292076a5ba2919a92df62c972ab2be36b975a01b9930002a0f1cb7aad3
-  SOURCE_CI_RUN_ID: "33790393468"
-  SOURCE_PUBLISH_RUN_ID: "33790392585"
-  # Forward render digest from infra PR #174's protected web-plan artifact.
-  TARGET_RENDER_SHA256: b0599cc9662831d325f76b0fbcb1ad146fc1d1b91c04c6c6dfa28a39e75d240e
+  TARGET_SOURCE_SHA: 642c935b65db123ea957765ad42ada1378ddfc04
+  TARGET_IMAGE: ghcr.io/great-falls-tool-bus/gftb-site@sha256:f0e618ed5d27e6cf2ea9439d90d2f3111fa0189a29800b7feb5b95a2e7511702
+  SOURCE_CI_RUN_ID: "33797417225"
+  SOURCE_PUBLISH_RUN_ID: "33797416853"
+  # Forward render digest from infra PR #176's protected web-plan artifact.
+  TARGET_RENDER_SHA256: 604cdb44d93d6670af1e308aa46cec3d2cbe97b8b1945f6be336595b1e9bab77
   # Generation 45 is RUNNING; any failed forward proof rolls back to its exact
   # signed infra tree and saved render.
   ROLLBACK_SOURCE_SHA: 836857bce295dec206cb4ebd6ba45f2956bc8aed
@@ -101,7 +101,7 @@ jobs:
           for name in GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_SYSTEM GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_SSH_COMMAND GIT_ASKPASS; do
             test -z "${!name:-}" || { echo "::error::Refusing ambient ${name}."; exit 2; }
           done
-          if git config --get-regexp '^(url\..*\.insteadOf|gpg\..*\.program|core\.sshCommand|include\..*|includeIf\..*)$'; then
+          if git config --get-regexp '^(url\..*\.insteadOf|gpg\.program|gpg\..*\.program|core\.sshCommand|include\..*|includeIf\..*)$'; then
             echo "::error::Git configuration may redirect canonical or signature verification."
             exit 2
           fi
@@ -111,13 +111,17 @@ jobs:
           esac
 
           api() { nix develop . --command gh api --hostname github.com "$@"; }
+          clean_curl() {
+            nix develop . --command env BASH_ENV= ENV= bash --noprofile --norc -p -c '
+              set -euo pipefail
+              tool_path="${PATH}"
+              exec env -i PATH="${tool_path}" HOME="$1" curl --disable \
+                --proto "=https" --tlsv1.2 --fail --silent --show-error \
+                --max-redirs 0 "$2"
+            ' _ "${RUNNER_TEMP}" "$1"
+          }
           public_api() {
-            nix develop . --command curl \
-              --proto '=https' --tlsv1.2 --fail --silent --show-error \
-              --max-redirs 0 \
-              -H 'Accept: application/vnd.github+json' \
-              -H 'X-GitHub-Api-Version: 2022-11-28' \
-              "$1"
+            clean_curl "$1"
           }
           test "${REVIEWED_BASE_SHA}" = "${PIN_MERGE_SHA}"
           test "${AMENDMENT4_RECEIPT_ORDINAL}" = 1
@@ -188,12 +192,37 @@ jobs:
             and .status == "completed" and .conclusion == "success"
           ' <<<"${source_publish}" >/dev/null
 
-          rules="$(api "repos/${GITHUB_REPOSITORY}/rules/branches/main")"
-          jq -e '
-            any(.[]; .type == "required_signatures")
-            and any(.[]; .type == "pull_request" and .parameters.allowed_merge_methods == ["squash"])
-            and any(.[]; .type == "required_status_checks" and .parameters.strict_required_status_checks_policy == true and any(.parameters.required_status_checks[]; .context == "validate"))
-          ' <<<"${rules}" >/dev/null
+          ruleset="$(api "repos/${GITHUB_REPOSITORY}/rulesets/20930684")"
+          jq -e --arg source "${GITHUB_REPOSITORY}" '
+            .id == 20930684
+            and .name == "main-reviewed-hosted-validate"
+            and .target == "branch"
+            and .source_type == "Repository"
+            and .source == $source
+            and .enforcement == "active"
+            and .bypass_actors == []
+            and .current_user_can_bypass == "never"
+            and .conditions.ref_name.include == ["refs/heads/main"]
+            and .conditions.ref_name.exclude == []
+            and ([.rules[].type] | sort) == (["deletion", "non_fast_forward", "pull_request", "required_signatures", "required_status_checks"] | sort)
+            and ([.rules[] | select(.type == "pull_request" and .parameters.allowed_merge_methods == ["squash"])] | length) == 1
+            and ([.rules[] | select(
+              .type == "required_status_checks"
+              and .parameters.strict_required_status_checks_policy == true
+              and .parameters.do_not_enforce_on_create == false
+              and .parameters.required_status_checks == [{"context":"validate","integration_id":15368}]
+            )] | length) == 1
+          ' <<<"${ruleset}" >/dev/null
+          effective_rules="$(api "repos/${GITHUB_REPOSITORY}/rules/branches/main")"
+          jq -e --arg source "${GITHUB_REPOSITORY}" '
+            length == 5
+            and all(.[];
+              .ruleset_id == 20930684
+              and .ruleset_source_type == "Repository"
+              and .ruleset_source == $source
+            )
+            and ([.[].type] | sort) == (["deletion", "non_fast_forward", "pull_request", "required_signatures", "required_status_checks"] | sort)
+          ' <<<"${effective_rules}" >/dev/null
 
           # Meta is private to this token. Exact byte-pinned constants bind the
           # already-merged ratification without widening this credential.
@@ -203,10 +232,10 @@ jobs:
           test "${META_ADR_SHA256}" = b3717602a64ddd0561f650fb08c671d0bb1f13ce12c69759682e1d10700260ff
 
           sha256sum --check --strict <<'HASHES'
-          3b127b309ddf3f78b7ffd3239cb0f14ef76ee187cb0e53497a7f63ed2fcbad7d  Justfile
+          ce50412c538838457b48bff449958c3222ef6b17f3230574ad3109d0ba043b29  Justfile
           33150ce2f846aef01539145f74a8eb1a04d45df5d960494ce188111a80e170e3  flake.lock
           7f1249c2c291282f724e6d49eaeafc05d7a1009eb00a5724ff6ca633c2c30879  flake.nix
-          a41638e42c9591d9ce92e9e3fd9a48adb86f229ba23371145dc6f71dc8046b78  k8s/web/greatfallstoolbus-org-production/deployment.yaml
+          3a56b86ddfc56ea151240c96c84364a4213ff3d7aa1db08fcfdca47669c1f9cd  k8s/web/greatfallstoolbus-org-production/deployment.yaml
           8ef176b50c24ac3de40b72c4958eab5cc2a849d3a212c09e7b6c75fa0b57d9af  k8s/web/greatfallstoolbus-org-production/kustomization.yaml
           ce89195429db343255779efb5a2d1eb09493a3937e34fb259c0393a49930f476  k8s/web/greatfallstoolbus-org-production/networkpolicy.yaml
           527a87425fc3a90a2a72d2adb59e1bfa7596d03e7f579a610ccfe841a48459d2  k8s/web/greatfallstoolbus-org-production/service.yaml
@@ -214,26 +243,29 @@ jobs:
           c4c3bc53977330afbb79be1f90a783116960a56f9ccf38d57f89936da686d1b3  scripts/validate-web-stack.sh
           HASHES
 
-          spent=false
-          if (( GITHUB_RUN_ATTEMPT > 1 )); then
-            for ((attempt=1; attempt<GITHUB_RUN_ATTEMPT; attempt++)); do
-              conclusion="$(api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${attempt}" --jq '.conclusion // ""')"
-              [[ "${conclusion}" != success ]] || spent=true
-            done
-          fi
-          successful="$(api "repos/${GITHUB_REPOSITORY}/actions/workflows/web-generation-46-parity.yml/runs?branch=main&status=success&per_page=100")"
-          jq -e --arg sha "${GITHUB_SHA}" --argjson run "${GITHUB_RUN_ID}" '[.workflow_runs[] | select(.head_sha == $sha and .id != $run)] | length == 0' <<<"${successful}" >/dev/null || spent=true
-          printf 'pr-head=%s\nspent=%s\n' "${pr_head}" "${spent}" >> "${GITHUB_OUTPUT}"
+          # This is a carrier-level one-shot, not a success-level one-shot.
+          # Any earlier attempt may have reached mutation before cancellation
+          # or timeout, even when no receipt artifact survived. Refuse every
+          # rerun and every other run for this exact carrier SHA regardless of
+          # status or conclusion; recovery requires a fresh reviewed carrier.
+          test "${GITHUB_RUN_ATTEMPT}" = 1
+          carrier_runs="$(api "repos/${GITHUB_REPOSITORY}/actions/workflows/web-generation-46-parity.yml/runs?branch=main&head_sha=${GITHUB_SHA}&per_page=100")"
+          jq -e --argjson run "${GITHUB_RUN_ID}" '
+            .total_count == 1
+            and (.workflow_runs | length) == 1
+            and .workflow_runs[0].id == $run
+          ' <<<"${carrier_runs}" >/dev/null
+          printf 'pr-head=%s\nspent=false\n' "${pr_head}" >> "${GITHUB_OUTPUT}"
 
           git update-ref refs/remotes/origin/main "${GITHUB_SHA}"
           git switch -C main "${GITHUB_SHA}"
           signer_home="${RUNNER_TEMP}/gftb-web-flow-gnupg"
           mkdir -m 700 "${signer_home}"
-          nix develop . --command curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --max-redirs 0 https://github.com/web-flow.gpg > "${RUNNER_TEMP}/web-flow.gpg"
+          clean_curl https://github.com/web-flow.gpg > "${RUNNER_TEMP}/web-flow.gpg"
           mapfile -t fingerprints < <(nix develop . --command gpg --batch --show-keys --with-colons "${RUNNER_TEMP}/web-flow.gpg" | awk -F: '$1 == "fpr" { print $10 }')
           [[ "${fingerprints[*]}" == "5DE3E0509C47EA3CF04A42D34AEE18F83AFDEB23 968479A1AFF927E37D1A566BB5690EEEBB952194" ]]
           nix develop . --command gpg --batch --homedir "${signer_home}" --import "${RUNNER_TEMP}/web-flow.gpg" >/dev/null 2>&1
-          GNUPGHOME="${signer_home}" nix develop . --command git verify-commit "${GITHUB_SHA}" >/dev/null
+          GNUPGHOME="${signer_home}" nix develop . --command git -c gpg.format=openpgp -c gpg.program=gpg -c gpg.openpgp.program=gpg verify-commit "${GITHUB_SHA}" >/dev/null
           echo "GNUPGHOME=${signer_home}" >> "${GITHUB_ENV}"
 
       - name: Prove both candidates and freeze both plans before credential
@@ -247,12 +279,12 @@ jobs:
               chmod 600 ".k8s-plans/generation-46.${label}.${suffix}"
             done
           }
-          export WEB_APPLY_IMAGE="${ROLLBACK_IMAGE}" WEB_APPLY_SHA="${ROLLBACK_SOURCE_SHA}" WEB_RELEASE_RENDER_COMMIT="${ROLLBACK_INFRA_SHA}"
+          export WEB_APPLY_IMAGE="${ROLLBACK_IMAGE}" WEB_APPLY_SHA="${ROLLBACK_SOURCE_SHA}" GFTB_AMENDMENT4_GEN46_REVERSE=1
           nix develop . --command just web-release-candidate-proof
           nix develop . --command just web-release-plan
           test "$(tr -d '\n' < .k8s-plans/web-release.render-sha256)" = "${ROLLBACK_RENDER_SHA256}"
           save_plan reverse
-          unset WEB_RELEASE_RENDER_COMMIT
+          unset GFTB_AMENDMENT4_GEN46_REVERSE
           export WEB_APPLY_IMAGE="${TARGET_IMAGE}" WEB_APPLY_SHA="${TARGET_SOURCE_SHA}"
           nix develop . --command just web-release-candidate-proof
           nix develop . --command just web-release-plan
@@ -296,10 +328,10 @@ jobs:
             done
           }
           restore_plan reverse
-          export WEB_APPLY_IMAGE="${ROLLBACK_IMAGE}" WEB_APPLY_SHA="${ROLLBACK_SOURCE_SHA}" WEB_RELEASE_RENDER_COMMIT="${ROLLBACK_INFRA_SHA}"
+          export WEB_APPLY_IMAGE="${ROLLBACK_IMAGE}" WEB_APPLY_SHA="${ROLLBACK_SOURCE_SHA}" GFTB_AMENDMENT4_GEN46_REVERSE=1
           nix develop . --command just web-release-server-dry-run
           restore_plan forward
-          unset WEB_RELEASE_RENDER_COMMIT
+          unset GFTB_AMENDMENT4_GEN46_REVERSE
           export WEB_APPLY_IMAGE="${TARGET_IMAGE}" WEB_APPLY_SHA="${TARGET_SOURCE_SHA}"
           nix develop . --command just web-release-server-dry-run
 
@@ -315,7 +347,7 @@ jobs:
           namespace=greatfallstoolbus-org-production
           receipt="${RUNNER_TEMP}/gftb-web-generation-46-receipt.json"
           apply_status=not_attempted rollback_status=not_needed proof_status=not_attempted classification=unknown terminal_rc=1
-          forward_attempted=false rollback_attempted=false zero_drift=false
+          forward_attempted=false rollback_attempted=false zero_drift=false rollback_zero_drift=false
           kube() { nix develop . --command kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace "${namespace}" "$@"; }
           restore_plan() {
             local label="$1" suffix
@@ -475,6 +507,7 @@ jobs:
               --argjson forwardAttempted "${forward_attempted}" \
               --argjson rollbackAttempted "${rollback_attempted}" \
               --argjson zeroDrift "${zero_drift}" \
+              --argjson rollbackZeroDrift "${rollback_zero_drift}" \
               --argjson pre "${pre_json}" \
               --argjson post "${post_json}" \
               --argjson rollback "${rollback_json}" \
@@ -495,7 +528,7 @@ jobs:
                 spent:{terminalBeforeRun:$spent},
                 classification:$classification,
                 prestate:$pre,
-                mutation:{forwardAttempted:$forwardAttempted,applyOutcome:$apply,rollbackAttempted:$rollbackAttempted,rollbackOutcome:$rollbackStatus,rollbackProof:$rollback},
+                mutation:{forwardAttempted:$forwardAttempted,applyOutcome:$apply,rollbackAttempted:$rollbackAttempted,rollbackOutcome:$rollbackStatus,rollbackProof:$rollback,rollbackZeroDrift:$rollbackZeroDrift},
                 poststate:$post,
                 observations:{proofStatus:$proof,zeroDrift:$zeroDrift,observerIndependent:false,credentialClass:"bootstrap web-apply readback",anonymousAccess:$access,authenticatedServedContent:"pending_operator_look"}
               }
@@ -536,7 +569,7 @@ jobs:
           apply_rc=0
           if [[ "${classification}" == rollback ]]; then
             restore_plan forward
-            unset WEB_RELEASE_RENDER_COMMIT
+            unset GFTB_AMENDMENT4_GEN46_REVERSE
             export WEB_APPLY_IMAGE="${TARGET_IMAGE}" WEB_APPLY_SHA="${TARGET_SOURCE_SHA}"
             forward_attempted=true
             set +e
@@ -563,7 +596,7 @@ jobs:
             proof_status=failed
             rollback_attempted=true
             restore_plan reverse
-            export WEB_APPLY_IMAGE="${ROLLBACK_IMAGE}" WEB_APPLY_SHA="${ROLLBACK_SOURCE_SHA}" WEB_RELEASE_RENDER_COMMIT="${ROLLBACK_INFRA_SHA}"
+            export WEB_APPLY_IMAGE="${ROLLBACK_IMAGE}" WEB_APPLY_SHA="${ROLLBACK_SOURCE_SHA}" GFTB_AMENDMENT4_GEN46_REVERSE=1
             set +e
             nix develop . --command just web-release-server-dry-run
             reverse_dry_rc=$?
@@ -575,8 +608,11 @@ jobs:
             fi
             snapshot rollback "${ROLLBACK_IMAGE}" "${ROLLBACK_SOURCE_SHA}"
             rollback_proof_rc=$?
+            kube diff -f .k8s-plans/generation-46.reverse.rendered.yaml >/dev/null
+            reverse_drift_rc=$?
             set -e
-            if (( reverse_dry_rc == 0 && reverse_apply_rc == 0 && rollback_proof_rc == 0 )); then rollback_status=succeeded; else rollback_status=failed; fi
+            if (( reverse_drift_rc == 0 )); then rollback_zero_drift=true; fi
+            if (( reverse_dry_rc == 0 && reverse_apply_rc == 0 && rollback_proof_rc == 0 && reverse_drift_rc == 0 )); then rollback_status=succeeded; else rollback_status=failed; fi
           else
             proof_status=failed
           fi

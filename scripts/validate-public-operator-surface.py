@@ -118,6 +118,14 @@ RETIRED_WEB_GENERATION45_BRIDGE_WORKFLOW = Path(".github/workflows/web-generatio
 # this exception does not arm the superseded local W14 executor.
 WEB_GENERATION46_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-46-parity.yml")
 WEB_GENERATION46_BRIDGE_SHA256 = "12b2ab6d534de87b4812026d4d27e7f1dda0b34377dd6e747972b302f0569ded"
+WEB_GENERATION46_REVERSE_SELECTOR = "GFTB_AMENDMENT4_GEN46_REVERSE"
+WEB_GENERATION46_ROLLBACK_INFRA = "8ecf26987896659727fc623142e170779ff92d41"
+WEB_GENERATION46_ROLLBACK_SOURCE = "836857bce295dec206cb4ebd6ba45f2956bc8aed"
+WEB_GENERATION46_ROLLBACK_IMAGE = (
+    "ghcr.io/great-falls-tool-bus/gftb-site@sha256:"
+    "498b9715ed123ac8b5e1be0c35a5355ede6880e655e77809b85bf83c8f34f24c"
+)
+WEB_GENERATION46_RULESET_ID = 20930684
 WEB_GENERATION46_BRIDGE_RECIPES = frozenset(
     {
         "web-release-candidate-proof",
@@ -126,19 +134,29 @@ WEB_GENERATION46_BRIDGE_RECIPES = frozenset(
         "web-release-apply",
     }
 )
-WEB_GENERATION46_TARGET_SOURCE = "bc0a2a0f58f4bd7aa1d6c274903fb619941a829a"
-WEB_GENERATION46_TARGET_IMAGE = "ghcr.io/great-falls-tool-bus/gftb-site@sha256:13eb13292076a5ba2919a92df62c972ab2be36b975a01b9930002a0f1cb7aad3"
+WEB_GENERATION46_TARGET_SOURCE = "642c935b65db123ea957765ad42ada1378ddfc04"
+WEB_GENERATION46_TARGET_IMAGE = "ghcr.io/great-falls-tool-bus/gftb-site@sha256:f0e618ed5d27e6cf2ea9439d90d2f3111fa0189a29800b7feb5b95a2e7511702"
 WEB_GENERATION46_DEPLOYMENT = Path(
     "k8s/web/greatfallstoolbus-org-production/deployment.yaml"
 )
 WEB_GENERATION46_INLINE_FREEZE = re.compile(
     r"sha256sum --check --strict <<'HASHES'\n(.*?)\n *HASHES\n", re.DOTALL
 )
+WEB_GENERATION46_REVERSE_INPUTS = (
+    "k8s/web/greatfallstoolbus-org-production/deployment.yaml",
+    "k8s/web/greatfallstoolbus-org-production/service.yaml",
+    "k8s/web/greatfallstoolbus-org-production/networkpolicy.yaml",
+    "k8s/web/greatfallstoolbus-org-production/kustomization.yaml",
+    "k8s/web/greatfallstoolbus-org-production/web-apply-rbac.yaml",
+    "k8s/web/secrets.contract.yaml",
+    "tofu/intent/great-falls-tool-bus/web-oncluster-route.json",
+    "tofu/intent/great-falls-tool-bus/pr-env-lanes.schema.json",
+)
 WEB_GENERATION46_FROZEN_INPUT_SHA256 = {
-    Path("Justfile"): "3b127b309ddf3f78b7ffd3239cb0f14ef76ee187cb0e53497a7f63ed2fcbad7d",
+    Path("Justfile"): "ce50412c538838457b48bff449958c3222ef6b17f3230574ad3109d0ba043b29",
     Path("flake.lock"): "33150ce2f846aef01539145f74a8eb1a04d45df5d960494ce188111a80e170e3",
     Path("flake.nix"): "7f1249c2c291282f724e6d49eaeafc05d7a1009eb00a5724ff6ca633c2c30879",
-    Path("k8s/web/greatfallstoolbus-org-production/deployment.yaml"): "a41638e42c9591d9ce92e9e3fd9a48adb86f229ba23371145dc6f71dc8046b78",
+    Path("k8s/web/greatfallstoolbus-org-production/deployment.yaml"): "3a56b86ddfc56ea151240c96c84364a4213ff3d7aa1db08fcfdca47669c1f9cd",
     Path("k8s/web/greatfallstoolbus-org-production/kustomization.yaml"): "8ef176b50c24ac3de40b72c4958eab5cc2a849d3a212c09e7b6c75fa0b57d9af",
     Path("k8s/web/greatfallstoolbus-org-production/networkpolicy.yaml"): "ce89195429db343255779efb5a2d1eb09493a3937e34fb259c0393a49930f476",
     Path("k8s/web/greatfallstoolbus-org-production/service.yaml"): "527a87425fc3a90a2a72d2adb59e1bfa7596d03e7f579a610ccfe841a48459d2",
@@ -393,7 +411,7 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "49a0e25c1cc8c8ff", "b15096271b4271a4", "fe1d38e06e5abf79", "905f0b0d50110b7a"
     ),
     "_reviewed-clean-main": _receipt(
-        "fe9e048cffbba33b", "36e25d7e15eff9f0", "2ef7dca85552e144", "3b2bf9865a24d32e"
+        "d4fc6c1d7b4806e1", "8602bd7fdcc01106", "53f55b5b8fc9fdb9", "728971f964fe01ec"
     ),
     "_reviewed-implementation-core": _receipt(
         "180f8edd55babb51", "43e15dac40bbad2a", "bffe444ff6221c04", "7c64836ae0c2cfc6"
@@ -535,7 +553,7 @@ WEB_RELEASE_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     # `kubectl kustomize` bytes VERBATIM and asserts the committed pin equals
     # the reviewed inputs; the mutation/synthesis jq lane is deleted.
     "web-release-render": _receipt(
-        "0284c5c5fac17f9d", "54f428b19813dbc6", "d01c48bff18148b3", "bd9372feedda22ec"
+        "750dfcb2b5d376e1", "a9bb9782f14ca767", "c96738472e13b054", "6982310081ef4f88"
     ),
     # Updated 2026-08-31 (TIN-4254 W13): the pruned legacy allow-egress
     # policies left the named mutation-denial enumeration.
@@ -1909,8 +1927,104 @@ def scan_workflow_text(
     return findings
 
 
+def scan_web_generation46_bridge_selector_lifecycle(
+    bridge_present: bool, justfile_text: str
+) -> list[Finding]:
+    """The one-shot bridge and its temporary Just selector retire together."""
+    selector_present = WEB_GENERATION46_REVERSE_SELECTOR in justfile_text
+    if bridge_present == selector_present:
+        return []
+    return [
+        Finding(
+            "web-generation46-bridge-selector-lifecycle",
+            WEB_GENERATION46_BRIDGE_WORKFLOW,
+            1,
+            "The Amendment-4 bridge and its exact temporary reverse selector "
+            "must be introduced and retired together.",
+        )
+    ]
+
+
+def scan_web_generation46_reverse_selector_contract(
+    justfile_text: str,
+) -> list[Finding]:
+    """Bind the temporary reverse renderer to Amendment 4 and nothing wider."""
+    findings: list[Finding] = []
+    if WEB_GENERATION46_REVERSE_SELECTOR not in justfile_text:
+        return findings
+
+    definitions = all_just_recipe_blocks(justfile_text).get(
+        "web-release-render", []
+    )
+    if len(definitions) != 1:
+        findings.append(
+            Finding(
+                "web-generation46-reverse-selector-contract",
+                Path("Justfile"),
+                1,
+                "The temporary Amendment-4 selector requires the one reviewed "
+                "web-release-render recipe.",
+            )
+        )
+        return findings
+
+    line, _, body = definitions[0]
+    executable = executable_recipe_text(body)
+    required_fragments = (
+        '[[ -z "${WEB_RELEASE_RENDER_COMMIT:-}" ]] ||',
+        'render_target="{{ web_stack_dir }}"',
+        'case "${GFTB_AMENDMENT4_GEN46_REVERSE:-}" in',
+        f'[[ "${{WEB_APPLY_IMAGE}}" == "{WEB_GENERATION46_ROLLBACK_IMAGE}" ]] ||',
+        f'[[ "${{WEB_APPLY_SHA}}" == "{WEB_GENERATION46_ROLLBACK_SOURCE}" ]] ||',
+        'bridge_path=".github/workflows/web-generation-46-parity.yml"',
+        '== "100644 blob" ]] ||',
+        f'render_commit="{WEB_GENERATION46_ROLLBACK_INFRA}"',
+        'render_target="${render_root}/{{ web_stack_dir }}"',
+        'kubectl kustomize "${render_target}"',
+    )
+    missing = [fragment for fragment in required_fragments if fragment not in executable]
+    render_commit_assignments = re.findall(
+        r'^\s*render_commit=(\S+)\s*$', executable, re.MULTILINE
+    )
+    closed_inputs_match = re.search(
+        r"^\s*closed_inputs=\(\n(?P<inputs>.*?)^\s*\)\n",
+        executable,
+        re.MULTILINE | re.DOTALL,
+    )
+    closed_inputs = (
+        tuple(
+            line.strip()
+            for line in closed_inputs_match.group("inputs").splitlines()
+            if line.strip()
+        )
+        if closed_inputs_match is not None
+        else ()
+    )
+    if (
+        missing
+        or justfile_text.count(WEB_GENERATION46_REVERSE_SELECTOR) != 2
+        or render_commit_assignments
+        != [f'"{WEB_GENERATION46_ROLLBACK_INFRA}"']
+        or closed_inputs != WEB_GENERATION46_REVERSE_INPUTS
+        or executable.count("GIT_NO_REPLACE_OBJECTS=1 git") != 6
+    ):
+        findings.append(
+            Finding(
+                "web-generation46-reverse-selector-contract",
+                Path("Justfile"),
+                line,
+                "The temporary Amendment-4 reverse renderer must reject a "
+                "caller-supplied ref, admit only the exact generation-45 "
+                "commit/source/image and eight regular inputs, disable Git "
+                "replace refs, and leave the ordinary renderer relative; "
+                f"missing={missing!r}.",
+            )
+        )
+    return findings
+
+
 def scan_web_generation46_bridge_contract(
-    workflow_text: str, deployment_text: str
+    workflow_text: str, deployment_text: str, justfile_text: str
 ) -> list[Finding]:
     findings: list[Finding] = []
     observed_digest = hashlib.sha256(workflow_text.encode("utf-8")).hexdigest()
@@ -1923,6 +2037,134 @@ def scan_web_generation46_bridge_contract(
                 "The Amendment-4 generation-46 bridge changed outside its exact reviewed receipt.",
             )
         )
+
+    rollback_env = {
+        "ROLLBACK_INFRA_SHA": WEB_GENERATION46_ROLLBACK_INFRA,
+        "ROLLBACK_SOURCE_SHA": WEB_GENERATION46_ROLLBACK_SOURCE,
+        "ROLLBACK_IMAGE": WEB_GENERATION46_ROLLBACK_IMAGE,
+    }
+    for name, expected in rollback_env.items():
+        observed = re.findall(
+            rf"^  {name}:\s*(\S+)\s*$", workflow_text, re.MULTILINE
+        )
+        if observed != [expected]:
+            findings.append(
+                Finding(
+                    "web-generation46-rollback-operand-drift",
+                    WEB_GENERATION46_BRIDGE_WORKFLOW,
+                    1,
+                    f"The Amendment-4 bridge must hard-code {name} to the "
+                    f"reviewed generation-45 operand {expected!r}; observed "
+                    f"{observed!r}.",
+                )
+            )
+
+    required_workflow_fragments: dict[str, tuple[str, ...]] = {
+        "web-generation46-carrier-one-shot-weakened": (
+            'test "${GITHUB_RUN_ATTEMPT}" = 1',
+            "actions/workflows/web-generation-46-parity.yml/runs?"
+            "branch=main&head_sha=${GITHUB_SHA}&per_page=100",
+            ".total_count == 1",
+            "(.workflow_runs | length) == 1",
+            ".workflow_runs[0].id == $run",
+        ),
+        "web-generation46-ruleset-contract-weakened": (
+            f'rulesets/{WEB_GENERATION46_RULESET_ID}")',
+            f".id == {WEB_GENERATION46_RULESET_ID}",
+            '.name == "main-reviewed-hosted-validate"',
+            '.target == "branch"',
+            '.source_type == "Repository"',
+            '.enforcement == "active"',
+            ".bypass_actors == []",
+            '.current_user_can_bypass == "never"',
+            '.conditions.ref_name.include == ["refs/heads/main"]',
+            ".conditions.ref_name.exclude == []",
+            '.parameters.allowed_merge_methods == ["squash"]',
+            ".parameters.strict_required_status_checks_policy == true",
+            ".parameters.do_not_enforce_on_create == false",
+            '.parameters.required_status_checks == '
+            '[{"context":"validate","integration_id":15368}]',
+            "length == 5",
+        ),
+        "web-generation46-verifier-steering-weakened": (
+            "exec env -i PATH=\"${tool_path}\" HOME=\"$1\" curl --disable",
+            "gpg\\.program|gpg\\..*\\.program|core\\.sshCommand",
+            "clean_curl https://github.com/web-flow.gpg",
+            "git -c gpg.format=openpgp -c gpg.program=gpg "
+            "-c gpg.openpgp.program=gpg verify-commit \"${GITHUB_SHA}\"",
+        ),
+        "web-generation46-reverse-selector-weakened": (
+            "WEB_APPLY_IMAGE=\"${ROLLBACK_IMAGE}\" "
+            "WEB_APPLY_SHA=\"${ROLLBACK_SOURCE_SHA}\" "
+            "GFTB_AMENDMENT4_GEN46_REVERSE=1",
+            "unset GFTB_AMENDMENT4_GEN46_REVERSE",
+        ),
+        "web-generation46-reverse-proof-weakened": (
+            "rollback_zero_drift=false",
+            "kube diff -f .k8s-plans/generation-46.reverse.rendered.yaml",
+            "if (( reverse_drift_rc == 0 )); then rollback_zero_drift=true; fi",
+            "reverse_apply_rc == 0 && rollback_proof_rc == 0 && "
+            "reverse_drift_rc == 0",
+            '--argjson rollbackZeroDrift "${rollback_zero_drift}"',
+            "rollbackZeroDrift:$rollbackZeroDrift",
+        ),
+    }
+    for rule, required in required_workflow_fragments.items():
+        missing = [fragment for fragment in required if fragment not in workflow_text]
+        if missing:
+            findings.append(
+                Finding(
+                    rule,
+                    WEB_GENERATION46_BRIDGE_WORKFLOW,
+                    1,
+                    "The exact Amendment-4 authority/recovery contract was "
+                    f"weakened; missing={missing!r}.",
+                )
+            )
+    selector_assignments = re.findall(
+        rf"\b{WEB_GENERATION46_REVERSE_SELECTOR}=([^\s]+)", workflow_text
+    )
+    if (
+        selector_assignments != ["1", "1", "1"]
+        or workflow_text.count(f"unset {WEB_GENERATION46_REVERSE_SELECTOR}") != 3
+        or "WEB_RELEASE_RENDER_COMMIT" in workflow_text
+    ):
+        findings.append(
+            Finding(
+                "web-generation46-reverse-selector-weakened",
+                WEB_GENERATION46_BRIDGE_WORKFLOW,
+                1,
+                "The bridge may select reverse rendering only through three "
+                "exact boolean uses of its temporary Amendment-4 selector; "
+                "caller-supplied render refs are forbidden.",
+            )
+        )
+    if "status=success" in workflow_text:
+        findings.append(
+            Finding(
+                "web-generation46-carrier-one-shot-weakened",
+                WEB_GENERATION46_BRIDGE_WORKFLOW,
+                1,
+                "SPENT is carrier-level: no success-only workflow-run query is admitted.",
+            )
+        )
+    expected_rule_types = (
+        '["deletion", "non_fast_forward", "pull_request", '
+        '"required_signatures", "required_status_checks"]'
+    )
+    if workflow_text.count(expected_rule_types) != 2:
+        findings.append(
+            Finding(
+                "web-generation46-ruleset-contract-weakened",
+                WEB_GENERATION46_BRIDGE_WORKFLOW,
+                1,
+                "Both the exact ruleset object and effective-main rule census "
+                "must bind deletion, non-fast-forward, pull-request, signature, "
+                "and hosted validate controls.",
+            )
+        )
+    findings.extend(scan_web_generation46_reverse_selector_contract(justfile_text))
+
     image_values = re.findall(
         r"^\s*image:\s*(ghcr\.io/great-falls-tool-bus/gftb-site@sha256:[0-9a-f]{64})\s*$",
         deployment_text,
@@ -2085,20 +2327,29 @@ def scan_workflows() -> list[Finding]:
 
     gen46_bridge_path = REPO / WEB_GENERATION46_BRIDGE_WORKFLOW
     gen46_deployment_path = REPO / WEB_GENERATION46_DEPLOYMENT
-    if not gen46_bridge_path.is_file() or not gen46_deployment_path.is_file():
+    gen46_bridge_present = gen46_bridge_path.is_file()
+    gen46_selector_present = WEB_GENERATION46_REVERSE_SELECTOR in justfile
+    findings.extend(
+        scan_web_generation46_bridge_selector_lifecycle(
+            gen46_bridge_present, justfile
+        )
+    )
+    if gen46_bridge_present and not gen46_deployment_path.is_file():
         findings.append(
             Finding(
-                "web-generation46-bridge-missing",
-                WEB_GENERATION46_BRIDGE_WORKFLOW,
+                "web-generation46-desired-state-missing",
+                WEB_GENERATION46_DEPLOYMENT,
                 1,
-                "The Amendment-4 bridge and its frozen generation-46 desired state must remain together until the terminal receipt.",
+                "The active Amendment-4 bridge requires its frozen generation-46 "
+                "desired state.",
             )
         )
-    else:
+    elif gen46_bridge_present and gen46_selector_present:
         findings.extend(
             scan_web_generation46_bridge_contract(
                 gen46_bridge_path.read_text(encoding="utf-8"),
                 gen46_deployment_path.read_text(encoding="utf-8"),
+                justfile,
             )
         )
 
@@ -2128,15 +2379,18 @@ def scan_workflows() -> list[Finding]:
                 recipe_arities,
             )
         )
-    if observed_calls != HOSTED_WORKFLOW_JUST_ALLOWLIST:
+    expected_calls = HOSTED_WORKFLOW_JUST_ALLOWLIST
+    if not gen46_bridge_present:
+        expected_calls = expected_calls - WEB_GENERATION46_BRIDGE_RECIPES
+    if observed_calls != expected_calls:
         findings.append(
             Finding(
                 "workflow-just-allowlist-drift",
                 Path(".github/workflows"),
                 1,
                 "Hosted Just call census changed: "
-                f"missing={sorted(HOSTED_WORKFLOW_JUST_ALLOWLIST - observed_calls)!r}, "
-                f"new={sorted(observed_calls - HOSTED_WORKFLOW_JUST_ALLOWLIST)!r}.",
+                f"missing={sorted(expected_calls - observed_calls)!r}, "
+                f"new={sorted(observed_calls - expected_calls)!r}.",
             )
         )
     return findings
@@ -6684,21 +6938,9 @@ def self_test() -> None:
         ),
         (
             "web-release-render",
-            '    [[ "${render_commit}" =~ ^[0-9a-f]{40}$ ]] || { echo "WEB_RELEASE_RENDER_COMMIT must be 40 lowercase hex characters" >&2; exit 2; }\n',
+            '    [[ -z "${WEB_RELEASE_RENDER_COMMIT:-}" ]] || { echo "WEB_RELEASE_RENDER_COMMIT is not an admitted release input" >&2; exit 2; }\n',
             "",
-            "alternate render exact-ref guard removal",
-        ),
-        (
-            "web-release-render",
-            '    git merge-base --is-ancestor "${render_commit}" HEAD >/dev/null 2>&1 || { echo "alternate release render commit is not an ancestor of the carrier" >&2; exit 2; }\n',
-            "",
-            "alternate render ancestor guard removal",
-        ),
-        (
-            "web-release-render",
-            '    git -c gpg.format=openpgp -c gpg.program=gpg -c gpg.openpgp.program=gpg verify-commit "${render_commit}" >/dev/null 2>&1 || { echo "alternate release render commit is not validly signed" >&2; exit 2; }\n',
-            "",
-            "alternate render signature guard removal",
+            "caller-supplied render-ref rejection removal",
         ),
     )
     for name, old, new, label in release_body_mutations:
@@ -6708,6 +6950,49 @@ def self_test() -> None:
             label,
             "web-release-recipe-executable-receipt-mismatch",
         )
+
+    if WEB_GENERATION46_REVERSE_SELECTOR in justfile:
+        amendment4_reverse_mutations = (
+            (
+                f'      render_commit="{WEB_GENERATION46_ROLLBACK_INFRA}"\n',
+                '      render_commit="${WEB_RELEASE_RENDER_COMMIT}"\n',
+                "reverse renderer caller-ref widening",
+            ),
+            (
+                f'      [[ "${{WEB_APPLY_IMAGE}}" == "{WEB_GENERATION46_ROLLBACK_IMAGE}" ]] ||',
+                '      [[ -n "${WEB_APPLY_IMAGE}" ]] ||',
+                "reverse image operand weakening",
+            ),
+            (
+                f'      [[ "${{WEB_APPLY_SHA}}" == "{WEB_GENERATION46_ROLLBACK_SOURCE}" ]] ||',
+                '      [[ -n "${WEB_APPLY_SHA}" ]] ||',
+                "reverse source operand weakening",
+            ),
+            (
+                '      bridge_entry="$(GIT_NO_REPLACE_OBJECTS=1 git ls-tree HEAD -- "${bridge_path}")"\n',
+                '      bridge_entry="$(git ls-tree HEAD -- "${bridge_path}")"\n',
+                "reverse bridge replace-ref reopening",
+            ),
+            (
+                "        k8s/web/greatfallstoolbus-org-production/web-apply-rbac.yaml\n",
+                "",
+                "reverse closed-input removal",
+            ),
+            (
+                '    render_target="{{ web_stack_dir }}"\n',
+                '    render_target="${PWD}/{{ web_stack_dir }}"\n',
+                "ordinary renderer absolute-path drift",
+            ),
+        )
+        for old, new, label in amendment4_reverse_mutations:
+            mutated = mutate_recipe_body(
+                justfile, "web-release-render", old, new, label
+            )
+            expect_web_release_contract_rejection(
+                mutated,
+                label,
+                "web-release-recipe-executable-receipt-mismatch",
+            )
 
     release_duplicate = (
         justfile
@@ -8529,61 +8814,197 @@ def self_test() -> None:
     ):
         raise SystemExit("self-test FAILED: a re-added generation-45 bridge was accepted")
 
-    gen46_bridge_text = (REPO / WEB_GENERATION46_BRIDGE_WORKFLOW).read_text(
-        encoding="utf-8"
+    gen46_bridge_path = REPO / WEB_GENERATION46_BRIDGE_WORKFLOW
+    gen46_bridge_present = gen46_bridge_path.is_file()
+    lifecycle_baseline = scan_web_generation46_bridge_selector_lifecycle(
+        gen46_bridge_present, justfile
     )
-    gen46_deployment_text = (REPO / WEB_GENERATION46_DEPLOYMENT).read_text(
-        encoding="utf-8"
-    )
-    if scan_web_generation46_bridge_contract(
-        gen46_bridge_text, gen46_deployment_text
-    ):
-        raise SystemExit("self-test FAILED: generation-46 bridge contract drifted")
-    mutated_gen46_bridge = gen46_bridge_text.replace(
-        WEB_GENERATION46_TARGET_SOURCE, "0" * 40, 1
-    )
-    if not any(
-        finding.rule == "web-generation46-bridge-bytes"
-        for finding in scan_web_generation46_bridge_contract(
-            mutated_gen46_bridge, gen46_deployment_text
+    if lifecycle_baseline:
+        raise SystemExit(
+            "self-test FAILED: generation-46 bridge/selector lifecycle drifted"
         )
+    if not scan_web_generation46_bridge_selector_lifecycle(
+        not gen46_bridge_present, justfile
     ):
-        raise SystemExit("self-test FAILED: generation-46 workflow mutation was accepted")
-    mutated_gen46_deployment = gen46_deployment_text.replace(
-        WEB_GENERATION46_TARGET_IMAGE,
-        "ghcr.io/great-falls-tool-bus/gftb-site@sha256:" + "0" * 64,
-        1,
-    )
-    if not any(
-        finding.rule == "web-generation46-desired-state-freeze"
-        for finding in scan_web_generation46_bridge_contract(
-            gen46_bridge_text, mutated_gen46_deployment
+        raise SystemExit(
+            "self-test FAILED: generation-46 bridge/selector mismatch was accepted"
         )
-    ):
-        raise SystemExit("self-test FAILED: generation-46 desired-state drift was accepted")
-    for stale_digest in sorted(WEB_GENERATION46_FROZEN_INPUT_SHA256.values()):
-        stale_inline = gen46_bridge_text.replace(stale_digest, "0" * 64, 1)
+
+    if gen46_bridge_present:
+        gen46_bridge_text = gen46_bridge_path.read_text(encoding="utf-8")
+        gen46_deployment_text = (REPO / WEB_GENERATION46_DEPLOYMENT).read_text(
+            encoding="utf-8"
+        )
+        if scan_web_generation46_bridge_contract(
+            gen46_bridge_text, gen46_deployment_text, justfile
+        ):
+            raise SystemExit(
+                "self-test FAILED: generation-46 bridge contract drifted"
+            )
+        mutated_gen46_bridge = gen46_bridge_text.replace(
+            WEB_GENERATION46_TARGET_SOURCE, "0" * 40, 1
+        )
         if not any(
-            finding.rule == "web-generation46-inline-freeze-agreement"
+            finding.rule == "web-generation46-bridge-bytes"
             for finding in scan_web_generation46_bridge_contract(
-                stale_inline, gen46_deployment_text
+                mutated_gen46_bridge, gen46_deployment_text, justfile
             )
         ):
             raise SystemExit(
-                "self-test FAILED: stale generation-46 inline freeze was accepted"
+                "self-test FAILED: generation-46 workflow mutation was accepted"
             )
-    dropped_inline = WEB_GENERATION46_INLINE_FREEZE.sub(
-        "sha256sum --check --strict <<'HASHES'\nHASHES\n",
-        gen46_bridge_text,
-        count=1,
-    )
-    if not any(
-        finding.rule == "web-generation46-inline-freeze-agreement"
-        for finding in scan_web_generation46_bridge_contract(
-            dropped_inline, gen46_deployment_text
+        mutated_gen46_deployment = gen46_deployment_text.replace(
+            WEB_GENERATION46_TARGET_IMAGE,
+            "ghcr.io/great-falls-tool-bus/gftb-site@sha256:" + "0" * 64,
+            1,
         )
-    ):
-        raise SystemExit("self-test FAILED: gutted generation-46 freeze was accepted")
+        if not any(
+            finding.rule == "web-generation46-desired-state-freeze"
+            for finding in scan_web_generation46_bridge_contract(
+                gen46_bridge_text, mutated_gen46_deployment, justfile
+            )
+        ):
+            raise SystemExit(
+                "self-test FAILED: generation-46 desired-state drift was accepted"
+            )
+        for stale_digest in sorted(WEB_GENERATION46_FROZEN_INPUT_SHA256.values()):
+            stale_inline = gen46_bridge_text.replace(stale_digest, "0" * 64, 1)
+            if not any(
+                finding.rule == "web-generation46-inline-freeze-agreement"
+                for finding in scan_web_generation46_bridge_contract(
+                    stale_inline, gen46_deployment_text, justfile
+                )
+            ):
+                raise SystemExit(
+                    "self-test FAILED: stale generation-46 inline freeze was accepted"
+                )
+        dropped_inline = WEB_GENERATION46_INLINE_FREEZE.sub(
+            "sha256sum --check --strict <<'HASHES'\nHASHES\n",
+            gen46_bridge_text,
+            count=1,
+        )
+        if not any(
+            finding.rule == "web-generation46-inline-freeze-agreement"
+            for finding in scan_web_generation46_bridge_contract(
+                dropped_inline, gen46_deployment_text, justfile
+            )
+        ):
+            raise SystemExit(
+                "self-test FAILED: gutted generation-46 freeze was accepted"
+            )
+
+        workflow_contract_mutations = (
+            (
+                "head_sha=${GITHUB_SHA}",
+                "status=success",
+                "web-generation46-carrier-one-shot-weakened",
+                "success-only SPENT query",
+            ),
+            (
+                f"rulesets/{WEB_GENERATION46_RULESET_ID}",
+                "rulesets/${RULESET_ID}",
+                "web-generation46-ruleset-contract-weakened",
+                "caller-selected ruleset",
+            ),
+            (
+                "curl --disable",
+                "curl",
+                "web-generation46-verifier-steering-weakened",
+                "curl configuration reopening",
+            ),
+            (
+                "gpg\\.program|gpg\\..*\\.program|core\\.sshCommand",
+                "gpg\\..*\\.program|core\\.sshCommand",
+                "web-generation46-verifier-steering-weakened",
+                "legacy gpg.program steering reopening",
+            ),
+            (
+                "GFTB_AMENDMENT4_GEN46_REVERSE=1",
+                'GFTB_AMENDMENT4_GEN46_REVERSE="${WEB_RELEASE_RENDER_COMMIT}"',
+                "web-generation46-reverse-selector-weakened",
+                "caller-selected reverse renderer",
+            ),
+            (
+                "kube diff -f .k8s-plans/generation-46.reverse.rendered.yaml",
+                "kube get deployment/greatfallstoolbus-org",
+                "web-generation46-reverse-proof-weakened",
+                "rollback zero-drift removal",
+            ),
+            (
+                f"  ROLLBACK_INFRA_SHA: {WEB_GENERATION46_ROLLBACK_INFRA}",
+                "  ROLLBACK_INFRA_SHA: ${ROLLBACK_INFRA_SHA}",
+                "web-generation46-rollback-operand-drift",
+                "caller-selected rollback commit",
+            ),
+        )
+        for old, new, rule, label in workflow_contract_mutations:
+            mutated = gen46_bridge_text.replace(old, new, 1)
+            if mutated == gen46_bridge_text:
+                raise SystemExit(
+                    f"self-test FAILED: could not construct {label} mutation"
+                )
+            if not any(
+                finding.rule == rule
+                for finding in scan_web_generation46_bridge_contract(
+                    mutated, gen46_deployment_text, justfile
+                )
+            ):
+                raise SystemExit(
+                    f"self-test FAILED: generation-46 accepted {label}"
+                )
+
+        just_contract_mutations = (
+            (
+                f'render_commit="{WEB_GENERATION46_ROLLBACK_INFRA}"',
+                'render_commit="${WEB_RELEASE_RENDER_COMMIT}"',
+                "caller-selected reverse commit",
+            ),
+            (
+                f'"${{WEB_APPLY_IMAGE}}" == "{WEB_GENERATION46_ROLLBACK_IMAGE}"',
+                '-n "${WEB_APPLY_IMAGE}"',
+                "weakened reverse image operand",
+            ),
+            (
+                f'"${{WEB_APPLY_SHA}}" == "{WEB_GENERATION46_ROLLBACK_SOURCE}"',
+                '-n "${WEB_APPLY_SHA}"',
+                "weakened reverse source operand",
+            ),
+            (
+                "GIT_NO_REPLACE_OBJECTS=1 git ls-tree HEAD",
+                "git ls-tree HEAD",
+                "replace-ref-enabled bridge lookup",
+            ),
+            (
+                "        k8s/web/greatfallstoolbus-org-production/web-apply-rbac.yaml\n",
+                "",
+                "seven-input reverse materialization",
+            ),
+        )
+        for old, new, label in just_contract_mutations:
+            mutated = justfile.replace(old, new, 1)
+            if mutated == justfile:
+                raise SystemExit(
+                    f"self-test FAILED: could not construct {label} mutation"
+                )
+            if not any(
+                finding.rule == "web-generation46-reverse-selector-contract"
+                for finding in scan_web_generation46_reverse_selector_contract(
+                    mutated
+                )
+            ):
+                raise SystemExit(
+                    f"self-test FAILED: generation-46 accepted {label}"
+                )
+
+        retired_justfile = justfile.replace(
+            WEB_GENERATION46_REVERSE_SELECTOR, "RETIRED_SELECTOR"
+        )
+        if scan_web_generation46_bridge_selector_lifecycle(
+            False, retired_justfile
+        ):
+            raise SystemExit(
+                "self-test FAILED: paired generation-46 retirement was refused"
+            )
 
     run_web_release_semantic_fixtures()
     run_web_release_mutation_fixtures()
