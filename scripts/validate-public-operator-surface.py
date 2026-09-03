@@ -353,7 +353,7 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "49a0e25c1cc8c8ff", "b15096271b4271a4", "fe1d38e06e5abf79", "905f0b0d50110b7a"
     ),
     "_reviewed-clean-main": _receipt(
-        "b764093a374ac0cb", "1d8439dbd4c9b0eb", "1e6f1e16ef7aa094", "9d5e6c7c48347a6a"
+        "dffb055a287f4a2b", "8a812c67565a7e41", "49a58eb1851c873a", "949afbdf6b962710"
     ),
     "_reviewed-implementation-core": _receipt(
         "180f8edd55babb51", "43e15dac40bbad2a", "bffe444ff6221c04", "7c64836ae0c2cfc6"
@@ -4821,10 +4821,13 @@ def install_web_release_fixture_mocks(
             elif args == [
                 "-c", "core.excludesFile=/dev/null",
                 "-c", "core.attributesFile=/dev/null",
+                "-c", "core.untrackedCache=false",
                 "status", "--porcelain", "--untracked-files=all",
             ]:
                 if os.environ.get("GIT_ATTR_NOSYSTEM") != "1":
                     raise SystemExit("mock status requires system attributes disabled")
+                if state == "apply-git-status-error":
+                    raise SystemExit(2)
                 if state == "apply-git-default-ignore-steering":
                     print("?? override.tf")
             elif (
@@ -6510,6 +6513,10 @@ def run_web_release_mutation_fixtures() -> None:
             (
                 "apply-git-default-ignore-steering",
                 "requires a clean worktree",
+            ),
+            (
+                "apply-git-status-error",
+                "could not inspect worktree status",
             ),
             (
                 "apply-authz-denied-create-policy",

@@ -1579,7 +1579,12 @@ _reviewed-clean-main:
       fi
     done
     [[ "$(git branch --show-current)" == "main" ]] || { echo "Guarded ARC operation requires the main branch" >&2; exit 2; }
-    [[ -z "$(git -c core.excludesFile=/dev/null -c core.attributesFile=/dev/null status --porcelain --untracked-files=all)" ]] || { echo "Guarded ARC operation requires a clean worktree" >&2; exit 2; }
+    set +e
+    worktree_status="$(git -c core.excludesFile=/dev/null -c core.attributesFile=/dev/null -c core.untrackedCache=false status --porcelain --untracked-files=all 2>/dev/null)"
+    worktree_status_rc=$?
+    set -e
+    [[ "${worktree_status_rc}" == "0" ]] || { echo "Guarded ARC operation could not inspect worktree status" >&2; exit 2; }
+    [[ -z "${worktree_status}" ]] || { echo "Guarded ARC operation requires a clean worktree" >&2; exit 2; }
     index_flags="$(git ls-files -v | awk '$1 != "H"')"
     [[ -z "${index_flags}" ]] || { echo "Guarded ARC operation refuses assume-unchanged, skip-worktree, or non-cached index flags: ${index_flags}" >&2; exit 2; }
     canonical_remote="https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git"
