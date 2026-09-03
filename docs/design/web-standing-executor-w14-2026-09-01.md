@@ -53,7 +53,8 @@ Consequences this design stands on:
    define one).
 
    > *Annotation (2026-09-03):* Amendment 4 (meta #57) was subsequently
-   > drafted as exactly that per-generation-class interim.
+   > drafted as the bounded interim lane (standing-bounded, Amendment-3
+   > shape).
 3. **Generation 46+ therefore cannot reach production until §7's ladder
    completes** — GF-I09 phase 2 arms only "after the owning SSOTs
    independently prove publisher, verifier, controller, exact-plan executor,
@@ -62,16 +63,19 @@ Consequences this design stands on:
    before the upstream legs exist, that is a fresh Meta decision outside this
    spec (§8).
 
-> **SUPERSEDED IN PART (2026-09-03, operator ruling, 2026-09-02 interview)** —
-> Meta took exactly that fresh decision: decisions/0022 Amendment 4 (meta PR
-> #57) is the bounded interim lane for generation 46+. Separately, this
-> design's §2 trigger model (a push-triggered standing apply) conflicts with
-> the ratified TIN-2611 conversion: under that spec the sole mutation
-> authority is owner-overlay-controller #5's Accept|Refuse on typed
-> requests, parallel mutation workflows are forbidden, and ADR 0022 §3.1
-> assigns publisher/verifier/admission roles only. Before any arming, §2
-> must be re-derived under the TIN-2611 chain. Retained text below stands
-> unedited per the house no-silent-rewrite convention.
+> **SUPERSEDED IN PART (2026-09-03, operator ruling, 2026-09-03 interview)** —
+> Meta has drafted exactly that fresh decision: decisions/0022 Amendment 4
+> (meta PR #57, pending operator signature) is the bounded interim lane for
+> generation 46+. Separately, this design's §2 trigger model (a
+> push-triggered standing apply) conflicts with the TIN-2611 conversion
+> chain. The ratified source is ADR 0022 (+ Amendment 1) on meta `main`;
+> TIN-2611's gated-convergence spec is the designated conversion carrier,
+> DRAFT on infra PR #104. Under that chain the sole mutation authority is
+> owner-overlay-controller #5's Accept|Refuse on typed requests, parallel
+> mutation workflows are forbidden, and ADR 0022 §3.1 assigns
+> publisher/verifier/admission roles only. Before any arming, §2 must be
+> re-derived under the TIN-2611 chain. Retained text below stands unedited
+> per the house no-silent-rewrite convention.
 
 `.github/workflows/` on infra `main` today contains no `web-generation-*`
 file, and `scripts/validate-public-operator-surface.py` fails the public
@@ -568,7 +572,7 @@ the receipt (`gfI09` block) but unarmed.
   decision and its bounds belong to the operator and Meta, not this document.
 
   > *Annotation (2026-09-03):* the statement remains true of this spec; Meta
-  > subsequently took that decision on its own authority (Amendment 4, meta
-  > PR #57).
+  > has since drafted that decision on its own authority (Amendment 4, meta
+  > PR #57, pending operator signature).
 - **No second reconciler, no schedule, no dispatch** — one trigger, one
   mutator, one receipt per pin.
