@@ -1563,7 +1563,11 @@ _reviewed-clean-main:
       if [[ -e "${info_path}" || -L "${info_path}" ]]; then
         [[ -f "${info_path}" && ! -L "${info_path}" ]] || { echo "Guarded ARC operation refuses non-regular repository-local Git metadata" >&2; exit 2; }
         set +e
-        awk '!/^[[:space:]]*(#|$)/ { found = 1 } END { exit(found ? 0 : 1) }' "${info_path}"
+        if [[ "${info_name}" == "exclude" ]]; then
+          awk '!/^#/ && !/^[[:space:]]*$/ { found = 1 } END { exit(found ? 0 : 1) }' "${info_path}"
+        else
+          awk '!/^[[:space:]]*(#|$)/ { found = 1 } END { exit(found ? 0 : 1) }' "${info_path}"
+        fi
         info_status=$?
         set -e
         case "${info_status}" in

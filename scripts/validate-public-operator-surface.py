@@ -353,7 +353,7 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "49a0e25c1cc8c8ff", "b15096271b4271a4", "fe1d38e06e5abf79", "905f0b0d50110b7a"
     ),
     "_reviewed-clean-main": _receipt(
-        "180d7dafca8545b6", "18a4cd3645e84382", "2262e44bc5d9a850", "bbb6745a1d1e3c03"
+        "ab5768da9dca9203", "6872031e65202d72", "87ceb29bb0a1b1ae", "7298cadc531c7d33"
     ),
     "_reviewed-implementation-core": _receipt(
         "180f8edd55babb51", "43e15dac40bbad2a", "bffe444ff6221c04", "7c64836ae0c2cfc6"
@@ -3719,9 +3719,13 @@ def install_web_release_fixture_mocks(
 
     git_info = fixture_dir / "git-info"
     git_info.mkdir(mode=0o700)
-    for name in ("safe-exclude", "safe-attributes"):
-        (git_info / name).write_text("# fixture comment only\n", encoding="utf-8")
-    (git_info / "active-exclude").write_text("*.tf\n", encoding="utf-8")
+    (git_info / "safe-exclude").write_text(
+        "# fixture comment only\n", encoding="utf-8"
+    )
+    (git_info / "safe-attributes").write_text(
+        "  # indented attribute comment\n", encoding="utf-8"
+    )
+    (git_info / "active-exclude").write_text(" #*.tf\n", encoding="utf-8")
     (git_info / "active-attributes").write_text(
         "* filter=untrusted\n", encoding="utf-8"
     )
