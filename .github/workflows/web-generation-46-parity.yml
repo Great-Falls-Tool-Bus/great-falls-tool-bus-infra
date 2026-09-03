@@ -112,6 +112,8 @@ jobs:
 
           api() { nix develop . --command gh api --hostname github.com "$@"; }
           clean_curl() {
+            # The positional parameters expand only inside this isolated child.
+            # shellcheck disable=SC2016
             nix develop . --command env BASH_ENV= ENV= bash --noprofile --norc -p -c '
               set -euo pipefail
               tool_path="${PATH}"
