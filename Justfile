@@ -1506,7 +1506,7 @@ _reviewed-clean-main:
     for name in GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_SYSTEM GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_SSH_COMMAND GIT_ASKPASS; do
       [[ -z "${!name:-}" ]] || { echo "Guarded ARC operation refuses ambient ${name}" >&2; exit 2; }
     done
-    if git config --get-regexp '^(url\..*\.insteadOf|gpg\.program|gpg\..*\.program|core\.sshCommand|include\..*|includeIf\..*)$'; then
+    if git config --get-regexp '^(url\..*\.insteadof|gpg\.program|gpg\..*\.program|core\.sshcommand|include\..*|includeif\..*)$'; then
       echo "Guarded ARC operation refuses Git configuration that can redirect remote or signature verification" >&2
       exit 2
     fi
@@ -2684,7 +2684,11 @@ web-release-render: _web-release-candidate-inputs
     1)
       [[ "${WEB_APPLY_IMAGE}" == "ghcr.io/great-falls-tool-bus/gftb-site@sha256:498b9715ed123ac8b5e1be0c35a5355ede6880e655e77809b85bf83c8f34f24c" ]] || { echo "Amendment 4 reverse image is not the exact generation-45 operand" >&2; exit 2; }
       [[ "${WEB_APPLY_SHA}" == "836857bce295dec206cb4ebd6ba45f2956bc8aed" ]] || { echo "Amendment 4 reverse source is not the exact generation-45 operand" >&2; exit 2; }
-      env -i PATH="${PATH}" HOME="${render_dir}/home" GNUPGHOME="${GNUPGHOME:-}" just _reviewed-clean-main >/dev/null
+      if [[ "${GFTB_AMENDMENT4_GEN46_AUTHORIZED_CARRIER:-}" == 1 ]]; then
+        just _reviewed-web-release-carrier >/dev/null
+      else
+        env -i PATH="${PATH}" HOME="${render_dir}/home" GNUPGHOME="${GNUPGHOME:-}" just _reviewed-clean-main >/dev/null
+      fi
       bridge_path=".github/workflows/web-generation-46-parity.yml"
       bridge_entry="$(GIT_NO_REPLACE_OBJECTS=1 git ls-tree HEAD -- "${bridge_path}")"
       [[ "$(awk '{print $1 " " $2}' <<<"${bridge_entry}")" == "100644 blob" ]] || { echo "Amendment 4 reverse requires its tracked generation-46 bridge" >&2; exit 2; }
@@ -4114,14 +4118,50 @@ web-release-server-dry-run: _web-release-apply-kubeconfig-contract _web-release-
     repo_root="$(git rev-parse --show-toplevel)"
     kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply --dry-run=server -f "${repo_root}/.k8s-plans/web-release.rendered.yaml"
 
-# ATTENDED APPLY. Gated exactly like arc-apply: a clean, signed checkout equal to
-# canonical main, GFTB_APPLY_CONFIRM=apply, an operator-custody kubeconfig, and a
-# plan that still reproduces byte-for-byte. It dry-runs, applies the recorded
-# bytes, and waits for the rollout. (The apply-time prune of the two legacy
+# Ordinary applies require clean, signed, current canonical main. The temporary
+# Amendment-4 generation-46 carrier may instead use the frozen authority marker
+# written only after its workflow proves the signed squash, reviewed parent,
+# exact PR provenance, ruleset, one-shot run, and frozen bytes. That marker
+# deliberately remains valid if an unrelated main merge lands during rollout,
+# so a post-mutation failure cannot strand recovery behind moving-main policy.
+_reviewed-web-release-carrier:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "${GFTB_AMENDMENT4_GEN46_AUTHORIZED_CARRIER:-}" in
+      "") just _reviewed-clean-main ;;
+      1)
+        [[ "${GITHUB_ACTIONS:-}" == true ]] || { echo "Generation-46 frozen-carrier authority is CI-only" >&2; exit 2; }
+        [[ "${GITHUB_REPOSITORY:-}" == Great-Falls-Tool-Bus/great-falls-tool-bus-infra ]] || { echo "Generation-46 frozen-carrier repository mismatch" >&2; exit 2; }
+        [[ "${GITHUB_EVENT_NAME:-}" == push && "${GITHUB_REF:-}" == refs/heads/main ]] || { echo "Generation-46 frozen-carrier event mismatch" >&2; exit 2; }
+        [[ "${GITHUB_WORKFLOW_REF:-}" == Great-Falls-Tool-Bus/great-falls-tool-bus-infra/.github/workflows/web-generation-46-parity.yml@refs/heads/main ]] || { echo "Generation-46 frozen-carrier workflow mismatch" >&2; exit 2; }
+        [[ "${GITHUB_WORKFLOW_SHA:-}" == "${GITHUB_SHA:-}" && "${GITHUB_RUN_ATTEMPT:-}" == 1 ]] || { echo "Generation-46 frozen-carrier invocation mismatch" >&2; exit 2; }
+        [[ -n "${RUNNER_TEMP:-}" && "${RUNNER_TEMP}" == /* ]] || { echo "Generation-46 frozen-carrier RUNNER_TEMP is invalid" >&2; exit 2; }
+        authority_file="${RUNNER_TEMP}/gftb-web-generation-46.authorized-carrier"
+        [[ -f "${authority_file}" && ! -L "${authority_file}" ]] || { echo "Generation-46 frozen-carrier authority marker is absent or unsafe" >&2; exit 2; }
+        [[ "$(stat -c '%a' "${authority_file}")" == 600 ]] || { echo "Generation-46 frozen-carrier authority marker mode is not 0600" >&2; exit 2; }
+        [[ "$(tr -d '\n' < "${authority_file}")" == "${GITHUB_SHA}" ]] || { echo "Generation-46 frozen-carrier authority marker mismatch" >&2; exit 2; }
+        [[ "$(git rev-parse HEAD)" == "${GITHUB_SHA}" ]] || { echo "Generation-46 frozen-carrier checkout mismatch" >&2; exit 2; }
+        [[ -z "$(git status --porcelain)" ]] || { echo "Generation-46 frozen-carrier checkout is dirty" >&2; exit 2; }
+        for name in GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_SYSTEM GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_SSH_COMMAND GIT_ASKPASS; do
+          [[ -z "${!name:-}" ]] || { echo "Generation-46 frozen-carrier authority refuses ambient ${name}" >&2; exit 2; }
+        done
+        if git config --get-regexp '^(url\..*\.insteadof|gpg\.program|gpg\..*\.program|core\.sshcommand|include\..*|includeif\..*)$'; then
+          echo "Generation-46 frozen-carrier authority refuses Git verifier steering" >&2
+          exit 2
+        fi
+        git -c gpg.format=openpgp -c gpg.program=gpg -c gpg.openpgp.program=gpg verify-commit "${GITHUB_SHA}" >/dev/null
+        ;;
+      *) echo "Invalid GFTB_AMENDMENT4_GEN46_AUTHORIZED_CARRIER selector" >&2; exit 2 ;;
+    esac
+
+# ATTENDED APPLY. Gated by the carrier contract above, GFTB_APPLY_CONFIRM=apply,
+# an operator-custody kubeconfig, and a plan that still reproduces byte-for-byte.
+# It dry-runs, applies the recorded bytes, and waits for the rollout. (The
+# apply-time prune of the two legacy
 # adapter-node egress policies is retired by TIN-4254: every gen 37..43 apply
 # already ran the delete, the committed tree declares default-deny-egress, and
 # live absence is receipted by an attended read-only census on the pruning PR.)
-web-release-apply: _reviewed-clean-main _operator-apply-confirm _web-release-apply-kubeconfig-contract _web-release-plan-preflight
+web-release-apply: _reviewed-web-release-carrier _operator-apply-confirm _web-release-apply-kubeconfig-contract _web-release-plan-preflight
     #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
     set +x
     set -euo pipefail

@@ -34,6 +34,9 @@ env:
   # Exact generation-46 pin merge; it must remain the carrier's sole parent.
   REVIEWED_BASE_SHA: 7d4ae781b8c4d8e694be21b7196bfe677d496bcb
   PIN_PR_NUMBER: "176"
+  # PR #176 was based on this exact signed main. Keep it distinct from the
+  # older generation-45 rollback tree used only to render recovery state.
+  PIN_BASE_SHA: b2d8b3db84523e910740252f3b87573cbaa23660
   PIN_HEAD_SHA: 96befeaaaa69ccdb34a0209aedd27ed04ae34239
   PIN_MERGE_SHA: 7d4ae781b8c4d8e694be21b7196bfe677d496bcb
   ROLLBACK_INFRA_SHA: 8ecf26987896659727fc623142e170779ff92d41
@@ -53,10 +56,10 @@ env:
   BRIDGE_EXPIRES_AT: "2026-09-10T03:59:59Z"
   AMENDMENT4_RECEIPT_ORDINAL: "1"
   # Meta ratification: exact merged main, ADR blob, and content digest.
-  META_MAIN_SHA: ba67a174da22cca2fd8b2e7312e859664151c1bc
+  META_MAIN_SHA: ba75f65a4c40245c96ece58d24d6c8e86212873b
   META_ADR_PATH: decisions/0022-gftb-site-main-prod-gfi09-carrier-2026-08-30.md
-  META_ADR_BLOB: 9e5d297c1a325c16ba29e13146f98619e31f6dd9
-  META_ADR_SHA256: b3717602a64ddd0561f650fb08c671d0bb1f13ce12c69759682e1d10700260ff
+  META_ADR_BLOB: 3388ce7e793898c316cbda7e68724f0c125fc943
+  META_ADR_SHA256: 3b6b37e6f10d7257d509cda2ffc3b1c787d67647f1b2ddef497b02c29966d75b
   # The bridge-adding PR in great-falls-tool-bus-infra; the authority step
   # binds the merge to it and the parity receipt embeds it. The sole remaining
   # placeholder is filled immediately after GitHub assigns the draft PR number.
@@ -90,7 +93,7 @@ jobs:
           # env block AND at its inline re-assert below; this guard makes a
           # partial fill or a forgotten fill fail closed rather than bind a
           # vacuous constant.
-          for name in REVIEWED_BASE_SHA PIN_PR_NUMBER PIN_HEAD_SHA PIN_MERGE_SHA ROLLBACK_INFRA_SHA TARGET_SOURCE_SHA TARGET_IMAGE SOURCE_CI_RUN_ID SOURCE_PUBLISH_RUN_ID TARGET_RENDER_SHA256 ROLLBACK_RENDER_SHA256 BRIDGE_EXPIRES_AT AMENDMENT4_RECEIPT_ORDINAL META_MAIN_SHA META_ADR_BLOB META_ADR_SHA256 BRIDGE_PR_NUMBER; do
+          for name in REVIEWED_BASE_SHA PIN_PR_NUMBER PIN_BASE_SHA PIN_HEAD_SHA PIN_MERGE_SHA ROLLBACK_INFRA_SHA TARGET_SOURCE_SHA TARGET_IMAGE SOURCE_CI_RUN_ID SOURCE_PUBLISH_RUN_ID TARGET_RENDER_SHA256 ROLLBACK_RENDER_SHA256 BRIDGE_EXPIRES_AT AMENDMENT4_RECEIPT_ORDINAL META_MAIN_SHA META_ADR_BLOB META_ADR_SHA256 BRIDGE_PR_NUMBER; do
             case "${!name}" in
               PLACEHOLDER_*) echo "::error::Refusing: ${name} is still an unfilled placeholder."; exit 2 ;;
             esac
@@ -101,7 +104,7 @@ jobs:
           for name in GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_SYSTEM GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_SSH_COMMAND GIT_ASKPASS; do
             test -z "${!name:-}" || { echo "::error::Refusing ambient ${name}."; exit 2; }
           done
-          if git config --get-regexp '^(url\..*\.insteadOf|gpg\.program|gpg\..*\.program|core\.sshCommand|include\..*|includeIf\..*)$'; then
+          if git config --get-regexp '^(url\..*\.insteadof|gpg\.program|gpg\..*\.program|core\.sshcommand|include\..*|includeif\..*)$'; then
             echo "::error::Git configuration may redirect canonical or signature verification."
             exit 2
           fi
@@ -166,13 +169,13 @@ jobs:
           jq -e \
             --arg head "${PIN_HEAD_SHA}" \
             --arg merge "${PIN_MERGE_SHA}" \
-            --arg base "${ROLLBACK_INFRA_SHA}" '
+            --arg base "${PIN_BASE_SHA}" '
             .merged == true
             and .base.ref == "main" and .base.sha == $base
             and .head.sha == $head and .merge_commit_sha == $merge
           ' <<<"${pin_pr}" >/dev/null
           pin_merge="$(api "repos/${GITHUB_REPOSITORY}/commits/${PIN_MERGE_SHA}")"
-          jq -e --arg parent "${ROLLBACK_INFRA_SHA}" '
+          jq -e --arg parent "${PIN_BASE_SHA}" '
             .commit.verification.verified == true
             and .commit.verification.reason == "valid"
             and (.parents | length) == 1 and .parents[0].sha == $parent
@@ -193,14 +196,27 @@ jobs:
             and .current_user_can_bypass == "never"
             and .conditions.ref_name.include == ["refs/heads/main"]
             and .conditions.ref_name.exclude == []
-            and ([.rules[].type] | sort) == (["deletion", "non_fast_forward", "pull_request", "required_signatures", "required_status_checks"] | sort)
-            and ([.rules[] | select(.type == "pull_request" and .parameters.allowed_merge_methods == ["squash"])] | length) == 1
-            and ([.rules[] | select(
-              .type == "required_status_checks"
-              and .parameters.strict_required_status_checks_policy == true
-              and .parameters.do_not_enforce_on_create == false
-              and .parameters.required_status_checks == [{"context":"validate","integration_id":15368}]
-            )] | length) == 1
+            and (.rules | sort_by(.type)) == ([
+              {"type":"deletion"},
+              {"type":"non_fast_forward"},
+              {"type":"required_signatures"},
+              {"type":"pull_request","parameters":{
+                "allowed_merge_methods":["squash"],
+                "dismiss_stale_reviews_on_push":true,
+                "dismissal_restriction":{"allowed_actors":[],"enabled":false},
+                "require_code_owner_review":false,
+                "require_extra_approval_for_unattributed_changes":true,
+                "require_last_push_approval":false,
+                "required_approving_review_count":0,
+                "required_review_thread_resolution":true,
+                "required_reviewers":[]
+              }},
+              {"type":"required_status_checks","parameters":{
+                "do_not_enforce_on_create":false,
+                "required_status_checks":[{"context":"validate","integration_id":15368}],
+                "strict_required_status_checks_policy":true
+              }}
+            ] | sort_by(.type))
           ' <<<"${ruleset}" >/dev/null
           effective_rules="$(api "repos/${GITHUB_REPOSITORY}/rules/branches/main")"
           jq -e --arg source "${GITHUB_REPOSITORY}" '
@@ -215,13 +231,13 @@ jobs:
 
           # Meta is private to this token. Exact byte-pinned constants bind the
           # already-merged ratification without widening this credential.
-          test "${META_MAIN_SHA}" = ba67a174da22cca2fd8b2e7312e859664151c1bc
+          test "${META_MAIN_SHA}" = ba75f65a4c40245c96ece58d24d6c8e86212873b
           test "${META_ADR_PATH}" = decisions/0022-gftb-site-main-prod-gfi09-carrier-2026-08-30.md
-          test "${META_ADR_BLOB}" = 9e5d297c1a325c16ba29e13146f98619e31f6dd9
-          test "${META_ADR_SHA256}" = b3717602a64ddd0561f650fb08c671d0bb1f13ce12c69759682e1d10700260ff
+          test "${META_ADR_BLOB}" = 3388ce7e793898c316cbda7e68724f0c125fc943
+          test "${META_ADR_SHA256}" = 3b6b37e6f10d7257d509cda2ffc3b1c787d67647f1b2ddef497b02c29966d75b
 
           sha256sum --check --strict <<'HASHES'
-          ce50412c538838457b48bff449958c3222ef6b17f3230574ad3109d0ba043b29  Justfile
+          64c9489c0501052822b8d80f69d65edf209a11b95df6baf1d0df9b1aef5d80f1  Justfile
           33150ce2f846aef01539145f74a8eb1a04d45df5d960494ce188111a80e170e3  flake.lock
           7f1249c2c291282f724e6d49eaeafc05d7a1009eb00a5724ff6ca633c2c30879  flake.nix
           3a56b86ddfc56ea151240c96c84364a4213ff3d7aa1db08fcfdca47669c1f9cd  k8s/web/greatfallstoolbus-org-production/deployment.yaml
@@ -256,6 +272,10 @@ jobs:
           nix develop . --command gpg --batch --homedir "${signer_home}" --import "${RUNNER_TEMP}/web-flow.gpg" >/dev/null 2>&1
           GNUPGHOME="${signer_home}" nix develop . --command git -c gpg.format=openpgp -c gpg.program=gpg -c gpg.openpgp.program=gpg verify-commit "${GITHUB_SHA}" >/dev/null
           echo "GNUPGHOME=${signer_home}" >> "${GITHUB_ENV}"
+          authority_file="${RUNNER_TEMP}/gftb-web-generation-46.authorized-carrier"
+          [[ ! -e "${authority_file}" && ! -L "${authority_file}" ]]
+          printf '%s\n' "${GITHUB_SHA}" > "${authority_file}"
+          chmod 600 "${authority_file}"
 
       - name: Prove both candidates and freeze both plans before credential
         working-directory: overlay
@@ -416,6 +436,7 @@ jobs:
             service_contract_sha256="$(jq -S -c '{type:.spec.type,selector:.spec.selector,ports:.spec.ports,externalIPs:(.spec.externalIPs // [])}' <<<"${service}" | sha256sum | awk '{print $1}')"
             jq -n \
               --argjson deployment "${deployment}" \
+              --argjson service "${service}" \
               --argjson replicaSets "${replica_sets}" \
               --argjson pods "${pods}" \
               --argjson endpointSlices "${slices}" \
@@ -442,6 +463,7 @@ jobs:
                 replicaSets: {
                   ownedCount: ([$replicaSets.items[] | select(any(.metadata.ownerReferences[]?; .controller == true and .uid == $deployment.metadata.uid))] | length),
                   activeCount: ([$replicaSets.items[] | select(.metadata.uid == $activeUid)] | length),
+                  activeUid: $activeUid,
                   activeRevision: $revision
                 },
                 pods: {
@@ -463,7 +485,14 @@ jobs:
                 networkPolicies: {
                   names: ([$networkPolicies.items[].metadata.name] | sort),
                   semanticSha256: "301eecb4ad234fdd7258ac7351a5a563e1b53cb250bce6f51a68824854b28220"
-                }
+                },
+                appliedObjects: ([
+                  {kind:"Deployment",name:$deployment.metadata.name,uid:$deployment.metadata.uid,generation:$deployment.metadata.generation},
+                  {kind:"Service",name:"greatfallstoolbus-org",uid:$service.metadata.uid,generation:$service.metadata.generation}
+                ] + [
+                  $networkPolicies.items[]
+                  | {kind:"NetworkPolicy",name:.metadata.name,uid:.metadata.uid,generation:.metadata.generation}
+                ] | sort_by([.kind,.name]))
               }' > "${out}"
           )
           access_proof() (
@@ -514,6 +543,7 @@ jobs:
                 },
                 run:{id:env.GITHUB_RUN_ID,attempt:(env.GITHUB_RUN_ATTEMPT|tonumber),url:(env.GITHUB_SERVER_URL+"/"+env.GITHUB_REPOSITORY+"/actions/runs/"+env.GITHUB_RUN_ID),environment:"web-apply"},
                 saved:{forwardRenderSha256:env.TARGET_RENDER_SHA256,reverseRenderSha256:env.ROLLBACK_RENDER_SHA256},
+                retainedPrior:{infraSha:env.ROLLBACK_INFRA_SHA,sourceSha:env.ROLLBACK_SOURCE_SHA,image:env.ROLLBACK_IMAGE,renderSha256:env.ROLLBACK_RENDER_SHA256},
                 spent:{terminalBeforeRun:$spent},
                 classification:$classification,
                 prestate:$pre,
@@ -585,7 +615,7 @@ jobs:
             proof_status=failed
             rollback_attempted=true
             restore_plan reverse
-            export WEB_APPLY_IMAGE="${ROLLBACK_IMAGE}" WEB_APPLY_SHA="${ROLLBACK_SOURCE_SHA}" GFTB_AMENDMENT4_GEN46_REVERSE=1
+            export WEB_APPLY_IMAGE="${ROLLBACK_IMAGE}" WEB_APPLY_SHA="${ROLLBACK_SOURCE_SHA}" GFTB_AMENDMENT4_GEN46_REVERSE=1 GFTB_AMENDMENT4_GEN46_AUTHORIZED_CARRIER=1
             set +e
             nix develop . --command just web-release-server-dry-run
             reverse_dry_rc=$?
@@ -632,6 +662,8 @@ jobs:
           test -n "${RUNNER_TEMP}"
           for name in \
             gftb-web-generation-46.kubeconfig \
+            gftb-web-generation-46.authorized-carrier \
+            web-flow.gpg \
             gftb-web-generation-46-receipt.json \
             pre.json post.json rollback.json access.json access.headers access.body; do
             target="${RUNNER_TEMP}/${name}"

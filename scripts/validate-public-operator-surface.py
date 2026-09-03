@@ -117,8 +117,9 @@ RETIRED_WEB_GENERATION45_BRIDGE_WORKFLOW = Path(".github/workflows/web-generatio
 # The shared TIN-2611 GF v4 owner-controller chain is the permanent successor;
 # this exception does not arm the superseded local W14 executor.
 WEB_GENERATION46_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-46-parity.yml")
-WEB_GENERATION46_BRIDGE_SHA256 = "f37beff494a8def7f08be3fe81b645b0b85c85c0a12c0a0d0feefacadc259017"
+WEB_GENERATION46_BRIDGE_SHA256 = "7e4fa96bac93ed922f55b48161a09eb61dca175e55038c76109a522e06342cc6"
 WEB_GENERATION46_REVERSE_SELECTOR = "GFTB_AMENDMENT4_GEN46_REVERSE"
+WEB_GENERATION46_PIN_BASE = "b2d8b3db84523e910740252f3b87573cbaa23660"
 WEB_GENERATION46_ROLLBACK_INFRA = "8ecf26987896659727fc623142e170779ff92d41"
 WEB_GENERATION46_ROLLBACK_SOURCE = "836857bce295dec206cb4ebd6ba45f2956bc8aed"
 WEB_GENERATION46_ROLLBACK_IMAGE = (
@@ -153,7 +154,7 @@ WEB_GENERATION46_REVERSE_INPUTS = (
     "tofu/intent/great-falls-tool-bus/pr-env-lanes.schema.json",
 )
 WEB_GENERATION46_FROZEN_INPUT_SHA256 = {
-    Path("Justfile"): "ce50412c538838457b48bff449958c3222ef6b17f3230574ad3109d0ba043b29",
+    Path("Justfile"): "64c9489c0501052822b8d80f69d65edf209a11b95df6baf1d0df9b1aef5d80f1",
     Path("flake.lock"): "33150ce2f846aef01539145f74a8eb1a04d45df5d960494ce188111a80e170e3",
     Path("flake.nix"): "7f1249c2c291282f724e6d49eaeafc05d7a1009eb00a5724ff6ca633c2c30879",
     Path("k8s/web/greatfallstoolbus-org-production/deployment.yaml"): "3a56b86ddfc56ea151240c96c84364a4213ff3d7aa1db08fcfdca47669c1f9cd",
@@ -163,6 +164,10 @@ WEB_GENERATION46_FROZEN_INPUT_SHA256 = {
     Path("scripts/guard-no-remote-kustomize-resources.sh"): "aacf50ada42c322a8e12eee0af40d55d77598f5468b73c1df574a8b50cc3be17",
     Path("scripts/validate-web-stack.sh"): "c4c3bc53977330afbb79be1f90a783116960a56f9ccf38d57f89936da686d1b3",
 }
+WEB_GENERATION46_GIT_STEERING_PATTERN = (
+    r"url\..*\.insteadof|gpg\.program|gpg\..*\.program|core\.sshcommand|"
+    r"include\..*|includeif\..*"
+)
 WORKFLOW_REPOSITORY_DISPATCH = re.compile(r"^\s*repository_dispatch\s*:")
 JUST_COMMAND_START = re.compile(r"\bjust\b")
 JUST_OPTIONS_WITH_VALUES = {
@@ -411,7 +416,7 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "49a0e25c1cc8c8ff", "b15096271b4271a4", "fe1d38e06e5abf79", "905f0b0d50110b7a"
     ),
     "_reviewed-clean-main": _receipt(
-        "d4fc6c1d7b4806e1", "8602bd7fdcc01106", "53f55b5b8fc9fdb9", "728971f964fe01ec"
+        "b9f88fbbdd1bf344", "fedb6df2056861af", "67be34318db94c22", "ed7aeb6f9e387f19"
     ),
     "_reviewed-implementation-core": _receipt(
         "180f8edd55babb51", "43e15dac40bbad2a", "bffe444ff6221c04", "7c64836ae0c2cfc6"
@@ -521,8 +526,9 @@ WEB_RELEASE_RECIPE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
         "_web-release-apply-kubeconfig-contract",
         "_web-release-plan-preflight",
     ),
+    "_reviewed-web-release-carrier": (),
     "web-release-apply": (
-        "_reviewed-clean-main",
+        "_reviewed-web-release-carrier",
         "_operator-apply-confirm",
         "_web-release-apply-kubeconfig-contract",
         "_web-release-plan-preflight",
@@ -553,7 +559,7 @@ WEB_RELEASE_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     # `kubectl kustomize` bytes VERBATIM and asserts the committed pin equals
     # the reviewed inputs; the mutation/synthesis jq lane is deleted.
     "web-release-render": _receipt(
-        "750dfcb2b5d376e1", "a9bb9782f14ca767", "c96738472e13b054", "6982310081ef4f88"
+        "c8dd00a5f6cbfda1", "093f7fb4bd12f7cf", "4728d4f5d214df7f", "6261ba537eaef07e"
     ),
     # Updated 2026-08-31 (TIN-4254 W13): the pruned legacy allow-egress
     # policies left the named mutation-denial enumeration.
@@ -582,6 +588,9 @@ WEB_RELEASE_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     ),
     "web-release-server-dry-run": _receipt(
         "b478fca65de1ae58", "a37038565e80d6f6", "23d5318412fc919d", "77382267087b8707"
+    ),
+    "_reviewed-web-release-carrier": _receipt(
+        "243f9fef05e69e15", "c5d0f0f5fa3bb394", "3315371dc5b64267", "c6a7c35f679d434e"
     ),
     # Updated 2026-08-31 (TIN-4254 W13): the apply-time NetworkPolicy prune is
     # retired; the recipe dry-runs, applies the recorded bytes, and waits.
@@ -1930,17 +1939,64 @@ def scan_workflow_text(
 def scan_web_generation46_bridge_selector_lifecycle(
     bridge_present: bool, justfile_text: str
 ) -> list[Finding]:
-    """The one-shot bridge and its temporary Just selector retire together."""
-    selector_present = WEB_GENERATION46_REVERSE_SELECTOR in justfile_text
-    if bridge_present == selector_present:
-        return []
+    """The one-shot bridge and every temporary Just capability retire together."""
+    definitions = all_just_recipe_blocks(justfile_text)
+    executable_surface = "\n".join(
+        [
+            f"{name}:{dependencies}\n{executable_recipe_text(body)}"
+            for name, recipes in definitions.items()
+            for _, dependencies, body in recipes
+        ]
+        + [
+            f"alias {name}:={target}"
+            for name, declarations in all_just_aliases(justfile_text).items()
+            for _, target in declarations
+        ]
+    )
+    temporary_fragments = (
+        WEB_GENERATION46_REVERSE_SELECTOR,
+        "GFTB_AMENDMENT4_GEN46_AUTHORIZED_CARRIER",
+        "_reviewed-web-release-carrier:",
+        "gftb-web-generation-46.authorized-carrier",
+        "web-generation-46-parity.yml",
+        WEB_GENERATION46_ROLLBACK_INFRA,
+        WEB_GENERATION46_ROLLBACK_SOURCE,
+        WEB_GENERATION46_ROLLBACK_IMAGE,
+        'render_root="${render_dir}/tree"',
+        "closed_inputs=(",
+        "GIT_NO_REPLACE_OBJECTS=1 git",
+        'render_target="${render_root}/',
+    )
+    observed = [
+        fragment for fragment in temporary_fragments if fragment in executable_surface
+    ]
+    if bridge_present:
+        if len(observed) == len(temporary_fragments):
+            return []
+    else:
+        apply_definitions = definitions.get("web-release-apply", [])
+        ordinary_dependencies = (
+            "_reviewed-clean-main",
+            "_operator-apply-confirm",
+            "_web-release-apply-kubeconfig-contract",
+            "_web-release-plan-preflight",
+        )
+        ordinary_apply = (
+            len(apply_definitions) == 1
+            and tuple(apply_definitions[0][1].split()) == ordinary_dependencies
+        )
+        if not observed and ordinary_apply:
+            return []
+        if not ordinary_apply:
+            observed.append("non-ordinary web-release-apply dependencies")
     return [
         Finding(
             "web-generation46-bridge-selector-lifecycle",
             WEB_GENERATION46_BRIDGE_WORKFLOW,
             1,
-            "The Amendment-4 bridge and its exact temporary reverse selector "
-            "must be introduced and retired together.",
+            "The Amendment-4 bridge, reverse renderer, frozen-carrier guard, "
+            "rollback operands, and extraction capability must be introduced "
+            f"and retired together; observed temporary fragments={observed!r}.",
         )
     ]
 
@@ -1976,6 +2032,9 @@ def scan_web_generation46_reverse_selector_contract(
         'case "${GFTB_AMENDMENT4_GEN46_REVERSE:-}" in',
         f'[[ "${{WEB_APPLY_IMAGE}}" == "{WEB_GENERATION46_ROLLBACK_IMAGE}" ]] ||',
         f'[[ "${{WEB_APPLY_SHA}}" == "{WEB_GENERATION46_ROLLBACK_SOURCE}" ]] ||',
+        'if [[ "${GFTB_AMENDMENT4_GEN46_AUTHORIZED_CARRIER:-}" == 1 ]]; then',
+        "just _reviewed-web-release-carrier >/dev/null",
+        'just _reviewed-clean-main >/dev/null',
         'bridge_path=".github/workflows/web-generation-46-parity.yml"',
         '== "100644 blob" ]] ||',
         f'render_commit="{WEB_GENERATION46_ROLLBACK_INFRA}"',
@@ -2059,6 +2118,21 @@ def scan_web_generation46_bridge_contract(
                 )
             )
 
+    pin_base = re.findall(
+        r"^  PIN_BASE_SHA:\s*(\S+)\s*$", workflow_text, re.MULTILINE
+    )
+    if pin_base != [WEB_GENERATION46_PIN_BASE]:
+        findings.append(
+            Finding(
+                "web-generation46-pin-provenance-drift",
+                WEB_GENERATION46_BRIDGE_WORKFLOW,
+                1,
+                "The pin PR base/merge parent must remain distinct from the "
+                f"rollback renderer and equal {WEB_GENERATION46_PIN_BASE!r}; "
+                f"observed {pin_base!r}.",
+            )
+        )
+
     required_workflow_fragments: dict[str, tuple[str, ...]] = {
         "web-generation46-carrier-one-shot-weakened": (
             'test "${GITHUB_RUN_ATTEMPT}" = 1',
@@ -2079,19 +2153,49 @@ def scan_web_generation46_bridge_contract(
             '.current_user_can_bypass == "never"',
             '.conditions.ref_name.include == ["refs/heads/main"]',
             ".conditions.ref_name.exclude == []",
-            '.parameters.allowed_merge_methods == ["squash"]',
-            ".parameters.strict_required_status_checks_policy == true",
-            ".parameters.do_not_enforce_on_create == false",
-            '.parameters.required_status_checks == '
-            '[{"context":"validate","integration_id":15368}]',
+            '"allowed_merge_methods":["squash"]',
+            '"dismiss_stale_reviews_on_push":true',
+            '"dismissal_restriction":{"allowed_actors":[],"enabled":false}',
+            '"require_code_owner_review":false',
+            '"require_extra_approval_for_unattributed_changes":true',
+            '"require_last_push_approval":false',
+            '"required_approving_review_count":0',
+            '"required_review_thread_resolution":true',
+            '"required_reviewers":[]',
+            '"do_not_enforce_on_create":false',
+            '"required_status_checks":[{"context":"validate","integration_id":15368}]',
+            '"strict_required_status_checks_policy":true',
             "length == 5",
+        ),
+        "web-generation46-pin-provenance-drift": (
+            '--arg base "${PIN_BASE_SHA}"',
+            '--arg parent "${PIN_BASE_SHA}"',
         ),
         "web-generation46-verifier-steering-weakened": (
             "exec env -i PATH=\"${tool_path}\" HOME=\"$1\" curl --disable",
-            "gpg\\.program|gpg\\..*\\.program|core\\.sshCommand",
+            WEB_GENERATION46_GIT_STEERING_PATTERN,
             "clean_curl https://github.com/web-flow.gpg",
             "git -c gpg.format=openpgp -c gpg.program=gpg "
             "-c gpg.openpgp.program=gpg verify-commit \"${GITHUB_SHA}\"",
+        ),
+        "web-generation46-frozen-recovery-carrier-weakened": (
+            'authority_file="${RUNNER_TEMP}/gftb-web-generation-46.authorized-carrier"',
+            '[[ ! -e "${authority_file}" && ! -L "${authority_file}" ]]',
+            "printf '%s\\n' \"${GITHUB_SHA}\" > \"${authority_file}\"",
+            'chmod 600 "${authority_file}"',
+            'GFTB_AMENDMENT4_GEN46_REVERSE=1 GFTB_AMENDMENT4_GEN46_AUTHORIZED_CARRIER=1',
+        ),
+        "web-generation46-applied-object-receipt-weakened": (
+            '--argjson service "${service}"',
+            "activeUid: $activeUid",
+            'appliedObjects: ([',
+            '{kind:"Deployment",name:$deployment.metadata.name,uid:$deployment.metadata.uid,generation:$deployment.metadata.generation}',
+            '{kind:"Service",name:"greatfallstoolbus-org",uid:$service.metadata.uid,generation:$service.metadata.generation}',
+            '| {kind:"NetworkPolicy",name:.metadata.name,uid:.metadata.uid,generation:.metadata.generation}',
+            'sort_by([.kind,.name])',
+        ),
+        "web-generation46-retained-prior-receipt-weakened": (
+            'retainedPrior:{infraSha:env.ROLLBACK_INFRA_SHA,sourceSha:env.ROLLBACK_SOURCE_SHA,image:env.ROLLBACK_IMAGE,renderSha256:env.ROLLBACK_RENDER_SHA256}',
         ),
         "web-generation46-reverse-selector-weakened": (
             "WEB_APPLY_IMAGE=\"${ROLLBACK_IMAGE}\" "
@@ -2121,6 +2225,47 @@ def scan_web_generation46_bridge_contract(
                     f"weakened; missing={missing!r}.",
                 )
             )
+    if justfile_text.count(WEB_GENERATION46_GIT_STEERING_PATTERN) != 2:
+        findings.append(
+            Finding(
+                "web-generation46-verifier-steering-weakened",
+                Path("Justfile"),
+                1,
+                "Both current-main and frozen-carrier guards must reject the "
+                "complete lower-case canonical Git configuration steering set.",
+            )
+        )
+    frozen_carrier_just_fragments = (
+        "_reviewed-web-release-carrier:",
+        'case "${GFTB_AMENDMENT4_GEN46_AUTHORIZED_CARRIER:-}" in',
+        '"${GITHUB_WORKFLOW_SHA:-}" == "${GITHUB_SHA:-}"',
+        'authority_file="${RUNNER_TEMP}/gftb-web-generation-46.authorized-carrier"',
+        '[[ -f "${authority_file}" && ! -L "${authority_file}" ]]',
+        "stat -c '%a' \"${authority_file}\"",
+        '"$(tr -d \'\\n\' < "${authority_file}")" == "${GITHUB_SHA}"',
+        '"$(git rev-parse HEAD)" == "${GITHUB_SHA}"',
+        'git -c gpg.format=openpgp -c gpg.program=gpg '
+        '-c gpg.openpgp.program=gpg verify-commit "${GITHUB_SHA}"',
+        "web-release-apply: _reviewed-web-release-carrier "
+        "_operator-apply-confirm _web-release-apply-kubeconfig-contract "
+        "_web-release-plan-preflight",
+    )
+    missing_frozen_carrier = [
+        fragment
+        for fragment in frozen_carrier_just_fragments
+        if fragment not in justfile_text
+    ]
+    if missing_frozen_carrier:
+        findings.append(
+            Finding(
+                "web-generation46-frozen-recovery-carrier-weakened",
+                Path("Justfile"),
+                1,
+                "The temporary CI-only frozen-carrier guard no longer keeps "
+                "rollback operable after canonical main advances; "
+                f"missing={missing_frozen_carrier!r}.",
+            )
+        )
     selector_assignments = re.findall(
         rf"\b{WEB_GENERATION46_REVERSE_SELECTOR}=([^\s]+)", workflow_text
     )
@@ -2152,15 +2297,14 @@ def scan_web_generation46_bridge_contract(
         '["deletion", "non_fast_forward", "pull_request", '
         '"required_signatures", "required_status_checks"]'
     )
-    if workflow_text.count(expected_rule_types) != 2:
+    if workflow_text.count(expected_rule_types) != 1:
         findings.append(
             Finding(
                 "web-generation46-ruleset-contract-weakened",
                 WEB_GENERATION46_BRIDGE_WORKFLOW,
                 1,
-                "Both the exact ruleset object and effective-main rule census "
-                "must bind deletion, non-fast-forward, pull-request, signature, "
-                "and hosted validate controls.",
+                "The effective-main rule census must bind deletion, "
+                "non-fast-forward, pull-request, signature, and hosted validate controls.",
             )
         )
     findings.extend(scan_web_generation46_reverse_selector_contract(justfile_text))
@@ -2328,7 +2472,6 @@ def scan_workflows() -> list[Finding]:
     gen46_bridge_path = REPO / WEB_GENERATION46_BRIDGE_WORKFLOW
     gen46_deployment_path = REPO / WEB_GENERATION46_DEPLOYMENT
     gen46_bridge_present = gen46_bridge_path.is_file()
-    gen46_selector_present = WEB_GENERATION46_REVERSE_SELECTOR in justfile
     findings.extend(
         scan_web_generation46_bridge_selector_lifecycle(
             gen46_bridge_present, justfile
@@ -2344,7 +2487,7 @@ def scan_workflows() -> list[Finding]:
                 "desired state.",
             )
         )
-    elif gen46_bridge_present and gen46_selector_present:
+    elif gen46_bridge_present:
         findings.extend(
             scan_web_generation46_bridge_contract(
                 gen46_bridge_path.read_text(encoding="utf-8"),
@@ -5082,6 +5225,9 @@ def install_web_release_fixture_mocks(
                 and state == "resolver-silent-callee"
             ):
                 raise SystemExit(0)
+            if sys.argv[1:] == ["_reviewed-clean-main"]:
+                print("reviewed infra carrier: " + "1" * 40)
+                raise SystemExit(0)
             if sys.argv[1:] in (
                 ["web-stack-validate"],
                 ["web-release-candidate-proof"],
@@ -6983,6 +7129,11 @@ def self_test() -> None:
                 '    render_target="${PWD}/{{ web_stack_dir }}"\n',
                 "ordinary renderer absolute-path drift",
             ),
+            (
+                "        just _reviewed-web-release-carrier >/dev/null\n",
+                "        just _reviewed-clean-main >/dev/null\n",
+                "recovery re-render reopens moving-main refusal",
+            ),
         )
         for old, new, label in amendment4_reverse_mutations:
             mutated = mutate_recipe_body(
@@ -7056,11 +7207,11 @@ def self_test() -> None:
                 "_web-release-apply-kubeconfig-contract",
                 "_web-release-plan-preflight",
             ),
-            "apply without the reviewed-clean-main carrier check",
+            "apply without the reviewed carrier check",
         ),
         (
             (
-                "_reviewed-clean-main",
+                "_reviewed-web-release-carrier",
                 "_web-release-apply-kubeconfig-contract",
                 "_web-release-plan-preflight",
             ),
@@ -7068,7 +7219,7 @@ def self_test() -> None:
         ),
         (
             (
-                "_reviewed-clean-main",
+                "_reviewed-web-release-carrier",
                 "_web-release-apply-kubeconfig-contract",
                 "_web-release-plan-preflight",
                 "_operator-apply-confirm",
@@ -7077,7 +7228,7 @@ def self_test() -> None:
         ),
         (
             (
-                "_reviewed-clean-main",
+                "_reviewed-web-release-carrier",
                 "_operator-apply-confirm",
                 "_web-release-apply-kubeconfig-contract",
             ),
@@ -7654,8 +7805,8 @@ def self_test() -> None:
     body_mutations = (
         (
             "_reviewed-clean-main",
-            '    git verify-commit "${head_sha}" >/dev/null',
-            '    true # git verify-commit "${head_sha}" >/dev/null',
+            '    git -c gpg.format=openpgp -c gpg.program=gpg -c gpg.openpgp.program=gpg verify-commit "${head_sha}" >/dev/null',
+            '    true # git -c gpg.format=openpgp -c gpg.program=gpg -c gpg.openpgp.program=gpg verify-commit "${head_sha}" >/dev/null',
             "comment-spoofed commit verification",
         ),
         (
@@ -8912,11 +9063,21 @@ def self_test() -> None:
                 "web-generation46-verifier-steering-weakened",
                 "curl configuration reopening",
             ),
-            (
-                "gpg\\.program|gpg\\..*\\.program|core\\.sshCommand",
-                "gpg\\..*\\.program|core\\.sshCommand",
-                "web-generation46-verifier-steering-weakened",
-                "legacy gpg.program steering reopening",
+            *(
+                (
+                    component,
+                    replacement,
+                    "web-generation46-verifier-steering-weakened",
+                    f"{label} steering reopening",
+                )
+                for component, replacement, label in (
+                    (r"url\..*\.insteadof", r"url\..*\.insteadOf", "URL rewrite"),
+                    (r"gpg\.program", r"gpg\.xprogram", "generic GPG program"),
+                    (r"gpg\..*\.program", r"gpg\..*\.xprogram", "format GPG program"),
+                    (r"core\.sshcommand", r"core\.sshCommand", "SSH command"),
+                    (r"include\..*", r"included\..*", "Git include"),
+                    (r"includeif\..*", r"includeIf\..*", "conditional Git include"),
+                )
             ),
             (
                 "GFTB_AMENDMENT4_GEN46_REVERSE=1",
@@ -8935,6 +9096,69 @@ def self_test() -> None:
                 "  ROLLBACK_INFRA_SHA: ${ROLLBACK_INFRA_SHA}",
                 "web-generation46-rollback-operand-drift",
                 "caller-selected rollback commit",
+            ),
+            (
+                f"  PIN_BASE_SHA: {WEB_GENERATION46_PIN_BASE}",
+                "  PIN_BASE_SHA: ${PIN_BASE_SHA}",
+                "web-generation46-pin-provenance-drift",
+                "caller-selected pin base",
+            ),
+            (
+                '--arg parent "${PIN_BASE_SHA}"',
+                '--arg parent "${ROLLBACK_INFRA_SHA}"',
+                "web-generation46-pin-provenance-drift",
+                "rollback tree reused as pin merge parent",
+            ),
+            (
+                "GFTB_AMENDMENT4_GEN46_REVERSE=1 GFTB_AMENDMENT4_GEN46_AUTHORIZED_CARRIER=1",
+                "GFTB_AMENDMENT4_GEN46_REVERSE=1 GFTB_AMENDMENT4_GEN46_AUTHORIZED_CARRIER=0",
+                "web-generation46-frozen-recovery-carrier-weakened",
+                "frozen-carrier selector disabled",
+            ),
+            (
+                '"required_review_thread_resolution":true',
+                '"required_review_thread_resolution":false',
+                "web-generation46-ruleset-contract-weakened",
+                "ruleset review-thread protection changed",
+            ),
+            *(
+                (
+                    fragment,
+                    replacement,
+                    "web-generation46-applied-object-receipt-weakened",
+                    f"{label} removed from receipt",
+                )
+                for fragment, replacement, label in (
+                    (
+                        '--argjson service "${service}"',
+                        '--argjson service "{}"',
+                        "Service snapshot binding",
+                    ),
+                    ("activeUid: $activeUid", "activeRevision: $revision", "active ReplicaSet UID"),
+                    (
+                        "uid:$deployment.metadata.uid",
+                        "uid:null",
+                        "Deployment UID",
+                    ),
+                    ("uid:$service.metadata.uid", "uid:null", "Service UID"),
+                    (
+                        "uid:.metadata.uid",
+                        "uid:null",
+                        "NetworkPolicy UIDs",
+                    ),
+                )
+            ),
+            (
+                "sourceSha:env.ROLLBACK_SOURCE_SHA",
+                "sourceSha:env.TARGET_SOURCE_SHA",
+                "web-generation46-retained-prior-receipt-weakened",
+                "retained prior source substituted",
+            ),
+            (
+                "image:env.ROLLBACK_IMAGE",
+                "image:env.TARGET_IMAGE",
+                "web-generation46-retained-prior-receipt-weakened",
+                "retained prior image substituted",
             ),
         )
         for old, new, rule, label in workflow_contract_mutations:
@@ -8996,14 +9220,112 @@ def self_test() -> None:
                     f"self-test FAILED: generation-46 accepted {label}"
                 )
 
-        retired_justfile = justfile.replace(
-            WEB_GENERATION46_REVERSE_SELECTOR, "RETIRED_SELECTOR"
-        )
-        if scan_web_generation46_bridge_selector_lifecycle(
-            False, retired_justfile
+        for component, replacement, label in (
+            (r"url\..*\.insteadof", r"url\..*\.insteadOf", "URL rewrite"),
+            (r"gpg\.program", r"gpg\.xprogram", "generic GPG program"),
+            (r"gpg\..*\.program", r"gpg\..*\.xprogram", "format GPG program"),
+            (r"core\.sshcommand", r"core\.sshCommand", "SSH command"),
+            (r"include\..*", r"included\..*", "Git include"),
+            (r"includeif\..*", r"includeIf\..*", "conditional Git include"),
         ):
+            mutated = justfile.replace(component, replacement, 1)
+            if mutated == justfile:
+                raise SystemExit(
+                    f"self-test FAILED: could not construct {label} Just mutation"
+                )
+            if not any(
+                finding.rule == "web-generation46-verifier-steering-weakened"
+                for finding in scan_web_generation46_bridge_contract(
+                    gen46_bridge_text, gen46_deployment_text, mutated
+                )
+            ):
+                raise SystemExit(
+                    f"self-test FAILED: generation-46 accepted {label} Just steering"
+                )
+
+        carrier_definition = just_recipe_block(
+            justfile, "_reviewed-web-release-carrier"
+        )
+        if carrier_definition is None:
+            raise SystemExit(
+                "self-test FAILED: generation-46 frozen-carrier recipe is absent"
+            )
+        carrier_line, _, _ = carrier_definition
+        retired_lines = justfile.splitlines(keepends=True)
+        carrier_start = carrier_line - 1
+        carrier_end = carrier_start + 1
+        while carrier_end < len(retired_lines) and (
+            not retired_lines[carrier_end].strip()
+            or retired_lines[carrier_end].startswith((" ", "\t"))
+        ):
+            carrier_end += 1
+        retired_justfile = "".join(
+            retired_lines[:carrier_start] + retired_lines[carrier_end:]
+        )
+        retired_justfile = retired_justfile.replace(
+            "web-release-apply: _reviewed-web-release-carrier "
+            "_operator-apply-confirm _web-release-apply-kubeconfig-contract "
+            "_web-release-plan-preflight",
+            "web-release-apply: _reviewed-clean-main _operator-apply-confirm "
+            "_web-release-apply-kubeconfig-contract _web-release-plan-preflight",
+            1,
+        )
+        retired_justfile, reverse_blocks_removed = re.subn(
+            r'^    case "\$\{GFTB_AMENDMENT4_GEN46_REVERSE:-\}" in\n'
+            r".*?^    esac\n",
+            '    env -i PATH="${PATH}" HOME="${render_dir}/home" '
+            "just web-stack-validate >/dev/null\n",
+            retired_justfile,
+            count=1,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        if reverse_blocks_removed != 1:
+            raise SystemExit(
+                "self-test FAILED: could not remove generation-46 reverse branch"
+            )
+        if scan_web_generation46_bridge_selector_lifecycle(False, retired_justfile):
             raise SystemExit(
                 "self-test FAILED: paired generation-46 retirement was refused"
+            )
+        renamed_justfile = justfile.replace(
+            WEB_GENERATION46_REVERSE_SELECTOR, "RETIRED_REVERSE_SELECTOR"
+        ).replace(
+            "GFTB_AMENDMENT4_GEN46_AUTHORIZED_CARRIER",
+            "RETIRED_AUTHORIZED_CARRIER",
+        )
+        if not scan_web_generation46_bridge_selector_lifecycle(
+            False, renamed_justfile
+        ):
+            raise SystemExit(
+                "self-test FAILED: renamed generation-46 mechanisms survived retirement"
+            )
+
+        reverse_only_fixture = retired_justfile.replace(
+            '    env -i PATH="${PATH}" HOME="${render_dir}/home" '
+            "just web-stack-validate >/dev/null\n",
+            f'    render_commit="{WEB_GENERATION46_ROLLBACK_INFRA}"\n',
+            1,
+        )
+        if not scan_web_generation46_bridge_selector_lifecycle(
+            False, reverse_only_fixture
+        ):
+            raise SystemExit(
+                "self-test FAILED: reverse-only residue survived retirement"
+            )
+
+        carrier_only_fixture = retired_justfile.replace(
+            "web-release-apply: _reviewed-clean-main _operator-apply-confirm "
+            "_web-release-apply-kubeconfig-contract _web-release-plan-preflight",
+            "web-release-apply: _reviewed-web-release-carrier "
+            "_operator-apply-confirm _web-release-apply-kubeconfig-contract "
+            "_web-release-plan-preflight",
+            1,
+        )
+        if not scan_web_generation46_bridge_selector_lifecycle(
+            False, carrier_only_fixture
+        ):
+            raise SystemExit(
+                "self-test FAILED: frozen-carrier-only residue survived retirement"
             )
 
     run_web_release_semantic_fixtures()
