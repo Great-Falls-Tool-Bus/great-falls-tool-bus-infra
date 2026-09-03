@@ -1501,16 +1501,48 @@ arc-enrollment-plan: enrollment-preflight arc-plan
 _reviewed-clean-main:
     #!/usr/bin/env bash
     set -euo pipefail
-    for name in GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_SYSTEM GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_REPLACE_REF_BASE GIT_SHALLOW_FILE GIT_EXEC_PATH GIT_SSH_COMMAND GIT_ASKPASS; do
+    for name in GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_SYSTEM GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_REPLACE_REF_BASE GIT_NO_REPLACE_OBJECTS GIT_NAMESPACE GIT_SHALLOW_FILE GIT_EXEC_PATH GIT_SSH_COMMAND GIT_ASKPASS; do
       [[ -z "${!name:-}" ]] || { echo "Guarded ARC operation refuses ambient ${name}" >&2; exit 2; }
     done
+    export GIT_NO_REPLACE_OBJECTS=1
+    set +e
+    scoped_config="$(git config --show-scope --name-only --get-regexp '.*' 2>/dev/null)"
+    config_status=$?
+    set -e
+    case "${config_status}" in
+      0|1) ;;
+      *) echo "Guarded ARC operation could not inspect repository Git configuration" >&2; exit 2 ;;
+    esac
+    set +e
+    awk '
+      {
+        scope = tolower($1)
+        name = tolower($2)
+        if ((scope == "local" || scope == "worktree") &&
+            (name ~ /^url\..*\.insteadof$/ ||
+             name == "gpg.program" ||
+             name ~ /^gpg\..*\.program$/ ||
+             name == "core.sshcommand" ||
+             name == "core.worktree" ||
+             name == "core.fsmonitor" ||
+             name == "status.showuntrackedfiles" ||
+             name ~ /^include\./ ||
+             name ~ /^includeif\./ ||
+             name ~ /^http\./)) {
+          found = 1
+        }
+      }
+      END { exit(found ? 0 : 1) }
+    ' <<<"${scoped_config}"
+    scoped_status=$?
+    set -e
+    case "${scoped_status}" in
+      0) echo "Guarded ARC operation refuses local/worktree Git configuration that can redirect repository, remote, TLS, proxy, status, or signature verification" >&2; exit 2 ;;
+      1) ;;
+      *) echo "Guarded ARC operation could not evaluate repository Git configuration" >&2; exit 2 ;;
+    esac
     [[ "$(git branch --show-current)" == "main" ]] || { echo "Guarded ARC operation requires the main branch" >&2; exit 2; }
-    [[ -z "$(git status --porcelain)" ]] || { echo "Guarded ARC operation requires a clean worktree" >&2; exit 2; }
-    if git config --show-scope --name-only --get-regexp '^(url\..*\.insteadof|gpg\.program|gpg\..*\.program|core\.sshcommand|include\..*|includeif\..*|http\..*)$' |
-      awk '$1 == "local" || $1 == "worktree" { found=1 } END { exit(found ? 0 : 1) }'; then
-      echo "Guarded ARC operation refuses Git configuration that can redirect remote, TLS, proxy, or signature verification" >&2
-      exit 2
-    fi
+    [[ -z "$(git status --porcelain --untracked-files=all)" ]] || { echo "Guarded ARC operation requires a clean worktree" >&2; exit 2; }
     index_flags="$(git ls-files -v | awk '$1 != "H"')"
     [[ -z "${index_flags}" ]] || { echo "Guarded ARC operation refuses assume-unchanged, skip-worktree, or non-cached index flags: ${index_flags}" >&2; exit 2; }
     canonical_remote="https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git"
@@ -1529,6 +1561,7 @@ _reviewed-clean-main:
         HOME=/ \
         GIT_CONFIG_NOSYSTEM=1 \
         GIT_CONFIG_GLOBAL=/dev/null \
+        GIT_NO_REPLACE_OBJECTS=1 \
         git -C / ls-remote --exit-code "${canonical_remote}" refs/heads/main |
         awk 'NR == 1 { print $1 }'
     )"

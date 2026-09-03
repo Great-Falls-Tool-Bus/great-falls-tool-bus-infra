@@ -353,7 +353,7 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "49a0e25c1cc8c8ff", "b15096271b4271a4", "fe1d38e06e5abf79", "905f0b0d50110b7a"
     ),
     "_reviewed-clean-main": _receipt(
-        "8059eefae943ab2e", "b6d0380f75aac90f", "1562d9670ebfa6a3", "6c0eb4e85ddad599"
+        "13ddc64a44daef61", "c56bc25b898738fb", "0152a854086b86fd", "556b35bf2f284dd6"
     ),
     "_reviewed-implementation-core": _receipt(
         "180f8edd55babb51", "43e15dac40bbad2a", "bffe444ff6221c04", "7c64836ae0c2cfc6"
@@ -4711,6 +4711,7 @@ def install_web_release_fixture_mocks(
         materialize(
             """
             #!__FIXTURE_PYTHON__
+            import os
             import pathlib
             import sys
 
@@ -4722,16 +4723,31 @@ def install_web_release_fixture_mocks(
                 "https://github.com/Great-Falls-Tool-Bus/"
                 "great-falls-tool-bus-infra.git"
             )
+            state = pathlib.Path(__STATE__).read_text(encoding="utf-8").strip()
             args = sys.argv[1:]
-            if args[:2] == ["-C", toplevel]:
+            if len(args) >= 2 and args[0] == "-C" and args[1] in (toplevel, "/"):
                 args = args[2:]
             if args == ["rev-parse", "--show-toplevel"]:
                 print(toplevel)
+            elif args == [
+                "config", "--show-scope", "--name-only", "--get-regexp", ".*"
+            ]:
+                if os.environ.get("GIT_NO_REPLACE_OBJECTS") != "1":
+                    raise SystemExit("mock git requires replacement objects disabled")
+                if state == "apply-git-config-error":
+                    raise SystemExit(2)
+                if state == "apply-git-local-http-config":
+                    print("local\\thttp.proxy")
+                    raise SystemExit(0)
+                raise SystemExit(1)
             elif args in (["rev-parse", "HEAD"], ["rev-parse", "origin/main"]):
                 print(head)
             elif args == ["branch", "--show-current"]:
                 print("main")
-            elif args in (["status", "--porcelain"], ["ls-files", "-v"]):
+            elif args in (
+                ["status", "--porcelain", "--untracked-files=all"],
+                ["ls-files", "-v"],
+            ):
                 pass
             elif args == ["remote", "get-url", "origin"]:
                 print(canonical)
@@ -4743,7 +4759,12 @@ def install_web_release_fixture_mocks(
                 "refs/heads/main"
             ]:
                 print(head + "\\trefs/heads/main")
-            elif args == ["verify-commit", head]:
+            elif args == [
+                "-c", "gpg.format=openpgp",
+                "-c", "gpg.program=gpg",
+                "-c", "gpg.openpgp.program=gpg",
+                "verify-commit", head,
+            ]:
                 pass
             else:
                 raise SystemExit(
@@ -6312,6 +6333,14 @@ def run_web_release_mutation_fixtures() -> None:
         # REFUSALS. Each must refuse with nothing applied.
         for state, diagnostic in (
             (
+                "apply-git-config-error",
+                "could not inspect repository Git configuration",
+            ),
+            (
+                "apply-git-local-http-config",
+                "refuses local/worktree Git configuration",
+            ),
+            (
                 "apply-authz-denied-create-policy",
                 f"cannot create networkpolicies.networking.k8s.io in {namespace}",
             ),
@@ -7218,13 +7247,15 @@ def self_test() -> None:
     body_mutations = (
         (
             "_reviewed-clean-main",
-            "    if git config --show-scope --name-only --get-regexp "
-            "'^(url\\..*\\.insteadof|gpg\\.program|gpg\\..*\\.program|"
-            "core\\.sshcommand|include\\..*|includeif\\..*|http\\..*)$' |",
-            "    if git config --show-scope --name-only --get-regexp "
-            "'^(url\\..*\\.insteadof|gpg\\.program|gpg\\..*\\.program|"
-            "core\\.sshcommand|include\\..*|includeif\\..*)$' |",
+            "             name ~ /^http\\./)) {",
+            "             false)) {",
             "Git HTTP steering refusal removal",
+        ),
+        (
+            "_reviewed-clean-main",
+            "    export GIT_NO_REPLACE_OBJECTS=1",
+            "    true # export GIT_NO_REPLACE_OBJECTS=1",
+            "replacement-object refusal removal",
         ),
         (
             "_reviewed-clean-main",
