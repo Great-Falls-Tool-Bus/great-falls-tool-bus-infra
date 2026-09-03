@@ -1499,12 +1499,17 @@ arc-enrollment-plan: enrollment-preflight arc-plan
 # The remote readback prevents a stale local origin/main ref from becoming apply
 # authority.
 _reviewed-clean-main:
-    #!/usr/bin/env bash
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
     set -euo pipefail
-    for name in GIT_CONFIG GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_SYSTEM GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_REPLACE_REF_BASE GIT_NO_REPLACE_OBJECTS GIT_NAMESPACE GIT_SHALLOW_FILE GIT_EXEC_PATH GIT_SSH_COMMAND GIT_ASKPASS; do
+    # The developer/CI toolchain PATH is an explicit input; privileged bash
+    # refuses imported functions and startup files, while Git config below is
+    # isolated from system/global state before repository state is inspected.
+    for name in GIT_CONFIG GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_SYSTEM GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_DIR GIT_WORK_TREE GIT_IMPLICIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_QUARANTINE_PATH GIT_REPLACE_REF_BASE GIT_NO_REPLACE_OBJECTS GIT_NAMESPACE GIT_REFERENCE_BACKEND GIT_SHALLOW_FILE GIT_ATTR_SOURCE GIT_EXEC_PATH GIT_SSH_COMMAND GIT_ASKPASS; do
       [[ -z "${!name:-}" ]] || { echo "Guarded ARC operation refuses ambient ${name}" >&2; exit 2; }
     done
     export GIT_NO_REPLACE_OBJECTS=1
+    export GIT_CONFIG_NOSYSTEM=1
+    export GIT_CONFIG_GLOBAL=/dev/null
     set +e
     scoped_config="$(git config --show-scope --name-only --get-regexp '.*' 2>/dev/null)"
     config_status=$?
@@ -1527,6 +1532,11 @@ _reviewed-clean-main:
              name == "core.fsmonitor" ||
              name == "core.excludesfile" ||
              name == "core.attributesfile" ||
+             name == "attr.tree" ||
+             name == "core.trustctime" ||
+             name == "core.checkstat" ||
+             name == "core.ignorestat" ||
+             name == "extensions.refstorage" ||
              name ~ /^filter\./ ||
              name == "status.showuntrackedfiles" ||
              name ~ /^include\./ ||
@@ -1544,6 +1554,25 @@ _reviewed-clean-main:
       1) ;;
       *) echo "Guarded ARC operation could not evaluate repository Git configuration" >&2; exit 2 ;;
     esac
+    for info_name in exclude attributes; do
+      set +e
+      info_path="$(git rev-parse --path-format=absolute --git-path "info/${info_name}" 2>/dev/null)"
+      info_status=$?
+      set -e
+      [[ "${info_status}" == "0" && "${info_path}" == /* ]] || { echo "Guarded ARC operation could not resolve repository-local Git metadata" >&2; exit 2; }
+      if [[ -e "${info_path}" || -L "${info_path}" ]]; then
+        [[ -f "${info_path}" && ! -L "${info_path}" ]] || { echo "Guarded ARC operation refuses non-regular repository-local Git metadata" >&2; exit 2; }
+        set +e
+        awk '!/^[[:space:]]*(#|$)/ { found = 1 } END { exit(found ? 0 : 1) }' "${info_path}"
+        info_status=$?
+        set -e
+        case "${info_status}" in
+          0) echo "Guarded ARC operation refuses active repository-local Git ignore or attribute rules" >&2; exit 2 ;;
+          1) ;;
+          *) echo "Guarded ARC operation could not inspect repository-local Git metadata" >&2; exit 2 ;;
+        esac
+      fi
+    done
     [[ "$(git branch --show-current)" == "main" ]] || { echo "Guarded ARC operation requires the main branch" >&2; exit 2; }
     [[ -z "$(git status --porcelain --untracked-files=all)" ]] || { echo "Guarded ARC operation requires a clean worktree" >&2; exit 2; }
     index_flags="$(git ls-files -v | awk '$1 != "H"')"
@@ -1552,7 +1581,7 @@ _reviewed-clean-main:
     origin_url="$(git remote get-url origin)"
     case "${origin_url}" in
       https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra|https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git|git@github.com:Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git) ;;
-      *) echo "Guarded ARC operation origin is not the canonical GFTB infra repository: ${origin_url}" >&2; exit 2 ;;
+      *) echo "Guarded ARC operation origin is not the canonical GFTB infra repository" >&2; exit 2 ;;
     esac
     git show-ref --verify --quiet refs/remotes/origin/main || { echo "Fetch canonical origin/main before the guarded ARC operation" >&2; exit 2; }
     head_sha="$(git rev-parse HEAD)"

@@ -353,7 +353,7 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "49a0e25c1cc8c8ff", "b15096271b4271a4", "fe1d38e06e5abf79", "905f0b0d50110b7a"
     ),
     "_reviewed-clean-main": _receipt(
-        "db4cd73dbf6f21b3", "35c9eda72d40bf4c", "6b03dadc54be34c7", "d5d8884ae7b56339"
+        "180d7dafca8545b6", "18a4cd3645e84382", "2262e44bc5d9a850", "bbb6745a1d1e3c03"
     ),
     "_reviewed-implementation-core": _receipt(
         "180f8edd55babb51", "43e15dac40bbad2a", "bffe444ff6221c04", "7c64836ae0c2cfc6"
@@ -3717,6 +3717,17 @@ def install_web_release_fixture_mocks(
             source = source.replace(old, new)
         return source
 
+    git_info = fixture_dir / "git-info"
+    git_info.mkdir(mode=0o700)
+    for name in ("safe-exclude", "safe-attributes"):
+        (git_info / name).write_text("# fixture comment only\n", encoding="utf-8")
+    (git_info / "active-exclude").write_text("*.tf\n", encoding="utf-8")
+    (git_info / "active-attributes").write_text(
+        "* filter=untrusted\n", encoding="utf-8"
+    )
+    (git_info / "symlink-exclude").symlink_to(git_info / "safe-exclude")
+    (git_info / "symlink-attributes").symlink_to(git_info / "safe-attributes")
+
     write_fixture_executable(
         mock_bin / "crane",
         materialize(
@@ -4734,6 +4745,10 @@ def install_web_release_fixture_mocks(
             ]:
                 if os.environ.get("GIT_NO_REPLACE_OBJECTS") != "1":
                     raise SystemExit("mock git requires replacement objects disabled")
+                if os.environ.get("GIT_CONFIG_NOSYSTEM") != "1":
+                    raise SystemExit("mock git requires system config disabled")
+                if os.environ.get("GIT_CONFIG_GLOBAL") != "/dev/null":
+                    raise SystemExit("mock git requires global config disabled")
                 if state == "apply-git-config-error":
                     raise SystemExit(2)
                 if state == "apply-git-local-http-config":
@@ -4748,7 +4763,51 @@ def install_web_release_fixture_mocks(
                 if state == "apply-git-local-filter-config":
                     print("local\\tfilter.hide.clean")
                     raise SystemExit(0)
+                if state == "apply-git-local-refstorage-config":
+                    print("local\\textensions.refstorage")
+                    raise SystemExit(0)
+                if state == "apply-git-local-stat-config":
+                    print("local\\tcore.trustctime")
+                    print("local\\tcore.checkstat")
+                    print("local\\tcore.ignorestat")
+                    raise SystemExit(0)
+                if state == "apply-git-worktree-attr-tree-config":
+                    print("worktree\\tattr.tree")
+                    raise SystemExit(0)
+                if state == "apply-git-global-gpg-config":
+                    print("global\\tgpg.program")
+                    raise SystemExit(0)
                 raise SystemExit(1)
+            elif args in (
+                [
+                    "rev-parse", "--path-format=absolute", "--git-path",
+                    "info/exclude",
+                ],
+                [
+                    "rev-parse", "--path-format=absolute", "--git-path",
+                    "info/attributes",
+                ],
+            ):
+                info_name = args[-1].removeprefix("info/")
+                selected = "safe-" + info_name
+                if state == "apply-git-info-exclude-entry" and info_name == "exclude":
+                    selected = "active-exclude"
+                elif (
+                    state == "apply-git-info-attributes-entry"
+                    and info_name == "attributes"
+                ):
+                    selected = "active-attributes"
+                elif (
+                    state == "apply-git-info-exclude-symlink"
+                    and info_name == "exclude"
+                ):
+                    selected = "symlink-exclude"
+                elif (
+                    state == "apply-git-info-attributes-symlink"
+                    and info_name == "attributes"
+                ):
+                    selected = "symlink-attributes"
+                print(pathlib.Path(__FIXTURES__) / "git-info" / selected)
             elif args in (["rev-parse", "HEAD"], ["rev-parse", "origin/main"]):
                 print(head)
             elif args == ["branch", "--show-current"]:
@@ -4759,7 +4818,15 @@ def install_web_release_fixture_mocks(
             ):
                 pass
             elif args == ["remote", "get-url", "origin"]:
-                print(canonical)
+                if state == "apply-git-origin-secret":
+                    print(
+                        "https://x-access-token:"
+                        + "ghp_"
+                        + "a" * 36
+                        + "@github.com/evil/repository.git"
+                    )
+                else:
+                    print(canonical)
             elif args == [
                 "show-ref", "--verify", "--quiet", "refs/remotes/origin/main"
             ]:
@@ -6340,30 +6407,36 @@ def run_web_release_mutation_fixtures() -> None:
             )
 
         # REFUSALS. Each must refuse with nothing applied.
-        git_config_environment = {
-            **environment,
-            "GIT_CONFIG": str(root / "untrusted-repository.config"),
-        }
-        expect_web_release_fixture_result(
-            just_binary,
-            "web-release-apply",
-            state_path,
-            log_path,
-            git_config_environment,
-            "apply-ok",
-            success=False,
-            diagnostic="refuses ambient GIT_CONFIG",
-        )
-        git_calls = [
-            line
-            for line in log_path.read_text(encoding="utf-8").splitlines()
-            if line.startswith("git ")
-        ]
-        if git_calls or cluster_mutations(kubectl_calls()):
-            raise SystemExit(
-                "self-test FAILED: ambient GIT_CONFIG reached Git or the cluster: "
-                f"git={git_calls!r}, kubectl={cluster_mutations(kubectl_calls())!r}"
+        for git_environment_name in (
+            "GIT_CONFIG",
+            "GIT_REFERENCE_BACKEND",
+            "GIT_ATTR_SOURCE",
+        ):
+            steered_git_environment = {
+                **environment,
+                git_environment_name: "untrusted-fixture-value",
+            }
+            expect_web_release_fixture_result(
+                just_binary,
+                "web-release-apply",
+                state_path,
+                log_path,
+                steered_git_environment,
+                "apply-ok",
+                success=False,
+                diagnostic=f"refuses ambient {git_environment_name}",
             )
+            git_calls = [
+                line
+                for line in log_path.read_text(encoding="utf-8").splitlines()
+                if line.startswith("git ")
+            ]
+            if git_calls or cluster_mutations(kubectl_calls()):
+                raise SystemExit(
+                    "self-test FAILED: ambient Git steering reached Git or the "
+                    f"cluster for {git_environment_name}: git={git_calls!r}, "
+                    f"kubectl={cluster_mutations(kubectl_calls())!r}"
+                )
 
         for state, diagnostic in (
             (
@@ -6385,6 +6458,34 @@ def run_web_release_mutation_fixtures() -> None:
             (
                 "apply-git-local-filter-config",
                 "refuses local/worktree Git configuration",
+            ),
+            (
+                "apply-git-local-refstorage-config",
+                "refuses local/worktree Git configuration",
+            ),
+            (
+                "apply-git-local-stat-config",
+                "refuses local/worktree Git configuration",
+            ),
+            (
+                "apply-git-worktree-attr-tree-config",
+                "refuses local/worktree Git configuration",
+            ),
+            (
+                "apply-git-info-exclude-entry",
+                "refuses active repository-local Git ignore or attribute rules",
+            ),
+            (
+                "apply-git-info-attributes-entry",
+                "refuses active repository-local Git ignore or attribute rules",
+            ),
+            (
+                "apply-git-info-exclude-symlink",
+                "refuses non-regular repository-local Git metadata",
+            ),
+            (
+                "apply-git-info-attributes-symlink",
+                "refuses non-regular repository-local Git metadata",
             ),
             (
                 "apply-authz-denied-create-policy",
@@ -6411,6 +6512,44 @@ def run_web_release_mutation_fixtures() -> None:
                     "reached the cluster after refusing: "
                     f"{cluster_mutations(kubectl_calls())!r}"
                 )
+
+        secret_origin_marker = "ghp_" + "a" * 36
+        secret_origin_result = expect_web_release_fixture_result(
+            just_binary,
+            "web-release-apply",
+            state_path,
+            log_path,
+            environment,
+            "apply-git-origin-secret",
+            success=False,
+            diagnostic="origin is not the canonical GFTB infra repository",
+        )
+        if secret_origin_marker in (
+            secret_origin_result.stdout + secret_origin_result.stderr
+        ):
+            raise SystemExit(
+                "self-test FAILED: noncanonical origin diagnostic disclosed its value"
+            )
+        if cluster_mutations(kubectl_calls()):
+            raise SystemExit(
+                "self-test FAILED: noncanonical secret-shaped origin reached the cluster"
+            )
+
+        expect_web_release_fixture_result(
+            just_binary,
+            "web-release-apply",
+            state_path,
+            log_path,
+            environment,
+            "apply-git-global-gpg-config",
+            success=True,
+            diagnostic="web release applied",
+        )
+        if cluster_mutations(kubectl_calls()) != expected_mutations:
+            raise SystemExit(
+                "self-test FAILED: harmless global GPG config changed the "
+                "reviewed apply sequence"
+            )
 
         # TIN-4254 (W13) retired the apply-time prune, and with it the
         # "denied/failed delete leaves a half-done promotion" scenario the
