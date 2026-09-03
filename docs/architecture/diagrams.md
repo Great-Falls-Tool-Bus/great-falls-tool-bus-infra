@@ -166,11 +166,13 @@ flowchart TD
 
 ## 4. GloriousFlywheel v4 flow
 
-**Claim.** GFTB owns immutable demand declarations; provider topology remains
-opaque. An application repository names an exact action through the immutable
-v4 template. The image-custodied client resolves its GFTB binding from the
-controller catalog and sends the action to the pooled REAPI/CAS fabric. ARC,
-when present, is only a thin GitHub edge.
+**Target, not present-tense status.** GFTB owns immutable demand declarations;
+provider topology remains opaque. An application repository names an exact
+action through the immutable v4 template. The image-custodied client resolves
+its GFTB binding from the controller catalog and sends the action to the pooled
+REAPI/CAS fabric. ARC, when present, is only a thin GitHub edge. This repository
+does not yet carry the signed GFTB operands or an installed controller catalog,
+so the flow below is not live evidence.
 
 ```mermaid
 flowchart LR

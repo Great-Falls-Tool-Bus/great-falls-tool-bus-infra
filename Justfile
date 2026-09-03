@@ -220,7 +220,7 @@ arc-app-secret-apply: _arc-app-secret-inputs _reviewed-clean-main _reviewed-impl
 taxonomy:
     python3 scripts/validate-overlay-runner-taxonomy.py {{ arc_tfvars }}
 
-# Self-test the overlay taxonomy guard (incl. the RBE cache/executor wiring rule).
+# Self-test the bounded legacy ARC registration/label continuity contract.
 taxonomy-selftest:
     bash scripts/test-overlay-runner-taxonomy.sh
 

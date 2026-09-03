@@ -3,26 +3,37 @@
 Consumer-owned infrastructure overlay for the Great-Falls-Tool-Bus GitHub
 organization.
 
-## GloriousFlywheel v4 contract
+## GloriousFlywheel v4 target and current gap
 
-GFTB adopts GloriousFlywheel without registering itself in the producer
-repository:
+The only target adoption path is one-way from released GF types and binaries
+into GFTB-owned declarations. It requires no GFTB row or callback in the
+producer repository:
 
-1. the organization installs the GF GitHub App;
-2. this repository publishes signed, immutable `OwnerInstallation/v1`,
+1. the organization owns an all-repositories GF GitHub App installation;
+2. this repository carries signed, immutable `OwnerInstallation/v1`,
    `TenantOverlay/v1`, and cumulative consumer `RevocationSet/v1` operands;
-3. this repository applies one immutable `OwnerOverlayRevision/v1` that names
+3. this repository carries one immutable `OwnerOverlayRevision/v1` that names
    those exact OCI artifacts;
 4. application repositories carry exact ActionPlans and call the immutable
    `ci-templates` v4 entrypoint; and
-5. the owner controller verifies GFTB demand and joins it to independently
-   verified provider supply.
+5. the owner controller verifies GFTB demand, joins it to independently
+   verified provider supply, and publishes the catalog consumed by the v4
+   action client.
 
-The overlay declares capabilities, policy, and application lifecycle. It does
-not declare cluster endpoints, nodes, storage classes, namespaces, worker
-pools, ARC scale sets, or runner labels. Those are provider supply. GF core
-owns the types and controller contract, never GFTB instances or repository
-rows.
+That path is not installed here yet. This tree currently carries none of the
+four signed v4 instance types above and no installed controller catalog. The
+remaining ARC declarations describe external state that still exists; they are
+an explicit state-continuity hold until the v4 canary proves and one protected
+main change retires the ARC resources and their inputs together. They are not
+v4 enrollment evidence.
+
+In the target shape, the overlay declares capabilities, policy, and
+application lifecycle. It does not declare cluster endpoints, nodes, storage
+classes, namespaces, worker pools, ARC scale sets, or runner labels. Those are
+provider supply. GF core owns the types and controller contract, never GFTB
+instances or repository rows. Provider-shaped fields retained for legacy ARC
+readback must be deleted with that external state, not copied into the v4
+operands.
 
 Enrollment is fail closed. A missing App installation, signed operand,
 revocation chain, owner revision, resolved binding catalog, OIDC identity, or
@@ -30,16 +41,19 @@ REAPI authority is a product defect to repair. It is not permission to use a
 local build, cache-only profile, direct endpoint, producer registry, or
 GitHub-hosted fallback.
 
-The removed `flywheel-cache-proof`, `flywheel-enroll`, OIDC-profile, and local
-Bazel wrapper surfaces were v3 attachment machinery. They are not v4 evidence
-and must not return.
+This preparatory cut removes the `flywheel-cache-proof`, `flywheel-enroll`,
+OIDC-profile, and local Bazel wrapper surfaces. They were v3 attachment
+machinery, are not v4 evidence, and must not return.
 
 ## Architecture
 
-Grounded diagrams for the GFTB-owned mail, network, and application planes live
-in [`docs/architecture/diagrams.md`](docs/architecture/diagrams.md). The GF v4
+Grounded diagrams for the GFTB-owned mail and network planes, plus the target
+application flow, live in
+[`docs/architecture/diagrams.md`](docs/architecture/diagrams.md). The GF v4
 structural authority is `spec/flywheel/Core.dhall` in GloriousFlywheel; the
-controller CRDs and Go types are owned by `owner-overlay-controller`.
+controller CRDs and Go types are owned by `owner-overlay-controller`. Source
+presence in either upstream repository does not make the missing GFTB instance
+or catalog rung live.
 
 Private credentials stay outside Git:
 

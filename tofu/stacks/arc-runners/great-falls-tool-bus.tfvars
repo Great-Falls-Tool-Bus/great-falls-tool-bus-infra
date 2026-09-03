@@ -72,10 +72,10 @@ dind_runner_scale_set_name   = "great-falls-tool-bus-dind"
 # at the 16Gi limit on the second Bazel build of the platform spoke (GF seat,
 # run 33373351388); this is the bounded TIN-4246 exception (operator-ratified
 # via the GF seat interview, recorded on TIN-4246/TIN-4227) that raises the
-# envelope to 12Gi/24Gi. Capacity is unchanged by TIN-3902: the runner-group cutover is an
-# admission fix, not a capacity change. min 0 / max 4 is the reviewed
-# TIN-2165/TIN-2234 posture and must stay non-zero: a dedicated group with
-# zero capacity admits nobody, which was the defect in the unmerged
+# envelope to 12Gi/24Gi. Capacity is unchanged by TIN-3902: the runner-group
+# cutover is an admission fix, not a capacity change. min 0 / max 4 is the
+# reviewed TIN-2165/TIN-2234 posture and must stay non-zero: a dedicated group
+# with zero capacity admits nobody, which was the defect in the unmerged
 # 2026-07-31 quarantine draft. The max-four posture is unchanged by this
 # ephemeral-storage step, but node-root ephemeral storage is shared across
 # concurrent runner pods on the same node, so the worst case is
@@ -95,6 +95,32 @@ nix_warm_pool_enabled         = false
 deploy_docker_runner          = false
 deploy_dind_runner            = false
 deploy_longhorn               = false
+
+# STATE-CONTINUITY HOLD (TIN-2611, 2026-09-03). These values still describe
+# the deployed legacy ARC scale set and must remain byte-stable until the v4
+# ActionPlan/controller path has proved the GFTB canary and the same protected
+# main change retires the ARC resources that consume them. They are not v4
+# enrollment authority and must not be copied into OwnerInstallation,
+# TenantOverlay, application plans, or any successor consumer interface.
+attic_server         = "http://attic.nix-cache.svc.cluster.local"
+attic_cache          = "main"
+attic_public_key     = "main:eaUydxuDu7xBoy5cCo3MdknYAkVyTIASQ7DGuwxa+XA="
+bazel_cache_endpoint = "grpc://bazel-cache.nix-cache.svc.cluster.local:9092"
+
+# The legacy runner image consumes these two fields. Their v1/profile and
+# direct-endpoint semantics are explicitly held, not endorsed: remove the
+# complete block with the ARC scale set rather than deleting the values early
+# and silently changing the still-live runner environment.
+nix_env_vars = [
+  {
+    name  = "GF_REAPI_TOKEN_EXCHANGE_ENDPOINT"
+    value = "http://gf-reapi-token-exchange.gf-rbe.svc.cluster.local:8081/v1/token/exchange"
+  },
+  {
+    name  = "GF_REAPI_CACHE_FRONTDOOR_ENDPOINT"
+    value = "grpc://gf-reapi-cell.gf-rbe.svc.cluster.local:8980"
+  }
+]
 
 shared_runner_node_selector = {
   "kubernetes.io/hostname" = "sting"

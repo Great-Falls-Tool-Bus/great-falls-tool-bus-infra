@@ -1,12 +1,13 @@
 # great-falls-tool-bus-infra Agent Guidance
 
 This repository is the public, consumer-owned Great-Falls-Tool-Bus (GFTB)
-overlay for GloriousFlywheel v4. It is the only ownership home for GFTB's
-signed immutable
+overlay and the designated ownership home for GFTB's future signed immutable
 `OwnerInstallation/v1`, `TenantOverlay/v1`, cumulative consumer
-`RevocationSet/v1`, and `OwnerOverlayRevision/v1` instances. GloriousFlywheel
-core owns their types and verifier, never their instances. Provider topology
-is opaque to this repository.
+`RevocationSet/v1`, and `OwnerOverlayRevision/v1` instances. Those instances
+and an installed controller catalog do not exist in this tree yet. The legacy
+ARC declarations that remain are explicitly bounded state-continuity surfaces,
+not v4 enrollment authority. GloriousFlywheel core owns the types and verifier,
+never GFTB instances. Provider topology is opaque to the v4 interface.
 
 Hard rules:
 
@@ -49,16 +50,18 @@ Heavy toolchain execution (tofu, kubectl/kustomize, gitleaks, actionlint,
 bazelisk — anything that launches a build or validation toolchain) is
 remote-only on this estate. Guarded Justfile recipes refuse locally via
 `scripts/remote-only-guard.sh` (`REFUSE` to stderr, exit 3, never
-warn-and-continue) and pass only on sanctioned hosted runners
-(`GITHUB_ACTIONS=true` and `RUNNER_ENVIRONMENT` not `github-hosted` — the GF
-admission shell, `tinyland-nix`/ARC). GF v4 is fail-closed with no
-local-execution fallback; the REAPI action, not the runner, is the unit of
-compute (R243). There is no override environment variable; the only non-CI
-pass is a baked `(lane, recipe)` allowlist inside the guard script, which is
-empty in this repository.
+warn-and-continue) and currently pass only on the protected self-hosted CI
+edge (`GITHUB_ACTIONS=true` and `RUNNER_ENVIRONMENT` not `github-hosted`). That
+ARC edge is continuity, not the v4 compute abstraction or proof. The v4 target
+is fail-closed and action-granular: the image-custodied client sends the named
+ActionPlan action to REAPI; missing authority does not enable local execution.
+There is no override environment variable; the only non-CI pass is a baked
+`(lane, recipe)` allowlist inside the guard script, which is empty in this
+repository.
 
-The verification route is: push the branch and read hosted CI — `gh pr
-checks`, `gh run view`, `gh run watch`.
+Until the v4 instance/catalog rung exists, source verification runs through the
+protected CI edge; that is source evidence only, not remote-execution or
+enrollment evidence.
 
 Ratified attended exceptions (unguarded by design):
 
@@ -67,7 +70,9 @@ Ratified attended exceptions (unguarded by design):
   `arc-enrollment-plan` / `arc-app-secret-apply`, `arc-validate`,
   `enrollment-preflight*`, and their `_arc-*` / `_reviewed-*` /
   `_operator-apply-confirm` helpers) — confirm-gated, no CI caller,
-  ratified per docs/runbooks and the implementation overlay
+  bound to the current `Justfile` and
+  `tofu/stacks/arc-runners/great-falls-tool-bus.tfvars` state-continuity
+  surface; it has no v4 authority
 - the web-release ceremony (`web-release-*` and helpers; TIN-3899 /
   decisions/0016) — attended-operator-only, unreachable from every CI
   workflow by design
