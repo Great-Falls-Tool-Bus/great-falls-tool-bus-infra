@@ -2082,6 +2082,151 @@ list-member-add: _list-member-add-inputs _reviewed-clean-main _operator-apply-co
     test "$(classify_membership <<<"${after_json}")" = "present" || { echo "Membership readback did not converge." >&2; exit 2; }
     echo "Selected list membership added and read back."
 
+# --- discuss@ writer-gate close: subscription_policy=moderate (TIN-4268) ----
+# Ratified 2026-09-01 operator ruling (platform spec
+# docs/spec/discuss-board-lifecycle-2026-09-01.md in greatfallstoolbus.org):
+# anyone READS the discuss board; only MEMBERS write; membership account
+# creation is the ONLY writer path. subscription_policy=confirm let any
+# anonymous archive reader self-subscribe as a writer, so the ratified
+# baseline for discuss@ is now `moderate` (docs/runbooks/list-operations.md
+# section 5, amended 2026-09-03). These attended lanes PATCH the live engine
+# to that baseline and emit the refusal-probe receipt TIN-4268 requires.
+# No agent-sent mail at any step: the probe is admin REST only; Mailman's own
+# owner notification for the parked probe request is the one expected system
+# mail, and the parked request is discarded (silent — discard sends nothing
+# to the probe address).
+
+_list-discuss-writer-gate-inputs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${GFTB_LIST_KUBECONFIG:?Set GFTB_LIST_KUBECONFIG to the dedicated namespace list-admin kubeconfig}"
+    python3 -I - "${GFTB_LIST_KUBECONFIG}" "$(git rev-parse --show-toplevel)" <<'PY'
+    import os
+    import stat
+    import sys
+    from pathlib import Path
+
+    path = Path(sys.argv[1]).expanduser().resolve(strict=True)
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("GFTB_LIST_KUBECONFIG must remain outside the public repository")
+    metadata = path.stat()
+    if not path.is_file() or metadata.st_uid != os.getuid():
+        raise SystemExit("GFTB_LIST_KUBECONFIG must be a regular file owned by the operator")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise SystemExit("GFTB_LIST_KUBECONFIG must have mode 0600")
+    PY
+
+# Close the discuss@ writer hole: move subscription_policy to the ratified
+# `moderate` baseline, read it back, then run the refusal probe in the same
+# attended sitting. Idempotent: an already-moderate list is a no-op patch and
+# still gets probed. Any pre-state other than confirm/moderate stops for
+# operator review instead of overwriting an unknown ruling.
+list-discuss-writer-gate-close: _list-discuss-writer-gate-inputs _reviewed-clean-main _operator-apply-confirm
+    #!/usr/bin/env bash
+    set -euo pipefail
+    namespace="latoolb-us-production"
+    pod_json="$(kubectl --kubeconfig "${GFTB_LIST_KUBECONFIG}" --namespace "${namespace}" get pods -l app.kubernetes.io/name=mailman-core -o json)"
+    core_pod="$(jq -er '[.items[] | select(.metadata.deletionTimestamp == null)] as $active | if (($active | length) == 1 and $active[0].status.phase == "Running" and any($active[0].status.conditions[]?; .type == "Ready" and .status == "True")) then $active[0].metadata.name else error("expected exactly one active Ready mailman-core pod") end' <<<"${pod_json}")"
+    read_policy() {
+      kubectl --kubeconfig "${GFTB_LIST_KUBECONFIG}" --namespace "${namespace}" exec -i "${core_pod}" --container mailman-core -- sh -eu -c '
+        curl --fail --silent --show-error \
+          --user "restadmin:${MAILMAN_REST_PASSWORD}" \
+          "http://$(hostname -i):8001/3.1/lists/discuss.latoolb.us/config/subscription_policy"
+      ' | jq -er '.subscription_policy'
+    }
+    before="$(read_policy)"
+    if [[ "${before}" == "moderate" ]]; then
+      echo "writer-gate.noop list=discuss.latoolb.us subscription_policy already moderate"
+    else
+      [[ "${before}" == "confirm" ]] || { echo "Refusing to overwrite unexpected discuss@ subscription_policy pre-state: ${before}" >&2; exit 2; }
+      status="$(kubectl --kubeconfig "${GFTB_LIST_KUBECONFIG}" --namespace "${namespace}" exec -i "${core_pod}" --container mailman-core -- sh -eu -c '
+        curl --silent --show-error --output /dev/null --write-out "%{http_code}" \
+          --user "restadmin:${MAILMAN_REST_PASSWORD}" --request PATCH \
+          --data-urlencode "subscription_policy=moderate" \
+          "http://$(hostname -i):8001/3.1/lists/discuss.latoolb.us/config"
+      ')"
+      test "${status}" = "204" || { echo "subscription_policy PATCH returned HTTP ${status}." >&2; exit 2; }
+      after="$(read_policy)"
+      test "${after}" = "moderate" || { echo "subscription_policy readback did not converge: ${after}" >&2; exit 2; }
+      echo "writer-gate.closed list=discuss.latoolb.us subscription_policy=${before}->moderate"
+    fi
+    just list-discuss-writer-gate-probe
+
+# Refusal-probe receipt (TIN-4268 acceptance): an anonymous/self-serve
+# subscription attempt on discuss@ must be REFUSED (parked for owner
+# approval, never a membership), while anonymous archive read stays open.
+# The probe emulates the self-serve join exactly — a subscribe with no owner
+# pre-approval — because self-serve flows can never pre-approve themselves.
+# Under the old `confirm` policy this identical call minted a member (HTTP
+# 201, the hole); under `moderate` it parks (HTTP 202). The parked request is
+# then discarded (no mail to the probe address). Record the emitted receipt
+# lines on TIN-4268.
+list-discuss-writer-gate-probe: _list-discuss-writer-gate-inputs _reviewed-clean-main
+    #!/usr/bin/env bash
+    set -euo pipefail
+    namespace="latoolb-us-production"
+    probe_subscriber="writer-gate-probe@latoolb.us"
+    archive_deep_link="https://lists.latoolb.us/hyperkitty/list/discuss@latoolb.us/"
+    pod_json="$(kubectl --kubeconfig "${GFTB_LIST_KUBECONFIG}" --namespace "${namespace}" get pods -l app.kubernetes.io/name=mailman-core -o json)"
+    core_pod="$(jq -er '[.items[] | select(.metadata.deletionTimestamp == null)] as $active | if (($active | length) == 1 and $active[0].status.phase == "Running" and any($active[0].status.conditions[]?; .type == "Ready" and .status == "True")) then $active[0].metadata.name else error("expected exactly one active Ready mailman-core pod") end' <<<"${pod_json}")"
+    policy="$(kubectl --kubeconfig "${GFTB_LIST_KUBECONFIG}" --namespace "${namespace}" exec -i "${core_pod}" --container mailman-core -- sh -eu -c '
+      curl --fail --silent --show-error \
+        --user "restadmin:${MAILMAN_REST_PASSWORD}" \
+        "http://$(hostname -i):8001/3.1/lists/discuss.latoolb.us/config/subscription_policy"
+    ' | jq -er '.subscription_policy')"
+    test "${policy}" = "moderate" || { echo "Probe precondition failed: discuss@ subscription_policy is ${policy}, not moderate. Run just list-discuss-writer-gate-close." >&2; exit 2; }
+    status="$(printf '%s\n' "${probe_subscriber}" | \
+      kubectl --kubeconfig "${GFTB_LIST_KUBECONFIG}" --namespace "${namespace}" exec -i "${core_pod}" --container mailman-core -- sh -eu -c '
+        IFS= read -r subscriber
+        curl --silent --show-error --output /dev/null --write-out "%{http_code}" \
+          --user "restadmin:${MAILMAN_REST_PASSWORD}" --request POST \
+          --data-urlencode "list_id=discuss.latoolb.us" \
+          --data-urlencode "subscriber=${subscriber}" \
+          --data-urlencode "pre_verified=true" \
+          --data-urlencode "pre_confirmed=true" \
+          --data-urlencode "role=member" \
+          "http://$(hostname -i):8001/3.1/members"
+      ')"
+    test "${status}" = "202" || { echo "REFUSAL PROBE FAILED: self-serve subscribe attempt returned HTTP ${status} (expected 202 parked-for-approval; 201 means the writer hole is OPEN)." >&2; exit 2; }
+    membership_json="$(printf '%s\n' "${probe_subscriber}" | \
+      kubectl --kubeconfig "${GFTB_LIST_KUBECONFIG}" --namespace "${namespace}" exec -i "${core_pod}" --container mailman-core -- sh -eu -c '
+        IFS= read -r subscriber
+        curl --fail --silent --show-error \
+          --user "restadmin:${MAILMAN_REST_PASSWORD}" --get \
+          --data-urlencode "list_id=discuss.latoolb.us" \
+          --data-urlencode "subscriber=${subscriber}" \
+          --data-urlencode "role=member" \
+          "http://$(hostname -i):8001/3.1/members/find"
+      ')"
+    membership_count="$(jq -er '.total_size // 0' <<<"${membership_json}")"
+    test "${membership_count}" = "0" || { echo "REFUSAL PROBE FAILED: probe address holds a discuss@ membership (writer hole OPEN)." >&2; exit 2; }
+    token="$(printf '%s\n' "${probe_subscriber}" | \
+      kubectl --kubeconfig "${GFTB_LIST_KUBECONFIG}" --namespace "${namespace}" exec -i "${core_pod}" --container mailman-core -- sh -eu -c '
+        IFS= read -r subscriber
+        curl --fail --silent --show-error \
+          --user "restadmin:${MAILMAN_REST_PASSWORD}" \
+          "http://$(hostname -i):8001/3.1/lists/discuss.latoolb.us/requests"
+      ' | jq -er --arg subscriber "${probe_subscriber}" '[.entries[]? | select((.email | ascii_downcase) == ($subscriber | ascii_downcase))] | if length >= 1 then .[0].token else error("parked probe request not found in the discuss@ requests queue") end')"
+    discard_status="$(printf '%s\n' "${token}" | \
+      kubectl --kubeconfig "${GFTB_LIST_KUBECONFIG}" --namespace "${namespace}" exec -i "${core_pod}" --container mailman-core -- sh -eu -c '
+        IFS= read -r token
+        curl --silent --show-error --output /dev/null --write-out "%{http_code}" \
+          --user "restadmin:${MAILMAN_REST_PASSWORD}" --request POST \
+          --data-urlencode "action=discard" \
+          "http://$(hostname -i):8001/3.1/lists/discuss.latoolb.us/requests/${token}"
+      ')"
+    test "${discard_status}" = "204" || { echo "Probe cleanup failed: discard of parked request ${token} returned HTTP ${discard_status}; discard it by hand (list-operations.md section 4)." >&2; exit 2; }
+    archive_status="$(curl --silent --output /dev/null --write-out "%{http_code}" "${archive_deep_link}")"
+    test "${archive_status}" = "200" || { echo "ARCHIVE-READ PROBE FAILED: anonymous GET of ${archive_deep_link} returned HTTP ${archive_status} (expected 200)." >&2; exit 2; }
+    echo "writer-gate.refusal-probe list=discuss.latoolb.us subscriber=${probe_subscriber} http=202 membership=absent parked-request=discarded"
+    echo "writer-gate.archive-read url=${archive_deep_link} http=${archive_status}"
+    echo "Record both receipt lines on TIN-4268 (probe receipt: anonymous subscription attempt refused; archive read stays anonymous)."
+
 # --- keyholders -> discuss add-only membership reconciler (TIN-3813 lane) ---
 # Enforces members(keyholders@latoolb.us) as a subset of
 # members(discuss@latoolb.us) going forward (the ratified private/public list

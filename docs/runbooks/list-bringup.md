@@ -84,8 +84,11 @@ Required list settings:
 - **Non-member posts:** accepted or moderated-through so first-contact access
   requests from strangers reach the keyholders. Rspamd and Mailman moderation
   are the spam/abuse controls.
-- **Public discussion list:** `discuss@latoolb.us` carries open subscription
-  and public HyperKitty archive semantics. Its source/transport reconciliation
+- **Public discussion list:** `discuss@latoolb.us` carries public HyperKitty
+  archive semantics (anyone reads). Since 2026-09-03 (TIN-4268) its
+  subscription is **not** open: `subscription_policy=moderate`, because
+  membership account creation is the only sanctioned writer path — see
+  `list-operations.md` sections 1 and 5. Its source/transport reconciliation
   is tracked separately on TIN-2498. Do not give `keyholders@` public-archive
   semantics.
 

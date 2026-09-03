@@ -19,7 +19,7 @@ first member and first owner of each.
 | List | Role | archive_policy | subscription_policy | default_nonmember_action | advertised |
 | --- | --- | --- | --- | --- | --- |
 | `keyholders@latoolb.us` | Private access-gating role list | `private` | `moderate` (owner-approved) | `accept` | `false` |
-| `discuss@latoolb.us` | Public community board | `public` | `confirm` (open, email-confirmed) | `hold` | `true` |
+| `discuss@latoolb.us` | Public community board | `public` | `moderate` (members-only writer path) | `hold` | `true` |
 
 - **`keyholders@latoolb.us`** federates keyholders through their own mail
   clients so any keyholder can pick up an access request. Membership is
@@ -27,9 +27,18 @@ first member and first owner of each.
   can send a first-contact access request that fans out to every keyholder.
   Because those requests can carry names, contact details, tool needs, and
   scheduling context, the archive is **private** and must stay that way.
-- **`discuss@latoolb.us`** is the open board. Anyone can subscribe with email
-  confirmation (`confirm`), the archive is **public**, and non-member posts are
-  **held** for moderation rather than accepted.
+- **`discuss@latoolb.us`** is the open **read** board with a members-only
+  **writer** path. The archive is **public** (anyone reads, anonymously), but
+  subscription is `moderate`: self-serve subscription attempts park for owner
+  approval instead of taking effect, because membership account creation is
+  the ONLY sanctioned writer path (2026-09-01 operator ruling, platform spec
+  `docs/spec/discuss-board-lifecycle-2026-09-01.md` in `greatfallstoolbus.org`;
+  TIN-4268). Sanctioned add paths are the members provisioning lane
+  (`provision.add_lists`, TIN-3964), the attended `just list-member-add`
+  lane, and the add-only keyholders reconciler (section 8). Non-member posts
+  are **held** for moderation rather than accepted. Before 2026-09-03 the
+  policy was `confirm` (open, email-confirmed self-subscription); that was
+  the writer hole TIN-4268 closed.
 
 Both lists share one transport into the engine. The substrate postfix map routes
 list mail to the LMTP listener at
@@ -236,10 +245,13 @@ kubectl --context honey -n latoolb-us-production exec "$CORE" -- sh -c '
 
 ### Subscription requests (owner approval)
 
-On `keyholders@` (`moderate`), a candidate who mails `keyholders-join@` or a
-REST add without `pre_approved` lands in the requests queue. List pending
-requests and approve one with an `action` of `accept`, `discard`, `reject`, or
-`defer`:
+Both lists are `moderate` now (discuss@ since 2026-09-03, TIN-4268). A
+candidate who mails a `-join@` address or a REST add without `pre_approved`
+lands in that list's requests queue. On `discuss@`, do **not** approve
+self-serve requests from strangers: membership account creation is the only
+sanctioned writer path (section 1), so `discard` (silent) or `reject` them
+and let the sanctioned add lanes do the adding. List pending requests and act
+on one with an `action` of `accept`, `discard`, `reject`, or `defer`:
 
 ```bash
 # View pending subscription requests.
@@ -275,7 +287,18 @@ kubectl --context honey -n latoolb-us-production exec "$CORE" -- sh -c '
 ### Ratified baseline (restore target)
 
 If the database drifts, restore these values. They are the operator-ratified
-2026-07-04 baseline, confirmed live the same day.
+2026-07-04 baseline, confirmed live the same day, with one dated amendment:
+
+> **Amendment 2026-09-03 (TIN-4268).** `subscription_policy` on
+> `discuss@latoolb.us` moved `confirm` → `moderate`, enforcing the
+> 2026-09-01 operator ruling (platform spec
+> `docs/spec/discuss-board-lifecycle-2026-09-01.md`,
+> `greatfallstoolbus.org` PR #226): anyone reads, only members write, and
+> membership account creation is the ONLY writer path. Under `confirm`, any
+> anonymous reader of the public archive could self-subscribe as a writer
+> with nothing but an email confirmation. The 2026-07-04 value (`confirm`)
+> is superseded; restore `moderate`. Live PATCH + refusal-probe receipt ride
+> the attended writer-gate lanes below.
 
 **`keyholders@latoolb.us`:**
 
@@ -293,11 +316,47 @@ If the database drifts, restore these values. They are the operator-ratified
 | Setting | Value |
 | --- | --- |
 | `archive_policy` | `public` |
-| `subscription_policy` | `confirm` |
+| `subscription_policy` | `moderate` (amended 2026-09-03, TIN-4268; was `confirm`) |
 | `default_member_action` | `accept` |
 | `default_nonmember_action` | `hold` |
 | `advertised` | `true` |
 | `admin_immed_notify` | `true` |
+
+### Writer-gate close + refusal probe (TIN-4268 attended lanes)
+
+The `subscription_policy` amendment above is applied to the live engine by an
+attended operator lane, not by `kubectl apply` (list settings live in
+Postgres — section 1). Both lanes require the dedicated list-admin
+kubeconfig (`GFTB_LIST_KUBECONFIG`, same contract as `just list-member-add`)
+and a clean, signed, current `main` checkout:
+
+```bash
+# One-time close (idempotent; refuses unexpected pre-states), then probes:
+GFTB_APPLY_CONFIRM=apply just list-discuss-writer-gate-close
+
+# Re-runnable refusal probe on its own (read-mostly; parks then discards one
+# probe request):
+just list-discuss-writer-gate-probe
+```
+
+The probe emulates the self-serve join exactly — a subscribe attempt with no
+owner pre-approval, which is all a self-serve flow can ever present — and
+passes only when:
+
+- the attempt parks for owner approval (HTTP `202`), instead of minting a
+  member (`201` was the `confirm`-era hole);
+- membership readback for the probe address is absent;
+- the parked request is discarded cleanly (`discard` is silent — no mail to
+  the probe address; owners do get Mailman's ordinary
+  `admin_immed_notify` notice, the one expected system mail);
+- the anonymous archive deep link
+  `https://lists.latoolb.us/hyperkitty/list/discuss@latoolb.us/` still
+  returns `200` (read stays open to everyone).
+
+Record the two emitted `writer-gate.*` receipt lines on TIN-4268. No agent
+sends mail at any step. Rolling `subscription_policy` back to `confirm` is a
+settings change **against the ratified ruling** and needs a new dated
+operator ruling here first.
 
 ### Safety-critical settings
 
@@ -310,6 +369,12 @@ If the database drifts, restore these values. They are the operator-ratified
 
 `subscription_policy=moderate` on `keyholders@` is the other guardrail: it keeps
 membership owner-curated so the keyholder set is not open to self-subscription.
+
+`subscription_policy=moderate` on `discuss@` is a ruling-backed guardrail too
+(TIN-4268): the public archive makes every reader anonymous, and `confirm`
+would let any of them self-subscribe as a writer. Membership account creation
+must remain the only writer path; do not relax this without a new dated
+operator ruling.
 
 ## 6. Stack management
 
