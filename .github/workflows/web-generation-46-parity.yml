@@ -1,0 +1,618 @@
+name: Web generation 46 parity bridge
+
+# TIN-4249 protected generation-46 parity carrier, authorized by ratified Meta
+# decision 0022 Amendment 4. It reconciles the running generation 45 to the
+# newest signed gftb-site main, generation 46. It is a standing-bounded bridge,
+# not the permanent main==prod mechanism: it expires after the third terminal
+# Amendment-4 receipt or at 2026-09-09 23:59 ET, whichever comes first, and is
+# retired after this terminal receipt. The permanent successor is the shared
+# TIN-2611 GloriousFlywheel v4 owner-controller chain; the superseded local W14
+# executor is not armed or invoked here.
+#
+# This carrier preserves saved-plan/no-replan, non-cancelling concurrency, and
+# observer_independent:false. W13 made committed render inputs authoritative,
+# so rollback is rendered from the exact signed generation-45 infra ancestor
+# through the current Just contract instead of mutating the generation-46 tree.
+# The workflow and validators freeze all operands byte-for-byte before any
+# protected credential is materialized.
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/web-generation-46-parity.yml"
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: gftb-web-generation-46-parity
+  cancel-in-progress: false
+
+env:
+  # Exact generation-46 pin merge; it must remain the carrier's sole parent.
+  REVIEWED_BASE_SHA: b2d8b3db84523e910740252f3b87573cbaa23660
+  PIN_PR_NUMBER: "174"
+  PIN_HEAD_SHA: 60f128f389c8383813a359e06f3aa2fcd83444be
+  PIN_MERGE_SHA: b2d8b3db84523e910740252f3b87573cbaa23660
+  ROLLBACK_INFRA_SHA: 8ecf26987896659727fc623142e170779ff92d41
+  TARGET_SOURCE_SHA: bc0a2a0f58f4bd7aa1d6c274903fb619941a829a
+  TARGET_IMAGE: ghcr.io/great-falls-tool-bus/gftb-site@sha256:13eb13292076a5ba2919a92df62c972ab2be36b975a01b9930002a0f1cb7aad3
+  SOURCE_CI_RUN_ID: "33790393468"
+  SOURCE_PUBLISH_RUN_ID: "33790392585"
+  # Forward render digest from infra PR #174's protected web-plan artifact.
+  TARGET_RENDER_SHA256: b0599cc9662831d325f76b0fbcb1ad146fc1d1b91c04c6c6dfa28a39e75d240e
+  # Generation 45 is RUNNING; any failed forward proof rolls back to its exact
+  # signed infra tree and saved render.
+  ROLLBACK_SOURCE_SHA: 836857bce295dec206cb4ebd6ba45f2956bc8aed
+  ROLLBACK_IMAGE: ghcr.io/great-falls-tool-bus/gftb-site@sha256:498b9715ed123ac8b5e1be0c35a5355ede6880e655e77809b85bf83c8f34f24c
+  # Reverse render digest from the protected W13 main web-plan artifact.
+  ROLLBACK_RENDER_SHA256: 042fe6067865cd1dce07e30b6070b4afc82fbb2611368b031054b1fd4c5888a8
+  WEB_APPLY_REPLICAS: "2"
+  BRIDGE_EXPIRES_AT: "2026-09-10T03:59:59Z"
+  AMENDMENT4_RECEIPT_ORDINAL: "1"
+  # Meta ratification: exact merged main, ADR blob, and content digest.
+  META_MAIN_SHA: ba67a174da22cca2fd8b2e7312e859664151c1bc
+  META_ADR_PATH: decisions/0022-gftb-site-main-prod-gfi09-carrier-2026-08-30.md
+  META_ADR_BLOB: 9e5d297c1a325c16ba29e13146f98619e31f6dd9
+  META_ADR_SHA256: b3717602a64ddd0561f650fb08c671d0bb1f13ce12c69759682e1d10700260ff
+  # The bridge-adding PR in great-falls-tool-bus-infra; the authority step
+  # binds the merge to it and the parity receipt embeds it. The sole remaining
+  # placeholder is filled immediately after GitHub assigns the draft PR number.
+  BRIDGE_PR_NUMBER: PLACEHOLDER_BRIDGE_PR_NUMBER
+
+jobs:
+  parity:
+    name: Reconcile generation 46 parity
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: tinyland-nix
+    timeout-minutes: 30
+    environment: web-apply
+    steps:
+      - name: Checkout overlay
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+          path: overlay
+          persist-credentials: false
+
+      - name: Verify signed squash authority and frozen inputs
+        id: authority
+        working-directory: overlay
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_HOST: github.com
+        run: |
+          set -euo pipefail
+          # Refuse before any network call while any operand is still an
+          # unfilled placeholder. Every placeholder must be substituted in the
+          # env block AND at its inline re-assert below; this guard makes a
+          # partial fill or a forgotten fill fail closed rather than bind a
+          # vacuous constant.
+          for name in REVIEWED_BASE_SHA PIN_PR_NUMBER PIN_HEAD_SHA PIN_MERGE_SHA ROLLBACK_INFRA_SHA TARGET_SOURCE_SHA TARGET_IMAGE SOURCE_CI_RUN_ID SOURCE_PUBLISH_RUN_ID TARGET_RENDER_SHA256 ROLLBACK_RENDER_SHA256 BRIDGE_EXPIRES_AT AMENDMENT4_RECEIPT_ORDINAL META_MAIN_SHA META_ADR_BLOB META_ADR_SHA256 BRIDGE_PR_NUMBER; do
+            case "${!name}" in
+              PLACEHOLDER_*) echo "::error::Refusing: ${name} is still an unfilled placeholder."; exit 2 ;;
+            esac
+          done
+          test "${GITHUB_REPOSITORY}" = Great-Falls-Tool-Bus/great-falls-tool-bus-infra
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test -z "$(git status --porcelain)"
+          for name in GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_SYSTEM GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_SSH_COMMAND GIT_ASKPASS; do
+            test -z "${!name:-}" || { echo "::error::Refusing ambient ${name}."; exit 2; }
+          done
+          if git config --get-regexp '^(url\..*\.insteadOf|gpg\..*\.program|core\.sshCommand|include\..*|includeIf\..*)$'; then
+            echo "::error::Git configuration may redirect canonical or signature verification."
+            exit 2
+          fi
+          case "$(git remote get-url origin)" in
+            https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra|https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git) ;;
+            *) echo "::error::Noncanonical origin."; exit 2 ;;
+          esac
+
+          api() { nix develop . --command gh api --hostname github.com "$@"; }
+          public_api() {
+            nix develop . --command curl \
+              --proto '=https' --tlsv1.2 --fail --silent --show-error \
+              --max-redirs 0 \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              "$1"
+          }
+          test "${REVIEWED_BASE_SHA}" = "${PIN_MERGE_SHA}"
+          test "${AMENDMENT4_RECEIPT_ORDINAL}" = 1
+          nix develop . --command python3 -I - "${BRIDGE_EXPIRES_AT}" <<'PY'
+          from datetime import datetime, timezone
+          import sys
+
+          expires = datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00"))
+          if datetime.now(timezone.utc) > expires:
+              raise SystemExit("Amendment 4 bridge authority has expired")
+          PY
+          test "$(api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" = "${GITHUB_SHA}"
+          commit="$(api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}")"
+          jq -e --arg base "${REVIEWED_BASE_SHA}" '
+            .commit.verification.verified == true
+            and .commit.verification.reason == "valid"
+            and (.parents | length) == 1
+            and .parents[0].sha == $base
+          ' <<<"${commit}" >/dev/null
+          pr="$(api "repos/${GITHUB_REPOSITORY}/pulls/${BRIDGE_PR_NUMBER}")"
+          pr_head="$(jq -er '.head.sha' <<<"${pr}")"
+          jq -e --arg carrier "${GITHUB_SHA}" --arg base "${REVIEWED_BASE_SHA}" '
+            .merged == true and .merge_commit_sha == $carrier
+            and .base.ref == "main" and .base.sha == $base
+          ' <<<"${pr}" >/dev/null
+          test "$(api "repos/${GITHUB_REPOSITORY}/git/commits/${GITHUB_SHA}" --jq .tree.sha)" = "$(api "repos/${GITHUB_REPOSITORY}/git/commits/${pr_head}" --jq .tree.sha)"
+          test "$(api "repos/${GITHUB_REPOSITORY}/commits/${pr_head}" --jq .commit.verification.verified)" = true
+          test "$(api "repos/${GITHUB_REPOSITORY}/commits/${pr_head}" --jq .commit.verification.reason)" = valid
+          mapfile -t changed < <(api "repos/${GITHUB_REPOSITORY}/pulls/${BRIDGE_PR_NUMBER}/files" --paginate --jq '.[].filename' | LC_ALL=C sort)
+          expected=(.github/workflows/web-generation-46-parity.yml Justfile scripts/validate-core-checkout.py scripts/validate-public-operator-surface.py)
+          [[ "${changed[*]}" == "${expected[*]}" ]]
+
+          pin_pr="$(api "repos/${GITHUB_REPOSITORY}/pulls/${PIN_PR_NUMBER}")"
+          jq -e \
+            --arg head "${PIN_HEAD_SHA}" \
+            --arg merge "${PIN_MERGE_SHA}" \
+            --arg base "${ROLLBACK_INFRA_SHA}" '
+            .merged == true
+            and .base.ref == "main" and .base.sha == $base
+            and .head.sha == $head and .merge_commit_sha == $merge
+          ' <<<"${pin_pr}" >/dev/null
+          pin_merge="$(api "repos/${GITHUB_REPOSITORY}/commits/${PIN_MERGE_SHA}")"
+          jq -e --arg parent "${ROLLBACK_INFRA_SHA}" '
+            .commit.verification.verified == true
+            and .commit.verification.reason == "valid"
+            and (.parents | length) == 1 and .parents[0].sha == $parent
+          ' <<<"${pin_merge}" >/dev/null
+          test "$(api "repos/${GITHUB_REPOSITORY}/git/commits/${PIN_MERGE_SHA}" --jq .tree.sha)" = "$(api "repos/${GITHUB_REPOSITORY}/git/commits/${PIN_HEAD_SHA}" --jq .tree.sha)"
+          test "$(api "repos/${GITHUB_REPOSITORY}/commits/${PIN_HEAD_SHA}" --jq .commit.verification.verified)" = true
+          test "$(api "repos/${GITHUB_REPOSITORY}/commits/${PIN_HEAD_SHA}" --jq .commit.verification.reason)" = valid
+
+          site_ref="$(public_api https://api.github.com/repos/Great-Falls-Tool-Bus/gftb-site/git/ref/heads/main)"
+          jq -e --arg source "${TARGET_SOURCE_SHA}" '.object.type == "commit" and .object.sha == $source' <<<"${site_ref}" >/dev/null
+          site_commit="$(public_api "https://api.github.com/repos/Great-Falls-Tool-Bus/gftb-site/commits/${TARGET_SOURCE_SHA}")"
+          jq -e --arg source "${TARGET_SOURCE_SHA}" '
+            .sha == $source
+            and .commit.verification.verified == true
+            and .commit.verification.reason == "valid"
+          ' <<<"${site_commit}" >/dev/null
+          source_ci="$(public_api "https://api.github.com/repos/Great-Falls-Tool-Bus/gftb-site/actions/runs/${SOURCE_CI_RUN_ID}")"
+          jq -e --arg source "${TARGET_SOURCE_SHA}" '
+            .head_sha == $source and .head_branch == "main" and .event == "push"
+            and .status == "completed" and .conclusion == "success"
+          ' <<<"${source_ci}" >/dev/null
+          source_publish="$(public_api "https://api.github.com/repos/Great-Falls-Tool-Bus/gftb-site/actions/runs/${SOURCE_PUBLISH_RUN_ID}")"
+          jq -e --arg source "${TARGET_SOURCE_SHA}" '
+            .head_sha == $source and .head_branch == "main" and .event == "push"
+            and .status == "completed" and .conclusion == "success"
+          ' <<<"${source_publish}" >/dev/null
+
+          rules="$(api "repos/${GITHUB_REPOSITORY}/rules/branches/main")"
+          jq -e '
+            any(.[]; .type == "required_signatures")
+            and any(.[]; .type == "pull_request" and .parameters.allowed_merge_methods == ["squash"])
+            and any(.[]; .type == "required_status_checks" and .parameters.strict_required_status_checks_policy == true and any(.parameters.required_status_checks[]; .context == "validate"))
+          ' <<<"${rules}" >/dev/null
+
+          # Meta is private to this token. Exact byte-pinned constants bind the
+          # already-merged ratification without widening this credential.
+          test "${META_MAIN_SHA}" = ba67a174da22cca2fd8b2e7312e859664151c1bc
+          test "${META_ADR_PATH}" = decisions/0022-gftb-site-main-prod-gfi09-carrier-2026-08-30.md
+          test "${META_ADR_BLOB}" = 9e5d297c1a325c16ba29e13146f98619e31f6dd9
+          test "${META_ADR_SHA256}" = b3717602a64ddd0561f650fb08c671d0bb1f13ce12c69759682e1d10700260ff
+
+          sha256sum --check --strict <<'HASHES'
+          3b127b309ddf3f78b7ffd3239cb0f14ef76ee187cb0e53497a7f63ed2fcbad7d  Justfile
+          33150ce2f846aef01539145f74a8eb1a04d45df5d960494ce188111a80e170e3  flake.lock
+          7f1249c2c291282f724e6d49eaeafc05d7a1009eb00a5724ff6ca633c2c30879  flake.nix
+          a41638e42c9591d9ce92e9e3fd9a48adb86f229ba23371145dc6f71dc8046b78  k8s/web/greatfallstoolbus-org-production/deployment.yaml
+          8ef176b50c24ac3de40b72c4958eab5cc2a849d3a212c09e7b6c75fa0b57d9af  k8s/web/greatfallstoolbus-org-production/kustomization.yaml
+          ce89195429db343255779efb5a2d1eb09493a3937e34fb259c0393a49930f476  k8s/web/greatfallstoolbus-org-production/networkpolicy.yaml
+          527a87425fc3a90a2a72d2adb59e1bfa7596d03e7f579a610ccfe841a48459d2  k8s/web/greatfallstoolbus-org-production/service.yaml
+          aacf50ada42c322a8e12eee0af40d55d77598f5468b73c1df574a8b50cc3be17  scripts/guard-no-remote-kustomize-resources.sh
+          c4c3bc53977330afbb79be1f90a783116960a56f9ccf38d57f89936da686d1b3  scripts/validate-web-stack.sh
+          HASHES
+
+          spent=false
+          if (( GITHUB_RUN_ATTEMPT > 1 )); then
+            for ((attempt=1; attempt<GITHUB_RUN_ATTEMPT; attempt++)); do
+              conclusion="$(api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${attempt}" --jq '.conclusion // ""')"
+              [[ "${conclusion}" != success ]] || spent=true
+            done
+          fi
+          successful="$(api "repos/${GITHUB_REPOSITORY}/actions/workflows/web-generation-46-parity.yml/runs?branch=main&status=success&per_page=100")"
+          jq -e --arg sha "${GITHUB_SHA}" --argjson run "${GITHUB_RUN_ID}" '[.workflow_runs[] | select(.head_sha == $sha and .id != $run)] | length == 0' <<<"${successful}" >/dev/null || spent=true
+          printf 'pr-head=%s\nspent=%s\n' "${pr_head}" "${spent}" >> "${GITHUB_OUTPUT}"
+
+          git update-ref refs/remotes/origin/main "${GITHUB_SHA}"
+          git switch -C main "${GITHUB_SHA}"
+          signer_home="${RUNNER_TEMP}/gftb-web-flow-gnupg"
+          mkdir -m 700 "${signer_home}"
+          nix develop . --command curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --max-redirs 0 https://github.com/web-flow.gpg > "${RUNNER_TEMP}/web-flow.gpg"
+          mapfile -t fingerprints < <(nix develop . --command gpg --batch --show-keys --with-colons "${RUNNER_TEMP}/web-flow.gpg" | awk -F: '$1 == "fpr" { print $10 }')
+          [[ "${fingerprints[*]}" == "5DE3E0509C47EA3CF04A42D34AEE18F83AFDEB23 968479A1AFF927E37D1A566BB5690EEEBB952194" ]]
+          nix develop . --command gpg --batch --homedir "${signer_home}" --import "${RUNNER_TEMP}/web-flow.gpg" >/dev/null 2>&1
+          GNUPGHOME="${signer_home}" nix develop . --command git verify-commit "${GITHUB_SHA}" >/dev/null
+          echo "GNUPGHOME=${signer_home}" >> "${GITHUB_ENV}"
+
+      - name: Prove both candidates and freeze both plans before credential
+        working-directory: overlay
+        run: |
+          set -euo pipefail
+          save_plan() {
+            local label="$1" suffix
+            for suffix in rendered.yaml render-sha256 image source-sha carrier-sha; do
+              cp ".k8s-plans/web-release.${suffix}" ".k8s-plans/generation-46.${label}.${suffix}"
+              chmod 600 ".k8s-plans/generation-46.${label}.${suffix}"
+            done
+          }
+          export WEB_APPLY_IMAGE="${ROLLBACK_IMAGE}" WEB_APPLY_SHA="${ROLLBACK_SOURCE_SHA}" WEB_RELEASE_RENDER_COMMIT="${ROLLBACK_INFRA_SHA}"
+          nix develop . --command just web-release-candidate-proof
+          nix develop . --command just web-release-plan
+          test "$(tr -d '\n' < .k8s-plans/web-release.render-sha256)" = "${ROLLBACK_RENDER_SHA256}"
+          save_plan reverse
+          unset WEB_RELEASE_RENDER_COMMIT
+          export WEB_APPLY_IMAGE="${TARGET_IMAGE}" WEB_APPLY_SHA="${TARGET_SOURCE_SHA}"
+          nix develop . --command just web-release-candidate-proof
+          nix develop . --command just web-release-plan
+          test "$(tr -d '\n' < .k8s-plans/web-release.render-sha256)" = "${TARGET_RENDER_SHA256}"
+          save_plan forward
+
+      - name: Materialize protected web-apply credential
+        working-directory: overlay
+        env:
+          WEB_APPLY_KUBECONFIG_B64: ${{ secrets.WEB_APPLY_KUBECONFIG_B64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "${WEB_APPLY_KUBECONFIG_B64}"
+          test -n "${RUNNER_TEMP}"
+          kubeconfig="${RUNNER_TEMP}/gftb-web-generation-46.kubeconfig"
+          printf '%s' "${WEB_APPLY_KUBECONFIG_B64}" | base64 --decode > "${kubeconfig}"
+          chmod 600 "${kubeconfig}"
+          echo "WEB_APPLY_KUBECONFIG=${kubeconfig}" >> "${GITHUB_ENV}"
+
+      - name: Preflight bootstrap observation RBAC and both server dry-runs
+        working-directory: overlay
+        run: |
+          set -euo pipefail
+          can_i() {
+            local verb="$1" resource="$2" result
+            result="$(nix develop . --command kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" auth can-i "${verb}" "${resource}" --namespace greatfallstoolbus-org-production)"
+            test "${result}" = yes || { echo "::error::Bootstrap credential cannot ${verb} ${resource}; refusing before mutation."; exit 2; }
+          }
+          can_i get deployments.apps/greatfallstoolbus-org
+          can_i list replicasets.apps
+          can_i list pods
+          can_i get services/greatfallstoolbus-org
+          can_i list endpointslices.discovery.k8s.io
+          can_i list networkpolicies.networking.k8s.io
+          restore_plan() {
+            local label="$1" suffix
+            for suffix in rendered.yaml render-sha256 image source-sha carrier-sha; do
+              cp ".k8s-plans/generation-46.${label}.${suffix}" ".k8s-plans/web-release.${suffix}"
+              chmod 600 ".k8s-plans/web-release.${suffix}"
+            done
+          }
+          restore_plan reverse
+          export WEB_APPLY_IMAGE="${ROLLBACK_IMAGE}" WEB_APPLY_SHA="${ROLLBACK_SOURCE_SHA}" WEB_RELEASE_RENDER_COMMIT="${ROLLBACK_INFRA_SHA}"
+          nix develop . --command just web-release-server-dry-run
+          restore_plan forward
+          unset WEB_RELEASE_RENDER_COMMIT
+          export WEB_APPLY_IMAGE="${TARGET_IMAGE}" WEB_APPLY_SHA="${TARGET_SOURCE_SHA}"
+          nix develop . --command just web-release-server-dry-run
+
+      - name: Reconcile, observe, and reverse on any post-mutation failure
+        id: reconcile
+        working-directory: overlay
+        env:
+          GFTB_APPLY_CONFIRM: apply
+          SPENT: ${{ steps.authority.outputs.spent }}
+          PR_HEAD_SHA: ${{ steps.authority.outputs.pr-head }}
+        run: |
+          set -euo pipefail
+          namespace=greatfallstoolbus-org-production
+          receipt="${RUNNER_TEMP}/gftb-web-generation-46-receipt.json"
+          apply_status=not_attempted rollback_status=not_needed proof_status=not_attempted classification=unknown terminal_rc=1
+          forward_attempted=false rollback_attempted=false zero_drift=false
+          kube() { nix develop . --command kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace "${namespace}" "$@"; }
+          restore_plan() {
+            local label="$1" suffix
+            for suffix in rendered.yaml render-sha256 image source-sha carrier-sha; do
+              cp ".k8s-plans/generation-46.${label}.${suffix}" ".k8s-plans/web-release.${suffix}"
+              chmod 600 ".k8s-plans/web-release.${suffix}"
+            done
+          }
+          snapshot() (
+            set -euo pipefail
+            local label image source out
+            label="$1"
+            image="$2"
+            source="$3"
+            out="${RUNNER_TEMP}/${label}.json"
+            local deployment replica_sets pods service slices policies dep_uid revision active_rs active_uid pod_uids pod_network service_uid
+            deployment="$(kube get deployment/greatfallstoolbus-org -o json)"
+            replica_sets="$(kube get replicasets.apps -o json)"
+            pods="$(kube get pods -o json)"
+            service="$(kube get service/greatfallstoolbus-org -o json)"
+            slices="$(kube get endpointslices.discovery.k8s.io --selector kubernetes.io/service-name=greatfallstoolbus-org -o json)"
+            policies="$(kube get networkpolicies.networking.k8s.io -o json)"
+            dep_uid="$(jq -er '.metadata.uid' <<<"${deployment}")"
+            revision="$(jq -er '.metadata.annotations["deployment.kubernetes.io/revision"] | select(test("^[1-9][0-9]*$"))' <<<"${deployment}")"
+            jq -e --arg image "${image}" --arg source "${source}" '
+              .metadata.name == "greatfallstoolbus-org" and .metadata.namespace == "greatfallstoolbus-org-production"
+              and .metadata.deletionTimestamp == null and .metadata.generation == .status.observedGeneration
+              and .spec.replicas == 2 and .status.replicas == 2 and .status.updatedReplicas == 2
+              and .status.readyReplicas == 2 and .status.availableReplicas == 2 and ((.status.unavailableReplicas // 0) == 0)
+              and .spec.selector.matchLabels == {"app.kubernetes.io/component":"web","app.kubernetes.io/name":"greatfallstoolbus-org"}
+              and .spec.template.metadata.annotations["app.tinyland.dev/source-sha"] == $source
+              and .spec.template.spec.automountServiceAccountToken == false and .spec.template.spec.enableServiceLinks == false
+              and .spec.template.spec.securityContext == {"fsGroup":65532,"runAsGroup":65532,"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"}}
+              and (.spec.template.spec.containers | length) == 1
+              and .spec.template.spec.containers[0].name == "greatfallstoolbus-org"
+              and .spec.template.spec.containers[0].image == $image
+              and (.spec.template.spec.containers[0].ports == [{"containerPort":3000,"name":"http","protocol":"TCP"}])
+              and .spec.template.spec.containers[0].securityContext == {"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true}
+              and (.spec.template.spec.containers[0] as $container | ["command","args","env","envFrom","volumeMounts"] | all(. as $key | ($container | has($key) | not)))
+            ' <<<"${deployment}" >/dev/null
+            active_rs="$(jq -e -c --arg owner "${dep_uid}" --arg revision "${revision}" '[.items[] | select(.metadata.deletionTimestamp == null) | select([.metadata.ownerReferences[]? | select(.controller == true) | .uid] == [$owner]) | select(.metadata.annotations["deployment.kubernetes.io/revision"] == $revision) | select(.spec.replicas == 2)] | if length == 1 then .[0] else error("active ReplicaSet census") end' <<<"${replica_sets}")"
+            active_uid="$(jq -er '.metadata.uid' <<<"${active_rs}")"
+            jq -e --arg owner "${dep_uid}" --arg active "${active_uid}" '[.items[] | select([.metadata.ownerReferences[]? | select(.controller == true) | .uid] == [$owner]) | select(.metadata.uid != $active)] | all(.[]; ((.spec.replicas // 0) == 0) and ((.status.replicas // 0) == 0))' <<<"${replica_sets}" >/dev/null
+            jq -e --arg owner "${active_uid}" --arg image "${image}" --arg digest "${image##*@}" '
+              [.items[] | select(.metadata.deletionTimestamp == null) | select([.metadata.ownerReferences[]? | select(.controller == true) | .uid] == [$owner])] as $p
+              | ($p | length) == 2 and all($p[]; .status.phase == "Running"
+                and any(.status.conditions[]?; .type == "Ready" and .status == "True")
+                and (.spec.containers | length) == 1 and .spec.containers[0].name == "greatfallstoolbus-org" and .spec.containers[0].image == $image
+                and (.status.containerStatuses | length) == 1 and .status.containerStatuses[0].ready == true
+                and (.status.containerStatuses[0].imageID | endswith("@" + $digest)))
+            ' <<<"${pods}" >/dev/null
+            pod_uids="$(jq -c --arg owner "${active_uid}" '[.items[] | select(.metadata.deletionTimestamp == null) | select([.metadata.ownerReferences[]? | select(.controller == true) | .uid] == [$owner]) | .metadata.uid] | sort' <<<"${pods}")"
+            pod_network="$(jq -c --arg owner "${active_uid}" '[.items[] | select(.metadata.deletionTimestamp == null) | select([.metadata.ownerReferences[]? | select(.controller == true) | .uid] == [$owner]) | {key:.metadata.uid,value:.status.podIP}] | from_entries' <<<"${pods}")"
+            service_uid="$(jq -er '.metadata.uid' <<<"${service}")"
+            jq -e '.spec.type == "ClusterIP" and .spec.selector == {"app.kubernetes.io/component":"web","app.kubernetes.io/name":"greatfallstoolbus-org"} and (.spec.ports | length) == 1 and .spec.ports[0].name == "http" and .spec.ports[0].port == 80 and .spec.ports[0].targetPort == "http" and .spec.ports[0].protocol == "TCP" and ((.spec.externalIPs // []) | length) == 0' <<<"${service}" >/dev/null
+            jq -e --argjson uids "${pod_uids}" --argjson network "${pod_network}" --arg service_uid "${service_uid}" '
+              [.items[] | select(.metadata.deletionTimestamp == null)] as $s | [$s[].endpoints[]] as $e
+              | ($s | length) > 0 and all($s[]; .metadata.labels["kubernetes.io/service-name"] == "greatfallstoolbus-org" and any(.metadata.ownerReferences[]?; .controller == true and .uid == $service_uid) and .addressType == "IPv4" and (.ports | length) == 1 and .ports[0].port == 3000)
+              and ($e | length) == 2 and all($e[]; .conditions.ready == true and ((.conditions.terminating // false) == false) and .targetRef.kind == "Pod" and .addresses == [$network[.targetRef.uid]])
+              and (([$e[].targetRef.uid] | sort) == $uids)
+            ' <<<"${slices}" >/dev/null
+            policy_semantic="$(jq -S -c '
+              def canonical_rule:
+                (if ((.from? // null) | type) == "array" then .from |= sort_by(tojson) else . end)
+                | (if ((.to? // null) | type) == "array" then (if .to == [] then del(.to) else .to |= sort_by(tojson) end) else . end)
+                | (if ((.ports? // null) | type) == "array" then .ports |= sort_by(tojson) else . end);
+              [.items[] | {apiVersion,kind,metadata:{name:.metadata.name,namespace:.metadata.namespace,labels:.metadata.labels},spec:(.spec
+                | .ingress = (.ingress // []) | .egress = (.egress // [])
+                | (if ((.policyTypes? // null) | type) == "array" then .policyTypes |= sort else . end)
+                | (if ((.ingress? // null) | type) == "array" then .ingress |= (map(canonical_rule) | sort_by(tojson)) else . end)
+                | (if ((.egress? // null) | type) == "array" then .egress |= (map(canonical_rule) | sort_by(tojson)) else . end))}] | sort_by(.metadata.name)
+            ' <<<"${policies}")"
+            test "$(printf '%s' "${policy_semantic}" | sha256sum | awk '{print $1}')" = 301eecb4ad234fdd7258ac7351a5a563e1b53cb250bce6f51a68824854b28220
+            jq -e '[.items[].metadata.name] | sort == ["allow-cloudflared-tunnel-ingress","allow-prometheus-scrape","default-deny-egress","default-deny-ingress"]' <<<"${policies}" >/dev/null
+            # Full API objects stay runner-local for assertions. The receipt
+            # contains only bounded projections and an allowlisted public-contract hash.
+            service_contract_sha256="$(jq -S -c '{type:.spec.type,selector:.spec.selector,ports:.spec.ports,externalIPs:(.spec.externalIPs // [])}' <<<"${service}" | sha256sum | awk '{print $1}')"
+            jq -n \
+              --argjson deployment "${deployment}" \
+              --argjson replicaSets "${replica_sets}" \
+              --argjson pods "${pods}" \
+              --argjson endpointSlices "${slices}" \
+              --argjson networkPolicies "${policies}" \
+              --arg serviceContractSha256 "${service_contract_sha256}" \
+              --arg activeUid "${active_uid}" \
+              --arg revision "${revision}" \
+              --arg image "${image}" \
+              --arg source "${source}" \
+              --arg digest "${image##*@}" \
+              '{
+                deployment: {
+                  name: $deployment.metadata.name,
+                  generation: $deployment.metadata.generation,
+                  observedGeneration: $deployment.status.observedGeneration,
+                  revision: $revision,
+                  desiredReplicas: $deployment.spec.replicas,
+                  updatedReplicas: ($deployment.status.updatedReplicas // 0),
+                  readyReplicas: ($deployment.status.readyReplicas // 0),
+                  availableReplicas: ($deployment.status.availableReplicas // 0),
+                  image: $image,
+                  sourceSha: $source
+                },
+                replicaSets: {
+                  ownedCount: ([$replicaSets.items[] | select(any(.metadata.ownerReferences[]?; .controller == true and .uid == $deployment.metadata.uid))] | length),
+                  activeCount: ([$replicaSets.items[] | select(.metadata.uid == $activeUid)] | length),
+                  activeRevision: $revision
+                },
+                pods: {
+                  activeOwnedCount: ([$pods.items[] | select(.metadata.deletionTimestamp == null) | select(any(.metadata.ownerReferences[]?; .controller == true and .uid == $activeUid))] | length),
+                  runningReadyCount: ([$pods.items[] | select(.metadata.deletionTimestamp == null) | select(any(.metadata.ownerReferences[]?; .controller == true and .uid == $activeUid)) | select(.status.phase == "Running" and any(.status.conditions[]?; .type == "Ready" and .status == "True"))] | length),
+                  digestMatchCount: ([$pods.items[] | select(.metadata.deletionTimestamp == null) | select(any(.metadata.ownerReferences[]?; .controller == true and .uid == $activeUid)) | select(.status.containerStatuses[0].imageID | endswith("@" + $digest))] | length)
+                },
+                service: {
+                  name: "greatfallstoolbus-org",
+                  contractSha256: $serviceContractSha256
+                },
+                endpointSlices: {
+                  sliceCount: ($endpointSlices.items | length),
+                  endpointCount: ([$endpointSlices.items[].endpoints[]?] | length),
+                  readyEndpointCount: ([$endpointSlices.items[].endpoints[]? | select(.conditions.ready == true and ((.conditions.terminating // false) == false))] | length),
+                  targetPodCount: ([$endpointSlices.items[].endpoints[]?.targetRef.uid] | unique | length),
+                  portTuples: ([$endpointSlices.items[].ports[]? | {name:(.name // null),port,protocol:(.protocol // "TCP")}] | unique | sort_by([.name,.port,.protocol]))
+                },
+                networkPolicies: {
+                  names: ([$networkPolicies.items[].metadata.name] | sort),
+                  semanticSha256: "301eecb4ad234fdd7258ac7351a5a563e1b53cb250bce6f51a68824854b28220"
+                }
+              }' > "${out}"
+          )
+          access_proof() (
+            set -euo pipefail
+            local headers="${RUNNER_TEMP}/access.headers" body="${RUNNER_TEMP}/access.body" status location
+            status="$(env -i PATH="${PATH}" HOME="${RUNNER_TEMP}" curl --disable --silent --show-error --connect-timeout 10 --max-time 20 --max-filesize 1048576 --max-redirs 0 --output "${body}" --dump-header "${headers}" --write-out '%{http_code}' https://greatfallstoolbus.org/)"
+            test "${status}" = 302
+            mapfile -t locations < <(awk 'tolower($1)=="location:" {print $2}' "${headers}" | tr -d '\r')
+            test "${#locations[@]}" = 1
+            location="${locations[0]}"
+            [[ "${location}" == https://sulliwood.cloudflareaccess.com/cdn-cgi/access/login/greatfallstoolbus.org?* ]]
+            location_sha256="$(printf '%s' "${location}" | sha256sum | awk '{print $1}')"
+            jq -n --arg status "${status}" --arg locationSha256 "${location_sha256}" '{status:($status|tonumber),locationSha256:$locationSha256,intercepted:true}' > "${RUNNER_TEMP}/access.json"
+          )
+          write_receipt() {
+            local pre_json post_json rollback_json access_json
+            pre_json="$(cat "${RUNNER_TEMP}/pre.json" 2>/dev/null || printf '{}')"
+            post_json="$(cat "${RUNNER_TEMP}/post.json" 2>/dev/null || printf '{}')"
+            rollback_json="$(cat "${RUNNER_TEMP}/rollback.json" 2>/dev/null || printf '{}')"
+            access_json="$(cat "${RUNNER_TEMP}/access.json" 2>/dev/null || printf '{"intercepted":false}')"
+            jq -n \
+              --arg carrier "${GITHUB_SHA}" \
+              --arg base "${REVIEWED_BASE_SHA}" \
+              --arg prHead "${PR_HEAD_SHA}" \
+              --arg classification "${classification}" \
+              --arg apply "${apply_status}" \
+              --arg rollbackStatus "${rollback_status}" \
+              --arg proof "${proof_status}" \
+              --argjson spent "${SPENT}" \
+              --argjson forwardAttempted "${forward_attempted}" \
+              --argjson rollbackAttempted "${rollback_attempted}" \
+              --argjson zeroDrift "${zero_drift}" \
+              --argjson pre "${pre_json}" \
+              --argjson post "${post_json}" \
+              --argjson rollback "${rollback_json}" \
+              --argjson access "${access_json}" '
+              {
+                schema:"gftb-web-generation-46-parity/v2",
+                authority:{
+                  reviewedBaseSha:$base,
+                  carrierMainSha:$carrier,
+                  pr:{number:(env.BRIDGE_PR_NUMBER|tonumber),headSha:$prHead,mergeMethod:"squash"},
+                  pin:{number:(env.PIN_PR_NUMBER|tonumber),headSha:env.PIN_HEAD_SHA,mergeSha:env.PIN_MERGE_SHA,rollbackInfraSha:env.ROLLBACK_INFRA_SHA},
+                  site:{sourceSha:env.TARGET_SOURCE_SHA,ciRunId:(env.SOURCE_CI_RUN_ID|tonumber),publisherRunId:(env.SOURCE_PUBLISH_RUN_ID|tonumber)},
+                  meta:{mainSha:env.META_MAIN_SHA,adrBlob:env.META_ADR_BLOB,adrSha256:env.META_ADR_SHA256,amendment4:{receiptOrdinal:(env.AMENDMENT4_RECEIPT_ORDINAL|tonumber),expiresAt:env.BRIDGE_EXPIRES_AT}},
+                  ruleset:{id:20930684,requiredStatus:"validate",strict:true,signatures:true}
+                },
+                run:{id:env.GITHUB_RUN_ID,attempt:(env.GITHUB_RUN_ATTEMPT|tonumber),url:(env.GITHUB_SERVER_URL+"/"+env.GITHUB_REPOSITORY+"/actions/runs/"+env.GITHUB_RUN_ID),environment:"web-apply"},
+                saved:{forwardRenderSha256:env.TARGET_RENDER_SHA256,reverseRenderSha256:env.ROLLBACK_RENDER_SHA256},
+                spent:{terminalBeforeRun:$spent},
+                classification:$classification,
+                prestate:$pre,
+                mutation:{forwardAttempted:$forwardAttempted,applyOutcome:$apply,rollbackAttempted:$rollbackAttempted,rollbackOutcome:$rollbackStatus,rollbackProof:$rollback},
+                poststate:$post,
+                observations:{proofStatus:$proof,zeroDrift:$zeroDrift,observerIndependent:false,credentialClass:"bootstrap web-apply readback",anonymousAccess:$access,authenticatedServedContent:"pending_operator_look"}
+              }
+              ' > "${receipt}"
+            chmod 600 "${receipt}"
+          }
+
+          deployment="$(kube get deployment/greatfallstoolbus-org -o json)"
+          live_image="$(jq -er '[.spec.template.spec.containers[] | select(.name=="greatfallstoolbus-org") | .image] | if length==1 then .[0] else error("container census") end' <<<"${deployment}")"
+          live_source="$(jq -er '.spec.template.metadata.annotations["app.tinyland.dev/source-sha"]' <<<"${deployment}")"
+          if [[ "${live_image}" == "${TARGET_IMAGE}" && "${live_source}" == "${TARGET_SOURCE_SHA}" ]]; then
+            classification=target
+            set +e
+            snapshot pre "${TARGET_IMAGE}" "${TARGET_SOURCE_SHA}"
+            prestate_rc=$?
+            set -e
+          elif [[ "${live_image}" == "${ROLLBACK_IMAGE}" && "${live_source}" == "${ROLLBACK_SOURCE_SHA}" ]]; then
+            classification=rollback
+            set +e
+            snapshot pre "${ROLLBACK_IMAGE}" "${ROLLBACK_SOURCE_SHA}"
+            prestate_rc=$?
+            set -e
+          else
+            classification=unrelated_drift
+            write_receipt
+            exit 2
+          fi
+          if (( prestate_rc != 0 )); then
+            classification=unrelated_drift
+            write_receipt
+            exit 2
+          fi
+          if [[ "${SPENT}" == true ]]; then
+            apply_status=refused_spent
+            write_receipt
+            exit 2
+          fi
+          apply_rc=0
+          if [[ "${classification}" == rollback ]]; then
+            restore_plan forward
+            unset WEB_RELEASE_RENDER_COMMIT
+            export WEB_APPLY_IMAGE="${TARGET_IMAGE}" WEB_APPLY_SHA="${TARGET_SOURCE_SHA}"
+            forward_attempted=true
+            set +e
+            nix develop . --command just web-release-apply
+            apply_rc=$?
+            set -e
+            if (( apply_rc == 0 )); then apply_status=succeeded; else apply_status=failed; fi
+          else
+            apply_status=noop
+          fi
+          set +e
+          snapshot post "${TARGET_IMAGE}" "${TARGET_SOURCE_SHA}"
+          snapshot_rc=$?
+          kube diff -f .k8s-plans/generation-46.forward.rendered.yaml >/dev/null
+          drift_rc=$?
+          access_proof
+          access_rc=$?
+          set -e
+          if (( drift_rc == 0 )); then zero_drift=true; fi
+          if (( apply_rc == 0 && snapshot_rc == 0 && drift_rc == 0 && access_rc == 0 )); then
+            proof_status=succeeded
+            terminal_rc=0
+          elif [[ "${classification}" == rollback ]]; then
+            proof_status=failed
+            rollback_attempted=true
+            restore_plan reverse
+            export WEB_APPLY_IMAGE="${ROLLBACK_IMAGE}" WEB_APPLY_SHA="${ROLLBACK_SOURCE_SHA}" WEB_RELEASE_RENDER_COMMIT="${ROLLBACK_INFRA_SHA}"
+            set +e
+            nix develop . --command just web-release-server-dry-run
+            reverse_dry_rc=$?
+            if (( reverse_dry_rc == 0 )); then
+              nix develop . --command just web-release-apply
+              reverse_apply_rc=$?
+            else
+              reverse_apply_rc=1
+            fi
+            snapshot rollback "${ROLLBACK_IMAGE}" "${ROLLBACK_SOURCE_SHA}"
+            rollback_proof_rc=$?
+            set -e
+            if (( reverse_dry_rc == 0 && reverse_apply_rc == 0 && rollback_proof_rc == 0 )); then rollback_status=succeeded; else rollback_status=failed; fi
+          else
+            proof_status=failed
+          fi
+          write_receipt
+          printf 'terminal-rc=%s\nrollback-status=%s\nproof-status=%s\n' "${terminal_rc}" "${rollback_status}" "${proof_status}" >> "${GITHUB_OUTPUT}"
+          exit "${terminal_rc}"
+
+      - name: Upload secret-free parity receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gftb-web-generation-46-parity-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gftb-web-generation-46-receipt.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Assert terminal target proof
+        if: always()
+        run: |
+          set -euo pipefail
+          test "${{ steps.reconcile.outputs.terminal-rc }}" = 0
+          test "${{ steps.reconcile.outputs.proof-status }}" = succeeded
+
+      - name: Remove exact protected and observation material
+        if: always()
+        run: |
+          set -euo pipefail
+          test -n "${RUNNER_TEMP}"
+          for name in \
+            gftb-web-generation-46.kubeconfig \
+            gftb-web-generation-46-receipt.json \
+            pre.json post.json rollback.json access.json access.headers access.body; do
+            target="${RUNNER_TEMP}/${name}"
+            [[ "${target}" == "${RUNNER_TEMP}/"* ]]
+            test ! -L "${target}"
+            if test -e "${target}"; then test -f "${target}"; fi
+            rm -f -- "${target}"
+            test ! -e "${target}"
+          done

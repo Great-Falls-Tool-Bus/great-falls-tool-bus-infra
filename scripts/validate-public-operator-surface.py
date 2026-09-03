@@ -111,6 +111,40 @@ RETIRED_WEB_GENERATION44_BRIDGE_WORKFLOW = Path(".github/workflows/web-generatio
 # bounded apply re-arms a fresh bridge from history until the amendment's
 # expiry or receipt cap, or until W14 promotes the standing executor.
 RETIRED_WEB_GENERATION45_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-45-parity.yml")
+# TIN-4249 generation-46 bridge, authorized by ratified decision 0022
+# Amendment 4. Its complete bytes and the generation-46 desired/render inputs
+# remain frozen until its terminal receipt, after which the carrier is deleted.
+# The shared TIN-2611 GF v4 owner-controller chain is the permanent successor;
+# this exception does not arm the superseded local W14 executor.
+WEB_GENERATION46_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-46-parity.yml")
+WEB_GENERATION46_BRIDGE_SHA256 = "PLACEHOLDER_GENERATION46_BRIDGE_SHA256"
+WEB_GENERATION46_BRIDGE_RECIPES = frozenset(
+    {
+        "web-release-candidate-proof",
+        "web-release-plan",
+        "web-release-server-dry-run",
+        "web-release-apply",
+    }
+)
+WEB_GENERATION46_TARGET_SOURCE = "bc0a2a0f58f4bd7aa1d6c274903fb619941a829a"
+WEB_GENERATION46_TARGET_IMAGE = "ghcr.io/great-falls-tool-bus/gftb-site@sha256:13eb13292076a5ba2919a92df62c972ab2be36b975a01b9930002a0f1cb7aad3"
+WEB_GENERATION46_DEPLOYMENT = Path(
+    "k8s/web/greatfallstoolbus-org-production/deployment.yaml"
+)
+WEB_GENERATION46_INLINE_FREEZE = re.compile(
+    r"sha256sum --check --strict <<'HASHES'\n(.*?)\n *HASHES\n", re.DOTALL
+)
+WEB_GENERATION46_FROZEN_INPUT_SHA256 = {
+    Path("Justfile"): "3b127b309ddf3f78b7ffd3239cb0f14ef76ee187cb0e53497a7f63ed2fcbad7d",
+    Path("flake.lock"): "33150ce2f846aef01539145f74a8eb1a04d45df5d960494ce188111a80e170e3",
+    Path("flake.nix"): "7f1249c2c291282f724e6d49eaeafc05d7a1009eb00a5724ff6ca633c2c30879",
+    Path("k8s/web/greatfallstoolbus-org-production/deployment.yaml"): "a41638e42c9591d9ce92e9e3fd9a48adb86f229ba23371145dc6f71dc8046b78",
+    Path("k8s/web/greatfallstoolbus-org-production/kustomization.yaml"): "8ef176b50c24ac3de40b72c4958eab5cc2a849d3a212c09e7b6c75fa0b57d9af",
+    Path("k8s/web/greatfallstoolbus-org-production/networkpolicy.yaml"): "ce89195429db343255779efb5a2d1eb09493a3937e34fb259c0393a49930f476",
+    Path("k8s/web/greatfallstoolbus-org-production/service.yaml"): "527a87425fc3a90a2a72d2adb59e1bfa7596d03e7f579a610ccfe841a48459d2",
+    Path("scripts/guard-no-remote-kustomize-resources.sh"): "aacf50ada42c322a8e12eee0af40d55d77598f5468b73c1df574a8b50cc3be17",
+    Path("scripts/validate-web-stack.sh"): "c4c3bc53977330afbb79be1f90a783116960a56f9ccf38d57f89936da686d1b3",
+}
 WORKFLOW_REPOSITORY_DISPATCH = re.compile(r"^\s*repository_dispatch\s*:")
 JUST_COMMAND_START = re.compile(r"\bjust\b")
 JUST_OPTIONS_WITH_VALUES = {
@@ -174,6 +208,12 @@ HOSTED_WORKFLOW_JUST_ALLOWLIST = {
     "mail-cr-drift-check",
     "mail-cr-server-dry-run",
     "mail-cr-validate",
+    # Exact byte-pinned TIN-4249 generation-46 bridge only. scan_workflows
+    # removes these calls from the operator-local closure for that one path.
+    "web-release-apply",
+    "web-release-candidate-proof",
+    "web-release-plan",
+    "web-release-server-dry-run",
     "web-stack-drift-check",
     "web-stack-render",
     "web-stack-validate",
@@ -1869,6 +1909,76 @@ def scan_workflow_text(
     return findings
 
 
+def scan_web_generation46_bridge_contract(
+    workflow_text: str, deployment_text: str
+) -> list[Finding]:
+    findings: list[Finding] = []
+    observed_digest = hashlib.sha256(workflow_text.encode("utf-8")).hexdigest()
+    if observed_digest != WEB_GENERATION46_BRIDGE_SHA256:
+        findings.append(
+            Finding(
+                "web-generation46-bridge-bytes",
+                WEB_GENERATION46_BRIDGE_WORKFLOW,
+                1,
+                "The Amendment-4 generation-46 bridge changed outside its exact reviewed receipt.",
+            )
+        )
+    image_values = re.findall(
+        r"^\s*image:\s*(ghcr\.io/great-falls-tool-bus/gftb-site@sha256:[0-9a-f]{64})\s*$",
+        deployment_text,
+        re.MULTILINE,
+    )
+    source_values = re.findall(
+        r"^\s*app\.tinyland\.dev/source-sha:\s*([0-9a-f]{40})\s*$",
+        deployment_text,
+        re.MULTILINE,
+    )
+    if image_values != [WEB_GENERATION46_TARGET_IMAGE] or source_values != [
+        WEB_GENERATION46_TARGET_SOURCE
+    ]:
+        findings.append(
+            Finding(
+                "web-generation46-desired-state-freeze",
+                WEB_GENERATION46_DEPLOYMENT,
+                1,
+                "The active bridge requires the exact generation-46 source and image desired state.",
+            )
+        )
+    for path, expected_digest in WEB_GENERATION46_FROZEN_INPUT_SHA256.items():
+        candidate = REPO / path
+        observed_digest = (
+            hashlib.sha256(candidate.read_bytes()).hexdigest()
+            if candidate.is_file()
+            else "missing"
+        )
+        if observed_digest != expected_digest:
+            findings.append(
+                Finding(
+                    "web-generation46-render-input-freeze",
+                    path,
+                    1,
+                    "The active bridge admits only its exact reviewed render and recipe inputs.",
+                )
+            )
+    inline_match = WEB_GENERATION46_INLINE_FREEZE.search(workflow_text)
+    inline_freeze: dict[Path, str] = {}
+    if inline_match is not None:
+        for line in inline_match.group(1).splitlines():
+            fields = line.split()
+            if len(fields) == 2:
+                inline_freeze[Path(fields[1])] = fields[0]
+    if inline_freeze != WEB_GENERATION46_FROZEN_INPUT_SHA256:
+        findings.append(
+            Finding(
+                "web-generation46-inline-freeze-agreement",
+                WEB_GENERATION46_BRIDGE_WORKFLOW,
+                1,
+                "The bridge inline sha256 freeze must equal the reviewed render-input map.",
+            )
+        )
+    return findings
+
+
 def scan_workflows() -> list[Finding]:
     findings: list[Finding] = []
     observed_calls: set[str] = set()
@@ -1973,6 +2083,25 @@ def scan_workflows() -> list[Finding]:
             )
         )
 
+    gen46_bridge_path = REPO / WEB_GENERATION46_BRIDGE_WORKFLOW
+    gen46_deployment_path = REPO / WEB_GENERATION46_DEPLOYMENT
+    if not gen46_bridge_path.is_file() or not gen46_deployment_path.is_file():
+        findings.append(
+            Finding(
+                "web-generation46-bridge-missing",
+                WEB_GENERATION46_BRIDGE_WORKFLOW,
+                1,
+                "The Amendment-4 bridge and its frozen generation-46 desired state must remain together until the terminal receipt.",
+            )
+        )
+    else:
+        findings.extend(
+            scan_web_generation46_bridge_contract(
+                gen46_bridge_path.read_text(encoding="utf-8"),
+                gen46_deployment_path.read_text(encoding="utf-8"),
+            )
+        )
+
     workflow_paths = set(git_files(WORKFLOW_GLOBS))
     for pattern in WORKFLOW_GLOBS:
         workflow_paths.update(path.relative_to(REPO) for path in REPO.glob(pattern))
@@ -1986,6 +2115,10 @@ def scan_workflows() -> list[Finding]:
         )
         observed_calls.update(calls)
         scoped_forbidden = forbidden_recipes
+        if rel == WEB_GENERATION46_BRIDGE_WORKFLOW:
+            scoped_forbidden = forbidden_recipes - set(
+                WEB_GENERATION46_BRIDGE_RECIPES
+            )
         findings.extend(
             scan_workflow_text(
                 workflow_text,
@@ -6549,6 +6682,24 @@ def self_test() -> None:
             '    [[ -n "${second_digest}" ]] ||',
             "release resolver tag-movement guard weakening",
         ),
+        (
+            "web-release-render",
+            '    [[ "${render_commit}" =~ ^[0-9a-f]{40}$ ]] || { echo "WEB_RELEASE_RENDER_COMMIT must be 40 lowercase hex characters" >&2; exit 2; }\n',
+            "",
+            "alternate render exact-ref guard removal",
+        ),
+        (
+            "web-release-render",
+            '    git merge-base --is-ancestor "${render_commit}" HEAD >/dev/null 2>&1 || { echo "alternate release render commit is not an ancestor of the carrier" >&2; exit 2; }\n',
+            "",
+            "alternate render ancestor guard removal",
+        ),
+        (
+            "web-release-render",
+            '    git -c gpg.format=openpgp -c gpg.program=gpg -c gpg.openpgp.program=gpg verify-commit "${render_commit}" >/dev/null 2>&1 || { echo "alternate release render commit is not validly signed" >&2; exit 2; }\n',
+            "",
+            "alternate render signature guard removal",
+        ),
     )
     for name, old, new, label in release_body_mutations:
         mutated = mutate_recipe_body(justfile, name, old, new, label)
@@ -8377,6 +8528,62 @@ def self_test() -> None:
         for finding in scan_workflows_with_retired_gen45_bridge_fixture()
     ):
         raise SystemExit("self-test FAILED: a re-added generation-45 bridge was accepted")
+
+    gen46_bridge_text = (REPO / WEB_GENERATION46_BRIDGE_WORKFLOW).read_text(
+        encoding="utf-8"
+    )
+    gen46_deployment_text = (REPO / WEB_GENERATION46_DEPLOYMENT).read_text(
+        encoding="utf-8"
+    )
+    if scan_web_generation46_bridge_contract(
+        gen46_bridge_text, gen46_deployment_text
+    ):
+        raise SystemExit("self-test FAILED: generation-46 bridge contract drifted")
+    mutated_gen46_bridge = gen46_bridge_text.replace(
+        WEB_GENERATION46_TARGET_SOURCE, "0" * 40, 1
+    )
+    if not any(
+        finding.rule == "web-generation46-bridge-bytes"
+        for finding in scan_web_generation46_bridge_contract(
+            mutated_gen46_bridge, gen46_deployment_text
+        )
+    ):
+        raise SystemExit("self-test FAILED: generation-46 workflow mutation was accepted")
+    mutated_gen46_deployment = gen46_deployment_text.replace(
+        WEB_GENERATION46_TARGET_IMAGE,
+        "ghcr.io/great-falls-tool-bus/gftb-site@sha256:" + "0" * 64,
+        1,
+    )
+    if not any(
+        finding.rule == "web-generation46-desired-state-freeze"
+        for finding in scan_web_generation46_bridge_contract(
+            gen46_bridge_text, mutated_gen46_deployment
+        )
+    ):
+        raise SystemExit("self-test FAILED: generation-46 desired-state drift was accepted")
+    for stale_digest in sorted(WEB_GENERATION46_FROZEN_INPUT_SHA256.values()):
+        stale_inline = gen46_bridge_text.replace(stale_digest, "0" * 64, 1)
+        if not any(
+            finding.rule == "web-generation46-inline-freeze-agreement"
+            for finding in scan_web_generation46_bridge_contract(
+                stale_inline, gen46_deployment_text
+            )
+        ):
+            raise SystemExit(
+                "self-test FAILED: stale generation-46 inline freeze was accepted"
+            )
+    dropped_inline = WEB_GENERATION46_INLINE_FREEZE.sub(
+        "sha256sum --check --strict <<'HASHES'\nHASHES\n",
+        gen46_bridge_text,
+        count=1,
+    )
+    if not any(
+        finding.rule == "web-generation46-inline-freeze-agreement"
+        for finding in scan_web_generation46_bridge_contract(
+            dropped_inline, gen46_deployment_text
+        )
+    ):
+        raise SystemExit("self-test FAILED: gutted generation-46 freeze was accepted")
 
     run_web_release_semantic_fixtures()
     run_web_release_mutation_fixtures()

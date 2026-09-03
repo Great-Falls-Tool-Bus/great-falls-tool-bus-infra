@@ -2668,12 +2668,39 @@ web-release-render: _web-release-candidate-inputs
     render_dir="$(mktemp -d "${temp_root}/gftb-web-render.XXXXXX")"
     trap 'rm -rf "${render_dir}"' EXIT
     mkdir -m 700 "${render_dir}/home"
-    env -i PATH="${PATH}" HOME="${render_dir}/home" just web-stack-validate >/dev/null
+    render_root="${PWD}"
+    if [[ -n "${WEB_RELEASE_RENDER_COMMIT:-}" ]]; then
+      render_commit="${WEB_RELEASE_RENDER_COMMIT}"
+      [[ "${render_commit}" =~ ^[0-9a-f]{40}$ ]] || { echo "WEB_RELEASE_RENDER_COMMIT must be 40 lowercase hex characters" >&2; exit 2; }
+      [[ -z "$(git status --porcelain)" ]] || { echo "alternate release rendering requires a clean carrier checkout" >&2; exit 2; }
+      git cat-file -e "${render_commit}^{commit}" 2>/dev/null || { echo "alternate release render commit does not exist" >&2; exit 2; }
+      git merge-base --is-ancestor "${render_commit}" HEAD >/dev/null 2>&1 || { echo "alternate release render commit is not an ancestor of the carrier" >&2; exit 2; }
+      git -c gpg.format=openpgp -c gpg.program=gpg -c gpg.openpgp.program=gpg verify-commit "${render_commit}" >/dev/null 2>&1 || { echo "alternate release render commit is not validly signed" >&2; exit 2; }
+      render_root="${render_dir}/tree"
+      closed_inputs=(
+        k8s/web/greatfallstoolbus-org-production/deployment.yaml
+        k8s/web/greatfallstoolbus-org-production/service.yaml
+        k8s/web/greatfallstoolbus-org-production/networkpolicy.yaml
+        k8s/web/greatfallstoolbus-org-production/kustomization.yaml
+        k8s/web/greatfallstoolbus-org-production/web-apply-rbac.yaml
+        k8s/web/secrets.contract.yaml
+        tofu/intent/great-falls-tool-bus/web-oncluster-route.json
+        tofu/intent/great-falls-tool-bus/pr-env-lanes.schema.json
+      )
+      for input in "${closed_inputs[@]}"; do
+        [[ "$(git ls-tree "${render_commit}" -- "${input}" | awk '{print $1 " " $2}')" == "100644 blob" ]] || { echo "alternate release render input is not one regular blob: ${input}" >&2; exit 2; }
+        mkdir -p "${render_root}/$(dirname "${input}")"
+        git cat-file blob "${render_commit}:${input}" > "${render_root}/${input}"
+      done
+      env -i PATH="${PATH}" HOME="${render_dir}/home" bash scripts/validate-web-stack.sh "${render_root}/{{ web_stack_dir }}" >/dev/null
+    else
+      env -i PATH="${PATH}" HOME="${render_dir}/home" just web-stack-validate >/dev/null
+    fi
     rendered="${render_dir}/rendered.yaml"
     # VERBATIM: the committed kustomize bytes are the release bytes. Any
     # yq/jq round-trip on this path would be synthesis-time re-serialization
     # variance and break digest equality with `kubectl kustomize` output.
-    kubectl kustomize {{ web_stack_dir }} > "${rendered}"
+    kubectl kustomize "${render_root}/{{ web_stack_dir }}" > "${rendered}"
     # The reviewed inputs are asserted against the COMMITTED pin, never
     # injected. A mismatch means the operator has not committed the pin step
     # for this release yet.

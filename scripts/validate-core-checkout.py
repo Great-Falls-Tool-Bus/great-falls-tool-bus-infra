@@ -44,6 +44,7 @@ EXPECTED_WORKFLOWS = {
     "mail-crs.yml",
     "validate.yml",
     "web-crs.yml",
+    "web-generation-46-parity.yml",
     "web-plan.yml",
 }
 
@@ -81,6 +82,7 @@ EXPECTED_ACTION_CHECKOUTS = {
     "mail-crs.yml": 4,
     "validate.yml": 1,
     "web-crs.yml": 2,
+    "web-generation-46-parity.yml": 1,
     "web-plan.yml": 1,
 }
 
@@ -95,11 +97,16 @@ EXPECTED_CORE_CI_PATH_EXPORTS = {
     "mail-crs.yml": 3,
     "validate.yml": 0,
     "web-crs.yml": 1,
+    "web-generation-46-parity.yml": 0,
     "web-plan.yml": 0,
 }
 
 EXPECTED_PERMISSIONS = {
-    workflow: (("contents: read", "id-token: write") if workflow == "flywheel-cache-proof.yml" else ("contents: read",))
+    workflow: (
+        ("actions: read", "contents: read", "pull-requests: read")
+        if workflow == "web-generation-46-parity.yml"
+        else (("contents: read", "id-token: write") if workflow == "flywheel-cache-proof.yml" else ("contents: read",))
+    )
     for workflow in EXPECTED_WORKFLOWS
 }
 
