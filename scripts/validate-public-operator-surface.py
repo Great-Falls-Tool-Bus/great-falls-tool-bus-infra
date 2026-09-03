@@ -14,6 +14,7 @@ commands. The Justfile remains the sole live entrypoint.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import copy
 import hashlib
 import json
@@ -4772,10 +4773,13 @@ def install_web_release_fixture_mocks(
                 if state == "apply-git-local-refstorage-config":
                     print("local\\textensions.refstorage")
                     raise SystemExit(0)
-                if state == "apply-git-local-stat-config":
-                    print("local\\tcore.trustctime")
-                    print("local\\tcore.checkstat")
-                    print("local\\tcore.ignorestat")
+                stat_key = {
+                    "apply-git-local-trustctime-config": "core.trustctime",
+                    "apply-git-local-checkstat-config": "core.checkstat",
+                    "apply-git-local-ignorestat-config": "core.ignorestat",
+                }.get(state)
+                if stat_key is not None:
+                    print("local\\t" + stat_key)
                     raise SystemExit(0)
                 if state == "apply-git-worktree-attr-tree-config":
                     print("worktree\\tattr.tree")
@@ -4796,7 +4800,10 @@ def install_web_release_fixture_mocks(
             ):
                 info_name = args[-1].removeprefix("info/")
                 selected = "safe-" + info_name
-                if state == "apply-git-info-exclude-entry" and info_name == "exclude":
+                if (
+                    state == "apply-git-info-exclude-entry"
+                    and info_name == "exclude"
+                ):
                     selected = "active-exclude"
                 elif (
                     state == "apply-git-info-attributes-entry"
@@ -4914,6 +4921,53 @@ def expect_web_release_fixture_result(
     return result
 
 
+def install_shell_poison_fixture(
+    root: Path,
+) -> tuple[dict[str, str], Callable[[str], None]]:
+    """Return imported startup/function poison and its absence assertion."""
+    function_marker = root / "imported-shell-function-ran"
+    startup_poison = root / "startup-poison.sh"
+    startup_poison.write_text(
+        "printf '%s' startup > " + shlex.quote(str(function_marker)) + "\n",
+        encoding="utf-8",
+    )
+    startup_poison.chmod(0o600)
+    poison_environment = {
+        "BASH_ENV": str(startup_poison),
+        "ENV": str(startup_poison),
+    }
+    for command in (
+        "awk",
+        "env",
+        "kubectl",
+        "curl",
+        "crane",
+        "yq",
+        "jq",
+        "python3",
+        "git",
+        "just",
+        "mktemp",
+    ):
+        poison_environment[f"BASH_FUNC_{command}%%"] = (
+            "() { printf '%s' "
+            + shlex.quote(command)
+            + " > "
+            + shlex.quote(str(function_marker))
+            + f"; unset -f {command}; command {command} \"$@\"; }}"
+        )
+
+    def assert_no_imported_function(stage: str) -> None:
+        if function_marker.exists():
+            source = function_marker.read_text(encoding="utf-8")
+            raise SystemExit(
+                "self-test FAILED: release proof imported a poisoned shell "
+                f"startup hook/function {source!r} during {stage}"
+            )
+
+    return poison_environment, assert_no_imported_function
+
+
 def run_web_release_semantic_fixtures() -> None:
     just_binary = shutil.which("just")
     if just_binary is None:
@@ -4960,36 +5014,9 @@ def run_web_release_semantic_fixtures() -> None:
         cookie = root / "access.cookies"
         cookie.write_text("# fixture cookie; mock curl only\n", encoding="utf-8")
         cookie.chmod(0o600)
-        function_marker = root / "imported-shell-function-ran"
-        startup_poison = root / "startup-poison.sh"
-        startup_poison.write_text(
-            "printf '%s' startup > " + shlex.quote(str(function_marker)) + "\n",
-            encoding="utf-8",
+        poison_environment, assert_no_imported_function = (
+            install_shell_poison_fixture(root)
         )
-        startup_poison.chmod(0o600)
-        poison_environment = {
-            "BASH_ENV": str(startup_poison),
-            "ENV": str(startup_poison),
-        }
-        for command in (
-            "env",
-            "kubectl",
-            "curl",
-            "crane",
-            "yq",
-            "jq",
-            "python3",
-            "git",
-            "just",
-            "mktemp",
-        ):
-            poison_environment[f"BASH_FUNC_{command}%%"] = (
-                "() { printf '%s' "
-                + shlex.quote(command)
-                + " > "
-                + shlex.quote(str(function_marker))
-                + f"; unset -f {command}; command {command} \"$@\"; }}"
-            )
         base_environment = {
             "PATH": str(mock_bin),
             "HOME": str(home),
@@ -5002,14 +5029,6 @@ def run_web_release_semantic_fixtures() -> None:
             "WEB_RELEASE_KUBECONFIG": str(kubeconfig),
             **poison_environment,
         }
-
-        def assert_no_imported_function(stage: str) -> None:
-            if function_marker.exists():
-                source = function_marker.read_text(encoding="utf-8")
-                raise SystemExit(
-                    "self-test FAILED: release proof imported a poisoned shell "
-                    f"startup hook/function {source!r} during {stage}"
-                )
 
         expect_web_release_fixture_result(
             just_binary,
@@ -6249,6 +6268,9 @@ def run_web_release_mutation_fixtures() -> None:
         prefix="gftb-web-mutation-selftest."
     ) as directory:
         root = Path(directory)
+        poison_environment, assert_no_imported_function = (
+            install_shell_poison_fixture(root)
+        )
         (
             mock_bin,
             state_path,
@@ -6279,6 +6301,7 @@ def run_web_release_mutation_fixtures() -> None:
             "WEB_APPLY_REPLICAS": "2",
             "WEB_APPLY_KUBECONFIG": str(kubeconfig),
             "GFTB_APPLY_CONFIRM": "apply",
+            **poison_environment,
         }
 
         def kubectl_calls() -> list[str]:
@@ -6385,6 +6408,7 @@ def run_web_release_mutation_fixtures() -> None:
             success=True,
             diagnostic="web release applied",
         )
+        assert_no_imported_function("web-release-apply")
         apply_calls = kubectl_calls()
         if not apply_calls or " auth can-i " not in apply_calls[0]:
             raise SystemExit(
@@ -6486,9 +6510,13 @@ def run_web_release_mutation_fixtures() -> None:
                 "apply-git-local-refstorage-config",
                 "refuses local/worktree Git configuration",
             ),
-            (
-                "apply-git-local-stat-config",
-                "refuses local/worktree Git configuration",
+            *(
+                (state, "refuses local/worktree Git configuration")
+                for state in (
+                    "apply-git-local-trustctime-config",
+                    "apply-git-local-checkstat-config",
+                    "apply-git-local-ignorestat-config",
+                )
             ),
             (
                 "apply-git-worktree-attr-tree-config",
