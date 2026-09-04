@@ -1,8 +1,12 @@
 name: Web generation 47 parity bridge
 
-# TIN-4249 protected generation-47 parity carrier, authorized by ratified Meta
-# decision 0022 Amendment 5 under Amendment 4. It reconciles generation 45 to the
-# newest signed gftb-site main, generation 47. It is a standing-bounded bridge,
+# TIN-4249 protected generation-47 recovery carrier, authorized by ratified Meta
+# decision 0022 Amendment 5 under Amendment 4. The first signed carrier failed
+# closed in its pre-credential authority step (run 33822848194): its plan,
+# credential, and mutation steps were skipped and it emitted no receipt. This
+# fresh reviewed carrier binds that failed attempt and reconciles generation 45
+# to the unchanged newest signed gftb-site main, generation 47. It remains a
+# standing-bounded bridge,
 # not the permanent main==prod mechanism: it expires after the third terminal
 # Amendment-4 receipt or at 2026-09-09 23:59 ET, whichever comes first, and is
 # retired after this terminal receipt. The permanent successor is the shared
@@ -31,8 +35,11 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Exact generation-47 pin merge; it must remain the carrier's sole parent.
-  REVIEWED_BASE_SHA: 887006eb0c0d8f034b5474d247d017d307104d22
+  # Exact failed pre-credential carrier; it must remain this recovery carrier's
+  # sole parent. The generation-47 pin remains separately frozen below.
+  REVIEWED_BASE_SHA: 2ca8235a252704753e79c63f6552b672ad382809
+  FAILED_CARRIER_SHA: 2ca8235a252704753e79c63f6552b672ad382809
+  FAILED_RUN_ID: "33822848194"
   PIN_PR_NUMBER: "178"
   # PR #178 was based on this exact signed main. Keep it distinct from the
   # older generation-45 rollback tree used only to render recovery state.
@@ -60,10 +67,16 @@ env:
   META_ADR_PATH: decisions/0022-gftb-site-main-prod-gfi09-carrier-2026-08-30.md
   META_ADR_BLOB: a8b2ceefe03cf0790c193d8a2ef3eaf044f85c11
   META_ADR_SHA256: 66f450ecdad6009c95569ac7745cfe4fee5a32924a616fe675f19bf3a3a1612d
+  # The Actions read token receives the public ruleset projection, which omits
+  # bypass_actors. Exact-head review observes the admin projection and freezes
+  # both its canonical hash and updated_at; the job re-observes updated_at plus
+  # every public/effective rule, so any intervening ruleset edit refuses.
+  RULESET_REVIEWED_UPDATED_AT: "2026-08-30T19:30:26.535Z"
+  RULESET_ADMIN_PROJECTION_SHA256: 4fad263383b9f2f2e5c5f47523c669ccd06360af2d4bd5f4288d237e2f77aea1
   # The bridge-adding PR in great-falls-tool-bus-infra; the authority step
   # binds the merge to it and the parity receipt embeds it. The sole remaining
   # placeholder is filled immediately after GitHub assigns the draft PR number.
-  BRIDGE_PR_NUMBER: "179"
+  BRIDGE_PR_NUMBER: PLACEHOLDER_BRIDGE_PR_NUMBER
 
 jobs:
   parity:
@@ -106,7 +119,7 @@ jobs:
           # env block AND at its inline re-assert below; this guard makes a
           # partial fill or a forgotten fill fail closed rather than bind a
           # vacuous constant.
-          for name in REVIEWED_BASE_SHA PIN_PR_NUMBER PIN_BASE_SHA PIN_HEAD_SHA PIN_MERGE_SHA ROLLBACK_INFRA_SHA TARGET_SOURCE_SHA TARGET_IMAGE SOURCE_CI_RUN_ID SOURCE_PUBLISH_RUN_ID TARGET_RENDER_SHA256 ROLLBACK_RENDER_SHA256 BRIDGE_EXPIRES_AT AMENDMENT4_RECEIPT_ORDINAL META_MAIN_SHA META_ADR_BLOB META_ADR_SHA256 BRIDGE_PR_NUMBER; do
+          for name in REVIEWED_BASE_SHA FAILED_CARRIER_SHA FAILED_RUN_ID PIN_PR_NUMBER PIN_BASE_SHA PIN_HEAD_SHA PIN_MERGE_SHA ROLLBACK_INFRA_SHA TARGET_SOURCE_SHA TARGET_IMAGE SOURCE_CI_RUN_ID SOURCE_PUBLISH_RUN_ID TARGET_RENDER_SHA256 ROLLBACK_RENDER_SHA256 BRIDGE_EXPIRES_AT AMENDMENT4_RECEIPT_ORDINAL META_MAIN_SHA META_ADR_BLOB META_ADR_SHA256 RULESET_REVIEWED_UPDATED_AT RULESET_ADMIN_PROJECTION_SHA256 BRIDGE_PR_NUMBER; do
             case "${!name}" in
               PLACEHOLDER_*) echo "::error::Refusing: ${name} is still an unfilled placeholder."; exit 2 ;;
             esac
@@ -208,8 +221,12 @@ jobs:
                 --max-redirs 0 "$2"
             ' _ "${RUNNER_TEMP}" "$1"
           }
-          test "${REVIEWED_BASE_SHA}" = "${PIN_MERGE_SHA}"
-          test "${AMENDMENT4_RECEIPT_ORDINAL}" = 1
+          test "${REVIEWED_BASE_SHA}" = "${FAILED_CARRIER_SHA}" || { echo "::error::Recovery carrier base is not the frozen failed carrier."; exit 2; }
+          test "${FAILED_CARRIER_SHA}" = 2ca8235a252704753e79c63f6552b672ad382809 || { echo "::error::Failed-carrier identity drifted."; exit 2; }
+          test "${FAILED_RUN_ID}" = 33822848194 || { echo "::error::Failed-run identity drifted."; exit 2; }
+          test "${AMENDMENT4_RECEIPT_ORDINAL}" = 1 || { echo "::error::The pre-credential failure cannot consume a terminal-receipt ordinal."; exit 2; }
+          test "${RULESET_REVIEWED_UPDATED_AT}" = 2026-08-30T19:30:26.535Z || { echo "::error::Reviewed ruleset timestamp drifted."; exit 2; }
+          test "${RULESET_ADMIN_PROJECTION_SHA256}" = 4fad263383b9f2f2e5c5f47523c669ccd06360af2d4bd5f4288d237e2f77aea1 || { echo "::error::Reviewed no-bypass ruleset projection drifted."; exit 2; }
           # gftb-site is private and this overlay deliberately carries no
           # cross-repository source credential. The signed pin review bound
           # its exact main/CI/publisher evidence; the pre-credential candidate
@@ -227,26 +244,58 @@ jobs:
           if datetime.now(timezone.utc) > expires:
               raise SystemExit("Amendment 4 bridge authority has expired")
           PY
-          test "$(api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" = "${GITHUB_SHA}"
+          test "$(api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" = "${GITHUB_SHA}" || { echo "::error::Carrier is not current canonical main."; exit 2; }
           commit="$(api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}")"
           jq -e --arg base "${REVIEWED_BASE_SHA}" '
             .commit.verification.verified == true
             and .commit.verification.reason == "valid"
             and (.parents | length) == 1
             and .parents[0].sha == $base
-          ' <<<"${commit}" >/dev/null
+          ' <<<"${commit}" >/dev/null || { echo "::error::Carrier signature or sole-parent authority failed."; exit 2; }
           pr="$(api "repos/${GITHUB_REPOSITORY}/pulls/${BRIDGE_PR_NUMBER}")"
           pr_head="$(jq -er '.head.sha' <<<"${pr}")"
           jq -e --arg carrier "${GITHUB_SHA}" --arg base "${REVIEWED_BASE_SHA}" '
             .merged == true and .merge_commit_sha == $carrier
             and .base.ref == "main" and .base.sha == $base
-          ' <<<"${pr}" >/dev/null
-          test "$(api "repos/${GITHUB_REPOSITORY}/git/commits/${GITHUB_SHA}" --jq .tree.sha)" = "$(api "repos/${GITHUB_REPOSITORY}/git/commits/${pr_head}" --jq .tree.sha)"
-          test "$(api "repos/${GITHUB_REPOSITORY}/commits/${pr_head}" --jq .commit.verification.verified)" = true
-          test "$(api "repos/${GITHUB_REPOSITORY}/commits/${pr_head}" --jq .commit.verification.reason)" = valid
+          ' <<<"${pr}" >/dev/null || { echo "::error::Carrier PR merge/base binding failed."; exit 2; }
+          test "$(api "repos/${GITHUB_REPOSITORY}/git/commits/${GITHUB_SHA}" --jq .tree.sha)" = "$(api "repos/${GITHUB_REPOSITORY}/git/commits/${pr_head}" --jq .tree.sha)" || { echo "::error::Carrier squash tree differs from its reviewed head."; exit 2; }
+          test "$(api "repos/${GITHUB_REPOSITORY}/commits/${pr_head}" --jq .commit.verification.verified)" = true || { echo "::error::Carrier PR head is not verified."; exit 2; }
+          test "$(api "repos/${GITHUB_REPOSITORY}/commits/${pr_head}" --jq .commit.verification.reason)" = valid || { echo "::error::Carrier PR head verification is not valid."; exit 2; }
           mapfile -t changed < <(api "repos/${GITHUB_REPOSITORY}/pulls/${BRIDGE_PR_NUMBER}/files" --paginate --jq '.[].filename' | LC_ALL=C sort)
-          expected=(.github/workflows/web-generation-47-parity.yml Justfile scripts/validate-core-checkout.py scripts/validate-public-operator-surface.py)
-          [[ "${changed[*]}" == "${expected[*]}" ]]
+          expected=(.github/workflows/web-generation-47-parity.yml scripts/validate-public-operator-surface.py)
+          [[ "${changed[*]}" == "${expected[*]}" ]] || { echo "::error::Recovery carrier PR changed files outside its closed pair."; exit 2; }
+
+          failed_commit="$(api "repos/${GITHUB_REPOSITORY}/commits/${FAILED_CARRIER_SHA}")"
+          jq -e --arg parent "${PIN_MERGE_SHA}" '
+            .commit.verification.verified == true
+            and .commit.verification.reason == "valid"
+            and (.parents | length) == 1 and .parents[0].sha == $parent
+          ' <<<"${failed_commit}" >/dev/null || { echo "::error::Failed carrier is not the signed sole child of the generation-47 pin."; exit 2; }
+          failed_run="$(api "repos/${GITHUB_REPOSITORY}/actions/runs/${FAILED_RUN_ID}")"
+          jq -e --arg carrier "${FAILED_CARRIER_SHA}" '
+            .head_sha == $carrier
+            and .event == "push"
+            and .status == "completed"
+            and .conclusion == "failure"
+            and .run_attempt == 1
+            and .path == ".github/workflows/web-generation-47-parity.yml"
+          ' <<<"${failed_run}" >/dev/null || { echo "::error::Failed-run identity or terminal classification drifted."; exit 2; }
+          failed_jobs="$(api "repos/${GITHUB_REPOSITORY}/actions/runs/${FAILED_RUN_ID}/jobs?per_page=100")"
+          jq -e '
+            .total_count == 1
+            and (.jobs | length) == 1
+            and .jobs[0].conclusion == "failure"
+            and any(.jobs[0].steps[]; .number == 3 and .name == "Verify signed squash authority and frozen inputs" and .conclusion == "failure")
+            and ([.jobs[0].steps[] | select(.number >= 4 and .number <= 7) | {number,conclusion}] == [
+              {"number":4,"conclusion":"skipped"},
+              {"number":5,"conclusion":"skipped"},
+              {"number":6,"conclusion":"skipped"},
+              {"number":7,"conclusion":"skipped"}
+            ])
+          ' <<<"${failed_jobs}" >/dev/null || { echo "::error::Failed carrier reached or obscured a protected execution step."; exit 2; }
+          failed_artifacts="$(api "repos/${GITHUB_REPOSITORY}/actions/runs/${FAILED_RUN_ID}/artifacts?per_page=100")"
+          jq -e '.total_count == 0 and .artifacts == []' <<<"${failed_artifacts}" >/dev/null || { echo "::error::Failed carrier unexpectedly emitted an artifact."; exit 2; }
+          echo "::notice::Recovery provenance is frozen; the failed carrier never reached credentials or mutation."
 
           pin_pr="$(api "repos/${GITHUB_REPOSITORY}/pulls/${PIN_PR_NUMBER}")"
           jq -e \
@@ -256,18 +305,23 @@ jobs:
             .merged == true
             and .base.ref == "main" and .base.sha == $base
             and .head.sha == $head and .merge_commit_sha == $merge
-          ' <<<"${pin_pr}" >/dev/null
+          ' <<<"${pin_pr}" >/dev/null || { echo "::error::Generation-47 pin PR binding failed."; exit 2; }
           pin_merge="$(api "repos/${GITHUB_REPOSITORY}/commits/${PIN_MERGE_SHA}")"
           jq -e --arg parent "${PIN_BASE_SHA}" '
             .commit.verification.verified == true
             and .commit.verification.reason == "valid"
             and (.parents | length) == 1 and .parents[0].sha == $parent
-          ' <<<"${pin_merge}" >/dev/null
-          test "$(api "repos/${GITHUB_REPOSITORY}/git/commits/${PIN_MERGE_SHA}" --jq .tree.sha)" = "$(api "repos/${GITHUB_REPOSITORY}/git/commits/${PIN_HEAD_SHA}" --jq .tree.sha)"
-          test "$(api "repos/${GITHUB_REPOSITORY}/commits/${PIN_HEAD_SHA}" --jq .commit.verification.verified)" = true
-          test "$(api "repos/${GITHUB_REPOSITORY}/commits/${PIN_HEAD_SHA}" --jq .commit.verification.reason)" = valid
+          ' <<<"${pin_merge}" >/dev/null || { echo "::error::Generation-47 pin merge signature or parent failed."; exit 2; }
+          test "$(api "repos/${GITHUB_REPOSITORY}/git/commits/${PIN_MERGE_SHA}" --jq .tree.sha)" = "$(api "repos/${GITHUB_REPOSITORY}/git/commits/${PIN_HEAD_SHA}" --jq .tree.sha)" || { echo "::error::Generation-47 pin squash tree differs from its reviewed head."; exit 2; }
+          test "$(api "repos/${GITHUB_REPOSITORY}/commits/${PIN_HEAD_SHA}" --jq .commit.verification.verified)" = true || { echo "::error::Generation-47 pin head is not verified."; exit 2; }
+          test "$(api "repos/${GITHUB_REPOSITORY}/commits/${PIN_HEAD_SHA}" --jq .commit.verification.reason)" = valid || { echo "::error::Generation-47 pin head verification is not valid."; exit 2; }
+          echo "::notice::Generation-47 pin provenance is frozen."
 
-          ruleset="$(api "repos/${GITHUB_REPOSITORY}/rulesets/20930684")"
+          # bypass_actors and current_user_can_bypass are permission-relative
+          # response fields and are absent from this job token's projection.
+          # Exact-head review proves the frozen admin-projection hash above;
+          # updated_at binds that proof to this live public/effective view.
+          ruleset="$(api -H 'Time-Zone: UTC' "repos/${GITHUB_REPOSITORY}/rulesets/20930684")"
           jq -e --arg source "${GITHUB_REPOSITORY}" '
             .id == 20930684
             and .name == "main-reviewed-hosted-validate"
@@ -275,8 +329,9 @@ jobs:
             and .source_type == "Repository"
             and .source == $source
             and .enforcement == "active"
-            and .bypass_actors == []
-            and .current_user_can_bypass == "never"
+            and .updated_at == env.RULESET_REVIEWED_UPDATED_AT
+            and (has("bypass_actors") | not)
+            and ((has("current_user_can_bypass") | not) or .current_user_can_bypass == "never")
             and .conditions.ref_name.include == ["refs/heads/main"]
             and .conditions.ref_name.exclude == []
             and (.rules | sort_by(.type)) == ([
@@ -300,7 +355,7 @@ jobs:
                 "strict_required_status_checks_policy":true
               }}
             ] | sort_by(.type))
-          ' <<<"${ruleset}" >/dev/null
+          ' <<<"${ruleset}" >/dev/null || { echo "::error::Canonical main ruleset contract failed."; exit 2; }
           effective_rules="$(api "repos/${GITHUB_REPOSITORY}/rules/branches/main")"
           jq -e --arg source "${GITHUB_REPOSITORY}" '
             length == 5
@@ -310,7 +365,7 @@ jobs:
               and .ruleset_source == $source
             )
             and ([.[].type] | sort) == (["deletion", "non_fast_forward", "pull_request", "required_signatures", "required_status_checks"] | sort)
-          ' <<<"${effective_rules}" >/dev/null
+          ' <<<"${effective_rules}" >/dev/null || { echo "::error::Effective main rules do not equal the sole reviewed ruleset."; exit 2; }
           apply_environment="$(api "repos/${GITHUB_REPOSITORY}/environments/web-apply")"
           jq -e '
             .name == "web-apply"
@@ -321,7 +376,8 @@ jobs:
             }
             and (.protection_rules | length) == 1
             and .protection_rules[0].type == "branch_policy"
-          ' <<<"${apply_environment}" >/dev/null
+          ' <<<"${apply_environment}" >/dev/null || { echo "::error::web-apply environment protection contract failed."; exit 2; }
+          echo "::notice::Branch and protected-environment authority are frozen."
 
           # Meta is private to this token. Exact byte-pinned constants bind the
           # already-merged ratification without widening this credential.

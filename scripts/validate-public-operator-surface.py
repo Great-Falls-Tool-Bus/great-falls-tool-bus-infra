@@ -112,14 +112,18 @@ RETIRED_WEB_GENERATION44_BRIDGE_WORKFLOW = Path(".github/workflows/web-generatio
 # bounded apply re-arms a fresh bridge from history until the amendment's
 # expiry or receipt cap, or until W14 promotes the standing executor.
 RETIRED_WEB_GENERATION45_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-45-parity.yml")
-# TIN-4249 generation-47 bridge, authorized by ratified decision 0022
-# Amendment 5 under Amendment 4. Its complete bytes and desired/render inputs
-# remain frozen until its terminal receipt, after which the carrier is deleted.
+# TIN-4249 generation-47 recovery bridge, authorized by ratified decision 0022
+# Amendment 5 under Amendment 4. The first carrier failed before credentials,
+# planning, or mutation; this carrier freezes that failure as well as its own
+# complete bytes and desired/render inputs until its terminal receipt, after
+# which the carrier is deleted.
 # The shared TIN-2611 GF v4 owner-controller chain is the permanent successor;
 # this exception does not arm the superseded local W14 executor.
 WEB_GENERATION47_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-47-parity.yml")
-WEB_GENERATION47_BRIDGE_SHA256 = "e6f4edd41e95d6362650c873b14b0e85d5a17fb2b256f9f33f32118812f2c4d6"
+WEB_GENERATION47_BRIDGE_SHA256 = "d6552af868d06411a530fd988fd60cd87d4efea2512ee113db77fb7c4a6ef7e5"
 WEB_GENERATION47_REVERSE_SELECTOR = "GFTB_AMENDMENT4_GEN47_REVERSE"
+WEB_GENERATION47_FAILED_CARRIER = "2ca8235a252704753e79c63f6552b672ad382809"
+WEB_GENERATION47_FAILED_RUN_ID = "33822848194"
 WEB_GENERATION47_PIN_BASE = "f673b5036c2e9195b63ccedf28f94f011db3bd00"
 WEB_GENERATION47_ROLLBACK_INFRA = "8ecf26987896659727fc623142e170779ff92d41"
 WEB_GENERATION47_ROLLBACK_SOURCE = "836857bce295dec206cb4ebd6ba45f2956bc8aed"
@@ -128,6 +132,10 @@ WEB_GENERATION47_ROLLBACK_IMAGE = (
     "498b9715ed123ac8b5e1be0c35a5355ede6880e655e77809b85bf83c8f34f24c"
 )
 WEB_GENERATION47_RULESET_ID = 20930684
+WEB_GENERATION47_RULESET_REVIEWED_UPDATED_AT = "2026-08-30T19:30:26.535Z"
+WEB_GENERATION47_RULESET_ADMIN_PROJECTION_SHA256 = (
+    "4fad263383b9f2f2e5c5f47523c669ccd06360af2d4bd5f4288d237e2f77aea1"
+)
 WEB_GENERATION47_BRIDGE_RECIPES = frozenset(
     {
         "web-release-candidate-proof",
@@ -2164,6 +2172,17 @@ def scan_web_generation47_bridge_contract(
         )
 
     required_workflow_fragments: dict[str, tuple[str, ...]] = {
+        "web-generation47-recovery-provenance-weakened": (
+            f"  REVIEWED_BASE_SHA: {WEB_GENERATION47_FAILED_CARRIER}",
+            f"  FAILED_CARRIER_SHA: {WEB_GENERATION47_FAILED_CARRIER}",
+            f'  FAILED_RUN_ID: "{WEB_GENERATION47_FAILED_RUN_ID}"',
+            'actions/runs/${FAILED_RUN_ID}")',
+            'actions/runs/${FAILED_RUN_ID}/jobs?per_page=100")',
+            'actions/runs/${FAILED_RUN_ID}/artifacts?per_page=100")',
+            '.conclusion == "failure"',
+            ".number >= 4 and .number <= 7",
+            ".total_count == 0 and .artifacts == []",
+        ),
         "web-generation47-carrier-one-shot-weakened": (
             'test "${GITHUB_RUN_ATTEMPT}" = 1',
             "actions/workflows/web-generation-47-parity.yml/runs?"
@@ -2179,8 +2198,13 @@ def scan_web_generation47_bridge_contract(
             '.target == "branch"',
             '.source_type == "Repository"',
             '.enforcement == "active"',
-            ".bypass_actors == []",
-            '.current_user_can_bypass == "never"',
+            f'  RULESET_REVIEWED_UPDATED_AT: "{WEB_GENERATION47_RULESET_REVIEWED_UPDATED_AT}"',
+            "  RULESET_ADMIN_PROJECTION_SHA256: "
+            f"{WEB_GENERATION47_RULESET_ADMIN_PROJECTION_SHA256}",
+            ".updated_at == env.RULESET_REVIEWED_UPDATED_AT",
+            '(has("bypass_actors") | not)',
+            '((has("current_user_can_bypass") | not) or '
+            '.current_user_can_bypass == "never")',
             '.conditions.ref_name.include == ["refs/heads/main"]',
             ".conditions.ref_name.exclude == []",
             '"allowed_merge_methods":["squash"]',
