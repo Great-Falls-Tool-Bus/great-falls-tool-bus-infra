@@ -177,9 +177,10 @@ spec:
           # generation 44 sha256:bf3ccd175d553f5b1a73f518c27d31c852aca1c97323d00d6b22a4767b5c63bc,
           # generation 43 sha256:3096c166a25300581e89101effa078dcf4100c638b0ce357f473f485624d6862.
           # This commit records reviewed desired release truth; merge applies
-          # nothing. The apply carrier is the standing-bounded protected
-          # automatic apply ratified 2026-09-03 (decisions/0022 Amendment 4);
-          # PINNED/RUNNING/SERVED are post-apply evidence.
+          # nothing. No GFTB-local parity bridge remains. Production
+          # convergence belongs to the shared GloriousFlywheel/owner-overlay
+          # carrier required by decisions/0022 section 3; PINNED/RUNNING/SERVED
+          # are post-apply evidence.
           image: ghcr.io/great-falls-tool-bus/gftb-site@sha256:f82534a08ba91f080fc67acec219659cb437a9874e1c3c99dedc0e6bd509fbcc
           imagePullPolicy: IfNotPresent
           ports:
