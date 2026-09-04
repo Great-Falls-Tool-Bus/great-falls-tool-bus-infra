@@ -14,6 +14,7 @@ commands. The Justfile remains the sole live entrypoint.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import copy
 import hashlib
 import json
@@ -60,40 +61,19 @@ RAW_TOFU_WORKFLOW = re.compile(r"(?<![A-Za-z0-9_-])tofu(?:\s|-chdir\b)")
 WORKFLOW_ENV_ENTRY = re.compile(r"^          (TF_VAR_[A-Za-z0-9_]+):[ \t]*(.+)$")
 
 RETIRED_ARC_WORKFLOW = Path(".github/workflows/deploy-arc-runners.yml")
-# TIN-3899 Phase 5 step 2: the legacy adapter-node CD carrier. It was the only
-# workflow that ran `just web-stack-apply`, and its
-# `repository_dispatch: web-image-published` trigger let a push to the PUBLIC
-# site repo mutate Deployment/greatfallstoolbus-org unattended. It is deleted;
-# re-adding the file, or re-introducing ANY repository_dispatch consumer in this
-# repository, fails the public surface. The site repo's signal job is retired in
-# the same change.
+# A repository-local web CD workflow or repository_dispatch consumer would
+# recreate the forbidden bridge. Either shape fails the public surface.
 RETIRED_WEB_CD_WORKFLOW = Path(".github/workflows/web-stack.yml")
-# TIN-4227 generation-40 parity bridge: RETIRED 2026-08-30 after its terminal
-# success receipt (run 33331047942; decisions/0022 §2 "the bridge then refuses
-# other generations and is deleted or disabled"). Operator ruling: delete
-# outright. Re-adding the file fails the public surface; the one-time apply
-# authority ended with the generation-40 terminal receipt. Ordinary generations
-# ship through the declare-only pin path until GF-I09 phase 2 arms.
-RETIRED_WEB_GENERATION40_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-40-parity.yml")
-# TIN-4227 second one-use bridge: RETIRED 2026-08-31 after its terminal success
-# receipt (decisions/0022 §2 amendment 2, "the bridge then refuses other
-# generations and is deleted or disabled"; operator ruling, TIN-4227 comment
-# b8f66e62). Operator ruling: delete outright, same as the generation-40
-# bridge above. Re-adding the file fails the public surface; the one-time
-# apply authority ended with the generation-42 terminal receipt. Ordinary
-# generations ship through the declare-only pin path until GF-I09 phase 2
-# arms.
-RETIRED_WEB_GENERATION42_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-42-parity.yml")
-# TIN-4227 third bridge: RETIRED 2026-09-01 after its terminal success
-# receipt (decisions/0022 Amendment 3 (d), "each apply retires its bridge
-# after its terminal receipt"; generation-43 run 33539402606, receipt
-# artifact 9813097428, carrier 44c9397b). Operator ruling: delete outright,
-# same as the generation-40 and generation-42 bridges above. Re-adding the
-# file fails the public surface; the next bounded apply re-arms a fresh
-# bridge from history (the e485dcbd shape) under the same amendment until
-# its expiry (2026-09-07) or receipt cap, or until W14 promotes the carrier
-# to the standing GF-I09 phase-2 executor.
-RETIRED_WEB_GENERATION43_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-43-parity.yml")
+# All GFTB-local web parity bridges are historical and may not return. Runs for
+# generations 40/42/43/44/45 ended with terminal success receipts under Meta
+# decision 0022; generation 47 failed closed before planning, credentials, or
+# mutation (run 33822848194, carrier 2ca8235a) and was retired by current
+# operator direction. Production convergence belongs only to the shared
+# GloriousFlywheel/owner-overlay carrier required by decision 0022 section 3.
+RETIRED_WEB_GENERATION_BRIDGES = {
+    generation: Path(f".github/workflows/web-generation-{generation}-parity.yml")
+    for generation in ("40", "42", "43", "44", "45", "47")
+}
 WORKFLOW_REPOSITORY_DISPATCH = re.compile(r"^\s*repository_dispatch\s*:")
 JUST_COMMAND_START = re.compile(r"\bjust\b")
 JUST_OPTIONS_WITH_VALUES = {
@@ -143,7 +123,6 @@ HOSTED_WORKFLOW_JUST_ALLOWLIST = {
     "edge-zones-plan-destroy-check",
     "edge-zones-plan-show",
     "edge-zones-validate",
-    "flywheel-cache-proof",
     "form-stack-apply",
     "form-stack-drift-check",
     "form-stack-server-dry-run",
@@ -157,10 +136,8 @@ HOSTED_WORKFLOW_JUST_ALLOWLIST = {
     "mail-cr-drift-check",
     "mail-cr-server-dry-run",
     "mail-cr-validate",
-    "web-stack-diff-selftest",
     "web-stack-drift-check",
     "web-stack-render",
-    "web-stack-validate",
 }
 
 EDGE_RUNTIME_TF_VARS = {
@@ -337,7 +314,7 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "49a0e25c1cc8c8ff", "b15096271b4271a4", "fe1d38e06e5abf79", "905f0b0d50110b7a"
     ),
     "_reviewed-clean-main": _receipt(
-        "fe9e048cffbba33b", "36e25d7e15eff9f0", "2ef7dca85552e144", "3b2bf9865a24d32e"
+        "a150da8501b19226", "aaa2dd5d11201170", "c445ea09645439b0", "855ad36f37510540"
     ),
     "_reviewed-implementation-core": _receipt(
         "180f8edd55babb51", "43e15dac40bbad2a", "bffe444ff6221c04", "7c64836ae0c2cfc6"
@@ -367,7 +344,7 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "6a5f69b8b73bb5d2", "285e9effeb9111c3", "8f5fbe0c34a07813", "51fe2e4ebf574cc1"
     ),
     "_operator-apply-confirm": _receipt(
-        "6487928ae4f59860", "9a786fc78d5d0e9d", "7a1077a7ff8f4ecb", "966d483dd92058a0"
+        "1858a391b5fd7061", "ffce7683cb03a7cf", "c1eac68badc61b8a", "8cc3c1556e23edc1"
     ),
     "_arc-exclusive-confirm": _receipt(
         "9c8565974cf6f3b0", "f2aca232a5ff6978", "8d566d4ae8c96152", "900813ed27e88e7a"
@@ -475,11 +452,16 @@ WEB_RELEASE_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     # Updated 2026-08-29: yq-go now owns only YAML/JSON conversion; jq
     # owns release mutation and slurp semantics. The public-surface fixtures
     # execute both this renderer and the exact-one kubeconfig guard.
+    # Updated 2026-08-31 (TIN-4254 W13): the renderer now emits the committed
+    # `kubectl kustomize` bytes VERBATIM and asserts the committed pin equals
+    # the reviewed inputs; the mutation/synthesis jq lane is deleted.
     "web-release-render": _receipt(
-        "bafec28ca138b218", "93c7bb2f1374d48a", "f096847a301b966a", "0ce6033f3a7d039c"
+        "e1cd0a828ede1938", "2f003979c09df6ad", "b1186ed9a1c08c1d", "cc2ff69fa616b70b"
     ),
+    # Updated 2026-08-31 (TIN-4254 W13): the pruned legacy allow-egress
+    # policies left the named mutation-denial enumeration.
     "_web-release-kubeconfig-inputs": _receipt(
-        "916de1b406d43ca1", "f7a2870af5898faf", "4f51aa497b5876b9", "65f0a9f9b8d0b819"
+        "1c116d26ea90c7ee", "c13e1abf52409212", "0417cc4dd45d1362", "057614a01b035d21"
     ),
     "web-release-pinned-running-proof": _receipt(
         "bb9f757c5e1a3dcf", "c48e67ad1aa40b11", "0f25466fc6db04e7", "159d31d0968b28ab"
@@ -490,8 +472,10 @@ WEB_RELEASE_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     "_web-release-plan-root-contract": _receipt(
         "271460cb71ceda56", "0bbca7e8b57d0ddf", "eb68c983d72ab455", "a44e713d9007bbf9"
     ),
+    # Updated 2026-08-31 (TIN-4254 W13): the delete-lane authz rows for the
+    # pruned legacy allow-egress policies are retired.
     "_web-release-apply-kubeconfig-contract": _receipt(
-        "25bab53181e65ec9", "391ef4c90fa9e231", "cf74e4f1db70e3a0", "cd7bf3b9b9891fb8"
+        "e039d9cd09969c19", "70355a659eed775b", "3232101df9752db0", "df7c77a079053bdc"
     ),
     "web-release-plan": _receipt(
         "4c521b684de15316", "694df6eec8402abd", "e6fb365e2cb8a4d1", "79d6b8a69379a844"
@@ -502,16 +486,10 @@ WEB_RELEASE_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     "web-release-server-dry-run": _receipt(
         "b478fca65de1ae58", "a37038565e80d6f6", "23d5318412fc919d", "77382267087b8707"
     ),
+    # Updated 2026-08-31 (TIN-4254 W13): the apply-time NetworkPolicy prune is
+    # retired; the recipe dry-runs, applies the recorded bytes, and waits.
     "web-release-apply": _receipt(
-        "027bfae6f72ee45f", "6bd86a57e1b5d921", "d5df538b3905589c", "f111051c06f3da5e"
-    ),
-    # The legacy adapter-node carrier's promotion interlock. It is not part of
-    # the web-release dependency graph -- it hangs off web-stack-apply, the
-    # attended legacy carrier no workflow may invoke (TIN-3899) -- so it is
-    # receipted here but deliberately NOT an operator-local root. Its body is
-    # enforced by scan_web_stack_promotion_interlock_text.
-    "_web-stack-promotion-interlock": _receipt(
-        "f6fbb3dc72de15bb", "38d350899029f9fb", "afb1a885f3b59950", "a5f7c8a92999df1f"
+        "fee7187cf1bffb78", "e47fd45fc8f05f08", "cff8047b05dd2759", "2adf88989c4452c0"
     ),
 }
 
@@ -531,13 +509,8 @@ WEB_RELEASE_STACK_GLOBAL_ASSIGNMENTS = {
 # `replicas` patch -- makes live state stop equalling the reviewed tree. The scan
 # covers the WHOLE Justfile (every recipe body plus every executable line outside
 # a recipe), not an enumerated recipe list, so a brand-new unlisted recipe cannot
-# reintroduce it. Exactly one recipe is allowed to do this: the legacy
-# `web-stack-apply` adapter-node carrier, whose imperative pin predates the
-# release chain and is documented in _k8s-drift-check's header. TIN-3899 removed
-# that carrier's automated caller but KEPT the recipe and its promotion
-# interlock as the attended belt-and-braces path, so this allowlist stays a
-# one-element set instead of going empty and taking the interlock contract with
-# it.
+# reintroduce it. No recipe is exempt: the retired adapter-node carrier is gone,
+# and the current release transaction renders the pin into reviewed plan bytes.
 #
 # The command anchor covers wrapper names built on `kubectl` (this repo's own
 # `kubectl_clean`), and IMPERATIVE_PIN_CONTINUATION folds backslash line
@@ -574,41 +547,20 @@ IMPERATIVE_PIN = re.compile(
     rf"|{_IMPERATIVE_PIN_KUBECTL}[^\n]*[\"']containers[\"']\s*:[^\n]*[\"']image[\"']\s*:"
     rf"|/spec/template/spec/containers/[0-9*]+/image\b"
 )
-IMPERATIVE_PIN_ALLOWED_RECIPES = frozenset({"web-stack-apply"})
+IMPERATIVE_PIN_ALLOWED_RECIPES: frozenset[str] = frozenset()
 
 # A brand-new recipe running `kubectl ... apply -k/-f` against the web stack
-# tree (`{{ web_stack_dir }}` or its literal path) is not an imperative pin, but
-# it would recreate allow-egress-dns / allow-egress-discuss-archive and re-pin
-# the tree's adapter-node digest WITHOUT passing through
-# _web-stack-promotion-interlock, which only web-stack-apply is bound to. Only
-# the legacy carrier and its server dry-run may apply the tree; the reviewed
-# release chain applies rendered plan bytes (`apply -f "${plan}"`), never the
-# tree. Same textual strength as IMPERATIVE_PIN: variable indirection of the
-# directory is a known residual.
+# tree (`{{ web_stack_dir }}` or its literal path) would bypass the reviewed
+# saved-plan transaction. No recipe may apply the tree directly; the release
+# chain applies rendered plan bytes (`apply -f "${plan}"`). Same textual
+# strength as IMPERATIVE_PIN: variable indirection of the directory is a known
+# residual.
 WEB_STACK_TREE_APPLY = re.compile(
     rf"{_IMPERATIVE_PIN_KUBECTL}[^\n]*\bapply\b[^\n]*"
     r"(?:\s-k\b|\s--kustomize\b|\s-f\b|\s--filename\b|\s-R\b|\s--recursive\b)"
     r"[^\n]*(?:\{\{\s*web_stack_dir\s*\}\}|k8s/web/greatfallstoolbus-org-production)"
 )
-WEB_STACK_TREE_APPLY_ALLOWED_RECIPES = frozenset(
-    {"web-stack-apply", "web-stack-server-dry-run"}
-)
-
-# The legacy adapter-node carrier and the reviewed release chain mutate the SAME
-# Deployment. web-stack.yml used to fire `just web-stack-apply` unattended from a
-# repository_dispatch the public site repo sent on every push to main; TIN-3899
-# deleted both ends of that path, so the carrier is now attended-only. The
-# interlock is RETAINED as belt-and-braces on that attended path: it reads the
-# LIVE image and refuses once the gftb-site promotion is in place, and this
-# contract makes removing or bypassing it -- or re-wiring any new mutating
-# carrier around it -- a `just public-surface` failure.
-WEB_STACK_PROMOTION_INTERLOCK = "_web-stack-promotion-interlock"
-WEB_STACK_PROMOTION_INTERLOCK_DEPENDENTS = ("web-stack-apply",)
-WEB_STACK_PROMOTION_INTERLOCK_REQUIRED_TEXT = (
-    "get deployment/greatfallstoolbus-org",
-    "ghcr.io/great-falls-tool-bus/gftb-site@",
-    "exit 1",
-)
+WEB_STACK_TREE_APPLY_ALLOWED_RECIPES: frozenset[str] = frozenset()
 
 WEB_RELEASE_VALIDATION_CALLEE = "web-stack-validate"
 WEB_RELEASE_VALIDATION_CALLEE_DEPENDENCIES: tuple[str, ...] = ()
@@ -635,8 +587,14 @@ WEB_RELEASE_VALIDATION_SCRIPT = Path("scripts/validate-web-stack.sh")
 # vendor marker and a v4 version marker; this receipt binds that exact fix.
 # Updated 2026-08-30 (PR #143): tracked web-apply RBAC is now validated
 # exactly and is proved absent from the workload render; this receipt co-moves.
+# Updated 2026-08-31 (TIN-4254 W13): the committed default-deny-egress
+# NetworkPolicy is now positively asserted, the render census is six objects,
+# and the legacy allow-egress delete rule left the exact web-apply Role.
+# Updated 2026-09-03 (TIN-2611): parked route/reaper/secrets placeholders and
+# the dead adapter-node carrier are absent; validation covers only live
+# declarations, tracked RBAC, render shape, and secret absence.
 WEB_RELEASE_VALIDATION_SCRIPT_SHA256 = _receipt(
-    "41900cb68a4e6395", "ab0e2f324f80a9be", "0b6d49e895398b99", "e070aab3a744ef53"
+    "b48d56be8f473221", "15b46781dc7700b7", "58053094a6bb24e9", "398906ec15539dcd"
 )
 
 FLAKE_RELEASE_PACKAGES = ("crane", "curl")
@@ -1245,12 +1203,6 @@ def scan_web_release_operator_contract_text(
             )
     dependency_names = set(WEB_RELEASE_RECIPE_DEPENDENCIES)
     digest_names = set(WEB_RELEASE_CRITICAL_RECIPE_DIGESTS)
-    # The promotion interlock is receipted in the same table but is deliberately
-    # NOT part of the release dependency graph: that graph doubles as the
-    # operator-local ROOT set, and the interlock hangs off the legacy
-    # web-stack-apply carrier, which since TIN-3899 no workflow invokes at all.
-    # scan_web_stack_promotion_interlock_text enforces its body receipt.
-    dependency_names |= {WEB_STACK_PROMOTION_INTERLOCK}
     if dependency_names != digest_names:
         findings.append(
             Finding(
@@ -1476,11 +1428,9 @@ def scan_imperative_pin_text(text: str, path: Path) -> list[Finding]:
                         path,
                         line,
                         f"{name} applies the web stack tree directly "
-                        f"({match.group(0).strip()!r}), bypassing "
-                        f"{WEB_STACK_PROMOTION_INTERLOCK}; only "
-                        f"{sorted(WEB_STACK_TREE_APPLY_ALLOWED_RECIPES)!r} may "
-                        "apply the tree, and the reviewed release chain applies "
-                        "rendered plan bytes instead.",
+                        f"({match.group(0).strip()!r}), bypassing the reviewed "
+                        "saved-plan transaction. No recipe may apply the tree; "
+                        "the release chain applies rendered plan bytes instead.",
                     )
                 )
 
@@ -1519,8 +1469,8 @@ def scan_imperative_pin_text(text: str, path: Path) -> list[Finding]:
                     path,
                     index,
                     "Justfile top level applies the web stack tree directly "
-                    f"({tree_match.group(0).strip()!r}), bypassing "
-                    f"{WEB_STACK_PROMOTION_INTERLOCK}.",
+                    f"({tree_match.group(0).strip()!r}), bypassing the reviewed "
+                    "saved-plan transaction.",
                 )
             )
 
@@ -1534,93 +1484,6 @@ def scan_imperative_pin_text(text: str, path: Path) -> list[Finding]:
                     f"{name} is allowlisted for imperative pinning but is not "
                     "defined exactly once; the allowlist must never outlive the "
                     "recipe it was written for.",
-                )
-            )
-    return findings
-
-
-def scan_web_stack_promotion_interlock_text(
-    text: str, path: Path
-) -> list[Finding]:
-    """The legacy adapter-node carrier must refuse to revert the promotion."""
-    findings: list[Finding] = []
-    blocks = all_just_recipe_blocks(text)
-    declarations = blocks.get(WEB_STACK_PROMOTION_INTERLOCK, [])
-    if len(declarations) != 1:
-        findings.append(
-            Finding(
-                "web-stack-promotion-interlock-missing",
-                path,
-                1,
-                f"{WEB_STACK_PROMOTION_INTERLOCK} must be defined exactly once. "
-                "It is the only mechanical stop between the unattended legacy "
-                "CD carrier and a silent revert of the gftb-site promotion.",
-            )
-        )
-    else:
-        line, _, body = declarations[0]
-        executable = executable_recipe_text(body)
-        expected_digest = WEB_RELEASE_CRITICAL_RECIPE_DIGESTS.get(
-            WEB_STACK_PROMOTION_INTERLOCK
-        )
-        observed_digest = hashlib.sha256(executable.encode("utf-8")).hexdigest()
-        if expected_digest is None:
-            findings.append(
-                Finding(
-                    "web-stack-promotion-interlock-receipt-missing",
-                    Path(SELF),
-                    1,
-                    f"{WEB_STACK_PROMOTION_INTERLOCK} must carry an executable "
-                    "receipt in WEB_RELEASE_CRITICAL_RECIPE_DIGESTS like the "
-                    "rest of the reviewed chain.",
-                )
-            )
-        elif observed_digest != expected_digest:
-            findings.append(
-                Finding(
-                    "web-stack-promotion-interlock-receipt-mismatch",
-                    path,
-                    line,
-                    f"{WEB_STACK_PROMOTION_INTERLOCK} executable SHA256 must be "
-                    f"{expected_digest}; observed {observed_digest}.",
-                )
-            )
-        for required in WEB_STACK_PROMOTION_INTERLOCK_REQUIRED_TEXT:
-            if required not in executable:
-                findings.append(
-                    Finding(
-                        "web-stack-promotion-interlock-weakened",
-                        path,
-                        line,
-                        f"{WEB_STACK_PROMOTION_INTERLOCK} no longer reads the "
-                        f"live Deployment image and refuses on it ({required!r} "
-                        "is gone); the legacy carrier could revert the "
-                        "promotion unattended.",
-                    )
-                )
-
-    dependencies = parse_just_recipe_dependencies(text)
-    for dependent in WEB_STACK_PROMOTION_INTERLOCK_DEPENDENTS:
-        declared = dependencies.get(dependent)
-        if declared is None:
-            findings.append(
-                Finding(
-                    "web-stack-promotion-interlock-detached",
-                    path,
-                    1,
-                    f"{dependent} is not declared; the promotion interlock "
-                    "contract names a recipe that no longer exists.",
-                )
-            )
-        elif not declared or declared[0] != WEB_STACK_PROMOTION_INTERLOCK:
-            findings.append(
-                Finding(
-                    "web-stack-promotion-interlock-detached",
-                    path,
-                    1,
-                    f"{dependent} must take {WEB_STACK_PROMOTION_INTERLOCK} as "
-                    f"its FIRST dependency; it declares {list(declared)!r}. The "
-                    "interlock has to precede every mutation of this workload.",
                 )
             )
     return findings
@@ -1874,47 +1737,19 @@ def scan_workflows() -> list[Finding]:
             )
         )
 
-    retired_bridge = REPO / RETIRED_WEB_GENERATION40_BRIDGE_WORKFLOW
-    if retired_bridge.exists() or retired_bridge.is_symlink():
-        findings.append(
-            Finding(
-                "retired-web-generation40-bridge-retained",
-                RETIRED_WEB_GENERATION40_BRIDGE_WORKFLOW,
-                1,
-                "Delete web-generation-40-parity.yml; the one-time parity bridge "
-                "retired with its terminal receipt (decisions/0022 §2). Ordinary "
-                "generations ship through the declare-only pin path.",
+    for generation, retired_path in RETIRED_WEB_GENERATION_BRIDGES.items():
+        retired_bridge = REPO / retired_path
+        if retired_bridge.exists() or retired_bridge.is_symlink():
+            findings.append(
+                Finding(
+                    f"retired-web-generation{generation}-bridge-retained",
+                    retired_path,
+                    1,
+                    f"Delete {retired_path.name}; all GFTB-local web parity "
+                    "bridges are retired. Production convergence belongs to "
+                    "the shared GloriousFlywheel/owner-overlay carrier.",
+                )
             )
-        )
-
-    retired_gen42_bridge = REPO / RETIRED_WEB_GENERATION42_BRIDGE_WORKFLOW
-    if retired_gen42_bridge.exists() or retired_gen42_bridge.is_symlink():
-        findings.append(
-            Finding(
-                "retired-web-generation42-bridge-retained",
-                RETIRED_WEB_GENERATION42_BRIDGE_WORKFLOW,
-                1,
-                "Delete web-generation-42-parity.yml; the second one-time parity "
-                "bridge retired with its terminal receipt (decisions/0022 §2 "
-                "amendment 2). Ordinary generations ship through the "
-                "declare-only pin path.",
-            )
-        )
-
-    retired_gen43_bridge = REPO / RETIRED_WEB_GENERATION43_BRIDGE_WORKFLOW
-    if retired_gen43_bridge.exists() or retired_gen43_bridge.is_symlink():
-        findings.append(
-            Finding(
-                "retired-web-generation43-bridge-retained",
-                RETIRED_WEB_GENERATION43_BRIDGE_WORKFLOW,
-                1,
-                "Delete web-generation-43-parity.yml; the third one-time parity "
-                "bridge retired with its terminal receipt (decisions/0022 "
-                "Amendment 3 (d)). The next bounded apply re-arms a fresh "
-                "bridge from history; ordinary generations ship through the "
-                "declare-only pin path.",
-            )
-        )
 
     workflow_paths = set(git_files(WORKFLOW_GLOBS))
     for pattern in WORKFLOW_GLOBS:
@@ -2882,7 +2717,6 @@ def check_critical_recipe_shell_syntax() -> None:
         *ARC_RECIPE_DEPENDENCIES,
         *ATTENDED_RECIPE_DEPENDENCIES,
         *WEB_RELEASE_RECIPE_DEPENDENCIES,
-        WEB_STACK_PROMOTION_INTERLOCK,
     ):
         dry_run = subprocess.run(
             ["just", "--dry-run", name],
@@ -2923,41 +2757,48 @@ WEB_RELEASE_FIXTURE_TAG = (
     "ghcr.io/great-falls-tool-bus/gftb-site:sha-" + WEB_RELEASE_FIXTURE_SHA
 )
 
-WEB_RELEASE_RENDER_FIXTURE = """\
+# Since TIN-4254 (W13) the mocked kustomize output models the COMMITTED tree:
+# the render recipe emits these bytes verbatim, so the fixture must already
+# carry the pin (fixture image + source-sha annotation) and the full hardened
+# pod shape the workload contract asserts, instead of relying on a retired
+# mutation lane to fix a stale base.
+WEB_RELEASE_RENDER_FIXTURE = f"""\
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: greatfallstoolbus-org
   namespace: greatfallstoolbus-org-production
 spec:
-  replicas: 0
+  replicas: 2
   selector:
     matchLabels:
       app.kubernetes.io/name: greatfallstoolbus-org
       app.kubernetes.io/component: web
   template:
     metadata:
-      annotations: {}
+      annotations:
+        app.tinyland.dev/source-sha: {WEB_RELEASE_FIXTURE_SHA}
       labels:
         app.kubernetes.io/name: greatfallstoolbus-org
         app.kubernetes.io/component: web
         app.kubernetes.io/part-of: great-falls-tool-bus
     spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
       securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: greatfallstoolbus-org
-          image: PLACEHOLDER
+          image: {WEB_RELEASE_FIXTURE_IMAGE}
           ports:
             - name: http
               containerPort: 3000
               protocol: TCP
-          command: ["node"]
-          args: ["build/index.js"]
-          env:
-            - name: PORT
-              value: "3000"
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -3339,6 +3180,16 @@ def web_release_runtime_objects() -> tuple[dict[str, object], ...]:
                 {"podSelector": {}, "policyTypes": ["Ingress"]},
                 app_label=False,
             ),
+            network_policy(
+                6,
+                "default-deny-egress",
+                {
+                    "podSelector": policy_selector,
+                    "policyTypes": ["Egress"],
+                    "egress": [],
+                },
+                app_label=False,
+            ),
         ]
     }
     network_policies = {
@@ -3349,18 +3200,6 @@ def web_release_runtime_objects() -> tuple[dict[str, object], ...]:
             not in {"allow-egress-dns", "allow-egress-discuss-archive"}
         ]
     }
-    network_policies["items"].append(
-        network_policy(
-            6,
-            "default-deny-egress",
-            {
-                "podSelector": policy_selector,
-                "policyTypes": ["Egress"],
-                "egress": [],
-            },
-            app_label=False,
-        )
-    )
     return (
         deployment,
         replicasets,
@@ -3577,7 +3416,8 @@ def install_web_release_fixture_mocks(
             raise TypeError("fixture NetworkPolicy must have metadata")
         policy["metadata"].pop("uid", None)
     # Keep the runtime legacy-policy fixtures, but make mocked kustomize
-    # match the current checked-in three-policy base.
+    # match the current checked-in four-policy base (default-deny-egress is
+    # committed tree truth since TIN-4254 W13).
     current_render_policies = [
         policy
         for policy in rendered_policies
@@ -3653,6 +3493,21 @@ def install_web_release_fixture_mocks(
         for old, new in replacements.items():
             source = source.replace(old, new)
         return source
+
+    git_info = fixture_dir / "git-info"
+    git_info.mkdir(mode=0o700)
+    (git_info / "safe-exclude").write_text(
+        "# fixture comment only\n", encoding="utf-8"
+    )
+    (git_info / "safe-attributes").write_text(
+        "  # indented attribute comment\n", encoding="utf-8"
+    )
+    (git_info / "active-exclude").write_text(" #*.tf\n", encoding="utf-8")
+    (git_info / "active-attributes").write_text(
+        "* filter=untrusted\n", encoding="utf-8"
+    )
+    (git_info / "symlink-exclude").symlink_to(git_info / "safe-exclude")
+    (git_info / "symlink-attributes").symlink_to(git_info / "safe-attributes")
 
     write_fixture_executable(
         mock_bin / "crane",
@@ -4348,28 +4203,7 @@ def install_web_release_fixture_mocks(
                     value["metadata"] = {"resourceVersion": "fixture-np-list-drift"}
                 sys.stdout.write(json.dumps(value))
                 raise SystemExit(0)
-            # --- the mutating half (web-release-apply / the legacy interlock) ---
-            interlock_jsonpath = (
-                "jsonpath={.spec.template.spec.containers"
-                '[?(@.name=="greatfallstoolbus-org")].image}'
-            )
-            if args == namespace_prefix + [
-                "get",
-                "deployment/greatfallstoolbus-org",
-                "--ignore-not-found",
-                "-o",
-                interlock_jsonpath,
-            ]:
-                if state == "stack-live-absent":
-                    sys.stdout.write("")
-                elif state == "stack-live-promoted":
-                    sys.stdout.write(__IMAGE__)
-                else:
-                    sys.stdout.write(
-                        "ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:"
-                        + "9" * 64
-                    )
-                raise SystemExit(0)
+            # --- the mutating half (web-release-apply) ---
             if args[: len(namespace_prefix) + 1] == namespace_prefix + ["apply"]:
                 apply_args = args[len(namespace_prefix) + 1 :]
                 dry_run = apply_args[:1] == ["--dry-run=server"]
@@ -4396,23 +4230,6 @@ def install_web_release_fixture_mocks(
                     "deployment.apps/greatfallstoolbus-org configured"
                     + (" (server dry run)" if dry_run else "")
                     + "\\n"
-                )
-                raise SystemExit(0)
-            if args == namespace_prefix + [
-                "delete",
-                "networkpolicy",
-                "allow-egress-dns",
-                "allow-egress-discuss-archive",
-                "--ignore-not-found",
-            ]:
-                if state == "apply-delete-fails":
-                    sys.stderr.write(
-                        'Error from server (Forbidden): networkpolicies '
-                        '"allow-egress-dns" is forbidden\\n'
-                    )
-                    raise SystemExit(1)
-                sys.stdout.write(
-                    'networkpolicy.networking.k8s.io "allow-egress-dns" deleted\\n'
                 )
                 raise SystemExit(0)
             if args == namespace_prefix + [
@@ -4505,13 +4322,12 @@ def install_web_release_fixture_mocks(
                   esac
                 else
                   case "${verb}:${base_resource}:${resource_name}" in
-                    get:deployments.apps:greatfallstoolbus-org|get:services:greatfallstoolbus-org|get:networkpolicies.networking.k8s.io:default-deny-ingress|get:networkpolicies.networking.k8s.io:allow-cloudflared-tunnel-ingress|get:networkpolicies.networking.k8s.io:allow-prometheus-scrape|get:networkpolicies.networking.k8s.io:default-deny-egress|update:deployments.apps:greatfallstoolbus-org|update:services:greatfallstoolbus-org|update:networkpolicies.networking.k8s.io:default-deny-ingress|update:networkpolicies.networking.k8s.io:allow-cloudflared-tunnel-ingress|update:networkpolicies.networking.k8s.io:allow-prometheus-scrape|update:networkpolicies.networking.k8s.io:default-deny-egress|patch:deployments.apps:greatfallstoolbus-org|patch:services:greatfallstoolbus-org|patch:networkpolicies.networking.k8s.io:default-deny-ingress|patch:networkpolicies.networking.k8s.io:allow-cloudflared-tunnel-ingress|patch:networkpolicies.networking.k8s.io:allow-prometheus-scrape|patch:networkpolicies.networking.k8s.io:default-deny-egress|delete:networkpolicies.networking.k8s.io:allow-egress-dns|delete:networkpolicies.networking.k8s.io:allow-egress-discuss-archive) allowed=1 ;;
+                    get:deployments.apps:greatfallstoolbus-org|get:services:greatfallstoolbus-org|get:networkpolicies.networking.k8s.io:default-deny-ingress|get:networkpolicies.networking.k8s.io:allow-cloudflared-tunnel-ingress|get:networkpolicies.networking.k8s.io:allow-prometheus-scrape|get:networkpolicies.networking.k8s.io:default-deny-egress|update:deployments.apps:greatfallstoolbus-org|update:services:greatfallstoolbus-org|update:networkpolicies.networking.k8s.io:default-deny-ingress|update:networkpolicies.networking.k8s.io:allow-cloudflared-tunnel-ingress|update:networkpolicies.networking.k8s.io:allow-prometheus-scrape|update:networkpolicies.networking.k8s.io:default-deny-egress|patch:deployments.apps:greatfallstoolbus-org|patch:services:greatfallstoolbus-org|patch:networkpolicies.networking.k8s.io:default-deny-ingress|patch:networkpolicies.networking.k8s.io:allow-cloudflared-tunnel-ingress|patch:networkpolicies.networking.k8s.io:allow-prometheus-scrape|patch:networkpolicies.networking.k8s.io:default-deny-egress) allowed=1 ;;
                   esac
                 fi
               fi
-              if [[ "${state}" == "apply-authz-denied-delete" && "${verb}:${base_resource}:${resource_name}" == "delete:networkpolicies.networking.k8s.io:allow-egress-discuss-archive" ]]; then allowed=0; fi
               if [[ "${state}" == "apply-authz-denied-create-policy" && "${verb}:${base_resource}" == "create:networkpolicies.networking.k8s.io" ]]; then allowed=0; fi
-              if [[ "${state}" == "apply-authz-transport-error" && "${verb}:${base_resource}:${resource_name}" == "delete:networkpolicies.networking.k8s.io:allow-egress-discuss-archive" ]]; then echo "mock authorization transport failure" >&2; exit 2; fi
+              if [[ "${state}" == "apply-authz-transport-error" && "${verb}:${base_resource}:${resource_name}" == "patch:networkpolicies.networking.k8s.io:default-deny-egress" ]]; then echo "mock authorization transport failure" >&2; exit 2; fi
               if [[ "${allowed}" -eq 1 ]]; then printf 'yes\\n'; exit 0; fi
               printf 'no\\n'
               exit 1
@@ -4666,6 +4482,7 @@ def install_web_release_fixture_mocks(
         materialize(
             """
             #!__FIXTURE_PYTHON__
+            import os
             import pathlib
             import sys
 
@@ -4677,19 +4494,132 @@ def install_web_release_fixture_mocks(
                 "https://github.com/Great-Falls-Tool-Bus/"
                 "great-falls-tool-bus-infra.git"
             )
+            state = pathlib.Path(__STATE__).read_text(encoding="utf-8").strip()
             args = sys.argv[1:]
-            if args[:2] == ["-C", toplevel]:
+            if len(args) >= 2 and args[0] == "-C" and args[1] in (toplevel, "/"):
                 args = args[2:]
             if args == ["rev-parse", "--show-toplevel"]:
                 print(toplevel)
+            elif args == [
+                "config", "--show-scope", "--name-only", "--get-regexp", ".*"
+            ]:
+                if os.environ.get("GIT_NO_REPLACE_OBJECTS") != "1":
+                    raise SystemExit("mock git requires replacement objects disabled")
+                if os.environ.get("GIT_CONFIG_NOSYSTEM") != "1":
+                    raise SystemExit("mock git requires system config disabled")
+                if os.environ.get("GIT_CONFIG_GLOBAL") != "/dev/null":
+                    raise SystemExit("mock git requires global config disabled")
+                if os.environ.get("GIT_ATTR_NOSYSTEM") != "1":
+                    raise SystemExit("mock git requires system attributes disabled")
+                if os.environ.get("GIT_OPTIONAL_LOCKS") != "0":
+                    raise SystemExit("mock git requires optional index locks disabled")
+                if os.environ.get("LC_ALL") != "C":
+                    raise SystemExit("mock git requires locale-neutral config parsing")
+                if state == "apply-git-config-error":
+                    raise SystemExit(2)
+                if state == "apply-git-local-http-config":
+                    print("local\\thttp.proxy")
+                    raise SystemExit(0)
+                if state == "apply-git-local-excludes-config":
+                    print("local\\tcore.excludesfile")
+                    raise SystemExit(0)
+                if state == "apply-git-local-attributes-config":
+                    print("local\\tcore.attributesfile")
+                    raise SystemExit(0)
+                if state == "apply-git-local-filter-config":
+                    print("local\\tfilter.hide.clean")
+                    raise SystemExit(0)
+                if state == "apply-git-local-refstorage-config":
+                    print("local\\textensions.refstorage")
+                    raise SystemExit(0)
+                stat_key = {
+                    "apply-git-local-trustctime-config": "core.trustctime",
+                    "apply-git-local-checkstat-config": "core.checkstat",
+                    "apply-git-local-ignorestat-config": "core.ignorestat",
+                }.get(state)
+                if stat_key is not None:
+                    print("local\\t" + stat_key)
+                    raise SystemExit(0)
+                if state == "apply-git-local-mixed-case-stat-config":
+                    print("local\\tcore.IgnoreStat")
+                    raise SystemExit(0)
+                if state == "apply-git-worktree-attr-tree-config":
+                    print("worktree\\tattr.tree")
+                    raise SystemExit(0)
+                if state == "apply-git-global-gpg-config":
+                    print("global\\tgpg.program")
+                    raise SystemExit(0)
+                raise SystemExit(1)
+            elif args in (
+                [
+                    "rev-parse", "--path-format=absolute", "--git-path",
+                    "info/exclude",
+                ],
+                [
+                    "rev-parse", "--path-format=absolute", "--git-path",
+                    "info/attributes",
+                ],
+            ):
+                info_name = args[-1].removeprefix("info/")
+                selected = "safe-" + info_name
+                if (
+                    state == "apply-git-info-exclude-entry"
+                    and info_name == "exclude"
+                ):
+                    selected = "active-exclude"
+                elif (
+                    state == "apply-git-info-attributes-entry"
+                    and info_name == "attributes"
+                ):
+                    selected = "active-attributes"
+                elif (
+                    state == "apply-git-info-exclude-symlink"
+                    and info_name == "exclude"
+                ):
+                    selected = "symlink-exclude"
+                elif (
+                    state == "apply-git-info-attributes-symlink"
+                    and info_name == "attributes"
+                ):
+                    selected = "symlink-attributes"
+                print(pathlib.Path(__FIXTURES__) / "git-info" / selected)
             elif args in (["rev-parse", "HEAD"], ["rev-parse", "origin/main"]):
                 print(head)
             elif args == ["branch", "--show-current"]:
                 print("main")
-            elif args in (["status", "--porcelain"], ["ls-files", "-v"]):
+            elif args == [
+                "-c", "core.excludesFile=/dev/null",
+                "-c", "core.attributesFile=/dev/null",
+                "-c", "core.untrackedCache=false",
+                "status", "--porcelain", "--untracked-files=all",
+            ]:
+                if os.environ.get("GIT_ATTR_NOSYSTEM") != "1":
+                    raise SystemExit("mock status requires system attributes disabled")
+                if os.environ.get("GIT_OPTIONAL_LOCKS") != "0":
+                    raise SystemExit("mock status requires optional index locks disabled")
+                if state == "apply-git-status-error":
+                    raise SystemExit(2)
+                if state == "apply-git-default-ignore-steering":
+                    print("?? override.tf")
+            elif (
+                args == ["status", "--porcelain", "--untracked-files=all"]
+                and state == "apply-git-default-ignore-steering"
+            ):
+                # Without the command-scoped /dev/null sources the injected
+                # user-global ignore hides override.tf and reports a false clean.
+                pass
+            elif args == ["ls-files", "-v"]:
                 pass
             elif args == ["remote", "get-url", "origin"]:
-                print(canonical)
+                if state == "apply-git-origin-secret":
+                    print(
+                        "https://x-access-token:"
+                        + "ghp_"
+                        + "a" * 36
+                        + "@github.com/evil/repository.git"
+                    )
+                else:
+                    print(canonical)
             elif args == [
                 "show-ref", "--verify", "--quiet", "refs/remotes/origin/main"
             ]:
@@ -4698,7 +4628,12 @@ def install_web_release_fixture_mocks(
                 "refs/heads/main"
             ]:
                 print(head + "\\trefs/heads/main")
-            elif args == ["verify-commit", head]:
+            elif args == [
+                "-c", "gpg.format=openpgp",
+                "-c", "gpg.program=gpg",
+                "-c", "gpg.openpgp.program=gpg",
+                "verify-commit", head,
+            ]:
                 pass
             else:
                 raise SystemExit(
@@ -4750,6 +4685,53 @@ def expect_web_release_fixture_result(
     return result
 
 
+def install_shell_poison_fixture(
+    root: Path,
+) -> tuple[dict[str, str], Callable[[str], None]]:
+    """Return imported startup/function poison and its absence assertion."""
+    function_marker = root / "imported-shell-function-ran"
+    startup_poison = root / "startup-poison.sh"
+    startup_poison.write_text(
+        "printf '%s' startup > " + shlex.quote(str(function_marker)) + "\n",
+        encoding="utf-8",
+    )
+    startup_poison.chmod(0o600)
+    poison_environment = {
+        "BASH_ENV": str(startup_poison),
+        "ENV": str(startup_poison),
+    }
+    for command in (
+        "awk",
+        "env",
+        "kubectl",
+        "curl",
+        "crane",
+        "yq",
+        "jq",
+        "python3",
+        "git",
+        "just",
+        "mktemp",
+    ):
+        poison_environment[f"BASH_FUNC_{command}%%"] = (
+            "() { printf '%s' "
+            + shlex.quote(command)
+            + " > "
+            + shlex.quote(str(function_marker))
+            + f"; unset -f {command}; command {command} \"$@\"; }}"
+        )
+
+    def assert_no_imported_function(stage: str) -> None:
+        if function_marker.exists():
+            source = function_marker.read_text(encoding="utf-8")
+            raise SystemExit(
+                "self-test FAILED: release proof imported a poisoned shell "
+                f"startup hook/function {source!r} during {stage}"
+            )
+
+    return poison_environment, assert_no_imported_function
+
+
 def run_web_release_semantic_fixtures() -> None:
     just_binary = shutil.which("just")
     if just_binary is None:
@@ -4796,36 +4778,9 @@ def run_web_release_semantic_fixtures() -> None:
         cookie = root / "access.cookies"
         cookie.write_text("# fixture cookie; mock curl only\n", encoding="utf-8")
         cookie.chmod(0o600)
-        function_marker = root / "imported-shell-function-ran"
-        startup_poison = root / "startup-poison.sh"
-        startup_poison.write_text(
-            "printf '%s' startup > " + shlex.quote(str(function_marker)) + "\n",
-            encoding="utf-8",
+        poison_environment, assert_no_imported_function = (
+            install_shell_poison_fixture(root)
         )
-        startup_poison.chmod(0o600)
-        poison_environment = {
-            "BASH_ENV": str(startup_poison),
-            "ENV": str(startup_poison),
-        }
-        for command in (
-            "env",
-            "kubectl",
-            "curl",
-            "crane",
-            "yq",
-            "jq",
-            "python3",
-            "git",
-            "just",
-            "mktemp",
-        ):
-            poison_environment[f"BASH_FUNC_{command}%%"] = (
-                "() { printf '%s' "
-                + shlex.quote(command)
-                + " > "
-                + shlex.quote(str(function_marker))
-                + f"; unset -f {command}; command {command} \"$@\"; }}"
-            )
         base_environment = {
             "PATH": str(mock_bin),
             "HOME": str(home),
@@ -4838,14 +4793,6 @@ def run_web_release_semantic_fixtures() -> None:
             "WEB_RELEASE_KUBECONFIG": str(kubeconfig),
             **poison_environment,
         }
-
-        def assert_no_imported_function(stage: str) -> None:
-            if function_marker.exists():
-                source = function_marker.read_text(encoding="utf-8")
-                raise SystemExit(
-                    "self-test FAILED: release proof imported a poisoned shell "
-                    f"startup hook/function {source!r} during {stage}"
-                )
 
         expect_web_release_fixture_result(
             just_binary,
@@ -5058,8 +5005,8 @@ def run_web_release_semantic_fixtures() -> None:
             or "allow-egress-discuss-archive" in render.stdout
         ):
             raise SystemExit(
-                "self-test FAILED: render fixture did not synthesize the exact "
-                "default-deny policy or retained a legacy egress allow"
+                "self-test FAILED: render fixture did not carry the committed "
+                "default-deny-egress policy or retained a legacy egress allow"
             )
         render_log = log_path.read_text(encoding="utf-8").splitlines()
         if render_log.count("nested-just web-stack-validate") != 1 or sum(
@@ -5070,22 +5017,23 @@ def run_web_release_semantic_fixtures() -> None:
                 "self-test FAILED: render fixture did not execute the reviewed "
                 "validator and exact local kustomize path"
             )
-        render_env_from = expect_web_release_fixture_result(
+        # The renderer emits committed bytes verbatim (TIN-4254 W13); a pin
+        # that does not match the reviewed inputs is a refusal, not a stamp.
+        expect_web_release_fixture_result(
             just_binary,
             "web-release-render",
             state_path,
             log_path,
-            base_environment,
-            "render-env-from",
-            success=True,
-            diagnostic=WEB_RELEASE_FIXTURE_IMAGE,
+            {**base_environment, "WEB_APPLY_SHA": "c" * 40},
+            "ok",
+            success=False,
+            diagnostic="committed pin does not match reviewed inputs; commit the pin first",
         )
-        if "envFrom:" in render_env_from.stdout:
-            raise SystemExit(
-                "self-test FAILED: render fixture retained an injected envFrom"
-            )
         for state, diagnostic in (
-            ("render-secret", "workload render must contain exactly Deployment/Service/three NetworkPolicies and no RBAC authority"),
+            ("render-secret", "workload render must contain exactly Deployment/Service/four NetworkPolicies and no RBAC authority"),
+            # An injected envFrom used to be silently stripped by the retired
+            # mutation lane; the verbatim renderer must refuse it instead.
+            ("render-env-from", "rendered static-Caddy workload contract mismatch"),
             ("render-missing-default-ingress", "rendered object census mismatch"),
             ("render-retained-legacy-egress", "rendered object census mismatch"),
             (
@@ -5277,8 +5225,6 @@ def run_web_release_semantic_fixtures() -> None:
                         "allow-prometheus-scrape",
                         "default-deny-egress",
                         "default-deny-ingress",
-                        "allow-egress-dns",
-                        "allow-egress-discuss-archive",
                     )
                 ),
             )
@@ -6047,8 +5993,6 @@ WEB_RELEASE_APPLY_AUTHZ_CONTRACT: tuple[tuple[str, str], ...] = (
     ("patch", "networkpolicies.networking.k8s.io/allow-cloudflared-tunnel-ingress"),
     ("patch", "networkpolicies.networking.k8s.io/allow-prometheus-scrape"),
     ("patch", "networkpolicies.networking.k8s.io/default-deny-egress"),
-    ("delete", "networkpolicies.networking.k8s.io/allow-egress-dns"),
-    ("delete", "networkpolicies.networking.k8s.io/allow-egress-discuss-archive"),
 )
 
 
@@ -6072,13 +6016,9 @@ def build_web_release_sandbox_repo(root: Path) -> Path:
 def run_web_release_mutation_fixtures() -> None:
     """Exercise the MUTATING half as real children against mocked binaries.
 
-    The proof recipes have had this coverage since PR #109; the plan/dry-run/
-    apply chain and the legacy-carrier promotion interlock did not. These
-    fixtures assert behavior a body digest cannot: argument order, that the
-    authorization preflight runs before anything is applied, that the legacy
-    egress prune carries --ignore-not-found and happens AFTER the apply and
-    BEFORE the rollout wait, and that every refusal path refuses before the
-    first mutation.
+    These fixtures assert behavior a body digest cannot: argument order, that
+    authorization runs before apply, and that every refusal path stops before
+    the first mutation.
     """
     just_binary = shutil.which("just")
     if just_binary is None:
@@ -6088,6 +6028,9 @@ def run_web_release_mutation_fixtures() -> None:
         prefix="gftb-web-mutation-selftest."
     ) as directory:
         root = Path(directory)
+        poison_environment, assert_no_imported_function = (
+            install_shell_poison_fixture(root)
+        )
         (
             mock_bin,
             state_path,
@@ -6118,6 +6061,7 @@ def run_web_release_mutation_fixtures() -> None:
             "WEB_APPLY_REPLICAS": "2",
             "WEB_APPLY_KUBECONFIG": str(kubeconfig),
             "GFTB_APPLY_CONFIRM": "apply",
+            **poison_environment,
         }
 
         def kubectl_calls() -> list[str]:
@@ -6224,6 +6168,7 @@ def run_web_release_mutation_fixtures() -> None:
             success=True,
             diagnostic="web release applied",
         )
+        assert_no_imported_function("web-release-apply")
         apply_calls = kubectl_calls()
         if not apply_calls or " auth can-i " not in apply_calls[0]:
             raise SystemExit(
@@ -6250,30 +6195,116 @@ def run_web_release_mutation_fixtures() -> None:
                 "self-test FAILED: web-release-apply mutated before finishing "
                 "its authorization preflight"
             )
+        # The mutation is exactly dry-run -> apply -> rollout wait. A delete
+        # or other mutation reappearing here is a regression.
         expected_mutations = [
             f"--kubeconfig {kubeconfig} --namespace {namespace} apply "
             f"--dry-run=server -f {plan}",
             f"--kubeconfig {kubeconfig} --namespace {namespace} apply -f {plan}",
-            f"--kubeconfig {kubeconfig} --namespace {namespace} delete "
-            "networkpolicy allow-egress-dns allow-egress-discuss-archive "
-            "--ignore-not-found",
             f"--kubeconfig {kubeconfig} --namespace {namespace} rollout status "
             "deployment/greatfallstoolbus-org --timeout=300s",
         ]
         if cluster_mutations(apply_calls) != expected_mutations:
             raise SystemExit(
                 "self-test FAILED: web-release-apply did not dry-run, apply the "
-                "recorded bytes, prune the legacy egress policies with "
-                "--ignore-not-found, and then wait for the rollout, in that "
+                "recorded bytes, and then wait for the rollout, in that "
                 f"order: {cluster_mutations(apply_calls)!r}"
             )
 
         # REFUSALS. Each must refuse with nothing applied.
+        for git_environment_name in (
+            "GIT_CONFIG",
+            "GIT_REFERENCE_BACKEND",
+            "GIT_ATTR_SOURCE",
+            "GIT_ATTR_NOSYSTEM",
+            "GIT_OPTIONAL_LOCKS",
+        ):
+            steered_git_environment = {
+                **environment,
+                git_environment_name: "untrusted-fixture-value",
+            }
+            expect_web_release_fixture_result(
+                just_binary,
+                "web-release-apply",
+                state_path,
+                log_path,
+                steered_git_environment,
+                "apply-ok",
+                success=False,
+                diagnostic=f"refuses ambient {git_environment_name}",
+            )
+            git_calls = [
+                line
+                for line in log_path.read_text(encoding="utf-8").splitlines()
+                if line.startswith("git ")
+            ]
+            if git_calls or cluster_mutations(kubectl_calls()):
+                raise SystemExit(
+                    "self-test FAILED: ambient Git steering reached Git or the "
+                    f"cluster for {git_environment_name}: git={git_calls!r}, "
+                    f"kubectl={cluster_mutations(kubectl_calls())!r}"
+                )
+
         for state, diagnostic in (
             (
-                "apply-authz-denied-delete",
-                f"cannot delete networkpolicies.networking.k8s.io/"
-                f"allow-egress-discuss-archive in {namespace}",
+                "apply-git-config-error",
+                "could not inspect repository Git configuration",
+            ),
+            (
+                "apply-git-local-http-config",
+                "refuses local/worktree Git configuration",
+            ),
+            (
+                "apply-git-local-excludes-config",
+                "refuses local/worktree Git configuration",
+            ),
+            (
+                "apply-git-local-attributes-config",
+                "refuses local/worktree Git configuration",
+            ),
+            (
+                "apply-git-local-filter-config",
+                "refuses local/worktree Git configuration",
+            ),
+            (
+                "apply-git-local-refstorage-config",
+                "refuses local/worktree Git configuration",
+            ),
+            *(
+                (state, "refuses local/worktree Git configuration")
+                for state in (
+                    "apply-git-local-trustctime-config",
+                    "apply-git-local-checkstat-config",
+                    "apply-git-local-ignorestat-config",
+                )
+            ),
+            (
+                "apply-git-worktree-attr-tree-config",
+                "refuses local/worktree Git configuration",
+            ),
+            (
+                "apply-git-info-exclude-entry",
+                "refuses active repository-local Git ignore or attribute rules",
+            ),
+            (
+                "apply-git-info-attributes-entry",
+                "refuses active repository-local Git ignore or attribute rules",
+            ),
+            (
+                "apply-git-info-exclude-symlink",
+                "refuses non-regular repository-local Git metadata",
+            ),
+            (
+                "apply-git-info-attributes-symlink",
+                "refuses non-regular repository-local Git metadata",
+            ),
+            (
+                "apply-git-default-ignore-steering",
+                "requires a clean worktree",
+            ),
+            (
+                "apply-git-status-error",
+                "could not inspect worktree status",
             ),
             (
                 "apply-authz-denied-create-policy",
@@ -6301,49 +6332,70 @@ def run_web_release_mutation_fixtures() -> None:
                     f"{cluster_mutations(kubectl_calls())!r}"
                 )
 
-        # A denied delete is caught by the preflight, so the half-done promotion
-        # the preflight exists to prevent must be unreachable; prove the recipe
-        # would in fact abort there if it ever were.
+        locale_steered_environment = {
+            **environment,
+            "LC_ALL": "C.UTF-8",
+            "LANG": "C.UTF-8",
+        }
+        expect_web_release_fixture_result(
+            just_binary,
+            "web-release-apply",
+            state_path,
+            log_path,
+            locale_steered_environment,
+            "apply-git-local-mixed-case-stat-config",
+            success=False,
+            diagnostic="refuses local/worktree Git configuration",
+        )
+        if cluster_mutations(kubectl_calls()):
+            raise SystemExit(
+                "self-test FAILED: locale-steered mixed-case Git config "
+                "reached the cluster"
+            )
+
+        secret_origin_marker = "ghp_" + "a" * 36
+        secret_origin_result = expect_web_release_fixture_result(
+            just_binary,
+            "web-release-apply",
+            state_path,
+            log_path,
+            environment,
+            "apply-git-origin-secret",
+            success=False,
+            diagnostic="origin is not the canonical GFTB infra repository",
+        )
+        if secret_origin_marker in (
+            secret_origin_result.stdout + secret_origin_result.stderr
+        ):
+            raise SystemExit(
+                "self-test FAILED: noncanonical origin diagnostic disclosed its value"
+            )
+        if cluster_mutations(kubectl_calls()):
+            raise SystemExit(
+                "self-test FAILED: noncanonical secret-shaped origin reached the cluster"
+            )
+
         expect_web_release_fixture_result(
             just_binary,
             "web-release-apply",
             state_path,
             log_path,
             environment,
-            "apply-delete-fails",
-            success=False,
-            diagnostic="is forbidden",
+            "apply-git-global-gpg-config",
+            success=True,
+            diagnostic="web release applied",
         )
-        if any(
-            "rollout status" in call for call in cluster_mutations(kubectl_calls())
-        ):
+        if cluster_mutations(kubectl_calls()) != expected_mutations:
             raise SystemExit(
-                "self-test FAILED: web-release-apply reported a rollout after a "
-                "failed egress prune"
+                "self-test FAILED: harmless global GPG config changed the "
+                "reviewed apply sequence"
             )
 
-        # THE LEGACY-CD PROMOTION INTERLOCK.
-        expect_web_release_fixture_result(
-            just_binary,
-            "_web-stack-promotion-interlock",
-            state_path,
-            log_path,
-            environment,
-            "stack-live-promoted",
-            success=False,
-            diagnostic="already carries the promoted gftb-site origin",
-        )
-        for state in ("ok", "stack-live-absent"):
-            expect_web_release_fixture_result(
-                just_binary,
-                "_web-stack-promotion-interlock",
-                state_path,
-                log_path,
-                environment,
-                state,
-                success=True,
-                diagnostic="the legacy carrier may proceed",
-            )
+        # TIN-4254 (W13) retired the apply-time prune, and with it the
+        # "denied/failed delete leaves a half-done promotion" scenario the
+        # `apply-authz-denied-delete` and `apply-delete-fails` fixtures
+        # existed to close. There is no delete in the lane to deny or fail.
+
 
 def self_test() -> None:
     if not RETIRED_EDGE_RECIPE.search("just edge-plan"):
@@ -6844,110 +6896,6 @@ def self_test() -> None:
             raise SystemExit(
                 f"self-test FAILED: web-stack-tree-apply scan accepted {label}"
             )
-    stale_tree_allowlist = justfile.replace(
-        "web-stack-server-dry-run: web-stack-validate _web-apply-inputs",
-        "web-stack-server-dry-run-renamed: web-stack-validate _web-apply-inputs",
-        1,
-    )
-    if not any(
-        finding.rule == "imperative-pin-allowlist-stale"
-        for finding in scan_imperative_pin_text(stale_tree_allowlist, Path("Justfile"))
-    ):
-        raise SystemExit(
-            "self-test FAILED: web-stack-tree-apply allowlist survived the "
-            "removal of the recipe it names"
-        )
-    stale_allowlist = justfile.replace(
-        "web-stack-apply: _web-stack-promotion-interlock",
-        "web-stack-apply-renamed: _web-stack-promotion-interlock",
-        1,
-    )
-    if not any(
-        finding.rule == "imperative-pin-allowlist-stale"
-        for finding in scan_imperative_pin_text(stale_allowlist, Path("Justfile"))
-    ):
-        raise SystemExit(
-            "self-test FAILED: imperative-pin allowlist survived the removal of "
-            "the recipe it names"
-        )
-
-    # The legacy-CD promotion interlock: it must exist, keep reading live state,
-    # and stay the FIRST thing web-stack-apply does.
-    if scan_web_stack_promotion_interlock_text(justfile, Path("Justfile")):
-        raise SystemExit(
-            "self-test FAILED: the committed tree fails its own promotion "
-            "interlock contract"
-        )
-    interlock_cases = (
-        (
-            "interlock removed",
-            re.sub(
-                r"\n_web-stack-promotion-interlock:.*?\n(?=\n# Operator-gated)",
-                "\n",
-                justfile,
-                count=1,
-                flags=re.DOTALL,
-            ),
-            "web-stack-promotion-interlock-missing",
-        ),
-        (
-            "interlock stops reading live state",
-            mutate_recipe_body(
-                justfile,
-                "_web-stack-promotion-interlock",
-                "get deployment/greatfallstoolbus-org",
-                "get service/greatfallstoolbus-org",
-                "interlock stops reading live state",
-            ),
-            "web-stack-promotion-interlock-weakened",
-        ),
-        (
-            "interlock detached from the legacy carrier",
-            justfile.replace(
-                "web-stack-apply: _web-stack-promotion-interlock "
-                "web-stack-server-dry-run",
-                "web-stack-apply: web-stack-server-dry-run",
-                1,
-            ),
-            "web-stack-promotion-interlock-detached",
-        ),
-        (
-            "interlock body edited without a receipt update",
-            justfile.replace(
-                'echo "promotion interlock: live image',
-                'echo "promotion interlock (edited): live image',
-                1,
-            ),
-            "web-stack-promotion-interlock-receipt-mismatch",
-        ),
-        (
-            "interlock demoted behind the dry-run",
-            justfile.replace(
-                "web-stack-apply: _web-stack-promotion-interlock "
-                "web-stack-server-dry-run",
-                "web-stack-apply: web-stack-server-dry-run "
-                "_web-stack-promotion-interlock",
-                1,
-            ),
-            "web-stack-promotion-interlock-detached",
-        ),
-    )
-    for label, fixture, rule in interlock_cases:
-        if fixture == justfile:
-            raise SystemExit(
-                f"self-test FAILED: promotion interlock mutation {label!r} did "
-                "not change the Justfile"
-            )
-        if not any(
-            finding.rule == rule
-            for finding in scan_web_stack_promotion_interlock_text(
-                fixture, Path("Justfile")
-            )
-        ):
-            raise SystemExit(
-                f"self-test FAILED: promotion interlock scan accepted {label}"
-            )
-
     release_wrapper_cases = (
         "web-release-ci: web-release-candidate-proof\n    true\n",
         "web-release-ci:\n    just web-release-candidate-proof\n",
@@ -7198,8 +7146,40 @@ def self_test() -> None:
     body_mutations = (
         (
             "_reviewed-clean-main",
-            '    git verify-commit "${head_sha}" >/dev/null',
-            '    true # git verify-commit "${head_sha}" >/dev/null',
+            "    export LC_ALL=C",
+            "    export LC_ALL=C.UTF-8",
+            "locale-neutral Git parsing removal",
+        ),
+        (
+            "_reviewed-clean-main",
+            "             name ~ /^http\\./)) {",
+            "             false)) {",
+            "Git HTTP steering refusal removal",
+        ),
+        (
+            "_reviewed-clean-main",
+            "    export GIT_NO_REPLACE_OBJECTS=1",
+            "    true # export GIT_NO_REPLACE_OBJECTS=1",
+            "replacement-object refusal removal",
+        ),
+        (
+            "_reviewed-clean-main",
+            "    export GIT_OPTIONAL_LOCKS=0",
+            "    export GIT_OPTIONAL_LOCKS=1",
+            "optional index-write suppression removal",
+        ),
+        (
+            "_reviewed-clean-main",
+            '        git -C / ls-remote --exit-code "${canonical_remote}" refs/heads/main |',
+            '        git ls-remote --exit-code "${canonical_remote}" refs/heads/main |',
+            "remote main read restored repository configuration",
+        ),
+        (
+            "_reviewed-clean-main",
+            "    git -c gpg.format=openpgp -c gpg.program=gpg "
+            '-c gpg.openpgp.program=gpg verify-commit "${head_sha}" >/dev/null',
+            "    true # git -c gpg.format=openpgp -c gpg.program=gpg "
+            '-c gpg.openpgp.program=gpg verify-commit "${head_sha}" >/dev/null',
             "comment-spoofed commit verification",
         ),
         (
@@ -7332,11 +7312,8 @@ def self_test() -> None:
     ):
         raise SystemExit("self-test FAILED: workflow ARC alias was accepted")
 
-    # TIN-3899: the retired CD plane. A workflow that re-declares a
-    # repository_dispatch trigger is exactly how the public site repo used to
-    # reach `just web-stack-apply` unattended, so the trigger itself is refused,
-    # and neither web-stack-apply nor its CD-only helpers remain approved for
-    # any hosted workflow.
+    # A repository_dispatch trigger or either old tree-apply recipe would
+    # recreate the forbidden repository-local CD bridge.
     if not any(
         finding.rule == "workflow-repository-dispatch-retired"
         for finding in scan_workflow_text(
@@ -7362,15 +7339,11 @@ def self_test() -> None:
             "self-test FAILED: workflow_dispatch was mistaken for the retired "
             "repository_dispatch CD trigger"
         )
-    for retired_cd_recipe in (
-        "web-stack-apply",
-        "web-stack-server-dry-run",
-        "web-stack-health",
-    ):
-        if retired_cd_recipe in HOSTED_WORKFLOW_JUST_ALLOWLIST:
+    for forbidden_bridge_recipe in ("web-stack-apply", "web-stack-server-dry-run"):
+        if forbidden_bridge_recipe in HOSTED_WORKFLOW_JUST_ALLOWLIST:
             raise SystemExit(
-                "self-test FAILED: the retired legacy web CD recipe "
-                f"{retired_cd_recipe!r} is still approved for hosted workflows"
+                "self-test FAILED: the forbidden web bridge recipe "
+                f"{forbidden_bridge_recipe!r} is approved for hosted workflows"
             )
     if (REPO / RETIRED_WEB_CD_WORKFLOW).exists():
         raise SystemExit(
@@ -8318,29 +8291,19 @@ def self_test() -> None:
     for label, plan, diagnostic in output_cases:
         expect_scope_rejection(scope_source, label, plan, diagnostic)
 
-    if (REPO / RETIRED_WEB_GENERATION40_BRIDGE_WORKFLOW).exists():
-        raise SystemExit("self-test FAILED: the retired generation-40 bridge workflow is present")
-    if not any(
-        finding.rule == "retired-web-generation40-bridge-retained"
-        for finding in scan_workflows_with_retired_bridge_fixture()
-    ):
-        raise SystemExit("self-test FAILED: a re-added generation-40 bridge was accepted")
-
-    if (REPO / RETIRED_WEB_GENERATION42_BRIDGE_WORKFLOW).exists():
-        raise SystemExit("self-test FAILED: the retired generation-42 bridge workflow is present")
-    if not any(
-        finding.rule == "retired-web-generation42-bridge-retained"
-        for finding in scan_workflows_with_retired_gen42_bridge_fixture()
-    ):
-        raise SystemExit("self-test FAILED: a re-added generation-42 bridge was accepted")
-
-    if (REPO / RETIRED_WEB_GENERATION43_BRIDGE_WORKFLOW).exists():
-        raise SystemExit("self-test FAILED: the retired generation-43 bridge workflow is present")
-    if not any(
-        finding.rule == "retired-web-generation43-bridge-retained"
-        for finding in scan_workflows_with_retired_gen43_bridge_fixture()
-    ):
-        raise SystemExit("self-test FAILED: a re-added generation-43 bridge was accepted")
+    for generation, retired_path in RETIRED_WEB_GENERATION_BRIDGES.items():
+        if (REPO / retired_path).exists():
+            raise SystemExit(
+                "self-test FAILED: the retired "
+                f"generation-{generation} bridge workflow is present"
+            )
+        if not scan_workflows_with_retired_generation_bridge_fixture(
+            generation, retired_path
+        ):
+            raise SystemExit(
+                "self-test FAILED: a re-added "
+                f"generation-{generation} bridge was accepted"
+            )
 
     run_web_release_semantic_fixtures()
     run_web_release_mutation_fixtures()
@@ -8348,38 +8311,19 @@ def self_test() -> None:
     print("public-operator-surface self-test passed")
 
 
-def scan_workflows_with_retired_bridge_fixture() -> list[Finding]:
-    """Negative control: a re-added bridge file must raise the retained finding."""
-    path = REPO / RETIRED_WEB_GENERATION40_BRIDGE_WORKFLOW
-    if path.exists():
+def scan_workflows_with_retired_generation_bridge_fixture(
+    generation: str, retired_path: Path
+) -> list[Finding]:
+    """Negative control: each re-added parity bridge must fail validation."""
+    path = REPO / retired_path
+    if path.exists() or path.is_symlink():
         raise SystemExit("self-test FAILED: fixture path already exists")
     try:
         path.write_text("name: retired fixture\n", encoding="utf-8")
-        return [finding for finding in scan_workflows() if finding.rule == "retired-web-generation40-bridge-retained"]
-    finally:
-        path.unlink(missing_ok=True)
-
-
-def scan_workflows_with_retired_gen42_bridge_fixture() -> list[Finding]:
-    """Negative control: a re-added second bridge file must raise the retained finding."""
-    path = REPO / RETIRED_WEB_GENERATION42_BRIDGE_WORKFLOW
-    if path.exists():
-        raise SystemExit("self-test FAILED: fixture path already exists")
-    try:
-        path.write_text("name: retired fixture\n", encoding="utf-8")
-        return [finding for finding in scan_workflows() if finding.rule == "retired-web-generation42-bridge-retained"]
-    finally:
-        path.unlink(missing_ok=True)
-
-
-def scan_workflows_with_retired_gen43_bridge_fixture() -> list[Finding]:
-    """Negative control: a re-added third bridge file must raise the retained finding."""
-    path = REPO / RETIRED_WEB_GENERATION43_BRIDGE_WORKFLOW
-    if path.exists():
-        raise SystemExit("self-test FAILED: fixture path already exists")
-    try:
-        path.write_text("name: retired fixture\n", encoding="utf-8")
-        return [finding for finding in scan_workflows() if finding.rule == "retired-web-generation43-bridge-retained"]
+        expected_rule = f"retired-web-generation{generation}-bridge-retained"
+        return [
+            finding for finding in scan_workflows() if finding.rule == expected_rule
+        ]
     finally:
         path.unlink(missing_ok=True)
 
@@ -8405,9 +8349,6 @@ def main() -> int:
             (REPO / "Justfile").read_text(encoding="utf-8"), Path("Justfile")
         )
         + scan_imperative_pin_text(
-            (REPO / "Justfile").read_text(encoding="utf-8"), Path("Justfile")
-        )
-        + scan_web_stack_promotion_interlock_text(
             (REPO / "Justfile").read_text(encoding="utf-8"), Path("Justfile")
         )
         + scan_web_release_validation_script_bytes(

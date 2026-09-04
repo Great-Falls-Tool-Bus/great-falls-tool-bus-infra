@@ -1,56 +1,11 @@
-# DECLARE-ONLY (dispatch-gated) — NOTHING APPLIES ON MERGE (TIN-2543, ADR 0010).
+# DECLARATION ONLY — applied only by the reviewed web-release transaction.
 #
-# GFTB on-cluster web serving workload: the promoted gftb-site static origin
-# (SvelteKit adapter-static build -> Caddy on an OCI image on GHCR -> K8s
-# Deployment behind a ClusterIP Service -> in-cluster cloudflared tunnel edge),
-# mirroring the proven MassageIthaca full-on-cluster pattern (see
-# blahaj:tofu/stacks/massageithaca/main.tf and this repo's
-# docs/decisions/0001-pr-gated-ephemeral-preview-deploys.md).
-#
-# TREE HONESTY (rung 1, 2026-08-21; ratification basis: operator interview
-# 2026-08-21, session register L71 Q2 rungs 1+2). Until this fix, this file
-# named a DIFFERENT GHCR repository (ghcr.io/great-falls-tool-bus/
-# greatfallstoolbus.org, the pre-split legacy adapter-node image) than the one
-# production has actually served since the gftb-site promotion
-# (ghcr.io/great-falls-tool-bus/gftb-site). That divergence was documented here
-# and in Justfile/k8s-stack-drift.yml as PERMANENT and by-design — it is not:
-# it was an artifact of the legacy carrier's declarative record never being
-# updated at promotion time. The invariant going forward is: THIS FILE PINS
-# WHAT IS ACTUALLY SERVED, and an operator updates the pin here as part of
-# each release ceremony (see Justfile `web-release-plan` / `web-release-apply`,
-# and the generation-37 pin receipt on the program board, TIN-3959). This is a
-# declarative-record fix only — the `web-release-*` ceremony (Justfile) still
-# renders and applies the live Deployment from operator-supplied
-# WEB_APPLY_IMAGE/WEB_APPLY_SHA, attended, behind `_operator-apply-confirm`;
-# nothing here changes that path, moves any authority, or causes an apply.
-#
-# ADR 0010 rules on-prem the production host and moves this stack from a parked
-# fail-closed skeleton to the EXECUTING cutover (ADR 0010 §5 step 3: scale the
-# web Deployment 0 -> 2). This manifest now carries the REAL cutover shape — a
-# digest-pinned production image and replicas: 2 — so it is no longer inert. It
-# stays DECLARE-ONLY in the honest sense that MERGING APPLIES NOTHING; the safety
-# is the apply GATE plus the still-closed public path, not an inert manifest:
-#   1. No CI applies, ever. web-crs.yml is validation-only, and TIN-3899 deleted
-#      web-stack.yml, the workflow_dispatch + confirm=apply + repository_dispatch
-#      apply carrier. Applying this stack is attended-operator-only now.
-#   2. This stack creates NO Namespace object. greatfallstoolbus-org-production is
-#      provisioned out of band; the web-apply SA is namespace-scoped and cannot
-#      create it (no Namespace object here — validate-web-stack.sh enforces this).
-#   3. No public traffic reaches it on merge: the honey-ingress cloudflared tunnel
-#      public-hostname route and apex/www DNS stay fail-closed=false in
-#      ../../tofu/intent/great-falls-tool-bus/web-oncluster-route.json (TIN-991,
-#      Cloudflare dashboard / token-managed, never in git). See ../README.md.
-#   4. No Secret ships here (the GHCR pull secret is operator-provisioned in the
-#      namespace, never committed).
-#
-# The pod-template fields below (securityContext, no command/env override) match
-# the exact contract Justfile's `web-release-render` asserts on the rendered
-# workload byte-for-byte (see the `jq -e` contract in that recipe), so the
-# checked-in base and the ceremony's render step now describe the same shape —
-# the ceremony still supplies (and this file cannot fix in advance) the
-# per-release image digest, source-sha annotation, and the
-# default-deny-egress NetworkPolicy it synthesizes at render time (tracked as a
-# residual; see the PR body / ../README.md).
+# The tree pins the production `gftb-site` static Caddy origin exactly: two
+# replicas, one immutable image digest, and the matching source SHA annotation.
+# `web-release-render` emits these committed bytes verbatim and refuses if its
+# reviewed WEB_APPLY_IMAGE/WEB_APPLY_SHA inputs differ. The namespace and Secret
+# values are external; this workload cannot bootstrap either. See
+# k8s/web/README.md and docs/runbooks/oncluster-web-cutover.md.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -78,6 +33,13 @@ spec:
       app.kubernetes.io/component: web
   template:
     metadata:
+      # Committed release identity (TIN-4254 W13): the full gftb-site source
+      # commit behind the digest pinned below. The pin step updates the image
+      # digest AND this annotation in the same commit; `web-release-render`
+      # refuses to plan when either differs from the reviewed
+      # WEB_APPLY_IMAGE/WEB_APPLY_SHA inputs.
+      annotations:
+        app.tinyland.dev/source-sha: 91cf300ddbe9068379bc7ade462dfcba92053966
       labels:
         app.kubernetes.io/name: greatfallstoolbus-org
         app.kubernetes.io/component: web
@@ -149,20 +111,28 @@ spec:
         - name: greatfallstoolbus-org
           # Digest-pinned production image: the promoted gftb-site static
           # origin (ADR 0010 §5 cutover shape; TIN-3899 promotion). Candidate
-          # 0c92ec1c (signed gftb-site main; carries PR #47 home goals + hours
-          # band + GitHub nav, #48 privacy archive-account clock, the operator's
-          # 2026-08-14 log edit, and #50's pin fix), generation 43. The immutable
-          # candidate was published by GitHub Actions run 33381373277 on 2026-08-31;
-          # anonymous public GHCR manifest resolution of tag sha-0c92ec1c
-          # returned exactly the digest pinned below. Previous pins (rollback
-          # candidates): generation 42 sha256:f45bc7a644edfb297b6df8281e315c64a7fdb37b304ef5bba135743143bcee1a (RUNNING),
-          # generation 41 sha256:2e80301da28d99edfad7f4caeccdc5aed109f8aaa74ee54efc1f646d8ecaa4da,
-          # generation 40 sha256:0295c226bd0bc78c0fe392b8955971ffbbd4fb9a0684939558d4c3d170a35dee.
+          # 91cf300d (signed gftb-site main; operator-ratified bus photographs,
+          # their goal/log mounts, the reusable optional featured-image
+          # rendering, the subsequent AGENTS-only D14 contract update, and the
+          # reviewed public-copy/front-matter corrections), generation 47. The
+          # immutable candidate was published by GitHub Actions run 33808652168
+          # on 2026-09-03; anonymous public
+          # GHCR manifest resolution of the full-sha tag returned exactly the
+          # digest pinned below. Previous pins (rollback candidates):
+          # generation 46
+          # sha256:f0e618ed5d27e6cf2ea9439d90d2f3111fa0189a29800b7feb5b95a2e7511702
+          # (PINNED desired-state only; superseded before apply; NEVER RUNNING),
+          # generation 45
+          # sha256:498b9715ed123ac8b5e1be0c35a5355ede6880e655e77809b85bf83c8f34f24c
+          # (RUNNING; retained rollback),
+          # generation 44 sha256:bf3ccd175d553f5b1a73f518c27d31c852aca1c97323d00d6b22a4767b5c63bc,
+          # generation 43 sha256:3096c166a25300581e89101effa078dcf4100c638b0ce357f473f485624d6862.
           # This commit records reviewed desired release truth; merge applies
-          # nothing. The apply carrier is the standing-bounded protected
-          # automatic apply ruled 2026-08-31 (decisions/0022 Amendment 3,
-          # TIN-4227 16b95236); PINNED/RUNNING/SERVED are post-apply evidence.
-          image: ghcr.io/great-falls-tool-bus/gftb-site@sha256:3096c166a25300581e89101effa078dcf4100c638b0ce357f473f485624d6862
+          # nothing. No GFTB-local parity bridge remains. Production
+          # convergence belongs to the shared GloriousFlywheel/owner-overlay
+          # carrier required by decisions/0022 section 3; PINNED/RUNNING/SERVED
+          # are post-apply evidence.
+          image: ghcr.io/great-falls-tool-bus/gftb-site@sha256:f82534a08ba91f080fc67acec219659cb437a9874e1c3c99dedc0e6bd509fbcc
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

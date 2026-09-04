@@ -1,33 +1,7 @@
-# DECLARE-ONLY — NOT APPLIED (TIN-2541).
-#
-# Default-deny ingress posture with explicit allows, mirroring MI
-# (blahaj:tofu/stacks/massageithaca/main.tf: default-deny-ingress + per-source
-# allows) and the house form-stack doctrine (k8s/form/.../networkpolicy.yaml:
-# the tunnel source is the non-host-networked `cloudflared` namespace, so a
-# namespaceSelector on kubernetes.io/metadata.name=cloudflared is the tightest
-# correct admission — no ipBlock/SNAT workaround needed on that leg).
-#
-# The web pod's ONLY public path is: cloudflared (tunnel) --3000--> this pod.
-# Prometheus scrape is admitted from the tinyland-dev-production monitoring
-# namespace on 3000. No 0.0.0.0/0, and no other backend.
-#
-# TREE HONESTY (rung 1, 2026-08-21). This file previously also declared
-# allow-egress-dns and allow-egress-discuss-archive — egress rules the retired
-# legacy adapter-node origin needed for its request-time discuss-archive fetch.
-# The gftb-site static origin makes zero outbound calls (it serves files off
-# disk), so those two policies are gone here now, matching what the
-# web-release-* ceremony has always pruned at promotion time (Justfile
-# `web-release-render`, which also always synthesizes a default-deny-egress
-# NetworkPolicy at render time — that one object is not yet committed here;
-# see the PR body for why, and ../README.md).
-#
-# FAIL-CLOSED note: these policies select on the web pod labels. The Deployment
-# ships replicas: 2 and a digest-pinned image, so these rules are NOT inert —
-# they take effect whenever an attended operator runs the web-release-* or
-# (legacy, now permanently interlocked-off) web-stack-apply carrier. What
-# merging this file cannot do is apply anything: this stack creates no
-# Namespace (the namespace-scoped web-apply SA cannot either), and the public
-# tunnel route stays fail-closed and dashboard-managed.
+# DECLARATION ONLY — applied only by the reviewed web-release transaction.
+# Default-deny ingress and egress. The static origin has no outbound dependency;
+# ingress is limited to cloudflared and Prometheus on port 3000. The committed
+# render is the complete policy set; no release-time policy is synthesized.
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -91,3 +65,21 @@ spec:
       ports:
         - protocol: TCP
           port: 3000
+---
+# Committed truth of the ceremony's egress posture (TIN-4254 W13): the
+# gftb-site static origin gets NO egress at all — empty egress rule list under
+# policyTypes [Egress] denies every outbound flow from the web pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+  namespace: greatfallstoolbus-org-production
+  labels:
+    app.tinyland.dev/lifecycle: declare-only
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: greatfallstoolbus-org
+      app.kubernetes.io/component: web
+  policyTypes: [Egress]
+  egress: []

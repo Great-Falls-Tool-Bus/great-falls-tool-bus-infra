@@ -33,8 +33,11 @@ default:
     @just --list
 
 check-hosted:
+    @bash scripts/remote-only-guard.sh check-hosted
     just workflow-lint
     just secrets-scan-dir
+    # history-mode gitleaks (hosted home of the removed local-only secrets-scan recipe)
+    gitleaks git --config .gitleaks.toml --redact --verbose .
     just public-surface-selftest
     just public-surface
     just public-pii
@@ -51,7 +54,6 @@ check-hosted:
     just archive-stack-validate
     just guard-no-remote-kustomize-resources-selftest
     just web-stack-validate
-    just web-stack-diff-selftest
     just grafana-dashboards-validate
     just arc-fmt-check
     just edge-zones-fmt-check
@@ -69,11 +71,8 @@ check: check-hosted
 
 # Gitleaks scan of working tree files (AGENTS.md hard rule: no secrets in Git)
 secrets-scan-dir:
+    @bash scripts/remote-only-guard.sh secrets-scan-dir
     gitleaks dir --config .gitleaks.toml --redact --verbose .
-
-# Gitleaks scan of git history
-secrets-scan:
-    gitleaks git --config .gitleaks.toml --redact --verbose .
 
 # Keep public docs/workflows pointed at audited Justfile recipes, not raw
 # tofu/kubectl copy-paste snippets.
@@ -101,13 +100,10 @@ core-checkout:
 core-checkout-selftest:
     python3 -B scripts/validate-core-checkout.py --self-test
 
-core-checkout-bazel:
-    bazelisk test --lockfile_mode=off //:core_checkout_contract_tests
-
 # TIN-3902 runner-group admission contract. config/organization.yaml declares
 # the GitHub-side roster and the ARC tfvars binds the scale sets to it; nothing
 # else holds the two together, because the GloriousFlywheel arc-runners module
-# never reads the roster and the taxonomy validator only parses runner labels.
+# never reads the roster and the taxonomy validator does not own that roster.
 runner-group-contract:
     python3 -B scripts/validate-runner-group-contract.py
 
@@ -118,6 +114,7 @@ workflow-lint:
     #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
     set +x
     set -euo pipefail
+    bash scripts/remote-only-guard.sh workflow-lint
     export LC_ALL=C
     command -v actionlint >/dev/null 2>&1 || {
       echo "actionlint is required (nix develop provides it)" >&2
@@ -223,7 +220,7 @@ arc-app-secret-apply: _arc-app-secret-inputs _reviewed-clean-main _reviewed-impl
 taxonomy:
     python3 scripts/validate-overlay-runner-taxonomy.py {{ arc_tfvars }}
 
-# Self-test the overlay taxonomy guard (incl. the RBE cache/executor wiring rule).
+# Self-test the bounded legacy ARC registration/label continuity contract.
 taxonomy-selftest:
     bash scripts/test-overlay-runner-taxonomy.sh
 
@@ -240,46 +237,13 @@ substrate-boundary:
 substrate-boundary-selftest:
     python3 scripts/validate-substrate-boundary.py --self-test
 
-# Verify a registered RBE/image consumer against the three live realities GF-core
-# CI cannot see (overlay tfvars anchor + RBE wiring, consumer workflow runs-on,
-# live Helm-managed runner), each reusing an already-built guard. Read-only.
-flywheel-enroll-verify repo="Great-Falls-Tool-Bus/great-falls-tool-bus.github.io":
-    GF_CORE_PATH="{{ gf_core }}" bash scripts/flywheel-enroll-verify.sh "{{ repo }}"
-
-# Read-only enrollment orchestrator: GF-core registry static check -> live verify
-# -> operator-gated provisioning handoff. Never mutates the cluster (mirrors
-# arc-enrollment-plan: sequence read-only verbs, then hand off to the operator).
-flywheel-enroll repo="Great-Falls-Tool-Bus/great-falls-tool-bus.github.io":
-    @python3 "{{ gf_core }}/scripts/validate-consumer-registry.py" --self-test
-    @GF_CORE_PATH="{{ gf_core }}" bash scripts/flywheel-enroll-verify.sh "{{ repo }}"
-    @echo ""
-    @echo "Runner provisioning is operator-gated. To provision/update the scale set:"
-    @echo "  GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-enrollment-plan"
-    @echo "  just arc-plan-show         # review the plan (expect no unexpected destroys)"
-    @echo "  just arc-plan-scope-check  # exact capacity/cutover/rollback plan only"
-    @echo "  GFTB_APPLY_CONFIRM=apply GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-apply"
-    @echo "  GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-capacity-readback"
-    @echo "This umbrella does NOT mutate the cluster."
-
-# GloriousFlywheel org-tenancy cache-backed Bazel proof (TIN-2364 pre-soak
-# surface). Declare-only + INERT until the operator flips
-# runtime_grants_enabled:true for org-great-falls-tool-bus and rolls the
-# gf-reapi cell + exchange onto the org-grammar image. Exchanges this repo's
-# GitHub OIDC identity for a gf-reapi-cell profile and runs a cache-backed,
-# READ-ONLY Bazel round-trip routed to remote_instance_name=org-great-falls-tool-bus
-# against the hermetic bazel/flywheel-proof/ genrule. Endpoint authority is
-# fleet-runtime env (BAZEL_REMOTE_CACHE, GF_REAPI_TOKEN_EXCHANGE_ENDPOINT); this
-# recipe bakes none and never hard-fails when they are absent. NOT part of
-# `check` (it needs the on-cluster cache substrate).
-flywheel-cache-proof:
-    GFW_EXPECTED_INSTANCE_NAME=org-great-falls-tool-bus bash scripts/flywheel-cache-proof.sh
-
 arc-fmt-check:
     #!/usr/bin/env bash
     # Fresh-clone friendly: use tofu from PATH when present; the GF-core nix
     # devshell is the fallback for machines without tofu installed. GF_CORE_CI_PATH
     # defaults to a pinned GitHub flake ref, not a sibling checkout.
     set -euo pipefail
+    bash scripts/remote-only-guard.sh arc-fmt-check
     if command -v tofu >/dev/null 2>&1; then
         tofu fmt -check {{ arc_tfvars }}
     else
@@ -1500,26 +1464,119 @@ arc-enrollment-plan: enrollment-preflight arc-plan
 # The remote readback prevents a stale local origin/main ref from becoming apply
 # authority.
 _reviewed-clean-main:
-    #!/usr/bin/env bash
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
     set -euo pipefail
+    # The developer/CI toolchain PATH is an explicit input; privileged bash
+    # refuses imported functions and startup files, while Git config below is
+    # isolated from system/global state before repository state is inspected.
+    export LC_ALL=C
+    for name in GIT_CONFIG GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_SYSTEM GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_DIR GIT_WORK_TREE GIT_IMPLICIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_QUARANTINE_PATH GIT_REPLACE_REF_BASE GIT_NO_REPLACE_OBJECTS GIT_NAMESPACE GIT_REFERENCE_BACKEND GIT_SHALLOW_FILE GIT_ATTR_SOURCE GIT_ATTR_NOSYSTEM GIT_OPTIONAL_LOCKS GIT_EXEC_PATH GIT_SSH_COMMAND GIT_ASKPASS; do
+      [[ -z "${!name:-}" ]] || { echo "Guarded ARC operation refuses ambient ${name}" >&2; exit 2; }
+    done
+    export GIT_NO_REPLACE_OBJECTS=1
+    export GIT_ATTR_NOSYSTEM=1
+    export GIT_OPTIONAL_LOCKS=0
+    export GIT_CONFIG_NOSYSTEM=1
+    export GIT_CONFIG_GLOBAL=/dev/null
+    set +e
+    scoped_config="$(git config --show-scope --name-only --get-regexp '.*' 2>/dev/null)"
+    config_status=$?
+    set -e
+    case "${config_status}" in
+      0|1) ;;
+      *) echo "Guarded ARC operation could not inspect repository Git configuration" >&2; exit 2 ;;
+    esac
+    set +e
+    awk '
+      {
+        scope = tolower($1)
+        name = tolower($2)
+        if ((scope == "local" || scope == "worktree") &&
+            (name ~ /^url\..*\.insteadof$/ ||
+             name == "gpg.program" ||
+             name ~ /^gpg\..*\.program$/ ||
+             name == "core.sshcommand" ||
+             name == "core.worktree" ||
+             name == "core.fsmonitor" ||
+             name == "core.excludesfile" ||
+             name == "core.attributesfile" ||
+             name == "attr.tree" ||
+             name == "core.trustctime" ||
+             name == "core.checkstat" ||
+             name == "core.ignorestat" ||
+             name == "extensions.refstorage" ||
+             name ~ /^filter\./ ||
+             name == "status.showuntrackedfiles" ||
+             name ~ /^include\./ ||
+             name ~ /^includeif\./ ||
+             name ~ /^http\./)) {
+          found = 1
+        }
+      }
+      END { exit(found ? 0 : 1) }
+    ' <<<"${scoped_config}"
+    scoped_status=$?
+    set -e
+    case "${scoped_status}" in
+      0) echo "Guarded ARC operation refuses local/worktree Git configuration that can redirect repository, remote, TLS, proxy, status, or signature verification" >&2; exit 2 ;;
+      1) ;;
+      *) echo "Guarded ARC operation could not evaluate repository Git configuration" >&2; exit 2 ;;
+    esac
+    for info_name in exclude attributes; do
+      set +e
+      info_path="$(git rev-parse --path-format=absolute --git-path "info/${info_name}" 2>/dev/null)"
+      info_status=$?
+      set -e
+      [[ "${info_status}" == "0" && "${info_path}" == /* ]] || { echo "Guarded ARC operation could not resolve repository-local Git metadata" >&2; exit 2; }
+      if [[ -e "${info_path}" || -L "${info_path}" ]]; then
+        [[ -f "${info_path}" && ! -L "${info_path}" ]] || { echo "Guarded ARC operation refuses non-regular repository-local Git metadata" >&2; exit 2; }
+        set +e
+        if [[ "${info_name}" == "exclude" ]]; then
+          awk '!/^#/ && !/^[[:space:]]*$/ { found = 1 } END { exit(found ? 0 : 1) }' "${info_path}"
+        else
+          awk '!/^[[:space:]]*(#|$)/ { found = 1 } END { exit(found ? 0 : 1) }' "${info_path}"
+        fi
+        info_status=$?
+        set -e
+        case "${info_status}" in
+          0) echo "Guarded ARC operation refuses active repository-local Git ignore or attribute rules" >&2; exit 2 ;;
+          1) ;;
+          *) echo "Guarded ARC operation could not inspect repository-local Git metadata" >&2; exit 2 ;;
+        esac
+      fi
+    done
     [[ "$(git branch --show-current)" == "main" ]] || { echo "Guarded ARC operation requires the main branch" >&2; exit 2; }
-    [[ -z "$(git status --porcelain)" ]] || { echo "Guarded ARC operation requires a clean worktree" >&2; exit 2; }
+    set +e
+    worktree_status="$(git -c core.excludesFile=/dev/null -c core.attributesFile=/dev/null -c core.untrackedCache=false status --porcelain --untracked-files=all 2>/dev/null)"
+    worktree_status_rc=$?
+    set -e
+    [[ "${worktree_status_rc}" == "0" ]] || { echo "Guarded ARC operation could not inspect worktree status" >&2; exit 2; }
+    [[ -z "${worktree_status}" ]] || { echo "Guarded ARC operation requires a clean worktree" >&2; exit 2; }
     index_flags="$(git ls-files -v | awk '$1 != "H"')"
     [[ -z "${index_flags}" ]] || { echo "Guarded ARC operation refuses assume-unchanged, skip-worktree, or non-cached index flags: ${index_flags}" >&2; exit 2; }
     canonical_remote="https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git"
     origin_url="$(git remote get-url origin)"
     case "${origin_url}" in
       https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra|https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git|git@github.com:Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git) ;;
-      *) echo "Guarded ARC operation origin is not the canonical GFTB infra repository: ${origin_url}" >&2; exit 2 ;;
+      *) echo "Guarded ARC operation origin is not the canonical GFTB infra repository" >&2; exit 2 ;;
     esac
     git show-ref --verify --quiet refs/remotes/origin/main || { echo "Fetch canonical origin/main before the guarded ARC operation" >&2; exit 2; }
     head_sha="$(git rev-parse HEAD)"
     origin_sha="$(git rev-parse origin/main)"
     [[ "${head_sha}" == "${origin_sha}" ]] || { echo "Guarded ARC operation HEAD ${head_sha} is not origin/main ${origin_sha}" >&2; exit 2; }
-    remote_sha="$(git ls-remote --exit-code "${canonical_remote}" refs/heads/main | awk 'NR == 1 { print $1 }')"
+    remote_sha="$(
+      env -i \
+        PATH="${PATH}" \
+        HOME=/ \
+        GIT_CONFIG_NOSYSTEM=1 \
+        GIT_CONFIG_GLOBAL=/dev/null \
+        GIT_NO_REPLACE_OBJECTS=1 \
+        git -C / ls-remote --exit-code "${canonical_remote}" refs/heads/main |
+        awk 'NR == 1 { print $1 }'
+    )"
     [[ "${remote_sha}" =~ ^[0-9a-f]{40}$ ]] || { echo "Could not resolve the current remote main SHA" >&2; exit 2; }
     [[ "${head_sha}" == "${remote_sha}" ]] || { echo "Guarded ARC operation HEAD ${head_sha} is not current remote main ${remote_sha}" >&2; exit 2; }
-    git verify-commit "${head_sha}" >/dev/null
+    git -c gpg.format=openpgp -c gpg.program=gpg -c gpg.openpgp.program=gpg verify-commit "${head_sha}" >/dev/null
     echo "reviewed infra carrier: ${head_sha}"
 
 # Enrollment and GitHub App Secret materialization use the implementation-role
@@ -1805,6 +1862,7 @@ _arc-plan-input-preflight: _reviewed-clean-main _reviewed-arc-core _arc-backend-
     test "${target_uid}" = "$(tr -d '\n' < .tofu-plans/arc-runners.target-uid)" || { echo "ARC plan was created for a different target cluster/release" >&2; exit 2; }
 
 _operator-apply-confirm:
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
     [[ "${GFTB_APPLY_CONFIRM:-}" == "apply" ]] || { echo "Set GFTB_APPLY_CONFIRM=apply for this attended mutation" >&2; exit 2; }
 
 _arc-exclusive-confirm:
@@ -1825,6 +1883,7 @@ edge_zones_backend := env_var_or_default("EDGE_ZONES_BACKEND", "tofu/backend/hon
 edge-zones-fmt-check:
     #!/usr/bin/env bash
     set -euo pipefail
+    bash scripts/remote-only-guard.sh edge-zones-fmt-check
     if command -v tofu >/dev/null 2>&1; then
         tofu fmt -check -recursive {{ edge_zones_stack }}
     else
@@ -1839,6 +1898,7 @@ edge-zones-lock:
 edge-zones-validate:
     #!/usr/bin/env bash
     set -euo pipefail
+    bash scripts/remote-only-guard.sh edge-zones-validate
     tf_data_dir="$(mktemp -d -t great-falls-tool-bus-infra-edge-zones-tofu-data.XXXXXX)"
     trap 'rm -rf "${tf_data_dir}"' EXIT
     if command -v tofu >/dev/null 2>&1; then
@@ -1851,6 +1911,7 @@ edge-zones-validate:
 edge-zones-init:
     #!/usr/bin/env bash
     set -euo pipefail
+    bash scripts/remote-only-guard.sh edge-zones-init
     backend="{{ edge_zones_backend }}"
     test -f "${backend}"
     if [[ "${backend}" != /* ]]; then
@@ -1859,23 +1920,28 @@ edge-zones-init:
     tofu -chdir={{ edge_zones_stack }} init -reconfigure -backend-config="${backend}"
 
 edge-zones-plan:
+    @bash scripts/remote-only-guard.sh edge-zones-plan
     mkdir -p .tofu-plans
     tofu -chdir={{ edge_zones_stack }} plan -out="$(pwd)/.tofu-plans/edge.tfplan"
 
 _edge-zones-plan-json:
+    @bash scripts/remote-only-guard.sh _edge-zones-plan-json
     test -f .tofu-plans/edge.tfplan
     tofu -chdir={{ edge_zones_stack }} show -json "$(pwd)/.tofu-plans/edge.tfplan" > .tofu-plans/edge.tfplan.json
 
 _edge-zones-plan-text:
+    @bash scripts/remote-only-guard.sh _edge-zones-plan-text
     @tofu -chdir={{ edge_zones_stack }} plan -no-color
 
 edge-zones-plan-show:
+    @bash scripts/remote-only-guard.sh edge-zones-plan-show
     test -f .tofu-plans/edge.tfplan
     tofu -chdir={{ edge_zones_stack }} show -no-color "$(pwd)/.tofu-plans/edge.tfplan"
 
 edge-zones-plan-destroy-check:
     #!/usr/bin/env bash
     set -euo pipefail
+    bash scripts/remote-only-guard.sh edge-zones-plan-destroy-check
     test -f .tofu-plans/edge.tfplan
     plan_json="$(mktemp "${TMPDIR:-/tmp}/gftb-edge-zones-plan.XXXXXX.json")"
     trap 'rm -f "${plan_json}"' EXIT
@@ -1902,6 +1968,7 @@ edge-zones-plan-destroy-check:
     echo "edge plan destroy guard passed."
 
 edge-zones-apply: edge-zones-plan-destroy-check
+    @bash scripts/remote-only-guard.sh edge-zones-apply
     test -f .tofu-plans/edge.tfplan
     tofu -chdir={{ edge_zones_stack }} apply "$(pwd)/.tofu-plans/edge.tfplan"
 
@@ -1914,6 +1981,7 @@ edge-zones-apply: edge-zones-plan-destroy-check
 mail_cr_dir := "k8s/mail/latoolb-us-production"
 
 mail-cr-validate:
+    @bash scripts/remote-only-guard.sh mail-cr-validate
     bash scripts/validate-mail-crs.sh {{ mail_cr_dir }}
 
 _mail-kubeconfig-inputs:
@@ -1942,9 +2010,11 @@ _mail-kubeconfig-inputs:
     PY
 
 mail-cr-server-dry-run: mail-cr-validate _mail-kubeconfig-inputs
+    @bash scripts/remote-only-guard.sh mail-cr-server-dry-run
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply --dry-run=server -k {{ mail_cr_dir }}
 
 mail-cr-apply: mail-cr-server-dry-run
+    @bash scripts/remote-only-guard.sh mail-cr-apply
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ mail_cr_dir }}
 
 # --- GFTB Mailman 3 list stack (TIN-2380) -----------------------------------
@@ -1959,12 +2029,15 @@ mail-cr-apply: mail-cr-server-dry-run
 list_stack_dir := "k8s/list/latoolb-us-production"
 
 list-stack-validate:
+    @bash scripts/remote-only-guard.sh list-stack-validate
     bash scripts/validate-list-stack.sh {{ list_stack_dir }}
 
 list-stack-server-dry-run: list-stack-validate _mail-kubeconfig-inputs
+    @bash scripts/remote-only-guard.sh list-stack-server-dry-run
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply --dry-run=server -k {{ list_stack_dir }}
 
 list-stack-apply: list-stack-server-dry-run
+    @bash scripts/remote-only-guard.sh list-stack-apply
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ list_stack_dir }}
 
 _list-member-add-inputs:
@@ -2087,6 +2160,7 @@ list-member-add: _list-member-add-inputs _reviewed-clean-main _operator-apply-co
 listsync_stack_dir := "k8s/list-sync/latoolb-us-production"
 
 listsync-stack-validate:
+    @bash scripts/remote-only-guard.sh listsync-stack-validate
     bash scripts/validate-listsync-stack.sh {{ listsync_stack_dir }}
 
 listsync-stack-server-dry-run: listsync-stack-validate _mail-kubeconfig-inputs
@@ -2107,6 +2181,7 @@ listsync-stack-apply: listsync-stack-server-dry-run
 form_stack_dir := "k8s/form/latoolb-us-production"
 
 form-stack-validate:
+    @bash scripts/remote-only-guard.sh form-stack-validate
     bash scripts/validate-form-stack.sh {{ form_stack_dir }}
 
 # Offline ALTCHA challenge/solve/verify round-trip against the shipping server.py
@@ -2173,9 +2248,11 @@ form-altcha-secret-apply: _mail-kubeconfig-inputs _reviewed-clean-main _operator
     echo "Secret applied and a replacement form-handler pod is Ready. Run the challenge and delivery smoke."
 
 form-stack-server-dry-run: form-stack-validate _mail-kubeconfig-inputs
+    @bash scripts/remote-only-guard.sh form-stack-server-dry-run
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply --dry-run=server -k {{ form_stack_dir }}
 
 form-stack-apply: form-stack-server-dry-run
+    @bash scripts/remote-only-guard.sh form-stack-apply
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ form_stack_dir }}
 
 # --- GFTB public discuss@ archive stack (TIN-2528) --------------------------
@@ -2196,12 +2273,15 @@ form-stack-apply: form-stack-server-dry-run
 archive_stack_dir := "k8s/archive/latoolb-us-production"
 
 archive-stack-validate:
+    @bash scripts/remote-only-guard.sh archive-stack-validate
     bash scripts/validate-archive-stack.sh {{ archive_stack_dir }}
 
 archive-stack-server-dry-run: archive-stack-validate _mail-kubeconfig-inputs
+    @bash scripts/remote-only-guard.sh archive-stack-server-dry-run
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply --dry-run=server -k {{ archive_stack_dir }}
 
 archive-stack-apply: archive-stack-server-dry-run
+    @bash scripts/remote-only-guard.sh archive-stack-apply
     kubectl --kubeconfig "${GFTB_MAIL_KUBECONFIG}" --namespace latoolb-us-production apply -k {{ archive_stack_dir }}
 
 # --- GFTB on-cluster web serving (TIN-2541 skeleton; TIN-2543 cutover) -------
@@ -2222,15 +2302,10 @@ archive-stack-apply: archive-stack-server-dry-run
 # repository_dispatch consumer can reach kubectl. MERGING APPLIES NOTHING, and
 # now neither does any push to the public site repo.
 #
-# LEGACY CARRIER IS NOW DEAD CODE. `web-stack-apply` below still exists as the
-# original adapter-node cutover carrier (an operator with an operator-custody
-# web-apply kubeconfig could run `just web-stack-apply` by hand), but
-# `_web-stack-promotion-interlock` refuses it unconditionally now that the
-# gftb-site static origin is permanently promoted onto
-# Deployment/greatfallstoolbus-org -- there is no live state this carrier could
-# run against without the interlock firing. The reviewed, actually-used
-# forward path for the static origin is the web-release-* chain below, not
-# this carrier.
+# The retired adapter-node apply carrier is absent. The reviewed, currently
+# usable production path for the static origin is the web-release-* chain
+# below; it remains attended until the shared v4 owner-overlay transaction
+# proves a complete takeover.
 #
 # TREE HONESTY (rung 1, 2026-08-21; ratification basis: operator interview
 # 2026-08-21, session register L71 Q2 rungs 1+2). This comment used to say the
@@ -2265,6 +2340,12 @@ guard-no-remote-kustomize-resources:
 guard-no-remote-kustomize-resources-selftest:
     bash scripts/guard-no-remote-kustomize-resources.sh --self-test
 
+# REMOTE-ONLY-GUARD EXEMPTION (deliberate, operator ruling 2026-09-01): this
+# recipe is the receipt-pinned WEB_RELEASE_VALIDATION_CALLEE and the reviewed
+# web-release-render invokes it under `env -i PATH=... HOME=...`, which strips
+# GITHUB_ACTIONS. A guard line here would break the ratified attended release
+# ceremony (and the public-surface self-test fixture that executes it) while
+# adding nothing: every recipe-level entrypoint that reaches it is guarded.
 web-stack-validate:
     bash scripts/validate-web-stack.sh {{ web_stack_dir }}
 
@@ -2274,29 +2355,27 @@ web-stack-validate:
 # ratification basis: operator interview 2026-08-21, register L71 Q2 = rungs
 # 1+2, L73). Render the COMMITTED declare-only tree to stdout: kustomize only,
 # nothing else. This is deliberately NOT web-release-render: it takes no
-# WEB_APPLY_IMAGE/WEB_APPLY_SHA, resolves no GHCR candidate, injects no
-# source-sha annotation, and synthesizes no default-deny-egress NetworkPolicy.
+# WEB_APPLY_IMAGE/WEB_APPLY_SHA and resolves no GHCR candidate. (Since
+# TIN-4254 neither recipe injects or synthesizes anything -- web-release-render
+# emits these same kustomize bytes verbatim and merely ASSERTS that the
+# committed pin equals its reviewed inputs -- so what separates them is the
+# candidate resolution and the assertion contract, not the bytes.)
 # It calls no `just` recipe at all, so it cannot reach -- directly or
 # transitively -- any member of the web-release-* reviewed candidate-
 # promotion family (scripts/validate-public-operator-surface.py
 # WEB_RELEASE_OPERATOR_LOCAL_ROOTS): that family stays exactly what TIN-3899 /
 # decisions/0016 made it, attended-operator-only and unreachable from every
 # CI workflow, and this recipe is written to stay outside its closure by
-# construction rather than by a validator exemption. Since rung 1
-# (deployment.yaml's "TREE HONESTY" fix) the committed tree already matches
-# web-release-render's own contract for every field except THREE it still
-# names as ceremony-only residuals -- in order of consequence: (1) the
-# PER-RELEASE CONTAINER IMAGE DIGEST (the field that decides what code
-# production actually runs; this render shows whatever digest is currently
-# committed, which is NOT necessarily what the next release ceremony will
-# pin), (2) the per-release source-sha annotation, and (3) the synthesized
-# default-deny-egress NetworkPolicy -- so this render is close to, but not
-# byte-identical with, what the attended ceremony would apply. Say that
-# honestly, and name the digest explicitly, in anything that consumes this
-# output; do not call it "the exact apply-time bytes". (The ceremony also
-# prunes two legacy egress NetworkPolicies at apply time -- that is an
-# apply-time-only concern, not a render residual: those two objects are not
-# in the committed tree at all, so this render never carries them either.)
+# construction rather than by a validator exemption. Since TIN-4254 (W13)
+# there are NO ceremony-only residuals left: the source-sha annotation and
+# the default-deny-egress NetworkPolicy are committed tree truth, the legacy
+# egress allows are pruned everywhere, and web-release-render itself emits
+# these same kustomize bytes verbatim -- so this render IS byte-identical
+# with what the attended ceremony applies, PROVIDED the committed pin is the
+# pin the ceremony reviews (web-release-render asserts exactly that and
+# refuses otherwise). The one honest caveat left for consumers: this shows
+# the digest currently committed, which is not necessarily what the NEXT
+# release ceremony will pin.
 #
 # Runs the standalone remote-resource ALLOWLIST guard
 # (scripts/guard-no-remote-kustomize-resources.sh; round 4 after adversarial
@@ -2309,70 +2388,15 @@ web-stack-validate:
 # `just` recipe, so this stays outside the web-release-* closure exactly as
 # before.
 web-stack-render:
+    @bash scripts/remote-only-guard.sh web-stack-render
     bash scripts/guard-no-remote-kustomize-resources.sh {{ web_stack_dir }}
     kubectl kustomize {{ web_stack_dir }}
-
-# Operator-supplied cutover inputs (attended env; never baked, and since
-# TIN-3899 never workflow-delivered either):
-#   WEB_APPLY_KUBECONFIG  path to the materialized namespace-scoped SA kubeconfig
-#   WEB_APPLY_IMAGE       image to serve (operator-resolved; not the PLACEHOLDER)
-# WEB_APPLY_REPLICAS    replica count to flip to (default 2, the MI prod shape)
-_web-apply-inputs:
-    test -n "${WEB_APPLY_KUBECONFIG:-}" || { echo "Set WEB_APPLY_KUBECONFIG to the web-apply kubeconfig path"; exit 1; }
-    test -f "${WEB_APPLY_KUBECONFIG}"
-    test -n "${WEB_APPLY_IMAGE:-}" || { echo "Set WEB_APPLY_IMAGE to the operator-resolved image reference"; exit 1; }
-    case "${WEB_APPLY_IMAGE}" in *PLACEHOLDER*) echo "refusing the declare-only PLACEHOLDER image; supply the real operator-resolved reference"; exit 1 ;; esac
 
 # Lighter-weight input check for read-only commands (drift-check) that need
 # only the kubeconfig, not an image to pin.
 _web-apply-kubeconfig-only:
     test -n "${WEB_APPLY_KUBECONFIG:-}" || { echo "Set WEB_APPLY_KUBECONFIG to the web-apply kubeconfig path"; exit 1; }
     test -f "${WEB_APPLY_KUBECONFIG}"
-
-# Server-side dry-run of the workload apply against the live API (no mutation).
-web-stack-server-dry-run: web-stack-validate _web-apply-inputs
-    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply --dry-run=server -k {{ web_stack_dir }}
-
-# PROMOTION INTERLOCK (TIN-3816; unattended trigger retired by TIN-3899). This
-# legacy adapter-node carrier and the reviewed web-release chain both mutate
-# Deployment/greatfallstoolbus-org in {{ web_stack_ns }}. Once the gftb-site
-# static origin is promoted in place, re-running this carrier would re-pin the
-# adapter-node image over it and `apply -k` would recreate allow-egress-dns /
-# allow-egress-discuss-archive -- silently reverting the promotion and falsifying
-# the SERVED proof.
-#
-# The carrier USED TO be fired unattended by web-stack.yml's
-# `repository_dispatch: web-image-published` (sent by greatfallstoolbus.org's
-# container-ghcr.yml on every push to main). TIN-3899 deleted that workflow and
-# the site-side signal job, so the carrier now has no automated caller at all and
-# the runbook quiesce rule is retired. This interlock is KEPT as the mechanical
-# belt-and-braces on the one remaining, attended path: it refuses from live
-# state, so an operator cannot revert the promotion by hand either, and its
-# receipt in WEB_RELEASE_CRITICAL_RECIPE_DIGESTS keeps any future re-wiring of a
-# mutating carrier failing closed at `just public-surface`.
-_web-stack-promotion-interlock: _web-apply-kubeconfig-only
-    #!/usr/bin/env bash
-    set -euo pipefail
-    live_image="$(kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} get deployment/greatfallstoolbus-org --ignore-not-found -o jsonpath='{.spec.template.spec.containers[?(@.name=="greatfallstoolbus-org")].image}')"
-    case "${live_image}" in
-      ghcr.io/great-falls-tool-bus/gftb-site@*|ghcr.io/great-falls-tool-bus/gftb-site:*)
-        echo "::error::promotion interlock: Deployment/greatfallstoolbus-org in {{ web_stack_ns }} already carries the promoted gftb-site origin (${live_image}). The legacy adapter-node carrier would revert it. Refusing." >&2
-        echo "Quiesce greatfallstoolbus.org main (the repository_dispatch source) until this carrier is retired; see docs/runbooks/oncluster-web-cutover.md section S." >&2
-        exit 1
-        ;;
-    esac
-    echo "promotion interlock: live image '${live_image:-<absent>}' is not a promoted gftb-site origin; the legacy carrier may proceed"
-
-# Operator-gated cutover apply: workload -> pin image -> flip replicas 0 -> N.
-# The namespace must already exist (the SA is namespace-scoped and cannot create
-# it); replicas are patched on the Deployment resource, not via the scale
-# subresource, so the least-privilege patch-Deployment grant is sufficient.
-web-stack-apply: _web-stack-promotion-interlock web-stack-server-dry-run
-    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply -k {{ web_stack_dir }}
-    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} set image deployment/greatfallstoolbus-org greatfallstoolbus-org="${WEB_APPLY_IMAGE}"
-    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} patch deployment/greatfallstoolbus-org --type merge --patch '{"spec":{"replicas":'"${WEB_APPLY_REPLICAS:-2}"'}}'
-    # 300s (was 180s): run 28769199755 (2026-07-06) hit `timed out waiting for the condition` on a cold-node image pull, but the rollout verified Ready seconds later -- a benign race, not a real failure.
-    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} rollout status deployment/greatfallstoolbus-org --timeout=300s
 
 # Post-apply read-only health gate: Deployment readyReplicas == desired. A ready
 # replica means the kubelet readinessProbe (GET /health on :3000) passed, so this
@@ -2410,12 +2434,9 @@ grafana-dashboards-validate:
     bash scripts/validate-grafana-dashboards.sh {{ grafana_dashboard_dir }}
 
 # --- Reviewed gftb-site release candidate proofs ----------------------------
-# These recipes are read-only/proof-only. They deliberately do not share the
-# legacy `web-stack-apply` mutation carrier, which pins the adapter-node image
-# and must never receive the static Caddy candidate; that candidate travels only
-# through the reviewed exact-render/apply/rollback contract below. The workflow
-# that used to drive the legacy carrier (.github/workflows/web-stack.yml) is
-# retired (TIN-3899).
+# These recipes are read-only/proof-only. The retired adapter-node carrier is
+# absent; the static Caddy candidate travels only through the reviewed
+# exact-render/apply/rollback contract below.
 
 _web-release-candidate-inputs:
     #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
@@ -2590,15 +2611,21 @@ web-release-candidate-proof: _web-release-candidate-inputs
     test -s "${proof_dir}/image.tar" || { echo "anonymous candidate pull produced no image" >&2; exit 1; }
     echo "anonymous candidate proof passed: source=${WEB_APPLY_SHA} digest=${expected_digest}"
 
-# Render the exact static-Caddy workload to stdout for the given
-# WEB_APPLY_IMAGE/WEB_APPLY_SHA. The checked-in base (rung 1 tree honesty,
-# 2026-08-21) already carries the static-Caddy shape -- this transform's
-# per-container overrides are now idempotent no-ops for everything except the
-# per-release image, source-sha annotation, and the synthesized
-# default-deny-egress NetworkPolicy (see k8s/web/.../deployment.yaml and
-# networkpolicy.yaml headers). This recipe never writes back to the checked-in
-# manifest; callers may redirect stdout only to a caller-owned temporary
-# receipt. No cluster or registry is contacted here.
+# Render the reviewed release bytes to stdout for the given
+# WEB_APPLY_IMAGE/WEB_APPLY_SHA. Since TIN-4254 (W13) this recipe emits the
+# committed tree's `kubectl kustomize {{ web_stack_dir }}` bytes VERBATIM --
+# no yq/jq mutation lane, no re-serialization, no synthesis: the source-sha
+# annotation and the default-deny-egress NetworkPolicy the render used to
+# stamp/synthesize are committed tree truth (see k8s/web/.../deployment.yaml
+# and networkpolicy.yaml headers), so the rendered bytes ARE the kustomize
+# bytes and re-render byte-identically. The reviewed inputs are ASSERTED, not
+# injected: the committed pin (image digest + source-sha template annotation)
+# must equal WEB_APPLY_IMAGE/WEB_APPLY_SHA or the render refuses ("commit the
+# pin first"), and the census/workload/NetworkPolicy contracts below hold the
+# committed shape to exactly what the ceremony has always applied. This
+# recipe never writes back to the checked-in manifest; callers may redirect
+# stdout only to a caller-owned temporary receipt. No cluster or registry is
+# contacted here.
 web-release-render: _web-release-candidate-inputs
     #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
     set +x
@@ -2636,76 +2663,22 @@ web-release-render: _web-release-candidate-inputs
     trap 'rm -rf "${render_dir}"' EXIT
     mkdir -m 700 "${render_dir}/home"
     env -i PATH="${PATH}" HOME="${render_dir}/home" just web-stack-validate >/dev/null
-    base="${render_dir}/base.yaml"
     rendered="${render_dir}/rendered.yaml"
-    kubectl kustomize {{ web_stack_dir }} > "${base}"
-    # Keep YAML parsing/serialization in mikefarah yq-go and all mutation
-    # semantics in jq; -I=0 produces one JSON document per input document.
-    yq eval-all -o=json -I=0 '.' "${base}" \
-      | jq --arg image "${WEB_APPLY_IMAGE}" --arg sha "${WEB_APPLY_SHA}" '
-      if .kind == "NetworkPolicy" and (.metadata.name == "allow-egress-dns" or .metadata.name == "allow-egress-discuss-archive") then
-        empty
-      elif .kind == "Deployment" and .metadata.name == "greatfallstoolbus-org" and .metadata.namespace == "greatfallstoolbus-org-production" then
-        .spec.replicas = 2
-        | .spec.template.metadata.annotations["app.tinyland.dev/source-sha"] = $sha
-        | .spec.template.spec.automountServiceAccountToken = false
-        | .spec.template.spec.enableServiceLinks = false
-        | .spec.template.spec.securityContext = {
-            "runAsNonRoot": true,
-            "runAsUser": 65532,
-            "runAsGroup": 65532,
-            "fsGroup": 65532,
-            "seccompProfile": {"type": "RuntimeDefault"}
-          }
-        | del(
-            .spec.template.spec.hostNetwork,
-            .spec.template.spec.hostPID,
-            .spec.template.spec.hostIPC,
-            .spec.template.spec.shareProcessNamespace
-          )
-        | .spec.template.spec.containers |= map(
-            if .name == "greatfallstoolbus-org" then
-              .image = $image
-              | .securityContext = {
-                  "allowPrivilegeEscalation": false,
-                  "readOnlyRootFilesystem": true,
-                  "capabilities": {"drop": ["ALL"]}
-                }
-              | del(.command, .args, .env, .envFrom, .volumeMounts, .lifecycle, .workingDir, .stdin, .stdinOnce, .tty)
-              | .ports |= map(del(.hostIP, .hostPort))
-            else . end
-          )
-      elif .kind == "NetworkPolicy" and .metadata.name == "default-deny-ingress" and .metadata.namespace == "greatfallstoolbus-org-production" then
-        .,
-        {
-          "apiVersion": "networking.k8s.io/v1",
-          "kind": "NetworkPolicy",
-          "metadata": {
-            "name": "default-deny-egress",
-            "namespace": "greatfallstoolbus-org-production",
-            "labels": {
-              "app.kubernetes.io/managed-by": "great-falls-tool-bus-infra",
-              "app.kubernetes.io/part-of": "great-falls-tool-bus",
-              "app.tinyland.dev/lifecycle": "declare-only",
-              "app.tinyland.dev/tenant": "great-falls-tool-bus"
-            }
-          },
-          "spec": {
-            "podSelector": {
-              "matchLabels": {
-                "app.kubernetes.io/name": "greatfallstoolbus-org",
-                "app.kubernetes.io/component": "web"
-              }
-            },
-            "policyTypes": ["Egress"],
-            "egress": []
-          }
-        }
-      else . end
-      ' \
-      | yq eval-all -p=json -o=yaml -P '.' - > "${rendered}"
-    # The later mutation lane must explicitly delete the two omitted legacy
-    # adapter-node egress policies; `kubectl apply` does not prune omissions.
+    # VERBATIM: the committed kustomize bytes are the release bytes. Any
+    # yq/jq round-trip on this path would be synthesis-time re-serialization
+    # variance and break digest equality with `kubectl kustomize` output.
+    kubectl kustomize {{ web_stack_dir }} > "${rendered}"
+    # The reviewed inputs are asserted against the COMMITTED pin, never
+    # injected. A mismatch means the operator has not committed the pin step
+    # for this release yet.
+    yq eval-all -o=json -I=0 '.' "${rendered}" \
+      | jq --slurp -e --arg image "${WEB_APPLY_IMAGE}" --arg sha "${WEB_APPLY_SHA}" '
+      [.[] | select(.kind == "Deployment" and .metadata.name == "greatfallstoolbus-org" and .metadata.namespace == "greatfallstoolbus-org-production")] as $deployments
+      | ($deployments | length) == 1
+        and ($deployments[0].spec.template.spec.containers | length) == 1
+        and ($deployments[0].spec.template.spec.containers[0].image == $image)
+        and ($deployments[0].spec.template.metadata.annotations["app.tinyland.dev/source-sha"] == $sha)
+      ' >/dev/null || { echo "committed pin does not match reviewed inputs; commit the pin first" >&2; exit 1; }
     expected_census=$'Deployment\tgreatfallstoolbus-org\tgreatfallstoolbus-org-production\nNetworkPolicy\tallow-cloudflared-tunnel-ingress\tgreatfallstoolbus-org-production\nNetworkPolicy\tallow-prometheus-scrape\tgreatfallstoolbus-org-production\nNetworkPolicy\tdefault-deny-egress\tgreatfallstoolbus-org-production\nNetworkPolicy\tdefault-deny-ingress\tgreatfallstoolbus-org-production\nService\tgreatfallstoolbus-org\tgreatfallstoolbus-org-production'
     actual_census="$(
       yq eval-all -o=json -I=0 '.' "${rendered}" \
@@ -2765,6 +2738,28 @@ web-release-render: _web-release-candidate-inputs
         and ($services[0].spec.ports == [{"name": "http", "port": 80, "protocol": "TCP", "targetPort": "http"}])
         and ([.[] | select(.kind == "Namespace" or .kind == "Secret" or .kind == "SecretList")] | length) == 0
       ' >/dev/null || { echo "rendered static-Caddy workload contract mismatch" >&2; exit 1; }
+    yq eval-all -o=json -I=0 '.' "${rendered}" \
+      | jq --slurp -e '
+      [.[] | select(.kind == "NetworkPolicy" and .metadata.name == "default-deny-egress" and .metadata.namespace == "greatfallstoolbus-org-production")] as $deny
+      | ($deny | length) == 1
+        and ($deny[0].apiVersion == "networking.k8s.io/v1")
+        and ($deny[0].metadata.labels == {
+              "app.kubernetes.io/managed-by": "great-falls-tool-bus-infra",
+              "app.kubernetes.io/part-of": "great-falls-tool-bus",
+              "app.tinyland.dev/lifecycle": "declare-only",
+              "app.tinyland.dev/tenant": "great-falls-tool-bus"
+            })
+        and ($deny[0].spec == {
+              "podSelector": {
+                "matchLabels": {
+                  "app.kubernetes.io/name": "greatfallstoolbus-org",
+                  "app.kubernetes.io/component": "web"
+                }
+              },
+              "policyTypes": ["Egress"],
+              "egress": []
+            })
+      ' >/dev/null || { echo "committed default-deny-egress NetworkPolicy shape mismatch" >&2; exit 1; }
     rendered_network_policies_semantic="$(
       yq eval-all -o=json -I=0 '.' "${rendered}" \
         | jq --slurp -S -c '
@@ -3162,9 +3157,7 @@ _web-release-kubeconfig-inputs:
       "networkpolicies.networking.k8s.io|allow-cloudflared-tunnel-ingress|namespaced" \
       "networkpolicies.networking.k8s.io|allow-prometheus-scrape|namespaced" \
       "networkpolicies.networking.k8s.io|default-deny-egress|namespaced" \
-      "networkpolicies.networking.k8s.io|default-deny-ingress|namespaced" \
-      "networkpolicies.networking.k8s.io|allow-egress-dns|namespaced" \
-      "networkpolicies.networking.k8s.io|allow-egress-discuss-archive|namespaced"; do
+      "networkpolicies.networking.k8s.io|default-deny-ingress|namespaced"; do
       IFS='|' read -r resource resource_name scope <<<"${named_contract}"
       if [[ "${scope}" == "namespaced" ]]; then auth_scope=(--namespace {{ web_stack_ns }}); else auth_scope=(--all-namespaces); fi
       for verb in update patch delete; do
@@ -3896,8 +3889,7 @@ web-release-served-proof: _web-release-candidate-inputs
 # refuses unless the re-render is byte-identical to the recorded plan, and then
 # applies THOSE bytes. So the reviewed bytes and the applied bytes cannot diverge,
 # and `kubectl rollout history` can always be reconciled against a render of the
-# reviewed inputs. This is deliberately unlike the legacy `web-stack-apply`
-# carrier, which imperatively `set image`s the adapter-node origin.
+# reviewed inputs. The former imperative adapter-node carrier is absent.
 #
 # Nothing here creates the namespace (the apply identity is namespace-scoped and
 # cannot), ships a Secret, or touches Cloudflare. The public path does not change:
@@ -3940,16 +3932,16 @@ _web-release-plan-root-contract:
 # tree, and no ambient KUBECONFIG allowed to shadow it.
 #
 # It also runs the AUTHORIZATION PREFLIGHT for the whole mutating chain, before
-# any mutation is attempted. `apply --dry-run=server` authorizes only the objects
-# it applies; it does NOT authorize the NetworkPolicy delete web-release-apply
-# performs afterwards, and the render introduces a NetworkPolicy object that does
-# not exist yet (default-deny-egress), so `create networkpolicies` is a new verb
-# too. Without this preflight the realistic failure is: dry-run green -> apply
-# succeeds (the Deployment now runs the gftb-site image) -> delete denied ->
-# `set -e` aborts before the rollout wait, leaving the promotion half-done with
-# allow-egress-dns still additively permitting egress and the stated "no egress
-# at all" invariant silently false. Mirrors the auth can-i preflights the ARC and
-# proof recipes already use.
+# any mutation is attempted. `apply --dry-run=server` can miss verbs the real
+# apply needs (a `create` on an object that does not exist yet reaches a
+# different authorization path than the dry-run's checks), so every verb the
+# chain uses is probed up front and any non-"yes" -- or any diagnostic output
+# at all -- refuses before the first mutation. Mirrors the auth can-i
+# preflights the ARC and proof recipes already use. (Until TIN-4254 this
+# preflight also authorized the apply-time delete of the two legacy
+# allow-egress policies; that delete lane is retired -- every gen 37..43
+# apply already ran it, and live absence is receipted by an attended
+# read-only census, not by CI.)
 _web-release-apply-kubeconfig-contract:
     #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
     set +x
@@ -3981,10 +3973,9 @@ _web-release-apply-kubeconfig-contract:
     trap 'rm -rf "${authz_dir}"' EXIT
     authz_stderr="${authz_dir}/authz.stderr"
     # Every verb the chain needs, in {{ web_stack_ns }}: `apply -f` on the three
-    # rendered kinds (get/create/update/patch), `rollout status` (get/list/watch
-    # deployments), and the NetworkPolicy prune (delete). Fail closed on a "no"
-    # AND on any diagnostic output, so an authorization transport error is a
-    # refusal rather than a pass.
+    # rendered kinds (get/create/update/patch) and `rollout status` (get/list/
+    # watch deployments). Fail closed on a "no" AND on any diagnostic output,
+    # so an authorization transport error is a refusal rather than a pass.
     for authz_contract in \
       "get deployments.apps/greatfallstoolbus-org" \
       "list deployments.apps" "watch deployments.apps" "create deployments.apps" \
@@ -4005,9 +3996,7 @@ _web-release-apply-kubeconfig-contract:
       "patch networkpolicies.networking.k8s.io/default-deny-ingress" \
       "patch networkpolicies.networking.k8s.io/allow-cloudflared-tunnel-ingress" \
       "patch networkpolicies.networking.k8s.io/allow-prometheus-scrape" \
-      "patch networkpolicies.networking.k8s.io/default-deny-egress" \
-      "delete networkpolicies.networking.k8s.io/allow-egress-dns" \
-      "delete networkpolicies.networking.k8s.io/allow-egress-discuss-archive"; do
+      "patch networkpolicies.networking.k8s.io/default-deny-egress"; do
       read -r authz_verb authz_resource <<<"${authz_contract}"
       : > "${authz_stderr}"
       authz_decision="$(kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" auth can-i "${authz_verb}" "${authz_resource}" --namespace {{ web_stack_ns }} 2>"${authz_stderr}" || true)"
@@ -4074,8 +4063,10 @@ web-release-server-dry-run: _web-release-apply-kubeconfig-contract _web-release-
 # ATTENDED APPLY. Gated exactly like arc-apply: a clean, signed checkout equal to
 # canonical main, GFTB_APPLY_CONFIRM=apply, an operator-custody kubeconfig, and a
 # plan that still reproduces byte-for-byte. It dry-runs, applies the recorded
-# bytes, prunes the two legacy adapter-node egress policies the render omits
-# (`kubectl apply` does not prune omissions), and waits for the rollout.
+# bytes, and waits for the rollout. (The apply-time prune of the two legacy
+# adapter-node egress policies is retired by TIN-4254: every gen 37..43 apply
+# already ran the delete, the committed tree declares default-deny-egress, and
+# live absence is receipted by an attended read-only census on the pruning PR.)
 web-release-apply: _reviewed-clean-main _operator-apply-confirm _web-release-apply-kubeconfig-contract _web-release-plan-preflight
     #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
     set +x
@@ -4084,7 +4075,6 @@ web-release-apply: _reviewed-clean-main _operator-apply-confirm _web-release-app
     plan="${repo_root}/.k8s-plans/web-release.rendered.yaml"
     kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply --dry-run=server -f "${plan}"
     kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply -f "${plan}"
-    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} delete networkpolicy allow-egress-dns allow-egress-discuss-archive --ignore-not-found
     kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} rollout status deployment/greatfallstoolbus-org --timeout=300s
     echo "web release applied; now run the PINNED/RUNNING and SERVED proofs"
 
@@ -4114,35 +4104,27 @@ web-release-apply: _reviewed-clean-main _operator-apply-confirm _web-release-app
 # the gftb-site promotion. It wasn't by design; it was this declarative
 # record never being updated at promotion time.
 #
-# WHY WEB IS REACHABLE-ZERO-DIFF, NOT GUARANTEED-RED (adversarial review B2):
-# the web-release-* ceremony's render step (`web-release-render`)
-# unconditionally stamps `app.tinyland.dev/source-sha` onto the live
-# Deployment's pod-template annotations at every release; the checked-in base
-# deliberately never carries a static value for it (the value changes every
-# release, so no committed value could ever be "correct"). A raw `kubectl
-# diff -k` would therefore report that one annotation as drift on EVERY run,
-# forever, making a fail-on-diff gate permanently red for a reason that is
-# not drift. `web-stack-drift-check` below wires `scripts/web-stack-diff.sh`
-# in as `KUBECTL_EXTERNAL_DIFF` to strip exactly that one known-synthesized
-# annotation from both sides before diffing -- see that script for the full
-# rationale. This is scoped to the web caller only; the other five stacks
-# below are untouched and still use kubectl's own default differ.
+# WEB IS TRUE-ZERO-DIFF SINCE TIN-4254 (W13): the committed tree now carries
+# the per-release `app.tinyland.dev/source-sha` pod-template annotation and
+# the `default-deny-egress` NetworkPolicy the ceremony used to stamp/
+# synthesize at render time, and `web-release-render` applies the kustomize
+# bytes verbatim -- so the web caller uses kubectl's own default differ like
+# every other stack, and ANY web diff (the source-sha annotation included) is
+# real drift. The retired `scripts/web-stack-diff.sh` external differ used to
+# strip that annotation from both sides; keeping it would now MASK real
+# live/tree divergence of the release identity.
 #
-# WHAT THIS GATE CANNOT SEE, EVEN AFTER THAT FIX: `kubectl diff -k` compares
-# the rendered LOCAL manifest set against LIVE and has no prune awareness --
-# it is blind to any object that exists ONLY on the cluster. The
-# web-release-* ceremony also synthesizes a `default-deny-egress`
-# NetworkPolicy at render time that the checked-in base does not declare;
-# that object will NEVER surface as a diff here, for any input, by
-# construction of `kubectl diff -k` itself -- there is nothing on the LOCAL
-# side to diff it against. A clean run of this gate is not evidence that
-# NetworkPolicy is absent or correct; it is simply invisible to this specific
-# check (see k8s/web/greatfallstoolbus-org-production/networkpolicy.yaml and
-# k8s/web/README.md). This check is read-only and therefore not interlocked;
-# the attended mutating carrier is (see _web-stack-promotion-interlock).
+# WHAT THIS GATE STILL CANNOT SEE: `kubectl diff -k` compares the rendered
+# LOCAL manifest set against LIVE and has no prune awareness -- it is blind
+# to any object that exists ONLY on the cluster (for the web stack, e.g. the
+# two legacy allow-egress policies if they ever reappeared out of band; their
+# live ABSENCE is receipted by an attended read-only census, not by this
+# gate). This check is read-only and separate from the reviewed release
+# transaction.
 _k8s-drift-check kubeconfig namespace dir label:
     #!/usr/bin/env bash
     set -uo pipefail
+    bash scripts/remote-only-guard.sh _k8s-drift-check || exit 3
     test -n "{{ kubeconfig }}" || { echo "kubeconfig path is required"; exit 1; }
     test -f "{{ kubeconfig }}" || { echo "kubeconfig not found at {{ kubeconfig }}"; exit 1; }
     kubectl --kubeconfig "{{ kubeconfig }}" --namespace {{ namespace }} diff -k {{ dir }} > "{{ label }}-drift.txt" 2>&1
@@ -4160,15 +4142,19 @@ _k8s-drift-check kubeconfig namespace dir label:
     fi
 
 mail-cr-drift-check: _mail-kubeconfig-inputs
+    @bash scripts/remote-only-guard.sh mail-cr-drift-check
     just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ mail_cr_dir }} mail-cr
 
 list-stack-drift-check: _mail-kubeconfig-inputs
+    @bash scripts/remote-only-guard.sh list-stack-drift-check
     just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ list_stack_dir }} list-stack
 
 form-stack-drift-check: _mail-kubeconfig-inputs
+    @bash scripts/remote-only-guard.sh form-stack-drift-check
     just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ form_stack_dir }} form-stack
 
 archive-stack-drift-check: _mail-kubeconfig-inputs
+    @bash scripts/remote-only-guard.sh archive-stack-drift-check
     just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ archive_stack_dir }} archive-stack
 
 # TIN-3813 EDIT-2 (infra #122 review): "activation is an operator decision in
@@ -4177,31 +4163,13 @@ archive-stack-drift-check: _mail-kubeconfig-inputs
 # (or a dry-run/secret/list-pair patch) shows up here instead of silently
 # taking effect between scheduled runs.
 listsync-stack-drift-check: _mail-kubeconfig-inputs
+    @bash scripts/remote-only-guard.sh listsync-stack-drift-check
     just _k8s-drift-check "${GFTB_MAIL_KUBECONFIG}" latoolb-us-production {{ listsync_stack_dir }} listsync-stack
 
-# rung 1 tree honesty (2026-08-21): see the _k8s-drift-check header -- the web
-# declaration now names the same repository the promoted static origin
-# actually runs, so a diff here is a real signal, not by-design noise.
-# KUBECTL_EXTERNAL_DIFF is set to scripts/web-stack-diff.sh (this caller
-# ONLY) so the one ceremony-synthesized `source-sha` annotation doesn't make
-# this gate permanently red -- see the _k8s-drift-check header and that
-# script for why, and for the separate default-deny-egress NetworkPolicy
-# residual this gate can never observe regardless.
+# TIN-4254 (W13): the committed tree carries the source-sha annotation and
+# default-deny-egress, so the web caller diffs with kubectl's default differ
+# like every other stack -- see the _k8s-drift-check header. Any diff here,
+# the release-identity annotation included, is real drift.
 web-stack-drift-check: _web-apply-kubeconfig-only
-    #!/usr/bin/env bash
-    set -euo pipefail
-    repo_root="$(git rev-parse --show-toplevel)"
-    export KUBECTL_EXTERNAL_DIFF="${repo_root}/scripts/web-stack-diff.sh"
+    @bash scripts/remote-only-guard.sh web-stack-drift-check
     just _k8s-drift-check "${WEB_APPLY_KUBECONFIG}" {{ web_stack_ns }} {{ web_stack_dir }} web-stack
-
-# Reconciliation-safety review (PR #135, E3): scripts/web-stack-diff.sh had
-# ZERO tests (`git grep web-stack-diff` returned only Justfile wiring and
-# doc comments) even though its own header has demanded since round 2 that
-# it "MUST be exercised with two directories in any test, never two bare
-# files, or a regression here reads as passing again." This runs the five
-# fixture cases that proved the yq-go/jq rewrite (sweep g1, 2026-08-29)
-# actually works, folded into `just check-hosted` so the next calling-convention
-# change cannot ship blind. Requires real yq-go + jq on PATH; flake.nix pins
-# both for the repo devshell and remote validation.
-web-stack-diff-selftest:
-    ./scripts/test-web-stack-diff.sh

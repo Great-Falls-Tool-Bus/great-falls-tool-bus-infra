@@ -18,9 +18,9 @@ output "alias_zone_name_servers" {
   value       = data.cloudflare_zone.alias.name_servers
 }
 
-# output "access_application_aud" RETIRED 2026-08-30 alongside
-# cloudflare_zero_trust_access_application.web_apex (TIN-2421): the apex no
-# longer has an Access application in front of it, so there is no AUD to
+# output "access_application_aud" is removed alongside
+# cloudflare_zero_trust_access_application.web_apex (TIN-2421): once this
+# desired state is reconciled, the apex has no Access application and no AUD to
 # emit. Rollback (revert this PR + re-apply) recreates the resource with a
 # fresh AUD, so a restored output would not match the pre-flip value anyway.
 
