@@ -1,0 +1,243 @@
+# GFTB member database network desired state (TIN-3817, Member v0 S1).
+#
+# Default-deny posture for the member database namespace, mirroring the house
+# doctrine already proven by k8s/web/.../networkpolicy.yaml (default-deny plus
+# named allows, never an ipBlock 0.0.0.0/0).
+#
+# Port 5432 is admitted from exactly three platform components in exactly one
+# namespace: web, worker, and migrator pods carrying the canonical
+# app.kubernetes.io/part-of: great-falls-tool-bus label. The exact migrator
+# publisher carrier is merged and Git-pinned; this file makes no claim that any
+# of those workloads is currently applied, running, or served. Until a matching
+# pod exists, the closed selector admits nothing.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: members-greatfallstoolbus-org-db-production
+  labels:
+    app.kubernetes.io/part-of: great-falls-tool-bus
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# Platform -> PostgreSQL. The ONLY route into the member database.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-platform-postgres-ingress
+  namespace: members-greatfallstoolbus-org-db-production
+  labels:
+    app.kubernetes.io/name: gftb-member-db
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: gftb-member-db
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: members-greatfallstoolbus-org-production
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: great-falls-tool-bus
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: ["web", "worker", "migrator"]
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+# Intra-cluster. Inert at instances: 1 and load-bearing the moment a replica is
+# ever added; keeping it here means growing the cluster is a one-field change
+# rather than a change that also has to remember the policy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-intra-cluster
+  namespace: members-greatfallstoolbus-org-db-production
+  labels:
+    app.kubernetes.io/name: gftb-member-db
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: gftb-member-db
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: gftb-member-db
+      ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 8000
+---
+# Consumer-owned egress for the database pods: the in-namespace backup store
+# and same-cluster peers. This source is not activatable until protected
+# provider authority supplies the required CNPG control-plane and DNS relations
+# outside this carrier; no composition adapter is claimed here.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgres-egress
+  namespace: members-greatfallstoolbus-org-db-production
+  labels:
+    app.kubernetes.io/name: gftb-member-db
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: gftb-member-db
+  policyTypes: [Egress]
+  egress:
+    # WAL archive + base backup destination (cluster.yaml barmanObjectStore).
+    # This leg is what the RPO row depends on: if it is denied, archive_command
+    # fails and WAL piles up on the dedicated walStorage volume.
+    #
+    # REWIRED under the B1 ruling (2026-08-20): the destination is no longer
+    # the tcfs namespace's SeaweedFS gateway (estate-owned, outside GFTB's
+    # consumer boundary, custody findings in
+    # the ruling text) but the in-namespace gftb-member-db-backup-store rustfs
+    # Service declared in rustfs.yaml. Same-namespace podSelector, not a
+    # namespaceSelector, and port 9000 not 8333.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: gftb-member-db-backup-store
+      ports:
+        - protocol: TCP
+          port: 9000
+    # Intra-cluster replication (inert at instances: 1, see above).
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: gftb-member-db
+      ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 8000
+---
+# Restore rehearsal egress. This is a separate closed policy rather than an
+# In[primary,restore] selector: each cluster may reach only its own peers, so
+# the rehearsal cannot open a primary<->restore path. Destinations mirror the
+# reviewed primary pattern exactly: the in-namespace backup store and
+# same-cluster CNPG peer traffic. Activation has the same external
+# control-plane and DNS prerequisites described above.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-restore-postgres-egress
+  namespace: members-greatfallstoolbus-org-db-production
+  labels:
+    app.kubernetes.io/name: gftb-member-db-restore
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: gftb-member-db-restore
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: gftb-member-db-backup-store
+      ports:
+        - protocol: TCP
+          port: 9000
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: gftb-member-db-restore
+      ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 8000
+---
+# The GFTB-owned rustfs backup store (rustfs.yaml). Ingress admits the two
+# named CNPG clusters and the dedicated bucket initializer, on the S3 API port;
+# nothing else in the
+# namespace (default-deny-ingress above still applies to it) or estate can
+# reach it. This is the netpol half of the B1 ruling: a GFTB-owned store kept
+# inside the GFTB consumer overlay, with the secrets contract and netpol doctrine
+# already governing everything else in this namespace.
+#
+# COVERS THE RESTORE REHEARSAL TOO (B-5, PR #118 review round). The rehearsal
+# Cluster (`gftb-member-db-restore`) reads the same backups
+# from this same store — that is the entire point of the rehearsal — so its
+# pods need to be admitted here too, or the restore never gets past fetching
+# its base backup. The bucket initializer has a separate workload identity.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cnpg-to-backup-store-ingress
+  namespace: members-greatfallstoolbus-org-db-production
+  labels:
+    app.kubernetes.io/name: gftb-member-db-backup-store
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: gftb-member-db-backup-store
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: cnpg.io/cluster
+                operator: In
+                values: ["gftb-member-db", "gftb-member-db-restore"]
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: gftb-member-db-backup-bucket-create
+              app.kubernetes.io/component: object-store-bootstrap
+              app.kubernetes.io/part-of: great-falls-tool-bus
+      ports:
+        - protocol: TCP
+          port: 9000
+---
+# The one-shot bucket initializer carries object-store bootstrap authority.
+# Give that identity exactly the in-namespace backup-store endpoint; provider
+# DNS admission is an activation prerequisite outside this carrier. Never let
+# the Job borrow the CNPG label and its API/database-peer egress.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-bucket-create-egress
+  namespace: members-greatfallstoolbus-org-db-production
+  labels:
+    app.kubernetes.io/name: gftb-member-db-backup-bucket-create
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: gftb-member-db-backup-bucket-create
+      app.kubernetes.io/component: object-store-bootstrap
+      app.kubernetes.io/part-of: great-falls-tool-bus
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: gftb-member-db-backup-store
+      ports:
+        - protocol: TCP
+          port: 9000
+---
+# Deny all egress from the passive backup-store pod. The empty Egress policy is
+# what turns "no rule matched" into deny without encoding provider DNS topology.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backup-store-deny-egress
+  namespace: members-greatfallstoolbus-org-db-production
+  labels:
+    app.kubernetes.io/name: gftb-member-db-backup-store
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: gftb-member-db-backup-store
+  policyTypes: [Egress]
+  egress: []

@@ -1,0 +1,66 @@
+# Restore-rehearsal desired state (TIN-3817, Member v0 slice S1 infra half).
+#
+# The RTO<=4h acceptance row is met by restoring and timing a backup, not by
+# declaring one. This second Cluster recovers from the primary's object store
+# through bootstrap.recovery and externalClusters; it is never placed over the
+# live Cluster. NetworkPolicy admits both named Cluster identities explicitly.
+#
+# This is a one-shot source input, not continuously reconciled stack state. It
+# becomes executable only when the protected v4 owner transaction can create
+# these exact bytes, record independent readback, and remove the rehearsal
+# resources. With recoveryTarget absent, CNPG recovers to the latest available
+# WAL.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: gftb-member-db-restore
+  namespace: members-greatfallstoolbus-org-db-production
+  labels:
+    app.kubernetes.io/name: gftb-member-db-restore
+    app.kubernetes.io/component: database-restore-rehearsal
+    app.kubernetes.io/part-of: great-falls-tool-bus
+spec:
+  imageName: ghcr.io/cloudnative-pg/postgresql@sha256:e38d10bb2c7420e62efe9afabf207c005d93cdcf30f19f692d047f7dc660271e
+  imagePullPolicy: IfNotPresent
+  instances: 1
+  enableSuperuserAccess: false
+  primaryUpdateStrategy: unsupervised
+  primaryUpdateMethod: restart
+
+  bootstrap:
+    recovery:
+      source: gftb-member-db-origin
+
+  externalClusters:
+    - name: gftb-member-db-origin
+      barmanObjectStore:
+        destinationPath: s3://gftb-member-db-backups/
+        # The PRIMARY cluster's serverName — this is what tells barman-cloud
+        # which server's WAL/base-backup objects inside the shared bucket to
+        # read. Never gftb-member-db-restore; that would look for a restore
+        # of a restore.
+        serverName: gftb-member-db
+        endpointURL: http://gftb-member-db-backup-store.members-greatfallstoolbus-org-db-production.svc.cluster.local:9000
+        s3Credentials:
+          accessKeyId:
+            name: gftb-member-db-backup-s3
+            key: ACCESS_KEY_ID
+          secretAccessKey:
+            name: gftb-member-db-backup-s3
+            key: ACCESS_SECRET_KEY
+
+  storage:
+    size: 20Gi
+  walStorage:
+    size: 10Gi
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+  monitoring:
+    enablePodMonitor: false

@@ -1,0 +1,104 @@
+# One-shot bucket initialization desired state (TIN-3817, Member v0 slice S1).
+#
+# One-shot bucket-create Job for the B1 ruling's rustfs backup store (B-3,
+# PR #118 review round). Nothing else creates the gftb-member-db-backups
+# bucket: rustfs boots with an empty /data, barman-cloud does not create
+# buckets.
+#
+# WHY A JOB, NOT A HELPER POD OR AN EXEC. The exact image and command are
+# reviewable, the pod receives only the object-store bootstrap credential, and
+# dedicated NetworkPolicy admits this workload identity only to DNS and the
+# backup-store Service. It never impersonates a CNPG Cluster pod or inherits
+# database/API egress.
+#
+# IMAGE. `quay.io/minio/mc` is the S3-compatible client, pinned here by exact
+# digest. Re-pinning it requires advancing the validator constant in the same
+# reviewed change.
+#
+# CREDENTIAL. envFrom gftb-member-db-backup-store-root — the rustfs
+# server-bootstrap/admin Secret, never gftb-member-db-backup-s3. This Job uses
+# that authority only to create the named bucket. It does NOT provision,
+# configure, or prove the distinct bucket-scoped client credential.
+#
+# NOT A KUSTOMIZATION MEMBER. One-shot dispatch artifact, same reasoning as
+# ../members-greatfallstoolbus-org-production/job-migrator.template.yaml:
+# reconciling a completed Job is a no-op-or-conflict. A future protected v4
+# owner transaction must create a fresh instance from these exact bytes.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: gftb-member-db-backup-bucket-create-
+  namespace: members-greatfallstoolbus-org-db-production
+  labels:
+    app.kubernetes.io/name: gftb-member-db-backup-bucket-create
+    app.kubernetes.io/component: object-store-bootstrap
+    app.kubernetes.io/part-of: great-falls-tool-bus
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gftb-member-db-backup-bucket-create
+        app.kubernetes.io/component: object-store-bootstrap
+        app.kubernetes.io/part-of: great-falls-tool-bus
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 30
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mc
+          image: quay.io/minio/mc@sha256:b55b1283c0b81b8bb473c94133d4e00a552518c4796a954ddb04bb7b6e05927d
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              mc alias set rustfs "${RUSTFS_ENDPOINT_URL}" "${RUSTFS_ACCESS_KEY}" "${RUSTFS_SECRET_KEY}" >/dev/null
+              mc mb --ignore-existing "rustfs/${RUSTFS_BUCKET}"
+              echo "bucket ready: ${RUSTFS_BUCKET}"
+          env:
+            - name: MC_CONFIG_DIR
+              value: /tmp/.mc
+            # In-cluster only, same Service rustfs.yaml declares and
+            # cluster.yaml's barmanObjectStore.endpointURL already targets.
+            - name: RUSTFS_ENDPOINT_URL
+              value: http://gftb-member-db-backup-store.members-greatfallstoolbus-org-db-production.svc.cluster.local:9000
+            # Must match cluster.yaml's barmanObjectStore.destinationPath
+            # bucket name exactly; scripts/validate-member-db-stack.sh
+            # cross-checks the two.
+            - name: RUSTFS_BUCKET
+              value: gftb-member-db-backups
+          # NAME ONLY. This object-store root pair is used only for server
+          # bootstrap and bucket creation, never
+          # the CNPG backup/restore client credential and never a value in git.
+          envFrom:
+            - secretRef:
+                name: gftb-member-db-backup-store-root
+                optional: false
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: mc-config
+              mountPath: /tmp/.mc
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+      volumes:
+        - name: mc-config
+          emptyDir: {}

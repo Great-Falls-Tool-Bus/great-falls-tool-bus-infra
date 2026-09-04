@@ -1,0 +1,42 @@
+# GFTB member-database backup desired state (TIN-3817 acceptance row 8).
+#
+# The RPO/RTO acceptance row is satisfied by TWO mechanisms, not one, and it is
+# worth being precise about which does what:
+#
+#   RPO (<= 1 hour)  is carried by CONTINUOUS WAL ARCHIVING, declared in
+#                    cluster.yaml (backup.barmanObjectStore + archive_timeout
+#                    300s). Worst case loss is one archive_timeout window: five
+#                    minutes. The ScheduledBackup below does NOT set the RPO.
+#   RTO (<= 4 hours) must be proved by an INDEPENDENT RESTORE REHEARSAL. The
+#                    six-hourly base-backup cadence limits the amount of WAL
+#                    replay required, but the schedule alone makes no recovery
+#                    time claim.
+#
+# This object is therefore an input to the RTO proof, never the proof itself.
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: gftb-member-db-base
+  namespace: members-greatfallstoolbus-org-db-production
+  labels:
+    app.kubernetes.io/name: gftb-member-db
+    app.kubernetes.io/component: backup
+    app.kubernetes.io/part-of: great-falls-tool-bus
+spec:
+  # CNPG cron is SIX fields (leading seconds), not five: "0 0 */6 * * *" is
+  # 00:00, 06:00, 12:00, 18:00 UTC. A five-field expression here would be
+  # misread by one position and silently change the cadence.
+  schedule: "0 0 */6 * * *"
+  cluster:
+    name: gftb-member-db
+  # `self`: the ScheduledBackup owns the Backup objects it creates, so pruning
+  # the schedule prunes its backups' Kubernetes records without touching the
+  # object-store data the retention policy governs.
+  backupOwnerReference: self
+  method: barmanObjectStore
+  # Start a base backup when the schedule first reconciles; the protected plan
+  # orders object-store readiness first and independent readback proves success.
+  immediate: true
+  # A suspended schedule is an RTO breach that can otherwise look healthy.
+  suspend: false
+  online: true

@@ -1,0 +1,139 @@
+# Pre-rollout migration desired state (TIN-3817 acceptance row 2).
+#
+# The pre-rollout migration Job. Spec S6: checked-in generated SQL migrations
+# run once in a pre-rollout Job under an advisory lock; pods never migrate on
+# startup. The platform half is merged and published:
+#
+#   source SHA: af60fcd7539a4beff6f24e1a95eb11160df7c166
+#   workflow:   greatfallstoolbus.org Actions run 33279762284, attempt 1
+#   artifact:   greatfallstoolbus-org-image-af60fcd7539a4beff6f24e1a95eb11160df7c166-33279762284-1
+#   image:      ghcr.io/great-falls-tool-bus/greatfallstoolbus.org
+#               @sha256:10f853938dc6823afe8c9bdc54943587f963d22117aafd17247350b2b5712b35
+#
+# This carrier pins that published artifact in Git. Merged/published and
+# Git-pinned do not prove reconciled, running, or served state; protected
+# owner-overlay readback does. Before this carrier is eligible to land, replace
+# source SHA, workflow run, attempt, artifact, and image digest atomically from
+# one current verified ActionOutputSet and advance web/worker to the same image.
+#
+# WHY THIS IS A TEMPLATE AND NOT A STACK MEMBER
+#
+#   1. The reviewed image is part of this immutable release carrier. There is
+#      no runtime image input, placeholder, tag, or post-rename alternate.
+#   2. It is one-shot, not stack state. Reconciling a completed Job is a
+#      no-op-or-conflict rather than a reconcile, which is why it uses
+#      generateName and is created fresh per release instead of being kustomized
+#      alongside the Cluster.
+#   3. It runs in the PLATFORM namespace, not the database namespace — it is a
+#      platform workload holding a database credential, and the member-db
+#      NetworkPolicy admits it there by label.
+#
+# CREDENTIAL BOUNDARY. This Job receives the OWNER/migration credential and it
+# is the only workload that ever does. The web and worker Deployments receive
+# the DML-only runtime credential instead. Both are referenced BY NAME; no value
+# is in git. See ../secrets.contract.yaml.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # No fixed `name`: each release creates a new Job. A fixed name would force
+  # the apply path to delete the previous Job first, and deleting a workload to
+  # make room for its replacement is precisely the imperative-mutation shape the
+  # house release doctrine refuses.
+  generateName: gftb-member-db-migrate-
+  namespace: members-greatfallstoolbus-org-production
+  annotations:
+    app.tinyland.dev/source-sha: af60fcd7539a4beff6f24e1a95eb11160df7c166
+    app.tinyland.dev/publisher-run: "33279762284"
+    app.tinyland.dev/publisher-attempt: "1"
+  labels:
+    app.kubernetes.io/name: gftb-member-db-migrator
+    app.kubernetes.io/component: migrator
+    app.kubernetes.io/part-of: great-falls-tool-bus
+    app.kubernetes.io/managed-by: great-falls-tool-bus-infra
+    app.tinyland.dev/tenant: great-falls-tool-bus
+spec:
+  # FAIL CLOSED. backoffLimit 0 means a failed migration stays failed and the
+  # protected transaction records it; it does not retry into a half-applied
+  # ledger. The migrator's advisory lock makes an explicitly authorized rerun
+  # safe.
+  backoffLimit: 0
+  # A migration that has not finished in fifteen minutes is stuck (most likely
+  # waiting on the advisory lock behind another migrator), not slow. Bounding it
+  # keeps the rollout gate honest instead of hanging the release.
+  activeDeadlineSeconds: 900
+  # Keep the completed Job (and its logs) for a day as release evidence, then
+  # let it go rather than accumulating one object per release forever.
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      annotations:
+        app.tinyland.dev/source-sha: af60fcd7539a4beff6f24e1a95eb11160df7c166
+      labels:
+        # THE ADMISSION CONTRACT. These three labels are what
+        # ../members-greatfallstoolbus-org-db-production/networkpolicy.yaml
+        # admits on 5432. Changing them here without changing the policy there
+        # produces a migration that cannot reach the database.
+        app.kubernetes.io/name: gftb-member-db-migrator
+        app.kubernetes.io/component: migrator
+        app.kubernetes.io/part-of: great-falls-tool-bus
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 30
+      automountServiceAccountToken: false
+      # Names-only pull authority for the exact Git-pinned GHCR carrier. The
+      # package was observed anonymously pullable during review; this reference
+      # makes no privacy claim and keeps the Job pullable after the separately
+      # authorized visibility correction.
+      imagePullSecrets:
+        - name: ghcr-pull
+      # House hardening (ADR 0008 §3: non-root uid/gid 1001), same as the web
+      # workload.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrator
+          # Exact publisher carrier above. Changing this image requires a new
+          # platform source SHA, publisher receipt, reviewed Git pin, and the
+          # same remote validation/review gates as this change.
+          image: ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:10f853938dc6823afe8c9bdc54943587f963d22117aafd17247350b2b5712b35
+          imagePullPolicy: IfNotPresent
+          # One immutable image, three entrypoints (spec S6). This is the
+          # migrator one; `web` and `worker` are Deployments elsewhere.
+          #
+          # ARGS, NOT COMMAND (B-1, PR #118 review round). The published
+          # nix2container artifact (flake.nix:166-173,199,263 in the platform
+          # repo) installs /bin/{web,worker,migrator} and dispatches the role
+          # POSITIONALLY. `args: ["migrator"]` resolves on PATH and,
+          # unlike `command:`, does not override the image ENTRYPOINT
+          # (`["dumb-init", "--"]`), so dumb-init stays PID 1.
+          args: ["migrator"]
+          env:
+            # THE NARROW CREDENTIAL, BY NAME ONLY. Projected into the platform
+            # namespace from the CNPG-generated `gftb-member-db-app` Secret in
+            # the database namespace. It is the
+            # gftb_migrator owner role — DDL authority — and it is scoped
+            # to this Job alone.
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: gftb-member-db-migrator-dsn
+                  key: dsn
+            - name: NODE_ENV
+              value: production
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

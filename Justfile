@@ -55,6 +55,8 @@ check-hosted:
     just guard-no-remote-kustomize-resources-selftest
     just web-stack-validate
     just grafana-dashboards-validate
+    just member-db-stack-validate
+    just member-db-stack-selftest
     just arc-fmt-check
     just edge-zones-fmt-check
     just edge-zones-validate
@@ -1465,6 +1467,7 @@ arc-enrollment-plan: enrollment-preflight arc-plan
 # authority.
 _reviewed-clean-main:
     #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
+    set +x
     set -euo pipefail
     # The developer/CI toolchain PATH is an explicit input; privileged bash
     # refuses imported functions and startup files, while Git config below is
@@ -1555,7 +1558,7 @@ _reviewed-clean-main:
     index_flags="$(git ls-files -v | awk '$1 != "H"')"
     [[ -z "${index_flags}" ]] || { echo "Guarded ARC operation refuses assume-unchanged, skip-worktree, or non-cached index flags: ${index_flags}" >&2; exit 2; }
     canonical_remote="https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git"
-    origin_url="$(git remote get-url origin)"
+    origin_url="$(git config --local --get remote.origin.url)"
     case "${origin_url}" in
       https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra|https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git|git@github.com:Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git) ;;
       *) echo "Guarded ARC operation origin is not the canonical GFTB infra repository" >&2; exit 2 ;;
@@ -1564,19 +1567,32 @@ _reviewed-clean-main:
     head_sha="$(git rev-parse HEAD)"
     origin_sha="$(git rev-parse origin/main)"
     [[ "${head_sha}" == "${origin_sha}" ]] || { echo "Guarded ARC operation HEAD ${head_sha} is not origin/main ${origin_sha}" >&2; exit 2; }
-    remote_sha="$(
-      env -i \
-        PATH="${PATH}" \
-        HOME=/ \
-        GIT_CONFIG_NOSYSTEM=1 \
-        GIT_CONFIG_GLOBAL=/dev/null \
-        GIT_NO_REPLACE_OBJECTS=1 \
-        git -C / ls-remote --exit-code "${canonical_remote}" refs/heads/main |
-        awk 'NR == 1 { print $1 }'
-    )"
-    [[ "${remote_sha}" =~ ^[0-9a-f]{40}$ ]] || { echo "Could not resolve the current remote main SHA" >&2; exit 2; }
+    git_bin="$(command -v git)"
+    gpg_bin="$(command -v gpg)"
+    env_bin="$(command -v env)"
+    [[ -n "${git_bin}" && -x "${git_bin}" ]] || { echo "Guarded ARC operation requires an executable git" >&2; exit 2; }
+    [[ -n "${gpg_bin}" && -x "${gpg_bin}" ]] || { echo "Guarded ARC operation requires an executable OpenPGP verifier" >&2; exit 2; }
+    [[ -n "${env_bin}" && -x "${env_bin}" ]] || { echo "Guarded ARC operation requires an executable env" >&2; exit 2; }
+    remote_probe_dir="$(mktemp -d "${TMPDIR:-/tmp}/gftb-infra-remote.XXXXXX")"
+    [[ -n "${remote_probe_dir}" && -d "${remote_probe_dir}" ]] || { echo "Could not create the bounded remote-verification directory" >&2; exit 2; }
+    cleanup_remote_probe() {
+      if [[ -n "${remote_probe_dir:-}" && -d "${remote_probe_dir}" ]]; then
+        rmdir -- "${remote_probe_dir}"
+      fi
+    }
+    trap cleanup_remote_probe EXIT
+    clean_git_env=("${env_bin}" -i GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0)
+    [[ -z "${SSL_CERT_FILE:-}" ]] || clean_git_env+=("SSL_CERT_FILE=${SSL_CERT_FILE}")
+    [[ -z "${NIX_SSL_CERT_FILE:-}" ]] || clean_git_env+=("NIX_SSL_CERT_FILE=${NIX_SSL_CERT_FILE}")
+    remote_output="$("${clean_git_env[@]}" "${git_bin}" -C "${remote_probe_dir}" ls-remote --exit-code "${canonical_remote}" refs/heads/main)"
+    [[ "${remote_output}" != *$'\n'* ]] || { echo "Canonical remote main lookup returned more than one ref" >&2; exit 2; }
+    IFS=$'\t' read -r remote_sha remote_ref remote_extra <<<"${remote_output}"
+    [[ -z "${remote_extra:-}" && "${remote_ref:-}" == "refs/heads/main" && "${remote_sha:-}" =~ ^[0-9a-f]{40}$ ]] || { echo "Could not resolve exactly one current canonical remote main SHA" >&2; exit 2; }
     [[ "${head_sha}" == "${remote_sha}" ]] || { echo "Guarded ARC operation HEAD ${head_sha} is not current remote main ${remote_sha}" >&2; exit 2; }
-    git -c gpg.format=openpgp -c gpg.program=gpg -c gpg.openpgp.program=gpg verify-commit "${head_sha}" >/dev/null
+    cleanup_remote_probe
+    remote_probe_dir=""
+    trap - EXIT
+    "${git_bin}" -c gpg.format=openpgp -c "gpg.program=${gpg_bin}" -c "gpg.openpgp.program=${gpg_bin}" verify-commit "${head_sha}" >/dev/null
     echo "reviewed infra carrier: ${head_sha}"
 
 # Enrollment and GitHub App Secret materialization use the implementation-role
@@ -2432,6 +2448,20 @@ grafana_dashboard_dir := "observability/grafana/dashboards/gftb"
 
 grafana-dashboards-validate:
     bash scripts/validate-grafana-dashboards.sh {{ grafana_dashboard_dir }}
+
+# --- GFTB member database substrate (TIN-3817, Member v0 slice S1 infra half) -
+# Consumer-owned declarative desired state. Reconciliation and release receipts
+# are owned by the protected v4 owner-overlay path, not repo-local recipes.
+
+member_db_stack_dir := "k8s/member-db/members-greatfallstoolbus-org-db-production"
+
+# Hosted, offline source-contract guard.
+member-db-stack-validate:
+    bash scripts/validate-member-db-stack.sh {{ member_db_stack_dir }}
+
+# Executable negative controls for the source-validation boundary.
+member-db-stack-selftest:
+    bash scripts/validate-member-db-stack.sh --self-test
 
 # --- Reviewed gftb-site release candidate proofs ----------------------------
 # These recipes are read-only/proof-only. The retired adapter-node carrier is

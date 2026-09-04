@@ -314,7 +314,7 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "49a0e25c1cc8c8ff", "b15096271b4271a4", "fe1d38e06e5abf79", "905f0b0d50110b7a"
     ),
     "_reviewed-clean-main": _receipt(
-        "a150da8501b19226", "aaa2dd5d11201170", "c445ea09645439b0", "855ad36f37510540"
+        "49a6977f410d02ab", "333de10c3190c842", "dbc92c2c745122b2", "4ad66174088c38e9"
     ),
     "_reviewed-implementation-core": _receipt(
         "180f8edd55babb51", "43e15dac40bbad2a", "bffe444ff6221c04", "7c64836ae0c2cfc6"
@@ -3337,11 +3337,13 @@ def install_web_release_fixture_mocks(
         "chmod",
         "env",
         "grep",
+        "gpg",
         "jq",
         "mkdir",
         "mktemp",
         "python3",
         "rm",
+        "rmdir",
         "sort",
         "tail",
         "tr",
@@ -4610,7 +4612,7 @@ def install_web_release_fixture_mocks(
                 pass
             elif args == ["ls-files", "-v"]:
                 pass
-            elif args == ["remote", "get-url", "origin"]:
+            elif args == ["config", "--local", "--get", "remote.origin.url"]:
                 if state == "apply-git-origin-secret":
                     print(
                         "https://x-access-token:"
@@ -4620,21 +4622,48 @@ def install_web_release_fixture_mocks(
                     )
                 else:
                     print(canonical)
+            elif args == ["remote", "get-url", "origin"]:
+                print(canonical)
             elif args == [
                 "show-ref", "--verify", "--quiet", "refs/remotes/origin/main"
             ]:
                 pass
-            elif args[:2] == ["ls-remote", "--exit-code"] and args[3:] == [
-                "refs/heads/main"
-            ]:
+            elif (
+                len(args) == 6
+                and args[0] == "-C"
+                and args[2:4] == ["ls-remote", "--exit-code"]
+                and args[4:] == [canonical, "refs/heads/main"]
+            ):
+                required = {
+                    "GIT_CONFIG_NOSYSTEM": "1",
+                    "GIT_CONFIG_GLOBAL": "/dev/null",
+                    "GIT_TERMINAL_PROMPT": "0",
+                }
+                if any(os.environ.get(key) != value for key, value in required.items()):
+                    raise SystemExit("mock git requires config-empty remote lookup")
+                if "HOME" in os.environ or any(
+                    key.startswith("GIT_CONFIG_") and key not in required
+                    for key in os.environ
+                ):
+                    raise SystemExit("mock git rejected inherited config steering")
                 print(head + "\\trefs/heads/main")
-            elif args == [
-                "-c", "gpg.format=openpgp",
-                "-c", "gpg.program=gpg",
-                "-c", "gpg.openpgp.program=gpg",
-                "verify-commit", head,
-            ]:
-                pass
+            elif (
+                len(args) == 8
+                and args[:2] == ["-c", "gpg.format=openpgp"]
+                and args[2] == "-c"
+                and args[3].startswith("gpg.program=")
+                and args[4] == "-c"
+                and args[5].startswith("gpg.openpgp.program=")
+                and args[6:] == ["verify-commit", head]
+            ):
+                gpg_program = args[3].split("=", 1)[1]
+                openpgp_program = args[5].split("=", 1)[1]
+                if (
+                    gpg_program != openpgp_program
+                    or not pathlib.Path(gpg_program).is_absolute()
+                    or not pathlib.Path(gpg_program).is_file()
+                ):
+                    raise SystemExit("mock git requires one exact absolute OpenPGP verifier")
             else:
                 raise SystemExit(
                     "mock git rejected unexpected argv: " + " ".join(sys.argv[1:])
@@ -7146,6 +7175,12 @@ def self_test() -> None:
     body_mutations = (
         (
             "_reviewed-clean-main",
+            '    "${git_bin}" -c gpg.format=openpgp -c "gpg.program=${gpg_bin}" -c "gpg.openpgp.program=${gpg_bin}" verify-commit "${head_sha}" >/dev/null',
+            '    true # explicit OpenPGP verification bypassed',
+            "comment-spoofed commit verification",
+        ),
+        (
+            "_reviewed-clean-main",
             "    export LC_ALL=C",
             "    export LC_ALL=C.UTF-8",
             "locale-neutral Git parsing removal",
@@ -7170,17 +7205,9 @@ def self_test() -> None:
         ),
         (
             "_reviewed-clean-main",
-            '        git -C / ls-remote --exit-code "${canonical_remote}" refs/heads/main |',
-            '        git ls-remote --exit-code "${canonical_remote}" refs/heads/main |',
+            '    remote_output="$("${clean_git_env[@]}" "${git_bin}" -C "${remote_probe_dir}" ls-remote --exit-code "${canonical_remote}" refs/heads/main)"',
+            '    remote_output="$("${clean_git_env[@]}" "${git_bin}" ls-remote --exit-code "${canonical_remote}" refs/heads/main)"',
             "remote main read restored repository configuration",
-        ),
-        (
-            "_reviewed-clean-main",
-            "    git -c gpg.format=openpgp -c gpg.program=gpg "
-            '-c gpg.openpgp.program=gpg verify-commit "${head_sha}" >/dev/null',
-            "    true # git -c gpg.format=openpgp -c gpg.program=gpg "
-            '-c gpg.openpgp.program=gpg verify-commit "${head_sha}" >/dev/null',
-            "comment-spoofed commit verification",
         ),
         (
             "_reviewed-arc-core",
