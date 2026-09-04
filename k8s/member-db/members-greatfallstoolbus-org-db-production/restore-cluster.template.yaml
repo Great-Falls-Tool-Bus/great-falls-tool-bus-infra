@@ -1,33 +1,15 @@
-# DECLARE-ONLY — MERGING APPLIES NOTHING (TIN-3817, Member v0 slice S1 infra half).
+# Restore-rehearsal desired state (TIN-3817, Member v0 slice S1 infra half).
 #
-# The restore rehearsal Cluster for runbook step R — the RTO<=4h acceptance
-# row is not met by declaring a backup, it is met by restoring one and timing
-# it (B-5, PR #118 review round). This is a SECOND Cluster, never applied
-# over the live one, recovering from the same rustfs backup store via
-# bootstrap.recovery + externalClusters rather than bootstrap.initdb.
+# The RTO<=4h acceptance row is met by restoring and timing a backup, not by
+# declaring one. This second Cluster recovers from the primary's object store
+# through bootstrap.recovery and externalClusters; it is never placed over the
+# live Cluster. NetworkPolicy admits both named Cluster identities explicitly.
 #
-# WHY THIS NOW WORKS. Before B-5, networkpolicy.yaml's
-# allow-cnpg-operator-ingress and allow-cnpg-to-backup-store-ingress admitted
-# only cnpg.io/cluster: gftb-member-db — a label THIS Cluster's pods do not
-# carry (CNPG sets cnpg.io/cluster to the Cluster's own name, so these pods
-# carry gftb-member-db-restore). The operator could never reach the restore
-# instance manager, and the restore pods could never read the backups they
-# exist to restore. Both policies now admit gftb-member-db-restore too, by
-# name, alongside the primary.
-#
-# NOT A KUSTOMIZATION MEMBER. Same reasoning as job-migrator.template.yaml
-# and bucket-create.template.yaml: this is a one-shot rehearsal artifact, not
-# stack state, and reconciling it via kustomize would try to keep the
-# rehearsal cluster alive permanently instead of letting the operator tear it
-# down (runbook step R5 / `just member-db-restore-rehearsal-teardown`).
-#
-# POINT-IN-TIME TARGET. Left unset here: CNPG recovers to the latest
-# available WAL when `recoveryTarget` is absent, which is both the common
-# case for an RTO rehearsal and the simplest thing to time honestly. An
-# The exact rehearsal recipe consumes this checked-in path, so it cannot apply
-# an operator-local copy. A specific `targetTime` requires a separate reviewed,
-# exact template/recipe carrier with the same absence, fresh-UID, branch, and
-# confirmation gates; this carrier proves latest-available recovery only.
+# This is a one-shot source input, not continuously reconciled stack state. It
+# becomes executable only when the protected v4 owner transaction can create
+# these exact bytes, record independent readback, and remove the rehearsal
+# resources. With recoveryTarget absent, CNPG recovers to the latest available
+# WAL.
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
@@ -37,7 +19,6 @@ metadata:
     app.kubernetes.io/name: gftb-member-db-restore
     app.kubernetes.io/component: database-restore-rehearsal
     app.kubernetes.io/part-of: great-falls-tool-bus
-    app.tinyland.dev/lifecycle: declare-only
 spec:
   imageName: ghcr.io/cloudnative-pg/postgresql@sha256:e38d10bb2c7420e62efe9afabf207c005d93cdcf30f19f692d047f7dc660271e
   imagePullPolicy: IfNotPresent
@@ -70,10 +51,8 @@ spec:
 
   storage:
     size: 20Gi
-    storageClass: openebs-bumble-postgresql-retain
   walStorage:
     size: 10Gi
-    storageClass: openebs-bumble-postgresql-retain
 
   resources:
     requests:

@@ -69,7 +69,6 @@ test_suite(
 )
 
 MEMBER_DB_CONTRACT_SOURCES = [
-    "k8s/member-db/README.md",
     "k8s/member-db/secrets.contract.yaml",
     "k8s/member-db/members-greatfallstoolbus-org-db-production/bucket-create.template.yaml",
     "k8s/member-db/members-greatfallstoolbus-org-db-production/cluster.yaml",

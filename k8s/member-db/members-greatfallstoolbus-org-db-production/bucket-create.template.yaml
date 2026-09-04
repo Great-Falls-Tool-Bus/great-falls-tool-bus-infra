@@ -1,44 +1,29 @@
-# DECLARE-ONLY — MERGING APPLIES NOTHING (TIN-3817, Member v0 slice S1 infra half).
+# One-shot bucket initialization desired state (TIN-3817, Member v0 slice S1).
 #
 # One-shot bucket-create Job for the B1 ruling's rustfs backup store (B-3,
 # PR #118 review round). Nothing else creates the gftb-member-db-backups
 # bucket: rustfs boots with an empty /data, barman-cloud does not create
-# buckets, and runbook step B2 named the bucket with no command, no tool, and
-# no ordering.
+# buckets.
 #
-# WHY A JOB, NOT A HELPER POD OR AN EXEC. The ingress NetworkPolicy
-# (allow-cnpg-to-backup-store-ingress) admits ONLY pods labeled
-# cnpg.io/cluster: gftb-member-db into the store on :9000 — a bare
-# `kubectl run` mc/aws-cli pod is denied by the very policy the B1 ruling
-# required, and `kubectl exec` into the rustfs pod is not a documented path
-# because the rustfs image is not guaranteed to carry an S3 client. This Job
-# instead carries the SAME label CNPG's own instance pods carry, so the
-# EXISTING policy admits it — the review's "cleanest — no policy change"
-# option. Same reasoning for egress: allow-postgres-egress already admits
-# cnpg.io/cluster: gftb-member-db pods to the backup store on :9000 and to
-# DNS, so this Job needs no egress rule of its own either.
+# WHY A JOB, NOT A HELPER POD OR AN EXEC. The exact image and command are
+# reviewable, the pod receives only the object-store bootstrap credential, and
+# dedicated NetworkPolicy admits this workload identity only to DNS and the
+# backup-store Service. It never impersonates a CNPG Cluster pod or inherits
+# database/API egress.
 #
-# IMAGE. quay.io/minio/mc, digest reused verbatim from the estate's own
-# already-vetted pin: blahaj scripts/ci-ensure-rustfs-bucket.sh
-# (TOFU_RUSTFS_BUCKET_MC_IMAGE default) records the same bounded job shape —
-# ensure a bucket exists on a rustfs instance from in-cluster CI — as historical
-# reviewed provenance, not a current-live assertion about another rustfs. `mc` is MinIO Client, S3-API
-# compatible, and this reuses that shape rather than inventing a new one.
+# IMAGE. `quay.io/minio/mc` is the S3-compatible client, pinned here by exact
+# digest. Re-pinning it requires advancing the validator constant in the same
+# reviewed change.
 #
 # CREDENTIAL. envFrom gftb-member-db-backup-store-root — the rustfs
 # server-bootstrap/admin Secret, never gftb-member-db-backup-s3. This Job uses
 # that authority only to create the named bucket. It does NOT provision,
-# configure, or prove the distinct bucket-scoped client credential; that is a
-# fail-closed operator prerequisite before the CNPG Cluster can apply.
+# configure, or prove the distinct bucket-scoped client credential.
 #
 # NOT A KUSTOMIZATION MEMBER. One-shot dispatch artifact, same reasoning as
 # ../members-greatfallstoolbus-org-production/job-migrator.template.yaml:
-# re-applying a completed Job is a no-op-or-conflict, not a reconcile, so it
-# is created fresh by `just member-db-backup-bucket-create` rather than
-# kustomized alongside the StatefulSet. Unlike the migrator template, nothing
-# here is operator-supplied at dispatch — the image, bucket name, and
-# endpoint are all reviewed constants — so there is no PLACEHOLDER to
-# substitute and no render step.
+# reconciling a completed Job is a no-op-or-conflict. A future protected v4
+# owner transaction must create a fresh instance from these exact bytes.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -48,7 +33,6 @@ metadata:
     app.kubernetes.io/name: gftb-member-db-backup-bucket-create
     app.kubernetes.io/component: object-store-bootstrap
     app.kubernetes.io/part-of: great-falls-tool-bus
-    app.tinyland.dev/lifecycle: declare-only
 spec:
   backoffLimit: 3
   activeDeadlineSeconds: 300
@@ -57,14 +41,8 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: gftb-member-db-backup-bucket-create
-        # THE ADMISSION CONTRACT. This is CNPG's own instance-selector
-        # label, reused deliberately (not invented) so
-        # allow-cnpg-to-backup-store-ingress and allow-postgres-egress in
-        # networkpolicy.yaml both admit this one-shot Job without a policy
-        # change. It is not a CNPG-managed pod and CNPG's operator does not
-        # reconcile against it — the label is a NetworkPolicy admission key
-        # here, nothing more.
-        cnpg.io/cluster: gftb-member-db
+        app.kubernetes.io/component: object-store-bootstrap
+        app.kubernetes.io/part-of: great-falls-tool-bus
     spec:
       restartPolicy: Never
       terminationGracePeriodSeconds: 30
@@ -99,8 +77,8 @@ spec:
             # cross-checks the two.
             - name: RUSTFS_BUCKET
               value: gftb-member-db-backups
-          # NAME ONLY. This is the operator-minted rustfs root pair used only
-          # for server bootstrap and bucket creation (runbook step B2), never
+          # NAME ONLY. This object-store root pair is used only for server
+          # bootstrap and bucket creation, never
           # the CNPG backup/restore client credential and never a value in git.
           envFrom:
             - secretRef:

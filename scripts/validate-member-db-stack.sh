@@ -6,9 +6,9 @@
 # --arg keeps names from being able to inject jq syntax.
 set -euo pipefail
 
-# DECLARE-ONLY guard for the GFTB member database substrate (TIN-3817, Member v0
-# slice S1 infra half). Offline: it never contacts a cluster and never needs a
-# credential, so it runs in hosted CI through `just check-hosted`.
+# Source-contract guard for the GFTB member database substrate (TIN-3817,
+# Member v0 slice S1 infra half). It never contacts a cluster or acquires a
+# credential.
 #
 # WHAT THIS GUARD IS FOR. The member database is the first GFTB surface that
 # holds personal data under an explicit RPO/RTO acceptance row, and three of its
@@ -22,7 +22,7 @@ set -euo pipefail
 #
 # None of the three produces an error at apply time. They produce a green
 # cluster that does not meet the contract. So each one is asserted here rather
-# than described in a runbook.
+# than left as unchecked prose.
 
 run_self_test() {
   local script_dir repo_root source_root validator temp_root fixtures
@@ -89,19 +89,10 @@ PY
   expect_failure runtime-dsn "${job}"     '                  name: gftb-member-db-migrator-dsn'     '                  name: gftb-member-db-runtime'     'migration Job secret references (only the narrow migration credential)'
   expect_failure pull-secret "${job}"     '        - name: ghcr-pull'     '        - name: ghcr-pull-broken'     'migration Job imagePullSecrets'
   expect_failure pull-secret-duplicate     'secrets.contract.yaml'     $'    - name: ghcr-pull\n      namespace: members-greatfallstoolbus-org-production\n      type: kubernetes.io/dockerconfigjson'     $'    - name: ghcr-pull\n      namespace: members-greatfallstoolbus-org-production\n      type: kubernetes.io/dockerconfigjson\n    - name: ghcr-pull\n      namespace: members-greatfallstoolbus-org-production\n      type: kubernetes.io/dockerconfigjson'     'GHCR pull Secret declaration cardinality'
-  expect_failure pull-secret-manual-origin     'secrets.contract.yaml'     $'    - name: ghcr-pull\n      namespace: members-greatfallstoolbus-org-production'     $'    - name: ghcr-pull\n      namespace: members-greatfallstoolbus-org-production\n      origin: operator-provisioned'     'GHCR pull Secret manual provisioning fields (must be absent)'
-  expect_failure pull-secret-manual-provisioner     'secrets.contract.yaml'     '      apply_prerequisite: _member-db-platform-image-pull-prerequisite'     $'      apply_prerequisite: _member-db-platform-image-pull-prerequisite\n      provisioned_by: operator via kubectl'     'GHCR pull Secret manual provisioning fields (must be absent)'
-  expect_failure pull-secret-projection-contract     'secrets.contract.yaml'     '        contract: RegistryPullProjection/v1'     '        contract: RegistryPullProjection/v0'     'GHCR pull Secret RegistryPullProjection contract'
-  expect_failure pull-secret-controller     'secrets.contract.yaml'     '        controller: sole-governed-owner-overlay'     '        controller: tenant-local'     'GHCR pull Secret controller authority contract'
-  expect_failure pull-secret-payload-source     'secrets.contract.yaml'     '        credential_payload_source: governed-controller-only'     '        credential_payload_source: per-tenant-sops-or-manual'     'GHCR pull Secret credential payload source contract'
-  expect_failure pull-secret-unexpected-projection-key     'secrets.contract.yaml'     '        operator_created_secret_permitted: false'     $'        operator_created_secret_permitted: false\n        per_tenant_sops_or_manual_payload_permitted: true'     'GHCR pull Secret RegistryPullProjection closed schema'
-  expect_failure pull-secret-mutable     'secrets.contract.yaml'     '        immutable: true'     '        immutable: false'     'GHCR pull Secret immutable intent contract'
-  expect_failure pull-secret-unprotected-subordinate     'secrets.contract.yaml'     '        protected_subordinate_execution: true'     '        protected_subordinate_execution: false'     'GHCR pull Secret protected subordinate execution contract'
-  expect_failure pull-secret-overwrite     'secrets.contract.yaml'     '        create_if_absent: true'     '        create_if_absent: false'     'GHCR pull Secret create-if-absent contract'
-  expect_failure pull-secret-controller-live     'secrets.contract.yaml'     '        controller_live: false'     '        controller_live: true'     'GHCR pull Secret controller live-state contract'
-  expect_failure pull-secret-interim-authority     'secrets.contract.yaml'     '        interim_authority_permitted: false'     '        interim_authority_permitted: true'     'GHCR pull Secret interim authority contract'
-  expect_failure pull-secret-operator-created     'secrets.contract.yaml'     '        operator_created_secret_permitted: false'     '        operator_created_secret_permitted: true'     'GHCR pull Secret operator-created Secret prohibition'
-  expect_failure restore-egress-selector     'members-greatfallstoolbus-org-db-production/networkpolicy.yaml'     $'  name: allow-restore-postgres-egress\n  namespace: members-greatfallstoolbus-org-db-production\n  labels:\n    app.kubernetes.io/name: gftb-member-db-restore\n    app.tinyland.dev/lifecycle: declare-only\nspec:\n  podSelector:\n    matchLabels:\n      cnpg.io/cluster: gftb-member-db-restore'     $'  name: allow-restore-postgres-egress\n  namespace: members-greatfallstoolbus-org-db-production\n  labels:\n    app.kubernetes.io/name: gftb-member-db-restore\n    app.tinyland.dev/lifecycle: declare-only\nspec:\n  podSelector:\n    matchLabels:\n      cnpg.io/cluster: gftb-member-db-restore-broken'     'allow-restore-postgres-egress podSelector'
+  expect_failure pull-secret-manual-origin     'secrets.contract.yaml'     $'    - name: ghcr-pull\n      namespace: members-greatfallstoolbus-org-production'     $'    - name: ghcr-pull\n      namespace: members-greatfallstoolbus-org-production\n      origin: operator-provisioned'     'names-only Secret contract forbidden fields'
+  expect_failure pull-secret-manual-provisioner     'secrets.contract.yaml'     $'      role: registry_pull\n      authority: >-'     $'      role: registry_pull\n      provisioned_by: operator via kubectl\n      authority: >-'     'names-only Secret contract forbidden fields'
+  expect_failure non-pull-secret-inline-value     'secrets.contract.yaml'     $'      role: gftb_app\n      authority: >-'     $'      role: gftb_app\n      value: harmless-placeholder\n      authority: >-'     'names-only Secret contract forbidden fields'
+  expect_failure restore-egress-selector     'members-greatfallstoolbus-org-db-production/networkpolicy.yaml'     $'  name: allow-restore-postgres-egress\n  namespace: members-greatfallstoolbus-org-db-production\n  labels:\n    app.kubernetes.io/name: gftb-member-db-restore\nspec:\n  podSelector:\n    matchLabels:\n      cnpg.io/cluster: gftb-member-db-restore'     $'  name: allow-restore-postgres-egress\n  namespace: members-greatfallstoolbus-org-db-production\n  labels:\n    app.kubernetes.io/name: gftb-member-db-restore\nspec:\n  podSelector:\n    matchLabels:\n      cnpg.io/cluster: gftb-member-db-restore-broken'     'allow-restore-postgres-egress podSelector'
   expect_failure root-as-scoped-authority     'secrets.contract.yaml'     'app.tinyland.dev/object-store-authority: object-read-write-no-admin'     'app.tinyland.dev/object-store-authority: server-root-admin'     'bucket-scoped backup Secret authority annotation contract'
   expect_failure invalid-yaml "${job}"     'apiVersion: batch/v1'     'apiVersion: ['     'YAML decode or jq query failed'
   echo "member-db validator negative controls passed"
@@ -138,7 +129,7 @@ readonly WANT_PG_DIGEST="sha256:e38d10bb2c7420e62efe9afabf207c005d93cdcf30f19f69
 readonly WANT_DB_NS="members-greatfallstoolbus-org-db-production"
 readonly WANT_PLATFORM_NS="members-greatfallstoolbus-org-production"
 readonly WANT_CLUSTER="gftb-member-db"
-# B-5 (PR #118 review round): the restore rehearsal (runbook step R) is a
+# B-5 (PR #118 review round): the restore rehearsal is a
 # SECOND Cluster in this namespace, and two ingress policies must admit its
 # pods alongside the primary's or the rehearsal — the RTO<=4h row's only
 # proof path — cannot run.
@@ -151,12 +142,8 @@ readonly WANT_MIGRATOR_SECRET="gftb-member-db-migrator-dsn"
 readonly WANT_PLATFORM_PART_OF="great-falls-tool-bus"
 readonly WANT_MIGRATOR_NAME="gftb-member-db-migrator"
 readonly WANT_IMAGE_PULL_SECRET="ghcr-pull"
-readonly WANT_PULL_PROJECTION_CONTRACT="RegistryPullProjection/v1"
-readonly WANT_PULL_PROJECTION_CONTROLLER="sole-governed-owner-overlay"
-readonly WANT_PULL_PROJECTION_PAYLOAD_SOURCE="governed-controller-only"
 readonly WANT_BACKUP_SECRET="gftb-member-db-backup-s3"
 readonly WANT_BUCKET="gftb-member-db-backups"
-readonly WANT_STORAGE_CLASS="openebs-bumble-postgresql-retain"
 readonly WANT_MIGRATOR_ARGS='["migrator"]'
 readonly WANT_MIGRATOR_CONTAINERS='["migrator"]'
 readonly WANT_MIGRATOR_SOURCE_SHA="af60fcd7539a4beff6f24e1a95eb11160df7c166"
@@ -173,7 +160,6 @@ readonly WANT_RUSTFS_REPO="docker.io/rustfs/rustfs"
 readonly WANT_RUSTFS_TAG="1.0.0-beta.8"
 readonly WANT_RUSTFS_DIGEST="sha256:fa19210ac4697c79d7ccca1ec9b0eb91aebacc6691991ffb14014bb3c67e6cc3"
 readonly WANT_RUSTFS_NAME="gftb-member-db-backup-store"
-readonly WANT_RUSTFS_STORAGECLASS="local-path-sting"
 readonly MIN_RUSTFS_STORAGE_GI=50
 # B-3 (PR #118 review round): the bucket-create Job. Image digest reused
 # verbatim from the estate's already-vetted mc pin (blahaj
@@ -236,15 +222,15 @@ for f in "${cluster}" "${schedbackup}" "${netpol}" "${kustomization}" \
   require_file "${f}"
 done
 
-# --- render ONCE, up front. Every assertion below that cares what actually
-# gets applied reads THIS file, never a source YAML directly — kustomize
+# --- render ONCE, up front. Every assertion below that cares about the
+# composed desired state reads THIS file, never a source YAML directly — kustomize
 # (the `resources:` list, the `labels:` transformer) sits between the two,
 # and a regression there (a dropped `- networkpolicy.yaml` line, a dropped
 # `- rustfs.yaml` or `- scheduledbackup.yaml` line) can leave every
-# source-file assertion green while the applied bytes are missing an entire
+# source-file assertion green while the composed bytes are missing an entire
 # NetworkPolicy, the backup store, or the RTO control. `kubectl kustomize`
-# only parses the local tree; it never touches a cluster. (B-7, same class as
-# #121's E1.) The migration Job template is deliberately NOT part of this
+# only parses the local tree; it never touches a cluster. The migration Job
+# template is deliberately NOT part of this
 # render (axis 12 below asserts it never becomes one), so its own assertions
 # keep reading the source file directly.
 rendered="$(mktemp)"
@@ -276,13 +262,13 @@ fi
 assert_eq "${image}" "${WANT_PG_REPO}@${WANT_PG_DIGEST}" \
   "CNPG image digest (TIN-3817 acceptance row 1 pins PostgreSQL 16.15)"
 
-# --- axis 2: single instance on the purpose-built, node-pinned class ---------
+# --- axis 2: single instance, with provider placement absent -----------------
 instances="$(yaml_query -r 'select(.kind == "Cluster") | .spec.instances' "${rendered}")"
 assert_eq "${instances}" "1" "CNPG instances"
-data_sc="$(yaml_query -r 'select(.kind == "Cluster") | .spec.storage.storageClass' "${rendered}")"
-wal_sc="$(yaml_query -r 'select(.kind == "Cluster") | .spec.walStorage.storageClass' "${rendered}")"
-assert_eq "${data_sc}" "${WANT_STORAGE_CLASS}" "data storageClass"
-assert_eq "${wal_sc}" "${WANT_STORAGE_CLASS}" "WAL storageClass"
+assert_eq "$(yaml_query -r 'select(.kind == "Cluster") | .spec.storage | has("storageClass")' "${rendered}")" \
+  "false" "consumer Cluster must not select a provider storageClass"
+assert_eq "$(yaml_query -r 'select(.kind == "Cluster") | .spec.walStorage | has("storageClass")' "${rendered}")" \
+  "false" "consumer Cluster WAL volume must not select a provider storageClass"
 # WAL on its own volume is what stops an archive stall from filling the data
 # volume; losing the separation is a durability regression, not a tidy-up.
 wal_size="$(yaml_query -r 'select(.kind == "Cluster") | .spec.walStorage.size' "${rendered}")"
@@ -327,7 +313,7 @@ if grep -Ex "value|stringValue" <<<"${s3_credential_keys}" >/dev/null 2>&1; then
   fail "s3Credentials must reference Secret keys by name only; an inline value is present"
 fi
 s3_credential_names="$(yaml_query -c 'select(.kind == "Cluster") | [.spec.backup.barmanObjectStore.s3Credentials.accessKeyId.name, .spec.backup.barmanObjectStore.s3Credentials.secretAccessKey.name] | unique' "${rendered}")"
-assert_eq "${s3_credential_names}" "[\"${WANT_BACKUP_SECRET}\"]" "primary backup credential must be the pre-provisioned bucket-scoped Secret, never rustfs root"
+assert_eq "${s3_credential_names}" "[\"${WANT_BACKUP_SECRET}\"]" "primary backup credential must be the bucket-scoped Secret, never rustfs root"
 
 backup_contract_type="$(yaml_query -r --arg n "${WANT_BACKUP_SECRET}" '.spec.secrets[] | select(.name == $n) | .type' "${secrets_contract}")"
 assert_eq "${backup_contract_type}" "Opaque" "bucket-scoped backup Secret type contract"
@@ -352,28 +338,8 @@ pull_contract_type="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.s
 assert_eq "${pull_contract_type}" "kubernetes.io/dockerconfigjson" "GHCR pull Secret type contract"
 pull_contract_keys="$(yaml_query -c --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .keys' "${secrets_contract}")"
 assert_eq "${pull_contract_keys}" '[".dockerconfigjson"]' "GHCR pull Secret key contract"
-pull_contract_manual_fields="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | (has("origin") or has("provisioned_by"))' "${secrets_contract}")"
-assert_eq "${pull_contract_manual_fields}" "false" "GHCR pull Secret manual provisioning fields (must be absent)"
-pull_contract_projection_keys="$(yaml_query -c --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .projection | keys | sort' "${secrets_contract}")"
-assert_eq "${pull_contract_projection_keys}" '["contract","controller","controller_live","create_if_absent","credential_payload_source","immutable","interim_authority_permitted","operator_created_secret_permitted","protected_subordinate_execution"]' "GHCR pull Secret RegistryPullProjection closed schema"
-pull_contract_projection="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .projection.contract' "${secrets_contract}")"
-assert_eq "${pull_contract_projection}" "${WANT_PULL_PROJECTION_CONTRACT}" "GHCR pull Secret RegistryPullProjection contract"
-pull_contract_controller="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .projection.controller' "${secrets_contract}")"
-assert_eq "${pull_contract_controller}" "${WANT_PULL_PROJECTION_CONTROLLER}" "GHCR pull Secret controller authority contract"
-pull_contract_payload_source="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .projection.credential_payload_source' "${secrets_contract}")"
-assert_eq "${pull_contract_payload_source}" "${WANT_PULL_PROJECTION_PAYLOAD_SOURCE}" "GHCR pull Secret credential payload source contract"
-pull_contract_immutable="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .projection.immutable' "${secrets_contract}")"
-assert_eq "${pull_contract_immutable}" "true" "GHCR pull Secret immutable intent contract"
-pull_contract_protected_subordinate="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .projection.protected_subordinate_execution' "${secrets_contract}")"
-assert_eq "${pull_contract_protected_subordinate}" "true" "GHCR pull Secret protected subordinate execution contract"
-pull_contract_create_if_absent="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .projection.create_if_absent' "${secrets_contract}")"
-assert_eq "${pull_contract_create_if_absent}" "true" "GHCR pull Secret create-if-absent contract"
-pull_contract_controller_live="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .projection.controller_live' "${secrets_contract}")"
-assert_eq "${pull_contract_controller_live}" "false" "GHCR pull Secret controller live-state contract"
-pull_contract_interim_authority="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .projection.interim_authority_permitted' "${secrets_contract}")"
-assert_eq "${pull_contract_interim_authority}" "false" "GHCR pull Secret interim authority contract"
-pull_contract_operator_created="$(yaml_query -r --arg n "${WANT_IMAGE_PULL_SECRET}" '.spec.secrets[] | select(.name == $n) | .projection.operator_created_secret_permitted' "${secrets_contract}")"
-assert_eq "${pull_contract_operator_created}" "false" "GHCR pull Secret operator-created Secret prohibition"
+forbidden_secret_fields="$(yaml_query -c '[.spec.secrets[] | .name as $name | paths as $path | select(($path[-1] | tostring) as $key | ["origin", "minted_by", "provisioned_by", "apply_prerequisite", "projection", "value", "data", "stringData"] | index($key)) | {name: $name, path: ($path | map(tostring) | join("."))}]' "${secrets_contract}")"
+assert_eq "${forbidden_secret_fields}" "[]" "names-only Secret contract forbidden fields"
 
 # --- axis 6: the two-role separation (acceptance row 2) ----------------------
 database="$(yaml_query -r 'select(.kind == "Cluster") | .spec.bootstrap.initdb.database' "${rendered}")"
@@ -419,11 +385,11 @@ if grep -Eqi "GRANT (ALL|CREATE)[^;]*TO ${WANT_RUNTIME_ROLE}" <<<"${init_sql}"; 
   fail "the runtime role must never receive ALL or CREATE; it is DML-only"
 fi
 
-# --- axis 7: metrics posture matches the estate ------------------------------
-# The Prometheus Operator CRDs are absent on honey, so a PodMonitor request
-# would make the Cluster unappliable.
+# --- axis 7: no consumer-side observability provider assumption --------------
+# Provider observability is a protected composition concern, not a consumer
+# placement field or CRD assumption.
 pod_monitor="$(yaml_query -r 'select(.kind == "Cluster") | .spec.monitoring.enablePodMonitor' "${rendered}")"
-assert_eq "${pod_monitor}" "false" "monitoring.enablePodMonitor (Prometheus Operator CRDs are absent on this estate)"
+assert_eq "${pod_monitor}" "false" "monitoring.enablePodMonitor (provider observability is not consumer-owned)"
 
 # --- axis 8: RTO control, the scheduled base backup --------------------------
 sb_ns="$(yaml_query -r 'select(.kind == "ScheduledBackup") | .metadata.namespace' "${rendered}")"
@@ -432,6 +398,8 @@ assert_eq "${sb_ns}" "${WANT_DB_NS}" "ScheduledBackup namespace"
 assert_eq "${sb_cluster}" "${WANT_CLUSTER}" "ScheduledBackup target cluster"
 assert_eq "$(yaml_query -r 'select(.kind == "ScheduledBackup") | .spec.method' "${rendered}")" \
   "barmanObjectStore" "ScheduledBackup method"
+assert_eq "$(yaml_query -r 'select(.kind == "ScheduledBackup") | .spec.immediate' "${rendered}")" \
+  "true" "ScheduledBackup immediate start"
 # A suspended schedule is an RTO breach that looks green on every dashboard.
 assert_eq "$(yaml_query -r 'select(.kind == "ScheduledBackup") | .spec.suspend' "${rendered}")" \
   "false" "ScheduledBackup suspend (a suspended schedule breaches RTO<=4h while looking healthy)"
@@ -487,20 +455,16 @@ assert_closed_pg_egress() {
   policy_types="$(yaml_query -c --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | .spec.policyTypes | sort' "${rendered}")"
   assert_eq "${policy_types}" '["Egress"]' "${policy} policyTypes"
   rule_count="$(yaml_query -r --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | [.spec.egress[]] | length' "${rendered}")"
-  assert_eq "${rule_count}" "4" "${policy} exact egress rule count"
+  assert_eq "${rule_count}" "3" "${policy} exact egress rule count"
   to_count="$(yaml_query -r --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | [.spec.egress[].to[]] | length' "${rendered}")"
-  assert_eq "${to_count}" "6" "${policy} exact destination count"
-  local dns_ns dns_pod dns_ports api_cidrs api_ports store_names store_ports peer_names peer_ports
+  assert_eq "${to_count}" "3" "${policy} exact destination count"
+  local dns_ns dns_pod dns_ports store_names store_ports peer_names peer_ports
   dns_ns="$(yaml_query -c --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | [.spec.egress[].to[] | select((.namespaceSelector.matchLabels["kubernetes.io/metadata.name"] // "") == "kube-system") | .namespaceSelector.matchLabels["kubernetes.io/metadata.name"]]' "${rendered}")"
   assert_eq "${dns_ns}" '["kube-system"]' "${policy} DNS namespace destination"
   dns_pod="$(yaml_query -c --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | [.spec.egress[].to[] | select((.podSelector.matchLabels["k8s-app"] // "") == "kube-dns") | .podSelector.matchLabels["k8s-app"]]' "${rendered}")"
   assert_eq "${dns_pod}" '["kube-dns"]' "${policy} DNS pod destination"
   dns_ports="$(yaml_query -c --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | [.spec.egress[] | select(any(.to[]?; (.podSelector.matchLabels["k8s-app"] // "") == "kube-dns")) | .ports[] | (.protocol + ":" + (.port|tostring))] | sort' "${rendered}")"
   assert_eq "${dns_ports}" '["TCP:53","UDP:53"]' "${policy} DNS ports"
-  api_cidrs="$(yaml_query -c --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | [.spec.egress[] | select(any(.ports[]?; .protocol == "TCP" and .port == 6443)) | .to[] | .ipBlock.cidr] | sort' "${rendered}")"
-  assert_eq "${api_cidrs}" '["192.168.70.10/32","192.168.70.11/32","192.168.70.12/32"]' "${policy} Kubernetes API /32 set"
-  api_ports="$(yaml_query -c --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | [.spec.egress[] | select(any(.ports[]?; .port == 6443)) | .ports[] | (.protocol + ":" + (.port|tostring))] | sort' "${rendered}")"
-  assert_eq "${api_ports}" '["TCP:6443"]' "${policy} Kubernetes API port"
   store_names="$(yaml_query -c --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | [.spec.egress[].to[] | select((.podSelector.matchLabels["app.kubernetes.io/name"] // "") == "gftb-member-db-backup-store") | .podSelector.matchLabels["app.kubernetes.io/name"]]' "${rendered}")"
   assert_eq "${store_names}" '["gftb-member-db-backup-store"]' "${policy} backup-store destination"
   store_ports="$(yaml_query -c --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | [.spec.egress[] | select(any(.to[]?; (.podSelector.matchLabels["app.kubernetes.io/name"] // "") == "gftb-member-db-backup-store")) | .ports[] | (.protocol + ":" + (.port|tostring))] | sort' "${rendered}")"
@@ -522,13 +486,12 @@ assert_closed_pg_egress "allow-restore-postgres-egress" "${WANT_RESTORE_CLUSTER}
 # from it. Named, not just counted, so a rename inside the admitted set is
 # caught too.
 netpol_names="$(yaml_query -r 'select(.kind == "NetworkPolicy") | .metadata.name' "${rendered}" | sort)"
-assert_eq "$(wc -l <<<"${netpol_names}" | tr -d ' ')" "9" "rendered NetworkPolicy count"
-assert_eq "${netpol_names}" "$(sort <<<'allow-cnpg-operator-ingress
+assert_eq "$(wc -l <<<"${netpol_names}" | tr -d ' ')" "8" "rendered NetworkPolicy count"
+assert_eq "${netpol_names}" "$(sort <<<'allow-bucket-create-egress
 allow-cnpg-to-backup-store-ingress
 allow-intra-cluster
 allow-platform-postgres-ingress
 allow-postgres-egress
-allow-prometheus-scrape
 allow-restore-postgres-egress
 backup-store-egress-dns-only
 default-deny-ingress')" "rendered NetworkPolicy names"
@@ -537,7 +500,7 @@ assert_eq "$(yaml_query -r 'select(.kind == "ScheduledBackup") | .kind' "${rende
 assert_eq "$(yaml_query -r 'select(.kind == "Service") | .kind' "${rendered}" | wc -l | tr -d ' ')" "1" "rendered Service count (rustfs)"
 assert_eq "$(yaml_query -r 'select(.kind == "StatefulSet") | .kind' "${rendered}" | wc -l | tr -d ' ')" "1" "rendered StatefulSet count (rustfs)"
 assert_eq "$(yaml_query -r 'select(.kind == "PersistentVolumeClaim") | .kind' "${rendered}" | wc -l | tr -d ' ')" "1" "rendered PersistentVolumeClaim count (rustfs)"
-assert_eq "$(yaml_query -r 'select(.kind == "Namespace") | .kind' "${rendered}" | wc -l | tr -d ' ')" "0" "rendered Namespace count (declare-only)"
+assert_eq "$(yaml_query -r 'select(.kind == "Namespace") | .kind' "${rendered}" | wc -l | tr -d ' ')" "0" "rendered Namespace count (consumer contract)"
 assert_eq "$(yaml_query -r 'select(.kind == "Secret") | .kind' "${rendered}" | wc -l | tr -d ' ')" "0" "rendered Secret count (no committed Secrets)"
 # Every rendered object lands in the one namespace this stack governs — the
 # `namespace:` kustomization directive is itself a single point of failure
@@ -547,7 +510,7 @@ bad_ns="$(yaml_query -r --arg ns "${WANT_DB_NS}" 'select(.metadata.namespace != 
 
 # --- FAIL-CLOSED: no Namespace, no Secret, no key material -------------------
 if grep -REn "^kind:[[:space:]]*Namespace" "${dir}" "${platform_dir}" >/dev/null 2>&1; then
-  fail "declare-only member-db stack must NOT create its target namespaces"
+  fail "member-db consumer contract must NOT create its target namespaces"
 fi
 # Anchored at end of line on purpose: `kind: SecretContract` in the names-only
 # inventory is not a Secret object, and an unanchored match would reject it.
@@ -636,21 +599,19 @@ fi
 # on purpose (to say where they live), and a textual match would reject that.
 kustomization_resources="$(yaml_query -r '.resources[]?' "${kustomization}")"
 if grep -Fq "job-migrator" <<<"${kustomization_resources}"; then
-  fail "the migration Job template must not be a kustomization resource; it is a one-shot dispatch artifact rendered by the member-db-migrate-render recipe"
+  fail "the migration Job template must not be a kustomization resource; it is a protected one-shot action input"
 fi
 if grep -Fq "bucket-create" <<<"${kustomization_resources}"; then
-  fail "the bucket-create Job template must not be a kustomization resource; it is a one-shot dispatch artifact created by the member-db-backup-bucket-create recipe"
+  fail "the bucket-create Job template must not be a kustomization resource; it is a protected one-shot action input"
 fi
 if grep -Fq "restore-cluster" <<<"${kustomization_resources}"; then
-  fail "the restore-cluster template must not be a kustomization resource; a permanently-reconciled rehearsal cluster is not the point (B-5) — it is created and torn down by the member-db-restore-rehearsal-* recipes"
+  fail "the restore-cluster template must not be a kustomization resource; it is a protected one-shot rehearsal input"
 fi
 
 # --- axis 13: the GFTB-owned rustfs backup store (B1 ruling, 2026-08-20) ----
 # Four checked things: the image is digest-pinned (never a tag, never a
-# different rustfs repo), the PVC is on the Retain-carrying local-path-sting
-# class at >=50Gi, the ingress NetworkPolicy admits exactly the CNPG cluster
-# pods on :9000 and nothing broader, and cluster.yaml's endpointURL actually
-# names this Service rather than drifting back toward tcfs.
+# different rustfs repo), provider placement is absent, the PVC is >=50Gi,
+# and the closed ingress policy and cluster endpoint name the same Service.
 rustfs_image="$(yaml_query -r 'select(.kind == "StatefulSet") | .spec.template.spec.containers[] | select(.name == "rustfs") | .image' "${rendered}")"
 if [[ ! "${rustfs_image}" =~ @sha256:[0-9a-f]{64}$ ]]; then
   fail "rustfs StatefulSet image must be pinned by @sha256:<64 lowercase hex>; got '${rustfs_image}'"
@@ -658,12 +619,10 @@ fi
 assert_eq "${rustfs_image}" "${WANT_RUSTFS_REPO}:${WANT_RUSTFS_TAG}@${WANT_RUSTFS_DIGEST}" \
   "rustfs image digest (B1 ruling: digest reused from the house pin source)"
 
-rustfs_node_selector="$(yaml_query -r 'select(.kind == "StatefulSet") | .spec.template.spec.nodeSelector["kubernetes.io/hostname"]' "${rendered}")"
-assert_eq "${rustfs_node_selector}" "sting" "rustfs StatefulSet nodeSelector (must agree with local-path-sting's allowedTopologies)"
-
-rustfs_pvc_class="$(yaml_query -r 'select(.kind == "PersistentVolumeClaim") | .spec.storageClassName' "${rendered}")"
-assert_eq "${rustfs_pvc_class}" "${WANT_RUSTFS_STORAGECLASS}" \
-  "rustfs PVC storageClassName (${WANT_RUSTFS_STORAGECLASS} carries reclaimPolicy: Retain per blahaj deploy/honey/local-path-sting.yaml)"
+assert_eq "$(yaml_query -r 'select(.kind == "StatefulSet") | .spec.template.spec | has("nodeSelector")' "${rendered}")" \
+  "false" "consumer backup store must not select a provider node"
+assert_eq "$(yaml_query -r 'select(.kind == "PersistentVolumeClaim") | .spec | has("storageClassName")' "${rendered}")" \
+  "false" "consumer backup PVC must not select a provider storageClass"
 rustfs_pvc_size="$(yaml_query -r 'select(.kind == "PersistentVolumeClaim") | .spec.resources.requests.storage' "${rendered}")"
 if [[ ! "${rustfs_pvc_size}" =~ ^([0-9]+)Gi$ ]]; then
   fail "rustfs PVC storage request must be an integer Gi quantity; got '${rustfs_pvc_size}'"
@@ -688,16 +647,9 @@ assert_eq "${rustfs_ingress_from_values}" "$(jq -nc --arg a "${WANT_CLUSTER}" --
   "rustfs ingress admitted source set (primary + restore rehearsal cluster, nothing else)"
 rustfs_ingress_port="$(yaml_query -r "${rustfs_ingress_pol} | .spec.ingress[].ports[].port" "${rendered}")"
 assert_eq "${rustfs_ingress_port}" "9000" "rustfs ingress port"
-
-# B-5: the CNPG operator's own ingress leg into the instance manager must
-# admit the restore rehearsal Cluster's pods too, by the SAME closed 'In'
-# list shape, or the operator never reports the rehearsal Ready.
-operator_ingress_pol="select(.kind == \"NetworkPolicy\" and .metadata.name == \"allow-cnpg-operator-ingress\")"
-operator_target_op="$(yaml_query -r "${operator_ingress_pol} | .spec.podSelector.matchExpressions[] | select(.key == \"cnpg.io/cluster\") | .operator" "${rendered}")"
-assert_eq "${operator_target_op}" "In" "CNPG operator ingress target operator (must be a closed 'In' list)"
-operator_target_values="$(yaml_query -c "${operator_ingress_pol} | .spec.podSelector.matchExpressions[] | select(.key == \"cnpg.io/cluster\") | .values | sort" "${rendered}")"
-assert_eq "${operator_target_values}" "$(jq -nc --arg a "${WANT_CLUSTER}" --arg b "${WANT_RESTORE_CLUSTER}" '[$a,$b] | sort')" \
-  "CNPG operator ingress target set (primary + restore rehearsal cluster, nothing else)"
+bucket_ingress_identity="$(yaml_query -c "${rustfs_ingress_pol} | [.spec.ingress[].from[].podSelector.matchLabels | select(.[\"app.kubernetes.io/name\"] == \"gftb-member-db-backup-bucket-create\") | to_entries | sort_by(.key) | from_entries]" "${rendered}")"
+assert_eq "${bucket_ingress_identity}" '[{"app.kubernetes.io/component":"object-store-bootstrap","app.kubernetes.io/name":"gftb-member-db-backup-bucket-create","app.kubernetes.io/part-of":"great-falls-tool-bus"}]' \
+  "rustfs ingress bucket-create workload identity"
 
 # Egress: exactly the DNS leg, nothing else — "zero egress beyond DNS".
 rustfs_egress_pol="select(.kind == \"NetworkPolicy\" and .metadata.name == \"backup-store-egress-dns-only\")"
@@ -705,6 +657,17 @@ rustfs_egress_to_count="$(yaml_query -r "${rustfs_egress_pol} | [.spec.egress[].
 assert_eq "${rustfs_egress_to_count}" "1" "rustfs egress NetworkPolicy must admit exactly one destination (DNS)"
 rustfs_egress_ports="$(yaml_query -c "${rustfs_egress_pol} | [.spec.egress[].ports[].port] | sort" "${rendered}")"
 assert_eq "${rustfs_egress_ports}" "[53,53]" "rustfs egress ports (UDP/TCP 53 only)"
+
+bucket_egress_pol='select(.kind == "NetworkPolicy" and .metadata.name == "allow-bucket-create-egress")'
+bucket_egress_selector="$(yaml_query -c "${bucket_egress_pol} | .spec.podSelector.matchLabels | to_entries | sort_by(.key) | from_entries" "${rendered}")"
+assert_eq "${bucket_egress_selector}" '{"app.kubernetes.io/component":"object-store-bootstrap","app.kubernetes.io/name":"gftb-member-db-backup-bucket-create","app.kubernetes.io/part-of":"great-falls-tool-bus"}' \
+  "bucket-create egress workload identity"
+bucket_egress_ports="$(yaml_query -c "${bucket_egress_pol} | [.spec.egress[].ports[] | (.protocol + \":\" + (.port|tostring))] | sort" "${rendered}")"
+assert_eq "${bucket_egress_ports}" '["TCP:53","TCP:9000","UDP:53"]' \
+  "bucket-create egress ports (DNS and backup store only)"
+bucket_egress_store="$(yaml_query -c "${bucket_egress_pol} | [.spec.egress[].to[] | select((.podSelector.matchLabels[\"app.kubernetes.io/name\"] // \"\") == \"gftb-member-db-backup-store\") | .podSelector.matchLabels[\"app.kubernetes.io/name\"]]" "${rendered}")"
+assert_eq "${bucket_egress_store}" '["gftb-member-db-backup-store"]' \
+  "bucket-create egress backup-store destination"
 
 # The CNPG pods' own egress must now reach the rustfs Service, not tcfs — and
 # the tcfs leg must be gone entirely, not just superseded, or a stale allow
@@ -736,11 +699,13 @@ bc_ns="$(yaml_query -r '.metadata.namespace' "${bucket_create}")"
 assert_eq "${bc_ns}" "${WANT_DB_NS}" "bucket-create Job namespace (runs in the database namespace, alongside rustfs)"
 bc_fixed_name="$(yaml_query -r '.metadata.name // "absent"' "${bucket_create}")"
 assert_eq "${bc_fixed_name}" "absent" "bucket-create Job must not carry a fixed metadata.name (generateName only)"
-# THE ADMISSION CONTRACT (again): this Job's pod label must be exactly the
-# value allow-cnpg-to-backup-store-ingress and allow-postgres-egress admit,
-# or it is denied by the very policy B-3 relies on to avoid a netpol change.
-bc_label="$(yaml_query -r '.spec.template.metadata.labels["cnpg.io/cluster"]' "${bucket_create}")"
-assert_eq "${bc_label}" "${WANT_CLUSTER}" "bucket-create Job pod label (must match the NetworkPolicy admission list)"
+# The bootstrap Job has its own identity and policy. It must never impersonate
+# a CNPG pod and inherit database-peer or Kubernetes-API egress.
+bc_labels="$(yaml_query -c '.spec.template.metadata.labels | to_entries | sort_by(.key) | from_entries' "${bucket_create}")"
+assert_eq "${bc_labels}" '{"app.kubernetes.io/component":"object-store-bootstrap","app.kubernetes.io/name":"gftb-member-db-backup-bucket-create","app.kubernetes.io/part-of":"great-falls-tool-bus"}' \
+  "bucket-create Job workload identity"
+bc_cnpg_label="$(yaml_query -r '.spec.template.metadata.labels["cnpg.io/cluster"] // "absent"' "${bucket_create}")"
+assert_eq "${bc_cnpg_label}" "absent" "bucket-create Job must not impersonate a CNPG Cluster pod"
 bc_image="$(yaml_query -r '.spec.template.spec.containers[] | select(.name == "mc") | .image' "${bucket_create}")"
 if [[ ! "${bc_image}" =~ @sha256:[0-9a-f]{64}$ ]]; then
   fail "bucket-create Job mc image must be pinned by @sha256:<64 lowercase hex>; got '${bc_image}'"
@@ -772,10 +737,10 @@ rc_secret_names="$(yaml_query -c '.spec.externalClusters[] | select(.name == "gf
 assert_eq "${rc_secret_names}" '["gftb-member-db-backup-s3"]' "restore-cluster s3Credentials (by name only, the SAME credential the primary's archive_command uses)"
 rc_superuser="$(yaml_query -r '.spec.enableSuperuserAccess' "${restore_cluster}")"
 assert_eq "${rc_superuser}" "false" "restore-cluster enableSuperuserAccess"
-rc_data_sc="$(yaml_query -r '.spec.storage.storageClass' "${restore_cluster}")"
-assert_eq "${rc_data_sc}" "${WANT_STORAGE_CLASS}" "restore-cluster data storageClass"
+assert_eq "$(yaml_query -r '.spec.storage | has("storageClass")' "${restore_cluster}")" \
+  "false" "restore template must not select a provider storageClass"
 
 # --- Full render already happened up front (B-7) — this is where every check
 # above got its bytes from; nothing left to do here but declare victory.
 
-echo "member-db stack validation passed for ${WANT_CLUSTER} in ${stack_ns}: DECLARE-ONLY (no namespace, no Secret object, no CI apply path), PostgreSQL 16.15 pinned to ${WANT_PG_REPO}@sha256:<64 hex> on ${WANT_STORAGE_CLASS} with a separate WAL volume, RPO bounded by archive_timeout ${archive_seconds}s to an in-cluster object store, RTO bounded by '${schedule}' base backups with ${retention} retention, ${WANT_OWNER_ROLE} (DDL) and ${WANT_RUNTIME_ROLE} (DML-only, bypassrls false) separated, default-deny admitting only ${WANT_PLATFORM_NS} ${admit_components} on 5432, migration Job entrypoint args ${WANT_MIGRATOR_ARGS} (no command:) carrying only ${WANT_MIGRATOR_SECRET}, backup destination ${want_endpoint} (B1 ruling: GFTB-owned rustfs, ${WANT_RUSTFS_REPO}@sha256:<64 hex> on ${WANT_RUSTFS_STORAGECLASS} >=${MIN_RUSTFS_STORAGE_GI}Gi, ingress admitting only cnpg.io/cluster=${WANT_CLUSTER} on :9000, egress DNS-only)"
+echo "member-db source contract valid for ${WANT_CLUSTER} in ${stack_ns}: no Namespace or Secret object; PostgreSQL 16.15 pinned to ${WANT_PG_REPO}@sha256:<64 hex> with a separate WAL volume; archive_timeout ${archive_seconds}s; base-backup schedule '${schedule}' with ${retention} retention; ${WANT_OWNER_ROLE} DDL and ${WANT_RUNTIME_ROLE} DML-only roles separated; migration Job uses ${WANT_MIGRATOR_ARGS} and only ${WANT_MIGRATOR_SECRET}; backup destination ${want_endpoint}"

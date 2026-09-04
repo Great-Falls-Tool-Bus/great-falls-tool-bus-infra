@@ -2,7 +2,7 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: members-greatfallstoolbus-org-db-production
 
-# DECLARE-ONLY — MERGING APPLIES NOTHING (TIN-3817, Member v0 S1 infra half).
+# GFTB member database desired state (TIN-3817, Member v0 S1 infra half).
 # GFTB member substrate: one dedicated PostgreSQL 16.15 CNPG cluster, its
 # six-hourly base-backup schedule, and a default-deny network posture that
 # admits only the platform namespace's web/worker/migrator pods.
@@ -16,10 +16,9 @@ namespace: members-greatfallstoolbus-org-db-production
 # greatfallstoolbus.org image and source receipt in Git; no dispatch-time image
 # input exists. It lives at
 # ../members-greatfallstoolbus-org-production/job-migrator.template.yaml and is
-# rendered independently by `just member-db-migrate-render`.
+# eligible for independent consumption only by a protected v4 owner action.
 #
-# No Namespace object: the member-db namespace is provisioned out of band, the
-# same posture the web stack holds, and the validator enforces the absence.
+# No Namespace or Secret object is committed; the validator enforces both.
 
 resources:
   - cluster.yaml

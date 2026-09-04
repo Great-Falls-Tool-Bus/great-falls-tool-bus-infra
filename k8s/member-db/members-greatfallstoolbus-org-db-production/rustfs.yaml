@@ -1,60 +1,14 @@
-# DECLARE-ONLY — MERGING APPLIES NOTHING (TIN-3817, Member v0 S1 infra half).
+# GFTB backup-store desired state (TIN-3817, Member v0 S1 infra half).
 #
-# GFTB-owned dedicated object store for member-PII database backups (WAL
-# archiving + scheduled base backups). This exists because of the B1 ruling
-# recorded in docs/runbooks/member-db-bringup.md (2026-08-20, operator
-# interview session 050cb99f): neither tcfs S3 endpoint is admitted for member
-# personal data (estate-held admin credential, writable IAM API, no
-# NetworkPolicy floor, `:latest` images, an internet tunnel — see the ruling
-# text and data-plane-runway-20260820.md §1 for the full custody findings).
-# Instead GFTB gets its own single-node rustfs, inside this repo's own apply
-# plane, admitting nothing but the CNPG cluster it backs up.
+# This dedicated object store holds member-database WAL and base backups. The
+# 2026-08-20 B1 ruling rejected both shared tcfs endpoints for member data and
+# selected a GFTB-owned store with closed NetworkPolicy and distinct bootstrap
+# and bucket-scoped credentials.
 #
-# SHAPE SOURCE. The reviewed blahaj snapshot cited by this carrier has no
-# declarative `tofu-state-rustfs` StatefulSet; older prose and a backup CronJob
-# referenced that opaque endpoint, which is historical evidence rather than a
-# current-live claim. The closest reviewed declared rustfs idiom is
-# `blahaj deploy/nix-cache/attic-rustfs-openebs.yaml` (2026-08-16 snapshot):
-# same image family, same non-root
-# security posture, same `prepare-data-dir` initContainer pattern for a
-# local-path-backed volume. This file mirrors that shape and converts it from
-# a Deployment (with a standalone PVC, RWO ZFS-backed) to a StatefulSet (with
-# a standalone PVC, RWO local-path-backed) because rustfs here is GFTB's own
-# workload, not a transcription of something already live.
-#
-# IMAGE. digest reused verbatim from the house pin source above:
+# The workload pins the exact rustfs image digest:
 #   docker.io/rustfs/rustfs:1.0.0-beta.8@sha256:fa19210ac4697c79d7ccca1ec9b0eb91aebacc6691991ffb14014bb3c67e6cc3
-# (blahaj deploy/nix-cache/attic-rustfs-openebs.yaml:214). Re-pin only via a
-# reviewed change to both this file and scripts/validate-member-db-stack.sh's
-# WANT_RUSTFS_DIGEST constant.
-#
-# PLACEMENT — local-path-sting, Retain, ≥50Gi, per the B1 ruling text. FLAG
-# FOR OPERATOR REVIEW BEFORE APPLY: blahaj's own ADR 002
-# (docs/architecture/decisions/002-honey-sting-rke2-ha-quorum.md) and
-# docs/reference/storage-role-model.md / storage-class-matrix.md say plainly
-# "do not place durable PVC consumers onto `sting` just because
-# `local-path-sting` exists" and "keep durable state off `local-path-sting`
-# unless a workload-specific issue explicitly approves it" — and blahaj has a
-# precedent of moving a *different* database (MassageIthaca PR-lane DBs,
-# TIN-1965) OFF `local-path-sting` for exactly this durability reason. The B1
-# ruling adopts the brief's `local-path-sting` recommendation verbatim for a
-# concrete, cited reason (data-plane-runway-20260820.md §Recommendation
-# :115-122): real failure-domain separation from `bumble`, where the CNPG
-# primary and its WAL volume already live — a single-node loss must not be
-# able to take both the database AND its backups. That is a workload-specific
-# justification in the ADR 002 sense, but it has not been reconciled against
-# ADR 002's text by name anywhere on record. Treat this file's `sting`
-# placement as provisional on that reconciliation happening — explicitly, in
-# the PR or the runbook — before docs/runbooks/member-db-bringup.md step S
-# (the CNPG Cluster apply) or any apply of this file runs. This is a
-# declare-only tree; nothing here applies itself.
-#
-# The `local-path-sting` StorageClass (blahaj deploy/honey/local-path-sting.yaml)
-# already carries `reclaimPolicy: Retain`, `volumeBindingMode:
-# WaitForFirstConsumer`, and `allowedTopologies` pinned to
-# `kubernetes.io/hostname: sting`. The PVC below only needs to name the class;
-# the StatefulSet's `nodeSelector` below is what keeps scheduling and volume
-# binding in agreement instead of leaving it to WaitForFirstConsumer chance.
+# Re-pin only with the matching validator constant. Physical storage and node
+# placement are provider-supply inputs and are absent from this consumer carrier.
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -65,7 +19,6 @@ metadata:
     app.kubernetes.io/name: gftb-member-db-backup-store
     app.kubernetes.io/component: object-store
     app.kubernetes.io/part-of: great-falls-tool-bus
-    app.tinyland.dev/lifecycle: declare-only
 spec:
   accessModes:
     - ReadWriteOnce
@@ -74,7 +27,6 @@ spec:
       # ">=50Gi" per the B1 ruling text. scripts/validate-member-db-stack.sh
       # asserts this parses and is not below 50Gi.
       storage: 50Gi
-  storageClassName: local-path-sting
   volumeMode: Filesystem
 ---
 apiVersion: v1
@@ -86,7 +38,6 @@ metadata:
     app.kubernetes.io/name: gftb-member-db-backup-store
     app.kubernetes.io/component: object-store
     app.kubernetes.io/part-of: great-falls-tool-bus
-    app.tinyland.dev/lifecycle: declare-only
 spec:
   type: ClusterIP
   selector:
@@ -111,14 +62,11 @@ metadata:
     app.kubernetes.io/name: gftb-member-db-backup-store
     app.kubernetes.io/component: object-store
     app.kubernetes.io/part-of: great-falls-tool-bus
-    app.tinyland.dev/lifecycle: declare-only
 spec:
   serviceName: gftb-member-db-backup-store
   replicas: 1
-  # A standalone PVC (above), not volumeClaimTemplates: single-node object
-  # store, one fixed identity, no ordinal fan-out — matches the
-  # attic-rustfs-openebs precedent's PVC shape rather than StatefulSet's
-  # per-replica default.
+  # A standalone PVC (above), not volumeClaimTemplates: one object-store
+  # identity and no ordinal volume fan-out.
   selector:
     matchLabels:
       app.kubernetes.io/name: gftb-member-db-backup-store
@@ -131,11 +79,6 @@ spec:
     spec:
       automountServiceAccountToken: false
       restartPolicy: Always
-      # Matches local-path-sting's allowedTopologies (kubernetes.io/hostname:
-      # sting) explicitly rather than leaving WaitForFirstConsumer to pick a
-      # node the volume can't bind on.
-      nodeSelector:
-        kubernetes.io/hostname: sting
       securityContext:
         runAsUser: 10001
         runAsGroup: 10001
@@ -143,10 +86,9 @@ spec:
         fsGroup: 10001
         fsGroupChangePolicy: OnRootMismatch
       initContainers:
-        # Same permission fix-up idiom as attic-rustfs-openebs.yaml: a
-        # freshly provisioned local-path host directory is root-owned, and
-        # the kubelet's OnRootMismatch skips the recursive chown on restart
-        # only if the root-shape ownership is already correct.
+        # Normalize ownership of a newly mounted data volume before the
+        # non-root server starts. The guard avoids a recursive chown on restart
+        # when the root ownership is already correct.
         - name: prepare-data-dir
           image: docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
           imagePullPolicy: IfNotPresent
@@ -187,7 +129,7 @@ spec:
           # NAME ONLY. This is the rustfs server-bootstrap/admin credential.
           # It is deliberately distinct from the bucket-scoped
           # gftb-member-db-backup-s3 client credential and is excluded from
-          # backup/restore acceptance authority (runbook step B2).
+          # backup/restore acceptance authority.
           envFrom:
             - secretRef:
                 name: gftb-member-db-backup-store-root
@@ -220,7 +162,6 @@ spec:
               cpu: "1"
               memory: 2Gi
           securityContext:
-            runAsNonRoot: false
             allowPrivilegeEscalation: false
             privileged: false
             readOnlyRootFilesystem: false

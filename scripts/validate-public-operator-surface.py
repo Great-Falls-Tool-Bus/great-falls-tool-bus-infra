@@ -368,88 +368,6 @@ ATTENDED_RECIPE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
         "_reviewed-clean-main",
         "_operator-apply-confirm",
     ),
-    # GFTB member database substrate (TIN-3817, Member v0 slice S1 infra half).
-    # These belong in the ATTENDED lane rather than the hosted lane for the same
-    # reason list-member-add and form-altcha-secret-apply do: every one of them
-    # consumes an operator-custody kubeconfig. Six recipes mutate live state:
-    # backup-store apply, bucket create, cluster apply, restore apply, restore
-    # teardown, and migration apply. `member-db-stack-validate` is deliberately
-    # NOT here — it is the offline guard `check-hosted` runs, it never contacts a
-    # cluster, and adding it would taint check-hosted through the attended
-    # closure.
-    "_member-db-kubeconfig-input": (),
-    "_member-db-backup-root-prerequisite": (
-        "_member-db-kubeconfig-input",
-    ),
-    "_member-db-current-api-egress-prerequisite": (
-        "_member-db-kubeconfig-input",
-    ),
-    "_member-db-cluster-prerequisites": (
-        "_member-db-backup-root-prerequisite",
-        "_member-db-current-api-egress-prerequisite",
-    ),
-    "_member-db-platform-image-pull-prerequisite": (
-        "_member-db-kubeconfig-input",
-    ),
-    "member-db-stack-server-dry-run": (
-        "member-db-stack-validate",
-        "_member-db-kubeconfig-input",
-    ),
-    # ORDERED APPLY (B-4). Split so a single `apply -k` can never again land
-    # the backup store and the Cluster together: cluster.yaml's own comment
-    # says WAL archiving begins the moment the Cluster is applied, so the
-    # store, its NetworkPolicy, and its bucket must already exist. Ordered on
-    # purpose within each recipe too: the offline guard and the server
-    # dry-run both run BEFORE the branch/worktree check and the confirmation,
-    # so an operator who is about to be told "no" finds out from the cheap
-    # check first, and the confirmation is the last thing standing between
-    # them and the apply.
-    "member-db-backup-store-apply": (
-        "member-db-stack-server-dry-run",
-        "_member-db-backup-root-prerequisite",
-        "_member-db-current-api-egress-prerequisite",
-        "_reviewed-clean-main",
-        "_operator-apply-confirm",
-    ),
-    "member-db-backup-bucket-create": (
-        "member-db-backup-store-apply",
-        "_reviewed-clean-main",
-        "_operator-apply-confirm",
-    ),
-    "member-db-cluster-apply": (
-        "member-db-backup-bucket-create",
-        "_member-db-cluster-prerequisites",
-        "_reviewed-clean-main",
-        "_operator-apply-confirm",
-    ),
-    # Convenience alias for the full ordered chain. Its own body is a no-op;
-    # the mutation is entirely in its one dependency.
-    "member-db-stack-apply": ("member-db-cluster-apply",),
-    "member-db-readback": ("_member-db-kubeconfig-input",),
-    "member-db-backup-verify": ("_member-db-kubeconfig-input",),
-    # Restore rehearsal (B-5): the RTO<=4h acceptance row's only proof path.
-    "member-db-restore-rehearsal-apply": (
-        "member-db-backup-verify",
-        "_member-db-cluster-prerequisites",
-        "_reviewed-clean-main",
-        "_operator-apply-confirm",
-    ),
-    "member-db-restore-rehearsal-teardown": (
-        "_member-db-kubeconfig-input",
-        "_reviewed-clean-main",
-        "_operator-apply-confirm",
-    ),
-    "member-db-migrate-render": ("member-db-stack-validate",),
-    "member-db-migrate-server-dry-run": (
-        "member-db-stack-validate",
-        "_member-db-kubeconfig-input",
-        "_member-db-platform-image-pull-prerequisite",
-    ),
-    "member-db-migrate-apply": (
-        "member-db-migrate-server-dry-run",
-        "_reviewed-clean-main",
-        "_operator-apply-confirm",
-    ),
 }
 
 ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
@@ -465,125 +383,12 @@ ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     "form-altcha-secret-apply": _receipt(
         "d394883ac79138f4", "b78253e99505ee18", "f0931c8607f62fa9", "f5c1b30b25c115ce"
     ),
-    # --- member database substrate receipts (TIN-3817) ----------------------
-    # Each value is sha256(executable_recipe_text(body)) — the recipe body with
-    # Just's indent removed and comment-only lines dropped — so prose can be
-    # edited freely and an executable line cannot. What each pin is protecting:
-    #
-    # _member-db-kubeconfig-input: the only thing standing between a fat-fingered
-    #   empty variable and `kubectl --kubeconfig ""` falling back to whatever
-    #   context the operator's ambient kubeconfig happens to point at.
-    "_member-db-kubeconfig-input": _receipt(
-        "9483ae823d52184a", "46f524549c47efcf", "fa8bb4ecd56a2783", "88cb783d8b2d5fd4"
-    ),
-    # Exact live prerequisites: root identity only, distinct bucket-scoped
-    # authority/current API readback, and namespace-local GHCR pull authority.
-    "_member-db-backup-root-prerequisite": _receipt(
-        "7684e57c5a3da818", "fd8d350d27527737", "fca8c2c14f53f4d0", "329f91ee42dd5f72"
-    ),
-    "_member-db-current-api-egress-prerequisite": _receipt(
-        "26b7bb2660a40012", "fe7671e5dd9c1ae4", "d178995c1eedd43b", "47c606df6357cc62"
-    ),
-    "_member-db-cluster-prerequisites": _receipt(
-        "50f5130424a3e947", "974cf955d4b989a7", "ec9c7ba8b8b45e52", "5d80e55b00440d3f"
-    ),
-    "_member-db-platform-image-pull-prerequisite": _receipt(
-        "673466b3b6c2508b", "af108488925dfb5f", "8c5ebb4fd9fe63a5", "e3d3b33fe3a14206"
-    ),
-    # member-db-stack-server-dry-run: proves the stack against the live API
-    #   without mutating. Pinned so `--dry-run=server` can never quietly become
-    #   a real apply through an edit to this recipe.
-    "member-db-stack-server-dry-run": _receipt(
-        "ada3b0ad80a553f7", "c3354a3daf8efa05", "7b10b346707eefd2", "24c9c27cd4ed7cc0"
-    ),
-    # member-db-backup-store-apply: step one of the ordered apply (B-4).
-    #   yq-go decodes and jq emits only the exact namespaced backup-store
-    #   inventory. Pinned so fail-closed filtering and the rollout wait stay.
-    "member-db-backup-store-apply": _receipt(
-        "9d63f0904479eacb", "5be1c8fe6e5dc0b5", "6c3a3d493f79c857", "3382ec2ec9d7f16e"
-    ),
-    # member-db-backup-bucket-create: step two (B-3). Pinned so the
-    #   wait-for-complete and log capture stay part of the recipe.
-    "member-db-backup-bucket-create": _receipt(
-        "b36dd145a9be9183", "c4e7bdb1c29886e6", "ffb923186923a4cd", "7ebf7aa35d831094"
-    ),
-    # member-db-cluster-apply: step three — the database bring-up mutation.
-    #   yq-go decodes and jq emits exactly the Cluster + ScheduledBackup.
-    #   Pinned so fail-closed filtering and the Ready wait stay.
-    "member-db-cluster-apply": _receipt(
-        "d8cc3b0c530e6726", "ca0e781e2b85bd47", "0e9e918c5dbee321", "00b7ebae62e836a7"
-    ),
-    # member-db-stack-apply: now a thin alias over the ordered chain. Pinned
-    #   so the alias cannot quietly grow its own parallel apply path.
-    "member-db-stack-apply": _receipt(
-        "a7a7c87b22cb53f2", "04361b38523fd5f3", "4089a334c085a4bf", "47aef492ca04a1d3"
-    ),
-    # member-db-readback: read-only, but it is release EVIDENCE — it is what
-    #   proves the served minor really is 16.15 and that ContinuousArchiving is
-    #   actually true. Pinned so the evidence cannot be narrowed to whatever
-    #   happens to be green.
-    "member-db-readback": _receipt(
-        "4fcafad4feb47a90", "197102aeeb6b16b0", "af7cd2b6a68483fa", "74e2d287ee4e7de8"
-    ),
-    # member-db-backup-verify: the RPO/RTO acceptance evidence. Pinned
-    #   specifically because of its last three lines — the check that at least
-    #   one Backup object actually reached `completed`. Deleting that check
-    #   leaves a recipe that prints a schedule and exits 0 forever.
-    "member-db-backup-verify": _receipt(
-        "5c25f55cd57d52f6", "34d8334d25d7de7d", "33080cc8a89aa368", "1c6f91512b0b273a"
-    ),
-    # member-db-restore-rehearsal-apply: the RTO<=4h acceptance row's only
-    #   proof path (B-5). Pinned so the wait-for-Ready cannot be dropped.
-    "member-db-restore-rehearsal-apply": _receipt(
-        "0f0babab2abd9bcd", "c9377cb844125d15", "796ccb2a3dec878d", "8b6a7f5716d42e37"
-    ),
-    # member-db-restore-rehearsal-teardown: pinned so the Released-PV printout
-    #   (the minimum "don't orphan silently" step) cannot be dropped.
-    "member-db-restore-rehearsal-teardown": _receipt(
-        "f1b71fcba09f905b", "359c9e486f7149eb", "cc76832d7e9ab370", "4cc7650a4a3d7dd9"
-    ),
-    # member-db-migrate-render: emits the exact Git-pinned Job carrier. Both the
-    #   dry-run and apply go through it; no runtime image input can alter bytes.
-    "member-db-migrate-render": _receipt(
-        "6df5406b1a6a238e", "fed406bccbcad01d", "7a904a4c201b11aa", "69c4b613e4e36b6d"
-    ),
-    "member-db-migrate-server-dry-run": _receipt(
-        "d6c529ad3029b41b", "412d186951b31caa", "ddf72afb4b694931", "fd73e747de111861"
-    ),
-    # member-db-migrate-apply: the schema mutation. Pinned so its second
-    #   confirmation (GFTB_MEMBER_DB_MIGRATE_CONFIRM) cannot be removed, and so
-    #   the wait-for-complete plus log capture that make the Job auditable stay
-    #   part of the recipe rather than an operator's habit.
-    "member-db-migrate-apply": _receipt(
-        "4114c22ae73edd99", "5e719fe800aac63f", "e50cbcd876915a2a", "eff4df3a21bfe4d0"
-    ),
 }
 
 ATTENDED_OPERATOR_LOCAL_ROOTS = {
     "_list-member-add-inputs",
     "list-member-add",
     "form-altcha-secret-apply",
-    # Member database substrate (TIN-3817). All are operator-local: no
-    # workflow, script, or composite action may invoke them, and the closure
-    # taints anything that tries to wrap one. `member-db-stack-validate` is
-    # excluded on purpose so `check-hosted` stays hosted-runnable.
-    "_member-db-kubeconfig-input",
-    "_member-db-backup-root-prerequisite",
-    "_member-db-current-api-egress-prerequisite",
-    "_member-db-cluster-prerequisites",
-    "_member-db-platform-image-pull-prerequisite",
-    "member-db-stack-server-dry-run",
-    "member-db-backup-store-apply",
-    "member-db-backup-bucket-create",
-    "member-db-cluster-apply",
-    "member-db-stack-apply",
-    "member-db-readback",
-    "member-db-backup-verify",
-    "member-db-restore-rehearsal-apply",
-    "member-db-restore-rehearsal-teardown",
-    "member-db-migrate-render",
-    "member-db-migrate-server-dry-run",
-    "member-db-migrate-apply",
 }
 
 # The gftb-site cutover proofs are intentionally operator-local even though they
@@ -4808,8 +4613,6 @@ def install_web_release_fixture_mocks(
             elif args == ["ls-files", "-v"]:
                 pass
             elif args == ["config", "--local", "--get", "remote.origin.url"]:
-                print(canonical)
-            elif args == ["remote", "get-url", "origin"]:
                 if state == "apply-git-origin-secret":
                     print(
                         "https://x-access-token:"
@@ -4819,6 +4622,8 @@ def install_web_release_fixture_mocks(
                     )
                 else:
                     print(canonical)
+            elif args == ["remote", "get-url", "origin"]:
+                print(canonical)
             elif args == [
                 "show-ref", "--verify", "--quiet", "refs/remotes/origin/main"
             ]:
@@ -7266,36 +7071,6 @@ def self_test() -> None:
             '    trap \'rm -f "${manifest}"\' EXIT',
             "    true",
             "ALTCHA temporary Secret cleanup removal",
-        ),
-        (
-            "_member-db-cluster-prerequisites",
-            "    set +x",
-            "    true",
-            "member-db Secret read xtrace hardening removal",
-        ),
-        (
-            "_member-db-current-api-egress-prerequisite",
-            '    jq -e --argjson current "${current_api_cidrs}" \'length == 2 and all(.[]; .cidrs == $current)\' <<<"${expected_api_sets}" >/dev/null ||',
-            "    true ||",
-            "member-db per-policy API equality bypass",
-        ),
-        (
-            "member-db-restore-rehearsal-apply",
-            '    [[ -z "${existing}" ]] ||',
-            "    true ||",
-            "restore rehearsal absence gate bypass",
-        ),
-        (
-            "member-db-restore-rehearsal-apply",
-            '    [[ "${ready_uid}" == "${created_uid}" ]] ||',
-            "    true ||",
-            "restore rehearsal fresh-UID gate bypass",
-        ),
-        (
-            "member-db-restore-rehearsal-teardown",
-            '      kubectl --kubeconfig "${kc}" wait "pv/${pv_name}" --for=jsonpath=\'{.status.phase}\'=Released --timeout=300s',
-            "      true",
-            "restore rehearsal exact PV transition wait bypass",
         ),
     )
     for name, old, new, label in attended_body_mutations:

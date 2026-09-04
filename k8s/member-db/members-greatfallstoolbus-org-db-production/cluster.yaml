@@ -1,30 +1,20 @@
-# DECLARE-ONLY — MERGING APPLIES NOTHING (TIN-3817 / Member v0 slice S1, infra half).
+# GFTB member-database desired state (TIN-3817 / Member v0 slice S1).
 #
 # One DEDICATED PostgreSQL 16.15 CNPG cluster for the GFTB member substrate.
 # TIN-3817 acceptance row 1 narrows the system spec's "PostgreSQL 16 under CNPG"
 # to the exact minor 16.15; that exact minor is what this manifest pins, by
 # digest, not by tag.
 #
-# APPLY GATE. Nothing in CI applies this. The only apply path is the attended
-# operator recipes in the Justfile (`member-db-stack-server-dry-run`, then the
-# operator's own reviewed apply), each of which needs an operator-custody
-# kubeconfig that hosted CI does not hold. This stack creates NO Namespace: the
-# member-db namespace is provisioned out of band, exactly like
-# greatfallstoolbus-org-production was for the web stack, and
-# scripts/validate-member-db-stack.sh enforces the absence.
+# This consumer overlay carries no kubeconfig, endpoint, provider placement, or
+# alternate apply path. This stack creates no Namespace or Secret object.
 #
-# OPERATOR SUBSTRATE, CONSUMED BY NAMED INTERFACE, NOT RE-HOMED. The reviewed
-# substrate declaration is in the blahaj substrate repository,
-# deploy/honey/rke2-cnpg.yaml at
-# 72b6c2d9c43894214f09c0f3f96586f8e0025337. Earlier observations recorded
-# operator/chart versions, but they are historical receipts, not current live
-# truth. This overlay declares NO operator install; runbook step O requires a
-# current readback at the attended sitting and routes any missing-operator
-# repair through the substrate repository.
+# The CNPG operator and its placement are provider supply, consumed through the
+# protected capability catalog and opaque to this overlay. This source declares
+# no operator installation or provider identity.
 #
 # NO SECRET VALUES. Every credential below is a NAME. The owner/migration
 # credential is CNPG-generated (Secret `gftb-member-db-app`, never in git); the
-# runtime credential is operator-minted by name only. See
+# runtime credential is referenced by name only. See
 # ../secrets.contract.yaml.
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
@@ -35,7 +25,6 @@ metadata:
     app.kubernetes.io/name: gftb-member-db
     app.kubernetes.io/component: database
     app.kubernetes.io/part-of: great-falls-tool-bus
-    app.tinyland.dev/lifecycle: declare-only
 spec:
   # Exact minor pinned by digest. `16.15` is the CloudNativePG system image for
   # PostgreSQL 16.15 (org.opencontainers.image.version=16.15, built 2026-08-17);
@@ -49,11 +38,10 @@ spec:
   # ONE INSTANCE TO START. Member v0 is a single-tenant membership database with
   # an RPO/RTO contract (TIN-3817 acceptance row 8), not an HA contract: the
   # durability answer here is continuous WAL archiving plus scheduled base
-  # backups, not a replica. The storage class is node-pinned to bumble (see
-  # `storage` below), so a second instance would not survive bumble anyway
-  # without a second pool — growing to 3 instances is a separate reviewed change
-  # that must land a non-node-pinned class first. Nothing about this shape
-  # forecloses that: `instances` is the only field that changes.
+  # backups, not a replica. Provider placement and storage-class resolution are
+  # intentionally absent from this consumer carrier. Growing to three instances
+  # therefore requires a separately reviewed provider-capability change as well
+  # as this field changing.
   instances: 1
 
   # No `postgres` superuser Secret is generated or reachable. Bootstrap SQL
@@ -131,7 +119,7 @@ spec:
         # Cluster-scoped, so it belongs here rather than in
         # postInitApplicationSQL. Created NOLOGIN/NOINHERIT first; the
         # `managed.roles` block below is what grants LOGIN and binds the
-        # operator-minted password Secret, so no password ever appears in git.
+        # names-only password Secret, so no password ever appears in git.
         - CREATE ROLE gftb_app NOLOGIN NOINHERIT;
       postInitApplicationSQL:
         # DML-ONLY RUNTIME ROLE (TIN-3817 acceptance row 2; S1 acceptance
@@ -186,30 +174,20 @@ spec:
         # app half writes becomes decorative.
         bypassrls: false
         connectionLimit: 40
-        # NAME ONLY. The operator mints this Secret in-cluster before first
-        # apply (docs/runbooks/member-db-bringup.md step C2). It is
-        # kubernetes.io/basic-auth with username gftb_app; the value
+        # NAME ONLY. Owner authority must project this kubernetes.io/basic-auth
+        # Secret with username gftb_app; the value
         # never enters git, CI, or a workflow log.
         passwordSecret:
           name: gftb-member-db-runtime
 
   storage:
     size: 20Gi
-    # Purpose-built class, already on the estate: zfs.csi.openebs.io, pool
-    # tank/k8s/postgresql, recordsize 8k (matches the PostgreSQL page size),
-    # zstd compression, reclaimPolicy Retain, allowVolumeExpansion true.
-    # NODE-PINNED: its allowedTopologies restrict it to kubernetes.io/hostname
-    # = bumble, which is why `instances: 1` above is honest rather than timid.
-    # Retain is the point — a deleted PVC must not take the member database's
-    # last local copy with it.
-    storageClass: openebs-bumble-postgresql-retain
   walStorage:
     # WAL on its own volume so a runaway WAL backlog (for example, an object
     # store outage stalling archive_command) fills a 10Gi volume and stops the
     # primary, instead of silently consuming the data volume's headroom and
     # taking the database down with a full filesystem.
     size: 10Gi
-    storageClass: openebs-bumble-postgresql-retain
 
   resources:
     requests:
@@ -220,10 +198,9 @@ spec:
       memory: 2Gi
 
   monitoring:
-    # Keep this carrier independent of Prometheus Operator CRDs. A 2026-08-19
-    # read found PodMonitor absent, but that is historical rather than current
-    # authority; runbook step O records the sitting's current CRD readback.
-    # Metrics remain exported on :9187 for the explicitly admitted scraper.
+    # Keep this consumer carrier independent of Prometheus Operator CRDs.
+    # Provider observability is supplied, if admitted, during protected catalog
+    # composition rather than encoded as a consumer-side placement assumption.
     enablePodMonitor: false
 
   backup:
@@ -241,24 +218,18 @@ spec:
       # endpoint, and the validator fails closed on any endpointURL that is
       # not a .svc.cluster.local name.
       #
-      # B1 RULING (docs/runbooks/member-db-bringup.md, 2026-08-20, operator
-      # interview session 050cb99f): neither tcfs endpoint is admitted for
+      # B1 RULING (2026-08-20, operator interview session 050cb99f): neither
+      # tcfs endpoint is admitted for
       # member personal data (custody findings: estate-held admin credential,
       # writable IAM API, no NetworkPolicy floor, `:latest` images, an
       # internet tunnel). The endpoint below is GFTB's own dedicated rustfs
       # (rustfs.yaml), in this same namespace, admitting only this Cluster's
-      # pods on :9000 — kept inside GFTB's own apply plane rather than an
-      # estate-owned namespace GFTB does not govern. Because WAL archiving
-      # begins the moment this Cluster is applied, the rustfs stack and its
-      # NetworkPolicy must be live before this Cluster is, or archive_command
-      # fails and WAL accumulates on the 10Gi volume above until the primary
-      # stops.
+      # pods on :9000. The protected plan orders the object store and policy
+      # before the Cluster because WAL archiving starts at Cluster creation.
       endpointURL: http://gftb-member-db-backup-store.members-greatfallstoolbus-org-db-production.svc.cluster.local:9000
       s3Credentials:
-        # NAMES ONLY. Pre-provisioned, bucket-scoped, non-admin authority
-        # (runbook step B2 and secrets.contract.yaml). The attended apply
-        # prerequisite rejects the rustfs root credential and requires the
-        # scoped Secret's proof annotations before this Cluster can apply.
+        # NAMES ONLY. Bucket-scoped, non-admin authority as declared in
+        # secrets.contract.yaml; never the object-store root credential.
         accessKeyId:
           name: gftb-member-db-backup-s3
           key: ACCESS_KEY_ID
