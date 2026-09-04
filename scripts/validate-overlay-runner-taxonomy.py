@@ -62,6 +62,14 @@ PROJECT_IDENTITY_TOKENS = {
     "toolbus",
 }
 
+# The still-live legacy ARC scale set consumes this key. Keep only the narrow
+# state-continuity invariant here; cache topology and execution policy belong
+# to GloriousFlywheel v4 and must not grow back into this retiring validator.
+EXPECTED_ATTIC_PUBLIC_KEY = "main:eaUydxuDu7xBoy5cCo3MdknYAkVyTIASQ7DGuwxa+XA="
+RETIRED_ATTIC_PUBLIC_KEYS = {
+    "main:l/gpjG5GLg1Gczmn5K97n5iSIRcsaWerICzdXqiBYT8=",
+}
+
 @dataclass
 class RunnerSet:
     key: str
@@ -229,6 +237,28 @@ def validate_github_url(url: str, allow_repo_registration_anchor: bool) -> list[
     return []
 
 
+def validate_attic_continuity(path: Path) -> list[str]:
+    """Hold the live ARC cache key stable until the ARC resource is retired."""
+    errors: list[str] = []
+    attic_servers = parse_literal_assignments(path, "attic_server")
+    attic_keys = parse_literal_assignments(path, "attic_public_key")
+
+    if attic_servers and not attic_keys:
+        first_server_line = attic_servers[0][0]
+        return [f"{path}:{first_server_line}: attic_server is set but attic_public_key is missing"]
+
+    for line_number, key in attic_keys:
+        if key in RETIRED_ATTIC_PUBLIC_KEYS:
+            errors.append(f"{path}:{line_number}: attic_public_key uses retired cache key {key!r}")
+        elif key != EXPECTED_ATTIC_PUBLIC_KEY:
+            errors.append(
+                f"{path}:{line_number}: attic_public_key must match current continuity key "
+                f"{EXPECTED_ATTIC_PUBLIC_KEY!r}"
+            )
+
+    return errors
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Validate overlay runner labels stay capability-shaped.",
@@ -254,6 +284,8 @@ def main() -> int:
         for line_number, url in parse_literal_assignments(path, "github_config_url"):
             for error in validate_github_url(url, args.allow_repo_registration_anchor):
                 all_errors.append(f"{path}:{line_number}: {error}")
+
+        all_errors.extend(validate_attic_continuity(path))
 
         for runner in parse_extra_runner_sets(path):
             if runner.runner_label is None:

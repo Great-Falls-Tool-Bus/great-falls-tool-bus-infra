@@ -12,10 +12,11 @@ Two files declare one boundary and nothing used to hold them together:
 The GloriousFlywheel `arc-runners` module never reads the roster -- it owns no
 `github_actions_runner_group` resource and only stamps the group NAME onto the
 Helm release -- and `validate-overlay-runner-taxonomy.py` parses only runner
-labels, registration URLs, Attic keys, and `extra_runner_sets`. So before this
-check, the roster could be emptied, the group renamed on one side only, or the
-operator-ruled public-admission value flipped back, and every gate stayed
-green while the live cutover silently changed meaning.
+labels, registration URLs, the continuity Attic key, and the structural
+`extra_runner_sets` fields. It does not own the runner-group roster. So before
+this check, the roster could be emptied, the group renamed on one side only,
+or the operator-ruled public-admission value flipped back, and every gate
+stayed green while the live cutover silently changed meaning.
 
 The roster and the ruled public-admission value are encoded here on purpose.
 Changing either is a reviewed edit to this file, exactly as advancing a core

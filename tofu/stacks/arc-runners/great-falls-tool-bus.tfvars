@@ -33,10 +33,10 @@ ghcr_pull_secret_name = "ghcr-pull"
 # The group name is an owner/tenancy identity, not a runner capability, so it
 # does not violate the shared-label taxonomy: workflows still request
 # `tinyland-nix`. The roster, visibility, and public-repository posture are
-# declared in config/organization.yaml `runner_contract.runner_group`: two
-# selected repositories (gftb-site, greatfallstoolbus.org) with public
-# repository admission enabled per operator ruling 2026-08-18 (TIN-3902), and
-# this public infra repository itself excluded.
+# declared in config/organization.yaml `runner_contract.runner_group`: three
+# selected repositories (gftb-site, greatfallstoolbus.org, and this infra
+# repository) with public-repository admission enabled per operator rulings
+# TIN-3902 and TIN-3914.
 #
 # NOT module-created: the GloriousFlywheel arc-runners stack loads only the
 # kubernetes and helm providers and owns no `github_actions_runner_group`
@@ -62,8 +62,10 @@ nix_runner_scale_set_name    = "great-falls-tool-bus-nix"
 docker_runner_scale_set_name = "great-falls-tool-bus-docker"
 dind_runner_scale_set_name   = "great-falls-tool-bus-dind"
 
-# docker/dind names above are inert while their deploy flags are false; they
-# exist so a future lane enable is a one-flag change, not a naming decision.
+# docker/dind names above are inert state-continuity inputs while their deploy
+# flags remain false. They are not dormant capacity and must never be enabled
+# from this overlay; remove them only with proven retirement of the legacy ARC
+# state that still consumes this tfvars contract.
 
 # The site build lane materializes Nix, pnpm, and Bazel state on the runner
 # rootfs while the volumes below are disabled. On 2026-08-17, four independent

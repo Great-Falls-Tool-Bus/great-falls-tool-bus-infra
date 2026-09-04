@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Self-test for the bounded legacy ARC continuity contract: workflow-facing
-# labels remain capability-shaped and registration URLs remain owner-scoped
-# unless a caller explicitly opts into a repository anchor. Cache, endpoint,
-# and execution-mode policy belongs to GF v4, not this retiring ARC validator.
+# labels remain capability-shaped, registration URLs remain owner-scoped
+# unless a caller explicitly opts into a repository anchor, and the still-live
+# Attic key cannot silently regress before ARC retirement. Broader cache,
+# endpoint, and execution-mode policy belongs to GF v4.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,7 +19,10 @@ cleanup() {
         "${TMP_DIR}/org-scope.tfvars" \
         "${TMP_DIR}/repo-scope.tfvars" \
         "${TMP_DIR}/missing-label.tfvars" \
-        "${TMP_DIR}/missing-registration.tfvars"
+        "${TMP_DIR}/missing-registration.tfvars" \
+        "${TMP_DIR}/attic-current.tfvars" \
+        "${TMP_DIR}/attic-missing-key.tfvars" \
+        "${TMP_DIR}/attic-retired-key.tfvars"
     rmdir -- "${TMP_DIR}"
 }
 trap cleanup EXIT
@@ -69,5 +73,28 @@ grep -q "missing runner_label" "${TMP_DIR}/out" || fail "missing label diagnosti
 sed '/github_config_url/d' "${TMP_DIR}/valid.tfvars" >"${TMP_DIR}/missing-registration.tfvars"
 run "${TMP_DIR}/missing-registration.tfvars" && fail "missing registration unexpectedly passed"
 grep -q "missing github_config_url" "${TMP_DIR}/out" || fail "missing registration diagnostic"
+
+# 6. The current continuity key remains accepted while the legacy ARC scale
+# set exists.
+cat >"${TMP_DIR}/attic-current.tfvars" <<'EOF'
+attic_server     = "http://attic.nix-cache.svc.cluster.local"
+attic_public_key = "main:eaUydxuDu7xBoy5cCo3MdknYAkVyTIASQ7DGuwxa+XA="
+EOF
+run "${TMP_DIR}/attic-current.tfvars" || fail "current Attic continuity key unexpectedly failed"
+
+# 7. A live Attic server may not lose its trust key independently.
+cat >"${TMP_DIR}/attic-missing-key.tfvars" <<'EOF'
+attic_server = "http://attic.nix-cache.svc.cluster.local"
+EOF
+run "${TMP_DIR}/attic-missing-key.tfvars" && fail "Attic server without key unexpectedly passed"
+grep -q "attic_public_key is missing" "${TMP_DIR}/out" || fail "missing Attic-key diagnostic"
+
+# 8. The known retired key cannot be restored during the continuity hold.
+cat >"${TMP_DIR}/attic-retired-key.tfvars" <<'EOF'
+attic_server     = "http://attic.nix-cache.svc.cluster.local"
+attic_public_key = "main:l/gpjG5GLg1Gczmn5K97n5iSIRcsaWerICzdXqiBYT8="
+EOF
+run "${TMP_DIR}/attic-retired-key.tfvars" && fail "retired Attic key unexpectedly passed"
+grep -q "retired cache key" "${TMP_DIR}/out" || fail "missing retired Attic-key diagnostic"
 
 echo "overlay runner taxonomy continuity self-test passed"
