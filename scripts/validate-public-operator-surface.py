@@ -69,57 +69,16 @@ RETIRED_ARC_WORKFLOW = Path(".github/workflows/deploy-arc-runners.yml")
 # repository, fails the public surface. The site repo's signal job is retired in
 # the same change.
 RETIRED_WEB_CD_WORKFLOW = Path(".github/workflows/web-stack.yml")
-# TIN-4227 generation-40 parity bridge: RETIRED 2026-08-30 after its terminal
-# success receipt (run 33331047942; decisions/0022 §2 "the bridge then refuses
-# other generations and is deleted or disabled"). Operator ruling: delete
-# outright. Re-adding the file fails the public surface; the one-time apply
-# authority ended with the generation-40 terminal receipt. Ordinary generations
-# ship through the declare-only pin path until GF-I09 phase 2 arms.
-RETIRED_WEB_GENERATION40_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-40-parity.yml")
-# TIN-4227 second one-use bridge: RETIRED 2026-08-31 after its terminal success
-# receipt (decisions/0022 §2 amendment 2, "the bridge then refuses other
-# generations and is deleted or disabled"; operator ruling, TIN-4227 comment
-# b8f66e62). Operator ruling: delete outright, same as the generation-40
-# bridge above. Re-adding the file fails the public surface; the one-time
-# apply authority ended with the generation-42 terminal receipt. Ordinary
-# generations ship through the declare-only pin path until GF-I09 phase 2
-# arms.
-RETIRED_WEB_GENERATION42_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-42-parity.yml")
-# TIN-4227 third bridge: RETIRED 2026-09-01 after its terminal success
-# receipt (decisions/0022 Amendment 3 (d), "each apply retires its bridge
-# after its terminal receipt"; generation-43 run 33539402606, receipt
-# artifact 9813097428, carrier 44c9397b). Operator ruling: delete outright,
-# same as the generation-40 and generation-42 bridges above. Re-adding the
-# file fails the public surface; the next bounded apply re-arms a fresh
-# bridge from history (the e485dcbd shape) under the same amendment until
-# its expiry (2026-09-07) or receipt cap, or until W14 promotes the carrier
-# to the standing GF-I09 phase-2 executor.
-RETIRED_WEB_GENERATION43_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-43-parity.yml")
-# TIN-4227 generation-44 bridge: RETIRED 2026-09-01 after its terminal
-# success receipt (decisions/0022 Amendment 3 (d), "each apply retires its
-# bridge after its terminal receipt"; run 33543115842, receipt artifact
-# 9814527607, carrier 59754b76). Operator ruling: delete outright, same as
-# the earlier bridges above. Re-adding the file fails the public surface;
-# the final bounded apply (generation 45, receipt 3 of 3) re-arms a fresh
-# bridge from history, after which the amendment is spent and promotion
-# rides the W14 standing executor or a fresh amendment.
-RETIRED_WEB_GENERATION44_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-44-parity.yml")
-# TIN-4227 generation-45 bridge: RETIRED after its terminal success receipt
-# (decisions/0022 Amendment 3 (d), "each apply retires its bridge after its
-# terminal receipt"; run 33569556598, receipt artifact 9824506152, carrier
-# f3b1cc6e). Operator ruling: delete outright, same as the earlier
-# bridges above. Re-adding the file fails the public surface; the next
-# bounded apply re-arms a fresh bridge from history until the amendment's
-# expiry or receipt cap, or until W14 promotes the standing executor.
-RETIRED_WEB_GENERATION45_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-45-parity.yml")
-# TIN-4249 generation-47 interim bridge: RETIRED 2026-09-03 by current
-# operator direction after its only carrier failed closed in the authority
-# step (run 33822848194, carrier 2ca8235a). Planning, credential, dry-run,
-# apply, and observation steps were all skipped; no receipt artifact existed
-# and no production mutation was attempted. Re-adding this GFTB-local bridge
-# fails the public surface. Production convergence belongs to the shared
+# All GFTB-local web parity bridges are historical and may not return. Runs for
+# generations 40/42/43/44/45 ended with terminal success receipts under Meta
+# decision 0022; generation 47 failed closed before planning, credentials, or
+# mutation (run 33822848194, carrier 2ca8235a) and was retired by current
+# operator direction. Production convergence belongs only to the shared
 # GloriousFlywheel/owner-overlay carrier required by decision 0022 section 3.
-RETIRED_WEB_GENERATION47_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-47-parity.yml")
+RETIRED_WEB_GENERATION_BRIDGES = {
+    generation: Path(f".github/workflows/web-generation-{generation}-parity.yml")
+    for generation in ("40", "42", "43", "44", "45", "47")
+}
 WORKFLOW_REPOSITORY_DISPATCH = re.compile(r"^\s*repository_dispatch\s*:")
 JUST_COMMAND_START = re.compile(r"\bjust\b")
 JUST_OPTIONS_WITH_VALUES = {
@@ -1910,91 +1869,19 @@ def scan_workflows() -> list[Finding]:
             )
         )
 
-    retired_bridge = REPO / RETIRED_WEB_GENERATION40_BRIDGE_WORKFLOW
-    if retired_bridge.exists() or retired_bridge.is_symlink():
-        findings.append(
-            Finding(
-                "retired-web-generation40-bridge-retained",
-                RETIRED_WEB_GENERATION40_BRIDGE_WORKFLOW,
-                1,
-                "Delete web-generation-40-parity.yml; the one-time parity bridge "
-                "retired with its terminal receipt (decisions/0022 §2). Ordinary "
-                "generations ship through the declare-only pin path.",
+    for generation, retired_path in RETIRED_WEB_GENERATION_BRIDGES.items():
+        retired_bridge = REPO / retired_path
+        if retired_bridge.exists() or retired_bridge.is_symlink():
+            findings.append(
+                Finding(
+                    f"retired-web-generation{generation}-bridge-retained",
+                    retired_path,
+                    1,
+                    f"Delete {retired_path.name}; all GFTB-local web parity "
+                    "bridges are retired. Production convergence belongs to "
+                    "the shared GloriousFlywheel/owner-overlay carrier.",
+                )
             )
-        )
-
-    retired_gen42_bridge = REPO / RETIRED_WEB_GENERATION42_BRIDGE_WORKFLOW
-    if retired_gen42_bridge.exists() or retired_gen42_bridge.is_symlink():
-        findings.append(
-            Finding(
-                "retired-web-generation42-bridge-retained",
-                RETIRED_WEB_GENERATION42_BRIDGE_WORKFLOW,
-                1,
-                "Delete web-generation-42-parity.yml; the second one-time parity "
-                "bridge retired with its terminal receipt (decisions/0022 §2 "
-                "amendment 2). Ordinary generations ship through the "
-                "declare-only pin path.",
-            )
-        )
-
-    retired_gen43_bridge = REPO / RETIRED_WEB_GENERATION43_BRIDGE_WORKFLOW
-    if retired_gen43_bridge.exists() or retired_gen43_bridge.is_symlink():
-        findings.append(
-            Finding(
-                "retired-web-generation43-bridge-retained",
-                RETIRED_WEB_GENERATION43_BRIDGE_WORKFLOW,
-                1,
-                "Delete web-generation-43-parity.yml; the third one-time parity "
-                "bridge retired with its terminal receipt (decisions/0022 "
-                "Amendment 3 (d)). The next bounded apply re-arms a fresh "
-                "bridge from history; ordinary generations ship through the "
-                "declare-only pin path.",
-            )
-        )
-
-    retired_gen44_bridge = REPO / RETIRED_WEB_GENERATION44_BRIDGE_WORKFLOW
-    if retired_gen44_bridge.exists() or retired_gen44_bridge.is_symlink():
-        findings.append(
-            Finding(
-                "retired-web-generation44-bridge-retained",
-                RETIRED_WEB_GENERATION44_BRIDGE_WORKFLOW,
-                1,
-                "Delete web-generation-44-parity.yml; this one-time parity "
-                "bridge retired with its terminal receipt (decisions/0022 "
-                "Amendment 3 (d)). The next bounded apply re-arms a fresh "
-                "bridge from history; ordinary generations ship through the "
-                "declare-only pin path.",
-            )
-        )
-
-    retired_gen45_bridge = REPO / RETIRED_WEB_GENERATION45_BRIDGE_WORKFLOW
-    if retired_gen45_bridge.exists() or retired_gen45_bridge.is_symlink():
-        findings.append(
-            Finding(
-                "retired-web-generation45-bridge-retained",
-                RETIRED_WEB_GENERATION45_BRIDGE_WORKFLOW,
-                1,
-                "Delete web-generation-45-parity.yml; this one-time parity "
-                "bridge retired with its terminal receipt (decisions/0022 "
-                "Amendment 3 (d)). The next bounded apply re-arms a fresh "
-                "bridge from history; ordinary generations ship through the "
-                "declare-only pin path.",
-            )
-        )
-
-    retired_gen47_bridge = REPO / RETIRED_WEB_GENERATION47_BRIDGE_WORKFLOW
-    if retired_gen47_bridge.exists() or retired_gen47_bridge.is_symlink():
-        findings.append(
-            Finding(
-                "retired-web-generation47-bridge-retained",
-                RETIRED_WEB_GENERATION47_BRIDGE_WORKFLOW,
-                1,
-                "Delete web-generation-47-parity.yml; the GFTB-local interim "
-                "bridge is retired after its pre-credential failed carrier "
-                "(TIN-4249). Production convergence belongs to the shared "
-                "GloriousFlywheel/owner-overlay carrier.",
-            )
-        )
 
     workflow_paths = set(git_files(WORKFLOW_GLOBS))
     for pattern in WORKFLOW_GLOBS:
@@ -8696,53 +8583,19 @@ def self_test() -> None:
     for label, plan, diagnostic in output_cases:
         expect_scope_rejection(scope_source, label, plan, diagnostic)
 
-    if (REPO / RETIRED_WEB_GENERATION40_BRIDGE_WORKFLOW).exists():
-        raise SystemExit("self-test FAILED: the retired generation-40 bridge workflow is present")
-    if not any(
-        finding.rule == "retired-web-generation40-bridge-retained"
-        for finding in scan_workflows_with_retired_bridge_fixture()
-    ):
-        raise SystemExit("self-test FAILED: a re-added generation-40 bridge was accepted")
-
-    if (REPO / RETIRED_WEB_GENERATION42_BRIDGE_WORKFLOW).exists():
-        raise SystemExit("self-test FAILED: the retired generation-42 bridge workflow is present")
-    if not any(
-        finding.rule == "retired-web-generation42-bridge-retained"
-        for finding in scan_workflows_with_retired_gen42_bridge_fixture()
-    ):
-        raise SystemExit("self-test FAILED: a re-added generation-42 bridge was accepted")
-
-    if (REPO / RETIRED_WEB_GENERATION43_BRIDGE_WORKFLOW).exists():
-        raise SystemExit("self-test FAILED: the retired generation-43 bridge workflow is present")
-    if not any(
-        finding.rule == "retired-web-generation43-bridge-retained"
-        for finding in scan_workflows_with_retired_gen43_bridge_fixture()
-    ):
-        raise SystemExit("self-test FAILED: a re-added generation-43 bridge was accepted")
-
-    if (REPO / RETIRED_WEB_GENERATION44_BRIDGE_WORKFLOW).exists():
-        raise SystemExit("self-test FAILED: the retired generation-44 bridge workflow is present")
-    if not any(
-        finding.rule == "retired-web-generation44-bridge-retained"
-        for finding in scan_workflows_with_retired_gen44_bridge_fixture()
-    ):
-        raise SystemExit("self-test FAILED: a re-added generation-44 bridge was accepted")
-
-    if (REPO / RETIRED_WEB_GENERATION45_BRIDGE_WORKFLOW).exists():
-        raise SystemExit("self-test FAILED: the retired generation-45 bridge workflow is present")
-    if not any(
-        finding.rule == "retired-web-generation45-bridge-retained"
-        for finding in scan_workflows_with_retired_gen45_bridge_fixture()
-    ):
-        raise SystemExit("self-test FAILED: a re-added generation-45 bridge was accepted")
-
-    if (REPO / RETIRED_WEB_GENERATION47_BRIDGE_WORKFLOW).exists():
-        raise SystemExit("self-test FAILED: the retired generation-47 bridge workflow is present")
-    if not any(
-        finding.rule == "retired-web-generation47-bridge-retained"
-        for finding in scan_workflows_with_retired_gen47_bridge_fixture()
-    ):
-        raise SystemExit("self-test FAILED: a re-added generation-47 bridge was accepted")
+    for generation, retired_path in RETIRED_WEB_GENERATION_BRIDGES.items():
+        if (REPO / retired_path).exists():
+            raise SystemExit(
+                "self-test FAILED: the retired "
+                f"generation-{generation} bridge workflow is present"
+            )
+        if not scan_workflows_with_retired_generation_bridge_fixture(
+            generation, retired_path
+        ):
+            raise SystemExit(
+                "self-test FAILED: a re-added "
+                f"generation-{generation} bridge was accepted"
+            )
 
     run_web_release_semantic_fixtures()
     run_web_release_mutation_fixtures()
@@ -8750,74 +8603,19 @@ def self_test() -> None:
     print("public-operator-surface self-test passed")
 
 
-def scan_workflows_with_retired_bridge_fixture() -> list[Finding]:
-    """Negative control: a re-added bridge file must raise the retained finding."""
-    path = REPO / RETIRED_WEB_GENERATION40_BRIDGE_WORKFLOW
-    if path.exists():
+def scan_workflows_with_retired_generation_bridge_fixture(
+    generation: str, retired_path: Path
+) -> list[Finding]:
+    """Negative control: each re-added parity bridge must fail validation."""
+    path = REPO / retired_path
+    if path.exists() or path.is_symlink():
         raise SystemExit("self-test FAILED: fixture path already exists")
     try:
         path.write_text("name: retired fixture\n", encoding="utf-8")
-        return [finding for finding in scan_workflows() if finding.rule == "retired-web-generation40-bridge-retained"]
-    finally:
-        path.unlink(missing_ok=True)
-
-
-def scan_workflows_with_retired_gen42_bridge_fixture() -> list[Finding]:
-    """Negative control: a re-added second bridge file must raise the retained finding."""
-    path = REPO / RETIRED_WEB_GENERATION42_BRIDGE_WORKFLOW
-    if path.exists():
-        raise SystemExit("self-test FAILED: fixture path already exists")
-    try:
-        path.write_text("name: retired fixture\n", encoding="utf-8")
-        return [finding for finding in scan_workflows() if finding.rule == "retired-web-generation42-bridge-retained"]
-    finally:
-        path.unlink(missing_ok=True)
-
-
-def scan_workflows_with_retired_gen43_bridge_fixture() -> list[Finding]:
-    """Negative control: a re-added third bridge file must raise the retained finding."""
-    path = REPO / RETIRED_WEB_GENERATION43_BRIDGE_WORKFLOW
-    if path.exists():
-        raise SystemExit("self-test FAILED: fixture path already exists")
-    try:
-        path.write_text("name: retired fixture\n", encoding="utf-8")
-        return [finding for finding in scan_workflows() if finding.rule == "retired-web-generation43-bridge-retained"]
-    finally:
-        path.unlink(missing_ok=True)
-
-
-def scan_workflows_with_retired_gen45_bridge_fixture() -> list[Finding]:
-    """Negative control: a re-added generation-45 bridge file must raise the retained finding."""
-    path = REPO / RETIRED_WEB_GENERATION45_BRIDGE_WORKFLOW
-    if path.exists():
-        raise SystemExit("self-test FAILED: fixture path already exists")
-    try:
-        path.write_text("name: retired fixture\n", encoding="utf-8")
-        return [finding for finding in scan_workflows() if finding.rule == "retired-web-generation45-bridge-retained"]
-    finally:
-        path.unlink(missing_ok=True)
-
-
-def scan_workflows_with_retired_gen47_bridge_fixture() -> list[Finding]:
-    """Negative control: a re-added generation-47 bridge file must raise the retained finding."""
-    path = REPO / RETIRED_WEB_GENERATION47_BRIDGE_WORKFLOW
-    if path.exists():
-        raise SystemExit("self-test FAILED: fixture path already exists")
-    try:
-        path.write_text("name: retired fixture\n", encoding="utf-8")
-        return [finding for finding in scan_workflows() if finding.rule == "retired-web-generation47-bridge-retained"]
-    finally:
-        path.unlink(missing_ok=True)
-
-
-def scan_workflows_with_retired_gen44_bridge_fixture() -> list[Finding]:
-    """Negative control: a re-added generation-44 bridge file must raise the retained finding."""
-    path = REPO / RETIRED_WEB_GENERATION44_BRIDGE_WORKFLOW
-    if path.exists():
-        raise SystemExit("self-test FAILED: fixture path already exists")
-    try:
-        path.write_text("name: retired fixture\n", encoding="utf-8")
-        return [finding for finding in scan_workflows() if finding.rule == "retired-web-generation44-bridge-retained"]
+        expected_rule = f"retired-web-generation{generation}-bridge-retained"
+        return [
+            finding for finding in scan_workflows() if finding.rule == expected_rule
+        ]
     finally:
         path.unlink(missing_ok=True)
 
