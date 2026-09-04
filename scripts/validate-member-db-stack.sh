@@ -629,9 +629,9 @@ test -z "${rustfs_ingress_from_ns}" || fail "rustfs ingress must admit same-name
 # B-5: admits the primary AND the restore rehearsal cluster, by matchExpressions
 # In [...], never a bare matchLabels (which would admit only one) and never an
 # unbounded operator that would admit every cnpg.io/cluster value in the ns.
-rustfs_ingress_from_op="$(yaml_query -r "${rustfs_ingress_pol} | .spec.ingress[].from[].podSelector.matchExpressions[] | select(.key == \"cnpg.io/cluster\") | .operator" "${rendered}")"
+rustfs_ingress_from_op="$(yaml_query -r "${rustfs_ingress_pol} | .spec.ingress[].from[].podSelector.matchExpressions[]? | select(.key == \"cnpg.io/cluster\") | .operator" "${rendered}")"
 assert_eq "${rustfs_ingress_from_op}" "In" "rustfs ingress admitted-source operator (must be a closed 'In' list)"
-rustfs_ingress_from_values="$(yaml_query -c "${rustfs_ingress_pol} | .spec.ingress[].from[].podSelector.matchExpressions[] | select(.key == \"cnpg.io/cluster\") | .values | sort" "${rendered}")"
+rustfs_ingress_from_values="$(yaml_query -c "${rustfs_ingress_pol} | .spec.ingress[].from[].podSelector.matchExpressions[]? | select(.key == \"cnpg.io/cluster\") | .values | sort" "${rendered}")"
 assert_eq "${rustfs_ingress_from_values}" "$(jq -nc --arg a "${WANT_CLUSTER}" --arg b "${WANT_RESTORE_CLUSTER}" '[$a,$b] | sort')" \
   "rustfs ingress admitted source set (primary + restore rehearsal cluster, nothing else)"
 rustfs_ingress_port="$(yaml_query -r "${rustfs_ingress_pol} | .spec.ingress[].ports[].port" "${rendered}")"
