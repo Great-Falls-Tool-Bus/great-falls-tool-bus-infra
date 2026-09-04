@@ -2302,15 +2302,10 @@ archive-stack-apply: archive-stack-server-dry-run
 # repository_dispatch consumer can reach kubectl. MERGING APPLIES NOTHING, and
 # now neither does any push to the public site repo.
 #
-# LEGACY CARRIER IS NOW DEAD CODE. `web-stack-apply` below still exists as the
-# original adapter-node cutover carrier (an operator with an operator-custody
-# web-apply kubeconfig could run `just web-stack-apply` by hand), but
-# `_web-stack-promotion-interlock` refuses it unconditionally now that the
-# gftb-site static origin is permanently promoted onto
-# Deployment/greatfallstoolbus-org -- there is no live state this carrier could
-# run against without the interlock firing. The reviewed, actually-used
-# forward path for the static origin is the web-release-* chain below, not
-# this carrier.
+# The retired adapter-node apply carrier is absent. The reviewed, currently
+# usable production path for the static origin is the web-release-* chain
+# below; it remains attended until the shared v4 owner-overlay transaction
+# proves a complete takeover.
 #
 # TREE HONESTY (rung 1, 2026-08-21; ratification basis: operator interview
 # 2026-08-21, session register L71 Q2 rungs 1+2). This comment used to say the
@@ -2397,68 +2392,11 @@ web-stack-render:
     bash scripts/guard-no-remote-kustomize-resources.sh {{ web_stack_dir }}
     kubectl kustomize {{ web_stack_dir }}
 
-# Operator-supplied cutover inputs (attended env; never baked, and since
-# TIN-3899 never workflow-delivered either):
-#   WEB_APPLY_KUBECONFIG  path to the materialized namespace-scoped SA kubeconfig
-#   WEB_APPLY_IMAGE       image to serve (operator-resolved; not the PLACEHOLDER)
-# WEB_APPLY_REPLICAS    replica count to flip to (default 2, the MI prod shape)
-_web-apply-inputs:
-    test -n "${WEB_APPLY_KUBECONFIG:-}" || { echo "Set WEB_APPLY_KUBECONFIG to the web-apply kubeconfig path"; exit 1; }
-    test -f "${WEB_APPLY_KUBECONFIG}"
-    test -n "${WEB_APPLY_IMAGE:-}" || { echo "Set WEB_APPLY_IMAGE to the operator-resolved image reference"; exit 1; }
-    case "${WEB_APPLY_IMAGE}" in *PLACEHOLDER*) echo "refusing the declare-only PLACEHOLDER image; supply the real operator-resolved reference"; exit 1 ;; esac
-
 # Lighter-weight input check for read-only commands (drift-check) that need
 # only the kubeconfig, not an image to pin.
 _web-apply-kubeconfig-only:
     test -n "${WEB_APPLY_KUBECONFIG:-}" || { echo "Set WEB_APPLY_KUBECONFIG to the web-apply kubeconfig path"; exit 1; }
     test -f "${WEB_APPLY_KUBECONFIG}"
-
-# Server-side dry-run of the workload apply against the live API (no mutation).
-web-stack-server-dry-run: web-stack-validate _web-apply-inputs
-    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply --dry-run=server -k {{ web_stack_dir }}
-
-# PROMOTION INTERLOCK (TIN-3816; unattended trigger retired by TIN-3899). This
-# legacy adapter-node carrier and the reviewed web-release chain both mutate
-# Deployment/greatfallstoolbus-org in {{ web_stack_ns }}. Once the gftb-site
-# static origin is promoted in place, re-running this carrier would re-pin the
-# adapter-node image over it -- silently reverting the promotion and falsifying
-# the SERVED proof. (Until TIN-4254 pruned them from every surface, a tree
-# apply would also have recreated the two legacy allow-egress policies; the
-# committed tree now declares default-deny-egress instead.)
-#
-# The carrier USED TO be fired unattended by web-stack.yml's
-# `repository_dispatch: web-image-published` (sent by greatfallstoolbus.org's
-# container-ghcr.yml on every push to main). TIN-3899 deleted that workflow and
-# the site-side signal job, so the carrier now has no automated caller at all and
-# the runbook quiesce rule is retired. This interlock is KEPT as the mechanical
-# belt-and-braces on the one remaining, attended path: it refuses from live
-# state, so an operator cannot revert the promotion by hand either, and its
-# receipt in WEB_RELEASE_CRITICAL_RECIPE_DIGESTS keeps any future re-wiring of a
-# mutating carrier failing closed at `just public-surface`.
-_web-stack-promotion-interlock: _web-apply-kubeconfig-only
-    #!/usr/bin/env bash
-    set -euo pipefail
-    live_image="$(kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} get deployment/greatfallstoolbus-org --ignore-not-found -o jsonpath='{.spec.template.spec.containers[?(@.name=="greatfallstoolbus-org")].image}')"
-    case "${live_image}" in
-      ghcr.io/great-falls-tool-bus/gftb-site@*|ghcr.io/great-falls-tool-bus/gftb-site:*)
-        echo "::error::promotion interlock: Deployment/greatfallstoolbus-org in {{ web_stack_ns }} already carries the promoted gftb-site origin (${live_image}). The legacy adapter-node carrier would revert it. Refusing." >&2
-        echo "Quiesce greatfallstoolbus.org main (the repository_dispatch source) until this carrier is retired; see docs/runbooks/oncluster-web-cutover.md section S." >&2
-        exit 1
-        ;;
-    esac
-    echo "promotion interlock: live image '${live_image:-<absent>}' is not a promoted gftb-site origin; the legacy carrier may proceed"
-
-# Operator-gated cutover apply: workload -> pin image -> flip replicas 0 -> N.
-# The namespace must already exist (the SA is namespace-scoped and cannot create
-# it); replicas are patched on the Deployment resource, not via the scale
-# subresource, so the least-privilege patch-Deployment grant is sufficient.
-web-stack-apply: _web-stack-promotion-interlock web-stack-server-dry-run
-    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply -k {{ web_stack_dir }}
-    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} set image deployment/greatfallstoolbus-org greatfallstoolbus-org="${WEB_APPLY_IMAGE}"
-    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} patch deployment/greatfallstoolbus-org --type merge --patch '{"spec":{"replicas":'"${WEB_APPLY_REPLICAS:-2}"'}}'
-    # 300s (was 180s): run 28769199755 (2026-07-06) hit `timed out waiting for the condition` on a cold-node image pull, but the rollout verified Ready seconds later -- a benign race, not a real failure.
-    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} rollout status deployment/greatfallstoolbus-org --timeout=300s
 
 # Post-apply read-only health gate: Deployment readyReplicas == desired. A ready
 # replica means the kubelet readinessProbe (GET /health on :3000) passed, so this
@@ -2496,12 +2434,9 @@ grafana-dashboards-validate:
     bash scripts/validate-grafana-dashboards.sh {{ grafana_dashboard_dir }}
 
 # --- Reviewed gftb-site release candidate proofs ----------------------------
-# These recipes are read-only/proof-only. They deliberately do not share the
-# legacy `web-stack-apply` mutation carrier, which pins the adapter-node image
-# and must never receive the static Caddy candidate; that candidate travels only
-# through the reviewed exact-render/apply/rollback contract below. The workflow
-# that used to drive the legacy carrier (.github/workflows/web-stack.yml) is
-# retired (TIN-3899).
+# These recipes are read-only/proof-only. The retired adapter-node carrier is
+# absent; the static Caddy candidate travels only through the reviewed
+# exact-render/apply/rollback contract below.
 
 _web-release-candidate-inputs:
     #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
@@ -3954,8 +3889,7 @@ web-release-served-proof: _web-release-candidate-inputs
 # refuses unless the re-render is byte-identical to the recorded plan, and then
 # applies THOSE bytes. So the reviewed bytes and the applied bytes cannot diverge,
 # and `kubectl rollout history` can always be reconciled against a render of the
-# reviewed inputs. This is deliberately unlike the legacy `web-stack-apply`
-# carrier, which imperatively `set image`s the adapter-node origin.
+# reviewed inputs. The former imperative adapter-node carrier is absent.
 #
 # Nothing here creates the namespace (the apply identity is namespace-scoped and
 # cannot), ships a Secret, or touches Cloudflare. The public path does not change:
@@ -4185,8 +4119,8 @@ web-release-apply: _reviewed-clean-main _operator-apply-confirm _web-release-app
 # to any object that exists ONLY on the cluster (for the web stack, e.g. the
 # two legacy allow-egress policies if they ever reappeared out of band; their
 # live ABSENCE is receipted by an attended read-only census, not by this
-# gate). This check is read-only and therefore not interlocked; the attended
-# mutating carrier is (see _web-stack-promotion-interlock).
+# gate). This check is read-only and separate from the reviewed release
+# transaction.
 _k8s-drift-check kubeconfig namespace dir label:
     #!/usr/bin/env bash
     set -uo pipefail

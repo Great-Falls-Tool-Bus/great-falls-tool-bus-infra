@@ -1,36 +1,7 @@
-# DECLARE-ONLY — NOT APPLIED (TIN-2541).
-#
-# Default-deny ingress posture with explicit allows, mirroring MI
-# (blahaj:tofu/stacks/massageithaca/main.tf: default-deny-ingress + per-source
-# allows) and the house form-stack doctrine (k8s/form/.../networkpolicy.yaml:
-# the tunnel source is the non-host-networked `cloudflared` namespace, so a
-# namespaceSelector on kubernetes.io/metadata.name=cloudflared is the tightest
-# correct admission — no ipBlock/SNAT workaround needed on that leg).
-#
-# The web pod's ONLY public path is: cloudflared (tunnel) --3000--> this pod.
-# Prometheus scrape is admitted from the tinyland-dev-production monitoring
-# namespace on 3000. No 0.0.0.0/0, and no other backend.
-#
-# TREE HONESTY (rung 1, 2026-08-21; completed by TIN-4254 W13). This file
-# previously also declared allow-egress-dns and allow-egress-discuss-archive —
-# egress rules the retired legacy adapter-node origin needed for its
-# request-time discuss-archive fetch. The gftb-site static origin makes zero
-# outbound calls (it serves files off disk), so those two policies are gone
-# here, and the default-deny-egress NetworkPolicy the web-release-* ceremony
-# used to synthesize at render time is now COMMITTED below (TIN-4254,
-# decisions/0022 Amendment 3): `kubectl kustomize` of this directory IS the
-# ceremony's applied bytes, with no render-time synthesis left. It carries
-# only the lifecycle label here; kustomization.yaml's labels transformer
-# supplies managed-by/part-of/tenant, so the rendered object is exactly what
-# the ceremony always applied.
-#
-# FAIL-CLOSED note: these policies select on the web pod labels. The Deployment
-# ships replicas: 2 and a digest-pinned image, so these rules are NOT inert —
-# they take effect whenever an attended operator runs the web-release-* or
-# (legacy, now permanently interlocked-off) web-stack-apply carrier. What
-# merging this file cannot do is apply anything: this stack creates no
-# Namespace (the namespace-scoped web-apply SA cannot either), and the public
-# tunnel route stays fail-closed and dashboard-managed.
+# DECLARATION ONLY — applied only by the reviewed web-release transaction.
+# Default-deny ingress and egress. The static origin has no outbound dependency;
+# ingress is limited to cloudflared and Prometheus on port 3000. The committed
+# render is the complete policy set; no release-time policy is synthesized.
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

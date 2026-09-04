@@ -1,60 +1,11 @@
-# DECLARE-ONLY (dispatch-gated) — NOTHING APPLIES ON MERGE (TIN-2543, ADR 0010).
+# DECLARATION ONLY — applied only by the reviewed web-release transaction.
 #
-# GFTB on-cluster web serving workload: the promoted gftb-site static origin
-# (SvelteKit adapter-static build -> Caddy on an OCI image on GHCR -> K8s
-# Deployment behind a ClusterIP Service -> in-cluster cloudflared tunnel edge),
-# mirroring the proven MassageIthaca full-on-cluster pattern (see
-# blahaj:tofu/stacks/massageithaca/main.tf and this repo's
-# docs/decisions/0001-pr-gated-ephemeral-preview-deploys.md).
-#
-# TREE HONESTY (rung 1, 2026-08-21; ratification basis: operator interview
-# 2026-08-21, session register L71 Q2 rungs 1+2). Until this fix, this file
-# named a DIFFERENT GHCR repository (ghcr.io/great-falls-tool-bus/
-# greatfallstoolbus.org, the pre-split legacy adapter-node image) than the one
-# production has actually served since the gftb-site promotion
-# (ghcr.io/great-falls-tool-bus/gftb-site). That divergence was documented here
-# and in Justfile/k8s-stack-drift.yml as PERMANENT and by-design — it is not:
-# it was an artifact of the legacy carrier's declarative record never being
-# updated at promotion time. The invariant going forward is: THIS FILE PINS
-# WHAT IS ACTUALLY SERVED, and an operator updates the pin here as part of
-# each release ceremony (see Justfile `web-release-plan` / `web-release-apply`,
-# and the generation-37 pin receipt on the program board, TIN-3959). This is a
-# declarative-record fix only — the `web-release-*` ceremony (Justfile) still
-# renders and applies the live Deployment from operator-supplied
-# WEB_APPLY_IMAGE/WEB_APPLY_SHA, attended, behind `_operator-apply-confirm`;
-# nothing here changes that path, moves any authority, or causes an apply.
-#
-# ADR 0010 rules on-prem the production host and moves this stack from a parked
-# fail-closed skeleton to the EXECUTING cutover (ADR 0010 §5 step 3: scale the
-# web Deployment 0 -> 2). This manifest now carries the REAL cutover shape — a
-# digest-pinned production image and replicas: 2 — so it is no longer inert. It
-# stays DECLARE-ONLY in the honest sense that MERGING APPLIES NOTHING; the safety
-# is the apply GATE plus the still-closed public path, not an inert manifest:
-#   1. No CI applies, ever. web-crs.yml is validation-only, and TIN-3899 deleted
-#      web-stack.yml, the workflow_dispatch + confirm=apply + repository_dispatch
-#      apply carrier. Applying this stack is attended-operator-only now.
-#   2. This stack creates NO Namespace object. greatfallstoolbus-org-production is
-#      provisioned out of band; the web-apply SA is namespace-scoped and cannot
-#      create it (no Namespace object here — validate-web-stack.sh enforces this).
-#   3. No public traffic reaches it on merge: the honey-ingress cloudflared tunnel
-#      public-hostname route and apex/www DNS stay fail-closed=false in
-#      ../../tofu/intent/great-falls-tool-bus/web-oncluster-route.json (TIN-991,
-#      Cloudflare dashboard / token-managed, never in git). See ../README.md.
-#   4. No Secret ships here (the GHCR pull secret is operator-provisioned in the
-#      namespace, never committed).
-#
-# The pod-template fields below (securityContext, no command/env override) match
-# the exact contract Justfile's `web-release-render` asserts on the rendered
-# workload byte-for-byte (see the `jq -e` contract in that recipe). Since
-# TIN-4254 (W13) there are NO ceremony-only residuals left: the per-release
-# source-sha annotation is committed on the pod template below, the
-# default-deny-egress NetworkPolicy is committed in networkpolicy.yaml, and
-# `web-release-render` emits `kubectl kustomize` bytes VERBATIM — it asserts
-# the committed pin equals the reviewed WEB_APPLY_IMAGE/WEB_APPLY_SHA inputs
-# instead of stamping them. The pin-step invariant extends accordingly: each
-# release ceremony's pin commit updates the image digest AND the
-# app.tinyland.dev/source-sha template annotation together, in the same
-# commit.
+# The tree pins the production `gftb-site` static Caddy origin exactly: two
+# replicas, one immutable image digest, and the matching source SHA annotation.
+# `web-release-render` emits these committed bytes verbatim and refuses if its
+# reviewed WEB_APPLY_IMAGE/WEB_APPLY_SHA inputs differ. The namespace and Secret
+# values are external; this workload cannot bootstrap either. See
+# k8s/web/README.md and docs/runbooks/oncluster-web-cutover.md.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

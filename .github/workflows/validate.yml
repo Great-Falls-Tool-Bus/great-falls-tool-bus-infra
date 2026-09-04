@@ -1,62 +1,10 @@
 name: Validate Overlay
 
-# This public repository's validation is deliberately secret-free. TIN-3914:
-# it runs on the GF cache-fronted `tinyland-nix` ARC fleet, not a
-# GitHub-hosted runner -- GitHub-hosted runners are not an option in this
-# estate (operator ruling 2026-08-19, TIN-3914: "never ubuntu-* runners; only
-# GF cache-fronted ARC runners"). ADMISSION HOLD RESOLVED: this repository
-# (id 1286829099) joined the `great-falls-tool-bus-infra` runner group's
-# roster in PR #128 (`config/organization.yaml`, operator ruling 2026-08-22).
-# Before that merge this job had no runner and `validate` -- the sole
-# required status check on `main` -- was permanently pending; this PR is the
-# other half of closing that (the roster admission alone does not move this
-# job off `ubuntu-24.04`).
-#
-# OPEN QUESTION FOR THIS PR'S REVIEW, not something this header settles:
-# `config/organization.yaml`'s `runner_group` comment states a standing
-# invariant -- no `pull_request`-triggered job reaches `tinyland-nix` --
-# enforced by every OTHER self-hosted workflow in this repository via either
-# a trusted-event `if:` gate (PR #110, `ae7cb63a`,
-# `github.event_name == 'push' || github.event_name == 'workflow_dispatch'`)
-# or by declaring no `pull_request` trigger at all. This job cannot adopt
-# either: it runs UNFILTERED on every `pull_request` by design, because it
-# is both this repository's sole required status check and (see "ALSO
-# CARRIES" below) the always-executing, always-reporting home for the
-# rung-2 web-stack PR-side render -- both require running on every PR. Its
-# compensating control is staying secret-free (`permissions: contents:
-# read`, zero `environment:`/`secrets.*` references, matching every other
-# `tinyland-nix` job here) rather than event-gated. "Secret-free" and
-# "gated" are different properties, and whether secret-freedom alone is
-# sufficient compensation for a `pull_request`-unfiltered job on this runner
-# class -- making this job a deliberate, single exception to the invariant
-# rather than a violation of it -- is the thing this PR's review needs to
-# confirm, not something already decided by landing it. (UPDATE, W17 /
-# TIN-4256: that review confirmed the posture, and `web-plan.yml` has since
-# become the SECOND sanctioned exception under the same compensating
-# control -- it now runs its render+validate body unfiltered on every
-# `pull_request` as the intended PR-required `web-plan` context. This job
-# remains the sole required status check until the operator wires
-# `web-plan` into ruleset 20930684; see
-# docs/runbooks/web-plan-required-status-activation.md.)
-#
-# ALSO CARRIES: the rung-2 web-stack plan render for pull requests (round 3,
-# after adversarial review PR #127 comment 5377613179; retained after W17 /
-# TIN-4256 as defense in depth now that `.github/workflows/web-plan.yml`
-# runs the same render on every `pull_request` itself -- removing this copy
-# is a separate operator call). Something still has
-# to report a real, always-executing conclusion on every PR so a
-# required `web-plan`-equivalent check can never freeze on an unrelated PR --
-# this job is one such carrier: it already runs on every `pull_request`
-# unfiltered, is already this repository's declared PR validation authority
-# (PR #110's own commit message), is already secret-free for this purpose,
-# and, as of THIS PR, runs on the GF cache-fronted runner class directly
-# (DRAFT PR #120, "ci: migrate off GitHub-hosted runners"/TIN-3914 Phase B,
-# proposed the same move separately; per operator ruling L77 Q2 it is
-# superseded by this PR and is being stripped/closed, not landed alongside
-# it -- see #116's PR thread). `kubectl`/`yq`/`jq` are already available in
-# this job's `nix develop .` devshell -- `just check-hosted` below already
-# exercises `web-stack-validate` (and therefore the same tools) today, so
-# the new step adds no new dependency.
+# The sole required status check for main. It is deliberately secret-free and
+# runs unfiltered on every pull request on the GF cache-fronted `tinyland-nix`
+# class (TIN-3914). It validates the complete overlay and renders the committed
+# web declaration offline. The duplicate `web-plan` and `web-crs` workflows are
+# retired; this one job owns that evidence.
 
 on:
   pull_request:
@@ -162,7 +110,7 @@ jobs:
             while IFS= read -r path; do
               [ -n "${path}" ] || continue
               case "${path}" in
-                .github/workflows/web-plan.yml|.github/workflows/validate.yml|Justfile|k8s/web/*|scripts/validate-web-stack.sh|scripts/guard-no-remote-kustomize-resources.sh|tofu/intent/great-falls-tool-bus/*)
+                .github/workflows/validate.yml|Justfile|k8s/web/*|scripts/validate-web-stack.sh|scripts/guard-no-remote-kustomize-resources.sh)
                   touched="true"
                   ;;
               esac
@@ -170,10 +118,8 @@ jobs:
           fi
           echo "touched=${touched}" >> "$GITHUB_OUTPUT"
 
-      # Always executes, always reports a real conclusion -- never a `skipped`
-      # step. Offline, no cluster, no registry, no credential: the same
-      # web-stack-render recipe web-plan.yml uses, behind the same
-      # remote-resource guard.
+      # Always executes and reports a real conclusion. It is offline and uses
+      # no cluster, registry, or credential.
       - name: Render web stack plan (rung 2, PR-side; offline, no cluster, no credential)
         env:
           TOUCHED: ${{ steps.web_stack_touch.outputs.touched }}
@@ -215,7 +161,7 @@ jobs:
             echo ""
             echo "**Rendered-bytes sha256 (determinism receipt input):** \`$(sha256sum web-plan-rendered.yaml | cut -d' ' -f1)\`"
             echo ""
-            echo "See \`.github/workflows/web-plan.yml\`'s header for the full explanation."
+            echo "The required validate job owns this render and its conclusion."
             echo ""
             echo '```yaml'
             cat web-plan-rendered.yaml
