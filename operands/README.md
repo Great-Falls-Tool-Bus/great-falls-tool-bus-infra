@@ -58,7 +58,6 @@ or ratified carrier exists:
 
 | File | Field | Required authority |
 | --- | --- | --- |
-| `tenant-overlay.json` | `authorizationPolicyDigest` | exact canonical GFTB authorization policy |
 | `tenant-overlay.json` | `capabilityPolicies[0].maxConcurrentActions` | ratified consumer demand bound |
 | `tenant-overlay.json` | all `subjectPolicy` members | ratified organization invocation policy |
 | `owner-installation.json` | `installationId` | installed GFTB product App, never ARC installation `143981297` |

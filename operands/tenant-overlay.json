@@ -1,5 +1,4 @@
 {
-  "authorizationPolicyDigest": "<TO-FILL: O-3 — sha256:<64-hex> of the ratified Great-Falls-Tool-Bus authorization policy>",
   "generation": 1,
   "capabilityPolicies": [
     {
