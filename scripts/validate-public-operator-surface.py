@@ -375,6 +375,7 @@ ATTENDED_RECIPE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
         "_reviewed-clean-main",
         "_operator-apply-confirm",
     ),
+    "form-stack-live-smoke": ("_reviewed-clean-main",),
 }
 
 ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
@@ -390,12 +391,16 @@ ATTENDED_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     "form-altcha-secret-apply": _receipt(
         "d394883ac79138f4", "b78253e99505ee18", "f0931c8607f62fa9", "f5c1b30b25c115ce"
     ),
+    "form-stack-live-smoke": _receipt(
+        "9fe56617313ea71e", "f1a91bb8f703727b", "79be0493058e2ae3", "d91549c5215703ee"
+    ),
 }
 
 ATTENDED_OPERATOR_LOCAL_ROOTS = {
     "_list-member-add-inputs",
     "list-member-add",
     "form-altcha-secret-apply",
+    "form-stack-live-smoke",
 }
 
 # The gftb-site cutover proofs are intentionally operator-local even though they
@@ -1800,7 +1805,8 @@ def scan_workflow_text(
                 1,
                 "Hosted workflows must not invoke ARC plan/init/apply, enrollment, "
                 "readback, GitHub App Secret, consented list membership, ALTCHA "
-                "Secret rotation, operator-held release proofs, or transitive "
+                "Secret rotation, live form mail, operator-held release proofs, "
+                "or transitive "
                 "operator recipes; "
                 f"observed {arc_calls!r}.",
             )
@@ -7327,6 +7333,12 @@ def self_test() -> None:
             '    trap \'rm -f "${manifest}"\' EXIT',
             "    true",
             "ALTCHA temporary Secret cleanup removal",
+        ),
+        (
+            "form-stack-live-smoke",
+            '    test "${GFTB_FORM_SMOKE_CONFIRM:-}" = "send-keyholders-test-mail" || {',
+            "    true || {",
+            "live form smoke confirmation weakening",
         ),
     )
     for name, old, new, label in attended_body_mutations:

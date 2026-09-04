@@ -2224,6 +2224,20 @@ form-stack-validate:
 form-altcha-test:
     python3 scripts/test-form-altcha.py
 
+# End-to-end public-edge proof with one real keyholders-list side effect. This
+# stays attended and main-only: the helper repeats both refusals so invoking it
+# directly cannot weaken the consent boundary.
+form-stack-live-smoke: _reviewed-clean-main
+    #!/usr/bin/env bash
+    set -euo pipefail
+    test "${GITHUB_ACTIONS:-}" != "true" || { echo "form-stack-live-smoke is attended-operator-only and must never run in CI" >&2; exit 2; }
+    test "${GFTB_FORM_SMOKE_CONFIRM:-}" = "send-keyholders-test-mail" || {
+      echo "This smoke sends one real message to keyholders@latoolb.us." >&2
+      echo "Set GFTB_FORM_SMOKE_CONFIRM=send-keyholders-test-mail to confirm that side effect." >&2
+      exit 2
+    }
+    exec bash scripts/smoke-form-stack-live.sh
+
 # Create or rotate the names-only ALTCHA HMAC Secret from a mode-restricted
 # operator file without placing key bytes in argv, Git, or shell history.
 form-altcha-secret-apply: _mail-kubeconfig-inputs _reviewed-clean-main _operator-apply-confirm

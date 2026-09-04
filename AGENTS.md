@@ -113,7 +113,7 @@ Ratified attended exceptions (unguarded by design):
   decisions/0016) — attended-operator-only, unreachable from every CI
   workflow by design
 - the attended operator lanes: `flywheel-enroll*`, `edge-zones-lock`,
-  `form-altcha-secret-apply`, `list-member-add`,
+  `form-altcha-secret-apply`, `form-stack-live-smoke`, `list-member-add`,
   `listsync-stack-server-dry-run` / `listsync-stack-apply`,
   `web-stack-health`, and the interlock-dead legacy carrier
   (`web-stack-server-dry-run` / `_web-stack-promotion-interlock` /

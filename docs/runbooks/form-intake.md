@@ -232,51 +232,40 @@ GFTB_MAIL_KUBECONFIG=/path/to/workload.kubeconfig just form-stack-apply
 
 ## Smoke test
 
-In-cluster, before exposing (proves the PoW gate + handler + LMTP path). A raw
-POST straight at the handler bypasses Anubis and should fan out to keyholders:
+The historical handler-direct bare POST was only truthful in
+challenge-disabled grace (`ALTCHA_REQUIRED=false` with no HMAC key). It also
+bypassed Anubis and could send real mail without an explicit consent step. Do
+not use it as the live proof once a signing key exists or enforcement may be
+enabled.
+
+After exposure, run the canonical attended recipe from a clean, signed, current
+`main`. The acknowledgement is intentionally specific because a successful run
+sends exactly one real test message to every current `keyholders@latoolb.us`
+subscriber:
 
 ```bash
-# Exec into any pod in the namespace, or port-forward the handler Service.
-kubectl --context honey -n latoolb-us-production port-forward svc/form-handler 8080:8080 &
-
-curl -sS -X POST http://127.0.0.1:8080/api/contact \
-  -H 'Content-Type: application/json' \
-  -H 'Origin: https://greatfallstoolbus.org' \
-  -d '{"name":"Smoke Test","email":"smoke@example.com","message":"ignore me","website":""}'
-# expect: {"ok": true}   and a message delivered to every keyholder
+GFTB_FORM_SMOKE_CONFIRM=send-keyholders-test-mail just form-stack-live-smoke
 ```
 
-Honeypot check (non-empty `website` -> silent success, NOTHING sent):
+The recipe refuses CI, pins the exact host and origin, refuses an unclean or
+stale checkout, and requires the exact acknowledgement. Before its single
+non-retried POST, it proves
+that a browser-like `GET /` reaches the Anubis challenge and observes
+`GET /api/challenge`:
 
-```bash
-curl -sS -X POST http://127.0.0.1:8080/api/contact \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"Bot","email":"bot@example.com","message":"spam","website":"http://x"}'
-# expect: {"ok": true}   but NO delivery
-```
+- `200` means challenge-enabled. The smoke solves the fresh proof and waits out
+  the handler's time trap before submitting it. That proof is accepted in both
+  advisory and enforced modes, so the smoke does **not** claim which mode is
+  live.
+- The exact `503 {"ok":false,"error":"challenge unavailable"}` means
+  challenge-disabled grace. A serving pod cannot combine that response with
+  `ALTCHA_REQUIRED=true`, because the checked-in handler fails startup in that
+  configuration; only this case uses a bare submission.
 
-Through Anubis (after exposure), the `/api/contact` POST is ALLOWed by the bot
-policy and reaches the handler **without** a challenge — the site's cross-origin
-`fetch` cannot solve a browser PoW, so allowlisting the path is what makes the
-form work at all (see "Bot policy" above). To confirm the split is live, run
-the checked-in live smoke script from an operator shell (never in CI: it
-contacts the real public edge):
-
-```bash
-scripts/smoke-form-stack-live.sh
-```
-
-It asserts both halves of the split: the `/api/contact` POST is ALLOWed and
-returns `{"ok": true}`, and a browser-UA `GET /` still gets the Anubis PoW
-interstitial HTML, not the handler's bare 404 JSON (row f honored). If the
-second check fails, traffic is bypassing Anubis — see the script header for
-the tunnel-route root-cause note (TIN-2420, 2026-08-17 finding: the
-Cloudflare Tunnel route is dashboard-managed and not represented in this
-repo, so this is an operator dashboard fix, not a code change).
-
-Expected result on success: every address subscribed to `keyholders@latoolb.us`
-receives the contact message, `Reply-To` set to the visitor so a keyholder can
-reply directly.
+Success means the handler accepted the one mail-shaped request. Delivery is
+still a manual receipt: confirm the single test message reached
+`keyholders@latoolb.us`. A transport failure has an unknown server-side outcome,
+so never retry automatically.
 
 ## Rollback
 

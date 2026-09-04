@@ -15,6 +15,7 @@ anubis_svc="${dir}/service-anubis.yaml"
 anubis_policy_cm="${dir}/configmap-anubis-policy.yaml"
 netpol="${dir}/networkpolicy.yaml"
 kustomization="${dir}/kustomization.yaml"
+live_smoke="$(dirname "$0")/smoke-form-stack-live.sh"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -42,9 +43,40 @@ command -v jq >/dev/null 2>&1 || fail "jq is required (bot policy JSON assertion
 
 for f in "${handler_deploy}" "${handler_svc}" "${handler_cm}" \
   "${anubis_deploy}" "${anubis_svc}" "${anubis_policy_cm}" "${netpol}" \
-  "${kustomization}"; do
+  "${kustomization}" "${live_smoke}"; do
   require_file "${f}"
 done
+
+# The one mail-shaped live proof is a registered, attended surface rather than
+# an unreviewed curl snippet. Keep its consent, topology, and phase handling
+# mechanically attached to form-stack validation without executing it here.
+test -x "${live_smoke}" || fail "${live_smoke} must remain executable"
+bash -n "${live_smoke}" || fail "${live_smoke} is not valid Bash"
+grep -Fq '[[ "${GITHUB_ACTIONS:-}" != "true" ]]' "${live_smoke}" \
+  || fail "live smoke must refuse GitHub Actions"
+grep -Fq '[[ "${confirm}" == "send-keyholders-test-mail" ]]' "${live_smoke}" \
+  || fail "live smoke must require the exact mail-side-effect acknowledgement"
+grep -Fq 'readonly host="forms.latoolb.us"' "${live_smoke}" \
+  || fail "live smoke must target the exact public form host"
+grep -Fq 'env -i PATH="${PATH}" curl --disable \' "${live_smoke}" \
+  || fail "live smoke must isolate curl from ambient config and environment"
+grep -Fq '"${endpoint}/api/challenge"' "${live_smoke}" \
+  || fail "live smoke must observe the ALTCHA challenge endpoint"
+grep -Fq '. == {"ok": false, "error": "challenge unavailable"}' "${live_smoke}" \
+  || fail "live smoke must recognize only the exact challenge-disabled response"
+grep -Fq 'advisory or enforced mode without guessing which' "${live_smoke}" \
+  || fail "live smoke must not infer advisory versus enforced ALTCHA mode"
+grep -Fq 'python3 -I - "${challenge_body}"' "${live_smoke}" \
+  || fail "live smoke ALTCHA solver must ignore ambient Python configuration"
+grep -Fq 'if expires <= issued:' "${live_smoke}" \
+  || fail "live smoke must validate the signed ALTCHA timing fields"
+grep -Fq 'sleep 4' "${live_smoke}" \
+  || fail "live smoke must wait out the checked-in ALTCHA time trap"
+test "$(grep -Fc -- '--request POST' "${live_smoke}")" = "1" \
+  || fail "live smoke must contain exactly one mail-shaped POST"
+if grep -Eq -- '--retry([ =]|$)' "${live_smoke}"; then
+  fail "live smoke must not retry a mail-shaped request with an unknown outcome"
+fi
 
 # --- Images pinned by DIGEST (not tag, not :latest) --------------------------
 if grep -REn "image:\s*\S*:latest" "${dir}" >/dev/null 2>&1; then
