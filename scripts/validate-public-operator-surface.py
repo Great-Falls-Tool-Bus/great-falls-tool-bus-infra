@@ -14,6 +14,7 @@ commands. The Justfile remains the sole live entrypoint.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import copy
 import hashlib
 import json
@@ -68,49 +69,16 @@ RETIRED_ARC_WORKFLOW = Path(".github/workflows/deploy-arc-runners.yml")
 # repository, fails the public surface. The site repo's signal job is retired in
 # the same change.
 RETIRED_WEB_CD_WORKFLOW = Path(".github/workflows/web-stack.yml")
-# TIN-4227 generation-40 parity bridge: RETIRED 2026-08-30 after its terminal
-# success receipt (run 33331047942; decisions/0022 §2 "the bridge then refuses
-# other generations and is deleted or disabled"). Operator ruling: delete
-# outright. Re-adding the file fails the public surface; the one-time apply
-# authority ended with the generation-40 terminal receipt. Ordinary generations
-# ship through the declare-only pin path until GF-I09 phase 2 arms.
-RETIRED_WEB_GENERATION40_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-40-parity.yml")
-# TIN-4227 second one-use bridge: RETIRED 2026-08-31 after its terminal success
-# receipt (decisions/0022 §2 amendment 2, "the bridge then refuses other
-# generations and is deleted or disabled"; operator ruling, TIN-4227 comment
-# b8f66e62). Operator ruling: delete outright, same as the generation-40
-# bridge above. Re-adding the file fails the public surface; the one-time
-# apply authority ended with the generation-42 terminal receipt. Ordinary
-# generations ship through the declare-only pin path until GF-I09 phase 2
-# arms.
-RETIRED_WEB_GENERATION42_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-42-parity.yml")
-# TIN-4227 third bridge: RETIRED 2026-09-01 after its terminal success
-# receipt (decisions/0022 Amendment 3 (d), "each apply retires its bridge
-# after its terminal receipt"; generation-43 run 33539402606, receipt
-# artifact 9813097428, carrier 44c9397b). Operator ruling: delete outright,
-# same as the generation-40 and generation-42 bridges above. Re-adding the
-# file fails the public surface; the next bounded apply re-arms a fresh
-# bridge from history (the e485dcbd shape) under the same amendment until
-# its expiry (2026-09-07) or receipt cap, or until W14 promotes the carrier
-# to the standing GF-I09 phase-2 executor.
-RETIRED_WEB_GENERATION43_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-43-parity.yml")
-# TIN-4227 generation-44 bridge: RETIRED 2026-09-01 after its terminal
-# success receipt (decisions/0022 Amendment 3 (d), "each apply retires its
-# bridge after its terminal receipt"; run 33543115842, receipt artifact
-# 9814527607, carrier 59754b76). Operator ruling: delete outright, same as
-# the earlier bridges above. Re-adding the file fails the public surface;
-# the final bounded apply (generation 45, receipt 3 of 3) re-arms a fresh
-# bridge from history, after which the amendment is spent and promotion
-# rides the W14 standing executor or a fresh amendment.
-RETIRED_WEB_GENERATION44_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-44-parity.yml")
-# TIN-4227 generation-45 bridge: RETIRED after its terminal success receipt
-# (decisions/0022 Amendment 3 (d), "each apply retires its bridge after its
-# terminal receipt"; run 33569556598, receipt artifact 9824506152, carrier
-# f3b1cc6e). Operator ruling: delete outright, same as the earlier
-# bridges above. Re-adding the file fails the public surface; the next
-# bounded apply re-arms a fresh bridge from history until the amendment's
-# expiry or receipt cap, or until W14 promotes the standing executor.
-RETIRED_WEB_GENERATION45_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-45-parity.yml")
+# All GFTB-local web parity bridges are historical and may not return. Runs for
+# generations 40/42/43/44/45 ended with terminal success receipts under Meta
+# decision 0022; generation 47 failed closed before planning, credentials, or
+# mutation (run 33822848194, carrier 2ca8235a) and was retired by current
+# operator direction. Production convergence belongs only to the shared
+# GloriousFlywheel/owner-overlay carrier required by decision 0022 section 3.
+RETIRED_WEB_GENERATION_BRIDGES = {
+    generation: Path(f".github/workflows/web-generation-{generation}-parity.yml")
+    for generation in ("40", "42", "43", "44", "45", "47")
+}
 WORKFLOW_REPOSITORY_DISPATCH = re.compile(r"^\s*repository_dispatch\s*:")
 JUST_COMMAND_START = re.compile(r"\bjust\b")
 JUST_OPTIONS_WITH_VALUES = {
@@ -352,7 +320,7 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "49a0e25c1cc8c8ff", "b15096271b4271a4", "fe1d38e06e5abf79", "905f0b0d50110b7a"
     ),
     "_reviewed-clean-main": _receipt(
-        "fe9e048cffbba33b", "36e25d7e15eff9f0", "2ef7dca85552e144", "3b2bf9865a24d32e"
+        "a150da8501b19226", "aaa2dd5d11201170", "c445ea09645439b0", "855ad36f37510540"
     ),
     "_reviewed-implementation-core": _receipt(
         "180f8edd55babb51", "43e15dac40bbad2a", "bffe444ff6221c04", "7c64836ae0c2cfc6"
@@ -382,7 +350,7 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
         "6a5f69b8b73bb5d2", "285e9effeb9111c3", "8f5fbe0c34a07813", "51fe2e4ebf574cc1"
     ),
     "_operator-apply-confirm": _receipt(
-        "6487928ae4f59860", "9a786fc78d5d0e9d", "7a1077a7ff8f4ecb", "966d483dd92058a0"
+        "1858a391b5fd7061", "ffce7683cb03a7cf", "c1eac68badc61b8a", "8cc3c1556e23edc1"
     ),
     "_arc-exclusive-confirm": _receipt(
         "9c8565974cf6f3b0", "f2aca232a5ff6978", "8d566d4ae8c96152", "900813ed27e88e7a"
@@ -1900,77 +1868,19 @@ def scan_workflows() -> list[Finding]:
             )
         )
 
-    retired_bridge = REPO / RETIRED_WEB_GENERATION40_BRIDGE_WORKFLOW
-    if retired_bridge.exists() or retired_bridge.is_symlink():
-        findings.append(
-            Finding(
-                "retired-web-generation40-bridge-retained",
-                RETIRED_WEB_GENERATION40_BRIDGE_WORKFLOW,
-                1,
-                "Delete web-generation-40-parity.yml; the one-time parity bridge "
-                "retired with its terminal receipt (decisions/0022 §2). Ordinary "
-                "generations ship through the declare-only pin path.",
+    for generation, retired_path in RETIRED_WEB_GENERATION_BRIDGES.items():
+        retired_bridge = REPO / retired_path
+        if retired_bridge.exists() or retired_bridge.is_symlink():
+            findings.append(
+                Finding(
+                    f"retired-web-generation{generation}-bridge-retained",
+                    retired_path,
+                    1,
+                    f"Delete {retired_path.name}; all GFTB-local web parity "
+                    "bridges are retired. Production convergence belongs to "
+                    "the shared GloriousFlywheel/owner-overlay carrier.",
+                )
             )
-        )
-
-    retired_gen42_bridge = REPO / RETIRED_WEB_GENERATION42_BRIDGE_WORKFLOW
-    if retired_gen42_bridge.exists() or retired_gen42_bridge.is_symlink():
-        findings.append(
-            Finding(
-                "retired-web-generation42-bridge-retained",
-                RETIRED_WEB_GENERATION42_BRIDGE_WORKFLOW,
-                1,
-                "Delete web-generation-42-parity.yml; the second one-time parity "
-                "bridge retired with its terminal receipt (decisions/0022 §2 "
-                "amendment 2). Ordinary generations ship through the "
-                "declare-only pin path.",
-            )
-        )
-
-    retired_gen43_bridge = REPO / RETIRED_WEB_GENERATION43_BRIDGE_WORKFLOW
-    if retired_gen43_bridge.exists() or retired_gen43_bridge.is_symlink():
-        findings.append(
-            Finding(
-                "retired-web-generation43-bridge-retained",
-                RETIRED_WEB_GENERATION43_BRIDGE_WORKFLOW,
-                1,
-                "Delete web-generation-43-parity.yml; the third one-time parity "
-                "bridge retired with its terminal receipt (decisions/0022 "
-                "Amendment 3 (d)). The next bounded apply re-arms a fresh "
-                "bridge from history; ordinary generations ship through the "
-                "declare-only pin path.",
-            )
-        )
-
-    retired_gen44_bridge = REPO / RETIRED_WEB_GENERATION44_BRIDGE_WORKFLOW
-    if retired_gen44_bridge.exists() or retired_gen44_bridge.is_symlink():
-        findings.append(
-            Finding(
-                "retired-web-generation44-bridge-retained",
-                RETIRED_WEB_GENERATION44_BRIDGE_WORKFLOW,
-                1,
-                "Delete web-generation-44-parity.yml; this one-time parity "
-                "bridge retired with its terminal receipt (decisions/0022 "
-                "Amendment 3 (d)). The next bounded apply re-arms a fresh "
-                "bridge from history; ordinary generations ship through the "
-                "declare-only pin path.",
-            )
-        )
-
-    retired_gen45_bridge = REPO / RETIRED_WEB_GENERATION45_BRIDGE_WORKFLOW
-    if retired_gen45_bridge.exists() or retired_gen45_bridge.is_symlink():
-        findings.append(
-            Finding(
-                "retired-web-generation45-bridge-retained",
-                RETIRED_WEB_GENERATION45_BRIDGE_WORKFLOW,
-                1,
-                "Delete web-generation-45-parity.yml; this one-time parity "
-                "bridge retired with its terminal receipt (decisions/0022 "
-                "Amendment 3 (d)). The next bounded apply re-arms a fresh "
-                "bridge from history; ordinary generations ship through the "
-                "declare-only pin path.",
-            )
-        )
 
     workflow_paths = set(git_files(WORKFLOW_GLOBS))
     for pattern in WORKFLOW_GLOBS:
@@ -3716,6 +3626,21 @@ def install_web_release_fixture_mocks(
             source = source.replace(old, new)
         return source
 
+    git_info = fixture_dir / "git-info"
+    git_info.mkdir(mode=0o700)
+    (git_info / "safe-exclude").write_text(
+        "# fixture comment only\n", encoding="utf-8"
+    )
+    (git_info / "safe-attributes").write_text(
+        "  # indented attribute comment\n", encoding="utf-8"
+    )
+    (git_info / "active-exclude").write_text(" #*.tf\n", encoding="utf-8")
+    (git_info / "active-attributes").write_text(
+        "* filter=untrusted\n", encoding="utf-8"
+    )
+    (git_info / "symlink-exclude").symlink_to(git_info / "safe-exclude")
+    (git_info / "symlink-attributes").symlink_to(git_info / "safe-attributes")
+
     write_fixture_executable(
         mock_bin / "crane",
         materialize(
@@ -4710,6 +4635,7 @@ def install_web_release_fixture_mocks(
         materialize(
             """
             #!__FIXTURE_PYTHON__
+            import os
             import pathlib
             import sys
 
@@ -4721,19 +4647,132 @@ def install_web_release_fixture_mocks(
                 "https://github.com/Great-Falls-Tool-Bus/"
                 "great-falls-tool-bus-infra.git"
             )
+            state = pathlib.Path(__STATE__).read_text(encoding="utf-8").strip()
             args = sys.argv[1:]
-            if args[:2] == ["-C", toplevel]:
+            if len(args) >= 2 and args[0] == "-C" and args[1] in (toplevel, "/"):
                 args = args[2:]
             if args == ["rev-parse", "--show-toplevel"]:
                 print(toplevel)
+            elif args == [
+                "config", "--show-scope", "--name-only", "--get-regexp", ".*"
+            ]:
+                if os.environ.get("GIT_NO_REPLACE_OBJECTS") != "1":
+                    raise SystemExit("mock git requires replacement objects disabled")
+                if os.environ.get("GIT_CONFIG_NOSYSTEM") != "1":
+                    raise SystemExit("mock git requires system config disabled")
+                if os.environ.get("GIT_CONFIG_GLOBAL") != "/dev/null":
+                    raise SystemExit("mock git requires global config disabled")
+                if os.environ.get("GIT_ATTR_NOSYSTEM") != "1":
+                    raise SystemExit("mock git requires system attributes disabled")
+                if os.environ.get("GIT_OPTIONAL_LOCKS") != "0":
+                    raise SystemExit("mock git requires optional index locks disabled")
+                if os.environ.get("LC_ALL") != "C":
+                    raise SystemExit("mock git requires locale-neutral config parsing")
+                if state == "apply-git-config-error":
+                    raise SystemExit(2)
+                if state == "apply-git-local-http-config":
+                    print("local\\thttp.proxy")
+                    raise SystemExit(0)
+                if state == "apply-git-local-excludes-config":
+                    print("local\\tcore.excludesfile")
+                    raise SystemExit(0)
+                if state == "apply-git-local-attributes-config":
+                    print("local\\tcore.attributesfile")
+                    raise SystemExit(0)
+                if state == "apply-git-local-filter-config":
+                    print("local\\tfilter.hide.clean")
+                    raise SystemExit(0)
+                if state == "apply-git-local-refstorage-config":
+                    print("local\\textensions.refstorage")
+                    raise SystemExit(0)
+                stat_key = {
+                    "apply-git-local-trustctime-config": "core.trustctime",
+                    "apply-git-local-checkstat-config": "core.checkstat",
+                    "apply-git-local-ignorestat-config": "core.ignorestat",
+                }.get(state)
+                if stat_key is not None:
+                    print("local\\t" + stat_key)
+                    raise SystemExit(0)
+                if state == "apply-git-local-mixed-case-stat-config":
+                    print("local\\tcore.IgnoreStat")
+                    raise SystemExit(0)
+                if state == "apply-git-worktree-attr-tree-config":
+                    print("worktree\\tattr.tree")
+                    raise SystemExit(0)
+                if state == "apply-git-global-gpg-config":
+                    print("global\\tgpg.program")
+                    raise SystemExit(0)
+                raise SystemExit(1)
+            elif args in (
+                [
+                    "rev-parse", "--path-format=absolute", "--git-path",
+                    "info/exclude",
+                ],
+                [
+                    "rev-parse", "--path-format=absolute", "--git-path",
+                    "info/attributes",
+                ],
+            ):
+                info_name = args[-1].removeprefix("info/")
+                selected = "safe-" + info_name
+                if (
+                    state == "apply-git-info-exclude-entry"
+                    and info_name == "exclude"
+                ):
+                    selected = "active-exclude"
+                elif (
+                    state == "apply-git-info-attributes-entry"
+                    and info_name == "attributes"
+                ):
+                    selected = "active-attributes"
+                elif (
+                    state == "apply-git-info-exclude-symlink"
+                    and info_name == "exclude"
+                ):
+                    selected = "symlink-exclude"
+                elif (
+                    state == "apply-git-info-attributes-symlink"
+                    and info_name == "attributes"
+                ):
+                    selected = "symlink-attributes"
+                print(pathlib.Path(__FIXTURES__) / "git-info" / selected)
             elif args in (["rev-parse", "HEAD"], ["rev-parse", "origin/main"]):
                 print(head)
             elif args == ["branch", "--show-current"]:
                 print("main")
-            elif args in (["status", "--porcelain"], ["ls-files", "-v"]):
+            elif args == [
+                "-c", "core.excludesFile=/dev/null",
+                "-c", "core.attributesFile=/dev/null",
+                "-c", "core.untrackedCache=false",
+                "status", "--porcelain", "--untracked-files=all",
+            ]:
+                if os.environ.get("GIT_ATTR_NOSYSTEM") != "1":
+                    raise SystemExit("mock status requires system attributes disabled")
+                if os.environ.get("GIT_OPTIONAL_LOCKS") != "0":
+                    raise SystemExit("mock status requires optional index locks disabled")
+                if state == "apply-git-status-error":
+                    raise SystemExit(2)
+                if state == "apply-git-default-ignore-steering":
+                    print("?? override.tf")
+            elif (
+                args == ["status", "--porcelain", "--untracked-files=all"]
+                and state == "apply-git-default-ignore-steering"
+            ):
+                # Without the command-scoped /dev/null sources the injected
+                # user-global ignore hides override.tf and reports a false clean.
+                pass
+            elif args == ["ls-files", "-v"]:
                 pass
             elif args == ["remote", "get-url", "origin"]:
-                print(canonical)
+                if state == "apply-git-origin-secret":
+                    print(
+                        "https://x-access-token:"
+                        + "ghp_"
+                        + "a" * 36
+                        + "@github.com/evil/repository.git"
+                    )
+                else:
+                    print(canonical)
             elif args == [
                 "show-ref", "--verify", "--quiet", "refs/remotes/origin/main"
             ]:
@@ -4742,7 +4781,12 @@ def install_web_release_fixture_mocks(
                 "refs/heads/main"
             ]:
                 print(head + "\\trefs/heads/main")
-            elif args == ["verify-commit", head]:
+            elif args == [
+                "-c", "gpg.format=openpgp",
+                "-c", "gpg.program=gpg",
+                "-c", "gpg.openpgp.program=gpg",
+                "verify-commit", head,
+            ]:
                 pass
             else:
                 raise SystemExit(
@@ -4794,6 +4838,53 @@ def expect_web_release_fixture_result(
     return result
 
 
+def install_shell_poison_fixture(
+    root: Path,
+) -> tuple[dict[str, str], Callable[[str], None]]:
+    """Return imported startup/function poison and its absence assertion."""
+    function_marker = root / "imported-shell-function-ran"
+    startup_poison = root / "startup-poison.sh"
+    startup_poison.write_text(
+        "printf '%s' startup > " + shlex.quote(str(function_marker)) + "\n",
+        encoding="utf-8",
+    )
+    startup_poison.chmod(0o600)
+    poison_environment = {
+        "BASH_ENV": str(startup_poison),
+        "ENV": str(startup_poison),
+    }
+    for command in (
+        "awk",
+        "env",
+        "kubectl",
+        "curl",
+        "crane",
+        "yq",
+        "jq",
+        "python3",
+        "git",
+        "just",
+        "mktemp",
+    ):
+        poison_environment[f"BASH_FUNC_{command}%%"] = (
+            "() { printf '%s' "
+            + shlex.quote(command)
+            + " > "
+            + shlex.quote(str(function_marker))
+            + f"; unset -f {command}; command {command} \"$@\"; }}"
+        )
+
+    def assert_no_imported_function(stage: str) -> None:
+        if function_marker.exists():
+            source = function_marker.read_text(encoding="utf-8")
+            raise SystemExit(
+                "self-test FAILED: release proof imported a poisoned shell "
+                f"startup hook/function {source!r} during {stage}"
+            )
+
+    return poison_environment, assert_no_imported_function
+
+
 def run_web_release_semantic_fixtures() -> None:
     just_binary = shutil.which("just")
     if just_binary is None:
@@ -4840,36 +4931,9 @@ def run_web_release_semantic_fixtures() -> None:
         cookie = root / "access.cookies"
         cookie.write_text("# fixture cookie; mock curl only\n", encoding="utf-8")
         cookie.chmod(0o600)
-        function_marker = root / "imported-shell-function-ran"
-        startup_poison = root / "startup-poison.sh"
-        startup_poison.write_text(
-            "printf '%s' startup > " + shlex.quote(str(function_marker)) + "\n",
-            encoding="utf-8",
+        poison_environment, assert_no_imported_function = (
+            install_shell_poison_fixture(root)
         )
-        startup_poison.chmod(0o600)
-        poison_environment = {
-            "BASH_ENV": str(startup_poison),
-            "ENV": str(startup_poison),
-        }
-        for command in (
-            "env",
-            "kubectl",
-            "curl",
-            "crane",
-            "yq",
-            "jq",
-            "python3",
-            "git",
-            "just",
-            "mktemp",
-        ):
-            poison_environment[f"BASH_FUNC_{command}%%"] = (
-                "() { printf '%s' "
-                + shlex.quote(command)
-                + " > "
-                + shlex.quote(str(function_marker))
-                + f"; unset -f {command}; command {command} \"$@\"; }}"
-            )
         base_environment = {
             "PATH": str(mock_bin),
             "HOME": str(home),
@@ -4882,14 +4946,6 @@ def run_web_release_semantic_fixtures() -> None:
             "WEB_RELEASE_KUBECONFIG": str(kubeconfig),
             **poison_environment,
         }
-
-        def assert_no_imported_function(stage: str) -> None:
-            if function_marker.exists():
-                source = function_marker.read_text(encoding="utf-8")
-                raise SystemExit(
-                    "self-test FAILED: release proof imported a poisoned shell "
-                    f"startup hook/function {source!r} during {stage}"
-                )
 
         expect_web_release_fixture_result(
             just_binary,
@@ -6129,6 +6185,9 @@ def run_web_release_mutation_fixtures() -> None:
         prefix="gftb-web-mutation-selftest."
     ) as directory:
         root = Path(directory)
+        poison_environment, assert_no_imported_function = (
+            install_shell_poison_fixture(root)
+        )
         (
             mock_bin,
             state_path,
@@ -6159,6 +6218,7 @@ def run_web_release_mutation_fixtures() -> None:
             "WEB_APPLY_REPLICAS": "2",
             "WEB_APPLY_KUBECONFIG": str(kubeconfig),
             "GFTB_APPLY_CONFIRM": "apply",
+            **poison_environment,
         }
 
         def kubectl_calls() -> list[str]:
@@ -6265,6 +6325,7 @@ def run_web_release_mutation_fixtures() -> None:
             success=True,
             diagnostic="web release applied",
         )
+        assert_no_imported_function("web-release-apply")
         apply_calls = kubectl_calls()
         if not apply_calls or " auth can-i " not in apply_calls[0]:
             raise SystemExit(
@@ -6309,7 +6370,100 @@ def run_web_release_mutation_fixtures() -> None:
             )
 
         # REFUSALS. Each must refuse with nothing applied.
+        for git_environment_name in (
+            "GIT_CONFIG",
+            "GIT_REFERENCE_BACKEND",
+            "GIT_ATTR_SOURCE",
+            "GIT_ATTR_NOSYSTEM",
+            "GIT_OPTIONAL_LOCKS",
+        ):
+            steered_git_environment = {
+                **environment,
+                git_environment_name: "untrusted-fixture-value",
+            }
+            expect_web_release_fixture_result(
+                just_binary,
+                "web-release-apply",
+                state_path,
+                log_path,
+                steered_git_environment,
+                "apply-ok",
+                success=False,
+                diagnostic=f"refuses ambient {git_environment_name}",
+            )
+            git_calls = [
+                line
+                for line in log_path.read_text(encoding="utf-8").splitlines()
+                if line.startswith("git ")
+            ]
+            if git_calls or cluster_mutations(kubectl_calls()):
+                raise SystemExit(
+                    "self-test FAILED: ambient Git steering reached Git or the "
+                    f"cluster for {git_environment_name}: git={git_calls!r}, "
+                    f"kubectl={cluster_mutations(kubectl_calls())!r}"
+                )
+
         for state, diagnostic in (
+            (
+                "apply-git-config-error",
+                "could not inspect repository Git configuration",
+            ),
+            (
+                "apply-git-local-http-config",
+                "refuses local/worktree Git configuration",
+            ),
+            (
+                "apply-git-local-excludes-config",
+                "refuses local/worktree Git configuration",
+            ),
+            (
+                "apply-git-local-attributes-config",
+                "refuses local/worktree Git configuration",
+            ),
+            (
+                "apply-git-local-filter-config",
+                "refuses local/worktree Git configuration",
+            ),
+            (
+                "apply-git-local-refstorage-config",
+                "refuses local/worktree Git configuration",
+            ),
+            *(
+                (state, "refuses local/worktree Git configuration")
+                for state in (
+                    "apply-git-local-trustctime-config",
+                    "apply-git-local-checkstat-config",
+                    "apply-git-local-ignorestat-config",
+                )
+            ),
+            (
+                "apply-git-worktree-attr-tree-config",
+                "refuses local/worktree Git configuration",
+            ),
+            (
+                "apply-git-info-exclude-entry",
+                "refuses active repository-local Git ignore or attribute rules",
+            ),
+            (
+                "apply-git-info-attributes-entry",
+                "refuses active repository-local Git ignore or attribute rules",
+            ),
+            (
+                "apply-git-info-exclude-symlink",
+                "refuses non-regular repository-local Git metadata",
+            ),
+            (
+                "apply-git-info-attributes-symlink",
+                "refuses non-regular repository-local Git metadata",
+            ),
+            (
+                "apply-git-default-ignore-steering",
+                "requires a clean worktree",
+            ),
+            (
+                "apply-git-status-error",
+                "could not inspect worktree status",
+            ),
             (
                 "apply-authz-denied-create-policy",
                 f"cannot create networkpolicies.networking.k8s.io in {namespace}",
@@ -6335,6 +6489,65 @@ def run_web_release_mutation_fixtures() -> None:
                     "reached the cluster after refusing: "
                     f"{cluster_mutations(kubectl_calls())!r}"
                 )
+
+        locale_steered_environment = {
+            **environment,
+            "LC_ALL": "C.UTF-8",
+            "LANG": "C.UTF-8",
+        }
+        expect_web_release_fixture_result(
+            just_binary,
+            "web-release-apply",
+            state_path,
+            log_path,
+            locale_steered_environment,
+            "apply-git-local-mixed-case-stat-config",
+            success=False,
+            diagnostic="refuses local/worktree Git configuration",
+        )
+        if cluster_mutations(kubectl_calls()):
+            raise SystemExit(
+                "self-test FAILED: locale-steered mixed-case Git config "
+                "reached the cluster"
+            )
+
+        secret_origin_marker = "ghp_" + "a" * 36
+        secret_origin_result = expect_web_release_fixture_result(
+            just_binary,
+            "web-release-apply",
+            state_path,
+            log_path,
+            environment,
+            "apply-git-origin-secret",
+            success=False,
+            diagnostic="origin is not the canonical GFTB infra repository",
+        )
+        if secret_origin_marker in (
+            secret_origin_result.stdout + secret_origin_result.stderr
+        ):
+            raise SystemExit(
+                "self-test FAILED: noncanonical origin diagnostic disclosed its value"
+            )
+        if cluster_mutations(kubectl_calls()):
+            raise SystemExit(
+                "self-test FAILED: noncanonical secret-shaped origin reached the cluster"
+            )
+
+        expect_web_release_fixture_result(
+            just_binary,
+            "web-release-apply",
+            state_path,
+            log_path,
+            environment,
+            "apply-git-global-gpg-config",
+            success=True,
+            diagnostic="web release applied",
+        )
+        if cluster_mutations(kubectl_calls()) != expected_mutations:
+            raise SystemExit(
+                "self-test FAILED: harmless global GPG config changed the "
+                "reviewed apply sequence"
+            )
 
         # TIN-4254 (W13) retired the apply-time prune, and with it the
         # "denied/failed delete leaves a half-done promotion" scenario the
@@ -7217,8 +7430,40 @@ def self_test() -> None:
     body_mutations = (
         (
             "_reviewed-clean-main",
-            '    git verify-commit "${head_sha}" >/dev/null',
-            '    true # git verify-commit "${head_sha}" >/dev/null',
+            "    export LC_ALL=C",
+            "    export LC_ALL=C.UTF-8",
+            "locale-neutral Git parsing removal",
+        ),
+        (
+            "_reviewed-clean-main",
+            "             name ~ /^http\\./)) {",
+            "             false)) {",
+            "Git HTTP steering refusal removal",
+        ),
+        (
+            "_reviewed-clean-main",
+            "    export GIT_NO_REPLACE_OBJECTS=1",
+            "    true # export GIT_NO_REPLACE_OBJECTS=1",
+            "replacement-object refusal removal",
+        ),
+        (
+            "_reviewed-clean-main",
+            "    export GIT_OPTIONAL_LOCKS=0",
+            "    export GIT_OPTIONAL_LOCKS=1",
+            "optional index-write suppression removal",
+        ),
+        (
+            "_reviewed-clean-main",
+            '        git -C / ls-remote --exit-code "${canonical_remote}" refs/heads/main |',
+            '        git ls-remote --exit-code "${canonical_remote}" refs/heads/main |',
+            "remote main read restored repository configuration",
+        ),
+        (
+            "_reviewed-clean-main",
+            "    git -c gpg.format=openpgp -c gpg.program=gpg "
+            '-c gpg.openpgp.program=gpg verify-commit "${head_sha}" >/dev/null',
+            "    true # git -c gpg.format=openpgp -c gpg.program=gpg "
+            '-c gpg.openpgp.program=gpg verify-commit "${head_sha}" >/dev/null',
             "comment-spoofed commit verification",
         ),
         (
@@ -8337,45 +8582,19 @@ def self_test() -> None:
     for label, plan, diagnostic in output_cases:
         expect_scope_rejection(scope_source, label, plan, diagnostic)
 
-    if (REPO / RETIRED_WEB_GENERATION40_BRIDGE_WORKFLOW).exists():
-        raise SystemExit("self-test FAILED: the retired generation-40 bridge workflow is present")
-    if not any(
-        finding.rule == "retired-web-generation40-bridge-retained"
-        for finding in scan_workflows_with_retired_bridge_fixture()
-    ):
-        raise SystemExit("self-test FAILED: a re-added generation-40 bridge was accepted")
-
-    if (REPO / RETIRED_WEB_GENERATION42_BRIDGE_WORKFLOW).exists():
-        raise SystemExit("self-test FAILED: the retired generation-42 bridge workflow is present")
-    if not any(
-        finding.rule == "retired-web-generation42-bridge-retained"
-        for finding in scan_workflows_with_retired_gen42_bridge_fixture()
-    ):
-        raise SystemExit("self-test FAILED: a re-added generation-42 bridge was accepted")
-
-    if (REPO / RETIRED_WEB_GENERATION43_BRIDGE_WORKFLOW).exists():
-        raise SystemExit("self-test FAILED: the retired generation-43 bridge workflow is present")
-    if not any(
-        finding.rule == "retired-web-generation43-bridge-retained"
-        for finding in scan_workflows_with_retired_gen43_bridge_fixture()
-    ):
-        raise SystemExit("self-test FAILED: a re-added generation-43 bridge was accepted")
-
-    if (REPO / RETIRED_WEB_GENERATION44_BRIDGE_WORKFLOW).exists():
-        raise SystemExit("self-test FAILED: the retired generation-44 bridge workflow is present")
-    if not any(
-        finding.rule == "retired-web-generation44-bridge-retained"
-        for finding in scan_workflows_with_retired_gen44_bridge_fixture()
-    ):
-        raise SystemExit("self-test FAILED: a re-added generation-44 bridge was accepted")
-
-    if (REPO / RETIRED_WEB_GENERATION45_BRIDGE_WORKFLOW).exists():
-        raise SystemExit("self-test FAILED: the retired generation-45 bridge workflow is present")
-    if not any(
-        finding.rule == "retired-web-generation45-bridge-retained"
-        for finding in scan_workflows_with_retired_gen45_bridge_fixture()
-    ):
-        raise SystemExit("self-test FAILED: a re-added generation-45 bridge was accepted")
+    for generation, retired_path in RETIRED_WEB_GENERATION_BRIDGES.items():
+        if (REPO / retired_path).exists():
+            raise SystemExit(
+                "self-test FAILED: the retired "
+                f"generation-{generation} bridge workflow is present"
+            )
+        if not scan_workflows_with_retired_generation_bridge_fixture(
+            generation, retired_path
+        ):
+            raise SystemExit(
+                "self-test FAILED: a re-added "
+                f"generation-{generation} bridge was accepted"
+            )
 
     run_web_release_semantic_fixtures()
     run_web_release_mutation_fixtures()
@@ -8383,62 +8602,19 @@ def self_test() -> None:
     print("public-operator-surface self-test passed")
 
 
-def scan_workflows_with_retired_bridge_fixture() -> list[Finding]:
-    """Negative control: a re-added bridge file must raise the retained finding."""
-    path = REPO / RETIRED_WEB_GENERATION40_BRIDGE_WORKFLOW
-    if path.exists():
+def scan_workflows_with_retired_generation_bridge_fixture(
+    generation: str, retired_path: Path
+) -> list[Finding]:
+    """Negative control: each re-added parity bridge must fail validation."""
+    path = REPO / retired_path
+    if path.exists() or path.is_symlink():
         raise SystemExit("self-test FAILED: fixture path already exists")
     try:
         path.write_text("name: retired fixture\n", encoding="utf-8")
-        return [finding for finding in scan_workflows() if finding.rule == "retired-web-generation40-bridge-retained"]
-    finally:
-        path.unlink(missing_ok=True)
-
-
-def scan_workflows_with_retired_gen42_bridge_fixture() -> list[Finding]:
-    """Negative control: a re-added second bridge file must raise the retained finding."""
-    path = REPO / RETIRED_WEB_GENERATION42_BRIDGE_WORKFLOW
-    if path.exists():
-        raise SystemExit("self-test FAILED: fixture path already exists")
-    try:
-        path.write_text("name: retired fixture\n", encoding="utf-8")
-        return [finding for finding in scan_workflows() if finding.rule == "retired-web-generation42-bridge-retained"]
-    finally:
-        path.unlink(missing_ok=True)
-
-
-def scan_workflows_with_retired_gen43_bridge_fixture() -> list[Finding]:
-    """Negative control: a re-added third bridge file must raise the retained finding."""
-    path = REPO / RETIRED_WEB_GENERATION43_BRIDGE_WORKFLOW
-    if path.exists():
-        raise SystemExit("self-test FAILED: fixture path already exists")
-    try:
-        path.write_text("name: retired fixture\n", encoding="utf-8")
-        return [finding for finding in scan_workflows() if finding.rule == "retired-web-generation43-bridge-retained"]
-    finally:
-        path.unlink(missing_ok=True)
-
-
-def scan_workflows_with_retired_gen45_bridge_fixture() -> list[Finding]:
-    """Negative control: a re-added generation-45 bridge file must raise the retained finding."""
-    path = REPO / RETIRED_WEB_GENERATION45_BRIDGE_WORKFLOW
-    if path.exists():
-        raise SystemExit("self-test FAILED: fixture path already exists")
-    try:
-        path.write_text("name: retired fixture\n", encoding="utf-8")
-        return [finding for finding in scan_workflows() if finding.rule == "retired-web-generation45-bridge-retained"]
-    finally:
-        path.unlink(missing_ok=True)
-
-
-def scan_workflows_with_retired_gen44_bridge_fixture() -> list[Finding]:
-    """Negative control: a re-added generation-44 bridge file must raise the retained finding."""
-    path = REPO / RETIRED_WEB_GENERATION44_BRIDGE_WORKFLOW
-    if path.exists():
-        raise SystemExit("self-test FAILED: fixture path already exists")
-    try:
-        path.write_text("name: retired fixture\n", encoding="utf-8")
-        return [finding for finding in scan_workflows() if finding.rule == "retired-web-generation44-bridge-retained"]
+        expected_rule = f"retired-web-generation{generation}-bridge-retained"
+        return [
+            finding for finding in scan_workflows() if finding.rule == expected_rule
+        ]
     finally:
         path.unlink(missing_ok=True)
 
