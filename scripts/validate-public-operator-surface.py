@@ -5420,8 +5420,14 @@ def install_web_release_fixture_mocks(
             ):
                 raise SystemExit(0)
             if sys.argv[1:] == ["_reviewed-clean-main"]:
-                print("reviewed infra carrier: " + "1" * 40)
-                raise SystemExit(0)
+                # Re-enter the real recipe against the sandbox. Returning a
+                # canned success here made the mutation fixtures incapable of
+                # proving that ambient Git steering is refused before the
+                # first repository read.
+                os.execv(
+                    __REAL_JUST__,
+                    [__REAL_JUST__, *child("_reviewed-clean-main")],
+                )
             if sys.argv[1:] in (
                 ["web-stack-validate"],
                 ["web-release-candidate-proof"],
