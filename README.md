@@ -16,9 +16,10 @@ producer repository:
    those exact OCI artifacts;
 4. application repositories carry exact ActionPlans and call the immutable
    `ci-templates` v4 entrypoint; and
-5. the owner controller verifies GFTB demand, joins it to independently
-   verified provider supply, and publishes the catalog consumed by the v4
-   action client.
+5. the adopter-owned controller verifies GFTB demand and emits a canonical
+   contribution; the tenant-blind provider aggregator joins that contribution
+   to independently verified supply and publishes the catalog consumed by the
+   v4 action client.
 
 That path is not installed here yet. This tree currently carries no signed v4
 instance and no installed controller catalog. [`operands/`](operands/README.md)
