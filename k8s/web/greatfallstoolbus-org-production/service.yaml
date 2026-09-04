@@ -1,13 +1,6 @@
-# DECLARE-ONLY — NOT APPLIED (TIN-2541).
-#
-# Plain ClusterIP, port 80 -> targetPort 3000 (gftb-site static Caddy origin),
-# internal DNS only and never internet-exposed directly. This mirrors MI's
-# Service exactly
-# (blahaj:tofu/stacks/massageithaca/main.tf ~L587): the ONLY public path is the
-# in-cluster cloudflared tunnel forwarding to
-# http://greatfallstoolbus-org.greatfallstoolbus-org-production.svc.cluster.local:80
-# — and that tunnel route is dashboard/token-managed, declared fail-closed in
-# ../../tofu/intent/great-falls-tool-bus/web-oncluster-route.json, never here.
+# DECLARATION ONLY — applied only by the reviewed web-release transaction.
+# Internal ClusterIP, port 80 to the gftb-site Caddy origin's named port 3000.
+# Public routing belongs to the Cloudflare edge stack, never this Service.
 apiVersion: v1
 kind: Service
 metadata:

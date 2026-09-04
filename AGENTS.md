@@ -79,9 +79,7 @@ Ratified attended exceptions (unguarded by design):
 - the attended operator lanes: `edge-zones-lock`, `form-altcha-secret-apply`,
   `list-member-add`,
   `listsync-stack-server-dry-run` / `listsync-stack-apply`,
-  `web-stack-health`, and the interlock-dead legacy carrier
-  (`web-stack-server-dry-run` / `_web-stack-promotion-interlock` /
-  `web-stack-apply`)
+  and read-only `web-stack-health`
 - `web-stack-validate` — deliberately unguarded: it is the receipt-pinned
   web-release validation callee, and the reviewed `web-release-render`
   invokes it under `env -i`, which strips `GITHUB_ACTIONS`; a guard there

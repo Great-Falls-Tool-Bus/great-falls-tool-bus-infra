@@ -61,13 +61,8 @@ RAW_TOFU_WORKFLOW = re.compile(r"(?<![A-Za-z0-9_-])tofu(?:\s|-chdir\b)")
 WORKFLOW_ENV_ENTRY = re.compile(r"^          (TF_VAR_[A-Za-z0-9_]+):[ \t]*(.+)$")
 
 RETIRED_ARC_WORKFLOW = Path(".github/workflows/deploy-arc-runners.yml")
-# TIN-3899 Phase 5 step 2: the legacy adapter-node CD carrier. It was the only
-# workflow that ran `just web-stack-apply`, and its
-# `repository_dispatch: web-image-published` trigger let a push to the PUBLIC
-# site repo mutate Deployment/greatfallstoolbus-org unattended. It is deleted;
-# re-adding the file, or re-introducing ANY repository_dispatch consumer in this
-# repository, fails the public surface. The site repo's signal job is retired in
-# the same change.
+# A repository-local web CD workflow or repository_dispatch consumer would
+# recreate the forbidden bridge. Either shape fails the public surface.
 RETIRED_WEB_CD_WORKFLOW = Path(".github/workflows/web-stack.yml")
 # All GFTB-local web parity bridges are historical and may not return. Runs for
 # generations 40/42/43/44/45 ended with terminal success receipts under Meta
@@ -143,7 +138,6 @@ HOSTED_WORKFLOW_JUST_ALLOWLIST = {
     "mail-cr-validate",
     "web-stack-drift-check",
     "web-stack-render",
-    "web-stack-validate",
 }
 
 EDGE_RUNTIME_TF_VARS = {
@@ -497,14 +491,6 @@ WEB_RELEASE_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     "web-release-apply": _receipt(
         "fee7187cf1bffb78", "e47fd45fc8f05f08", "cff8047b05dd2759", "2adf88989c4452c0"
     ),
-    # The legacy adapter-node carrier's promotion interlock. It is not part of
-    # the web-release dependency graph -- it hangs off web-stack-apply, the
-    # attended legacy carrier no workflow may invoke (TIN-3899) -- so it is
-    # receipted here but deliberately NOT an operator-local root. Its body is
-    # enforced by scan_web_stack_promotion_interlock_text.
-    "_web-stack-promotion-interlock": _receipt(
-        "f6fbb3dc72de15bb", "38d350899029f9fb", "afb1a885f3b59950", "a5f7c8a92999df1f"
-    ),
 }
 
 WEB_RELEASE_OPERATOR_LOCAL_ROOTS = set(WEB_RELEASE_RECIPE_DEPENDENCIES)
@@ -523,13 +509,8 @@ WEB_RELEASE_STACK_GLOBAL_ASSIGNMENTS = {
 # `replicas` patch -- makes live state stop equalling the reviewed tree. The scan
 # covers the WHOLE Justfile (every recipe body plus every executable line outside
 # a recipe), not an enumerated recipe list, so a brand-new unlisted recipe cannot
-# reintroduce it. Exactly one recipe is allowed to do this: the legacy
-# `web-stack-apply` adapter-node carrier, whose imperative pin predates the
-# release chain and is documented in _k8s-drift-check's header. TIN-3899 removed
-# that carrier's automated caller but KEPT the recipe and its promotion
-# interlock as the attended belt-and-braces path, so this allowlist stays a
-# one-element set instead of going empty and taking the interlock contract with
-# it.
+# reintroduce it. No recipe is exempt: the retired adapter-node carrier is gone,
+# and the current release transaction renders the pin into reviewed plan bytes.
 #
 # The command anchor covers wrapper names built on `kubectl` (this repo's own
 # `kubectl_clean`), and IMPERATIVE_PIN_CONTINUATION folds backslash line
@@ -566,40 +547,20 @@ IMPERATIVE_PIN = re.compile(
     rf"|{_IMPERATIVE_PIN_KUBECTL}[^\n]*[\"']containers[\"']\s*:[^\n]*[\"']image[\"']\s*:"
     rf"|/spec/template/spec/containers/[0-9*]+/image\b"
 )
-IMPERATIVE_PIN_ALLOWED_RECIPES = frozenset({"web-stack-apply"})
+IMPERATIVE_PIN_ALLOWED_RECIPES: frozenset[str] = frozenset()
 
 # A brand-new recipe running `kubectl ... apply -k/-f` against the web stack
-# tree (`{{ web_stack_dir }}` or its literal path) is not an imperative pin, but
-# it would mutate the release surface WITHOUT passing through
-# _web-stack-promotion-interlock, which only web-stack-apply is bound to. Only
-# the legacy carrier and its server dry-run may apply the tree; the reviewed
-# release chain applies rendered plan bytes (`apply -f "${plan}"`), never the
-# tree. Same textual strength as IMPERATIVE_PIN: variable indirection of the
-# directory is a known residual.
+# tree (`{{ web_stack_dir }}` or its literal path) would bypass the reviewed
+# saved-plan transaction. No recipe may apply the tree directly; the release
+# chain applies rendered plan bytes (`apply -f "${plan}"`). Same textual
+# strength as IMPERATIVE_PIN: variable indirection of the directory is a known
+# residual.
 WEB_STACK_TREE_APPLY = re.compile(
     rf"{_IMPERATIVE_PIN_KUBECTL}[^\n]*\bapply\b[^\n]*"
     r"(?:\s-k\b|\s--kustomize\b|\s-f\b|\s--filename\b|\s-R\b|\s--recursive\b)"
     r"[^\n]*(?:\{\{\s*web_stack_dir\s*\}\}|k8s/web/greatfallstoolbus-org-production)"
 )
-WEB_STACK_TREE_APPLY_ALLOWED_RECIPES = frozenset(
-    {"web-stack-apply", "web-stack-server-dry-run"}
-)
-
-# The legacy adapter-node carrier and the reviewed release chain mutate the SAME
-# Deployment. web-stack.yml used to fire `just web-stack-apply` unattended from a
-# repository_dispatch the public site repo sent on every push to main; TIN-3899
-# deleted both ends of that path, so the carrier is now attended-only. The
-# interlock is RETAINED as belt-and-braces on that attended path: it reads the
-# LIVE image and refuses once the gftb-site promotion is in place, and this
-# contract makes removing or bypassing it -- or re-wiring any new mutating
-# carrier around it -- a `just public-surface` failure.
-WEB_STACK_PROMOTION_INTERLOCK = "_web-stack-promotion-interlock"
-WEB_STACK_PROMOTION_INTERLOCK_DEPENDENTS = ("web-stack-apply",)
-WEB_STACK_PROMOTION_INTERLOCK_REQUIRED_TEXT = (
-    "get deployment/greatfallstoolbus-org",
-    "ghcr.io/great-falls-tool-bus/gftb-site@",
-    "exit 1",
-)
+WEB_STACK_TREE_APPLY_ALLOWED_RECIPES: frozenset[str] = frozenset()
 
 WEB_RELEASE_VALIDATION_CALLEE = "web-stack-validate"
 WEB_RELEASE_VALIDATION_CALLEE_DEPENDENCIES: tuple[str, ...] = ()
@@ -629,8 +590,11 @@ WEB_RELEASE_VALIDATION_SCRIPT = Path("scripts/validate-web-stack.sh")
 # Updated 2026-08-31 (TIN-4254 W13): the committed default-deny-egress
 # NetworkPolicy is now positively asserted, the render census is six objects,
 # and the legacy allow-egress delete rule left the exact web-apply Role.
+# Updated 2026-09-03 (TIN-2611): parked route/reaper/secrets placeholders and
+# the dead adapter-node carrier are absent; validation covers only live
+# declarations, tracked RBAC, render shape, and secret absence.
 WEB_RELEASE_VALIDATION_SCRIPT_SHA256 = _receipt(
-    "c4c3bc53977330af", "bb79be1f90a78311", "6960a56f9ccf38d5", "7f89936da686d1b3"
+    "b48d56be8f473221", "15b46781dc7700b7", "58053094a6bb24e9", "398906ec15539dcd"
 )
 
 FLAKE_RELEASE_PACKAGES = ("crane", "curl")
@@ -1239,12 +1203,6 @@ def scan_web_release_operator_contract_text(
             )
     dependency_names = set(WEB_RELEASE_RECIPE_DEPENDENCIES)
     digest_names = set(WEB_RELEASE_CRITICAL_RECIPE_DIGESTS)
-    # The promotion interlock is receipted in the same table but is deliberately
-    # NOT part of the release dependency graph: that graph doubles as the
-    # operator-local ROOT set, and the interlock hangs off the legacy
-    # web-stack-apply carrier, which since TIN-3899 no workflow invokes at all.
-    # scan_web_stack_promotion_interlock_text enforces its body receipt.
-    dependency_names |= {WEB_STACK_PROMOTION_INTERLOCK}
     if dependency_names != digest_names:
         findings.append(
             Finding(
@@ -1470,11 +1428,9 @@ def scan_imperative_pin_text(text: str, path: Path) -> list[Finding]:
                         path,
                         line,
                         f"{name} applies the web stack tree directly "
-                        f"({match.group(0).strip()!r}), bypassing "
-                        f"{WEB_STACK_PROMOTION_INTERLOCK}; only "
-                        f"{sorted(WEB_STACK_TREE_APPLY_ALLOWED_RECIPES)!r} may "
-                        "apply the tree, and the reviewed release chain applies "
-                        "rendered plan bytes instead.",
+                        f"({match.group(0).strip()!r}), bypassing the reviewed "
+                        "saved-plan transaction. No recipe may apply the tree; "
+                        "the release chain applies rendered plan bytes instead.",
                     )
                 )
 
@@ -1513,8 +1469,8 @@ def scan_imperative_pin_text(text: str, path: Path) -> list[Finding]:
                     path,
                     index,
                     "Justfile top level applies the web stack tree directly "
-                    f"({tree_match.group(0).strip()!r}), bypassing "
-                    f"{WEB_STACK_PROMOTION_INTERLOCK}.",
+                    f"({tree_match.group(0).strip()!r}), bypassing the reviewed "
+                    "saved-plan transaction.",
                 )
             )
 
@@ -1528,93 +1484,6 @@ def scan_imperative_pin_text(text: str, path: Path) -> list[Finding]:
                     f"{name} is allowlisted for imperative pinning but is not "
                     "defined exactly once; the allowlist must never outlive the "
                     "recipe it was written for.",
-                )
-            )
-    return findings
-
-
-def scan_web_stack_promotion_interlock_text(
-    text: str, path: Path
-) -> list[Finding]:
-    """The legacy adapter-node carrier must refuse to revert the promotion."""
-    findings: list[Finding] = []
-    blocks = all_just_recipe_blocks(text)
-    declarations = blocks.get(WEB_STACK_PROMOTION_INTERLOCK, [])
-    if len(declarations) != 1:
-        findings.append(
-            Finding(
-                "web-stack-promotion-interlock-missing",
-                path,
-                1,
-                f"{WEB_STACK_PROMOTION_INTERLOCK} must be defined exactly once. "
-                "It is the only mechanical stop between the unattended legacy "
-                "CD carrier and a silent revert of the gftb-site promotion.",
-            )
-        )
-    else:
-        line, _, body = declarations[0]
-        executable = executable_recipe_text(body)
-        expected_digest = WEB_RELEASE_CRITICAL_RECIPE_DIGESTS.get(
-            WEB_STACK_PROMOTION_INTERLOCK
-        )
-        observed_digest = hashlib.sha256(executable.encode("utf-8")).hexdigest()
-        if expected_digest is None:
-            findings.append(
-                Finding(
-                    "web-stack-promotion-interlock-receipt-missing",
-                    Path(SELF),
-                    1,
-                    f"{WEB_STACK_PROMOTION_INTERLOCK} must carry an executable "
-                    "receipt in WEB_RELEASE_CRITICAL_RECIPE_DIGESTS like the "
-                    "rest of the reviewed chain.",
-                )
-            )
-        elif observed_digest != expected_digest:
-            findings.append(
-                Finding(
-                    "web-stack-promotion-interlock-receipt-mismatch",
-                    path,
-                    line,
-                    f"{WEB_STACK_PROMOTION_INTERLOCK} executable SHA256 must be "
-                    f"{expected_digest}; observed {observed_digest}.",
-                )
-            )
-        for required in WEB_STACK_PROMOTION_INTERLOCK_REQUIRED_TEXT:
-            if required not in executable:
-                findings.append(
-                    Finding(
-                        "web-stack-promotion-interlock-weakened",
-                        path,
-                        line,
-                        f"{WEB_STACK_PROMOTION_INTERLOCK} no longer reads the "
-                        f"live Deployment image and refuses on it ({required!r} "
-                        "is gone); the legacy carrier could revert the "
-                        "promotion unattended.",
-                    )
-                )
-
-    dependencies = parse_just_recipe_dependencies(text)
-    for dependent in WEB_STACK_PROMOTION_INTERLOCK_DEPENDENTS:
-        declared = dependencies.get(dependent)
-        if declared is None:
-            findings.append(
-                Finding(
-                    "web-stack-promotion-interlock-detached",
-                    path,
-                    1,
-                    f"{dependent} is not declared; the promotion interlock "
-                    "contract names a recipe that no longer exists.",
-                )
-            )
-        elif not declared or declared[0] != WEB_STACK_PROMOTION_INTERLOCK:
-            findings.append(
-                Finding(
-                    "web-stack-promotion-interlock-detached",
-                    path,
-                    1,
-                    f"{dependent} must take {WEB_STACK_PROMOTION_INTERLOCK} as "
-                    f"its FIRST dependency; it declares {list(declared)!r}. The "
-                    "interlock has to precede every mutation of this workload.",
                 )
             )
     return findings
@@ -2848,7 +2717,6 @@ def check_critical_recipe_shell_syntax() -> None:
         *ARC_RECIPE_DEPENDENCIES,
         *ATTENDED_RECIPE_DEPENDENCIES,
         *WEB_RELEASE_RECIPE_DEPENDENCIES,
-        WEB_STACK_PROMOTION_INTERLOCK,
     ):
         dry_run = subprocess.run(
             ["just", "--dry-run", name],
@@ -4335,28 +4203,7 @@ def install_web_release_fixture_mocks(
                     value["metadata"] = {"resourceVersion": "fixture-np-list-drift"}
                 sys.stdout.write(json.dumps(value))
                 raise SystemExit(0)
-            # --- the mutating half (web-release-apply / the legacy interlock) ---
-            interlock_jsonpath = (
-                "jsonpath={.spec.template.spec.containers"
-                '[?(@.name=="greatfallstoolbus-org")].image}'
-            )
-            if args == namespace_prefix + [
-                "get",
-                "deployment/greatfallstoolbus-org",
-                "--ignore-not-found",
-                "-o",
-                interlock_jsonpath,
-            ]:
-                if state == "stack-live-absent":
-                    sys.stdout.write("")
-                elif state == "stack-live-promoted":
-                    sys.stdout.write(__IMAGE__)
-                else:
-                    sys.stdout.write(
-                        "ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:"
-                        + "9" * 64
-                    )
-                raise SystemExit(0)
+            # --- the mutating half (web-release-apply) ---
             if args[: len(namespace_prefix) + 1] == namespace_prefix + ["apply"]:
                 apply_args = args[len(namespace_prefix) + 1 :]
                 dry_run = apply_args[:1] == ["--dry-run=server"]
@@ -6169,13 +6016,9 @@ def build_web_release_sandbox_repo(root: Path) -> Path:
 def run_web_release_mutation_fixtures() -> None:
     """Exercise the MUTATING half as real children against mocked binaries.
 
-    The proof recipes have had this coverage since PR #109; the plan/dry-run/
-    apply chain and the legacy-carrier promotion interlock did not. These
-    fixtures assert behavior a body digest cannot: argument order, that the
-    authorization preflight runs before anything is applied, that the legacy
-    egress prune carries --ignore-not-found and happens AFTER the apply and
-    BEFORE the rollout wait, and that every refusal path refuses before the
-    first mutation.
+    These fixtures assert behavior a body digest cannot: argument order, that
+    authorization runs before apply, and that every refusal path stops before
+    the first mutation.
     """
     just_binary = shutil.which("just")
     if just_binary is None:
@@ -6352,9 +6195,8 @@ def run_web_release_mutation_fixtures() -> None:
                 "self-test FAILED: web-release-apply mutated before finishing "
                 "its authorization preflight"
             )
-        # TIN-4254 (W13): the apply-time legacy-egress prune is retired, so the
-        # mutating lane is exactly dry-run -> apply -> rollout wait. A delete
-        # reappearing here is a regression, not a prune.
+        # The mutation is exactly dry-run -> apply -> rollout wait. A delete
+        # or other mutation reappearing here is a regression.
         expected_mutations = [
             f"--kubeconfig {kubeconfig} --namespace {namespace} apply "
             f"--dry-run=server -f {plan}",
@@ -6554,28 +6396,6 @@ def run_web_release_mutation_fixtures() -> None:
         # `apply-authz-denied-delete` and `apply-delete-fails` fixtures
         # existed to close. There is no delete in the lane to deny or fail.
 
-        # THE LEGACY-CD PROMOTION INTERLOCK.
-        expect_web_release_fixture_result(
-            just_binary,
-            "_web-stack-promotion-interlock",
-            state_path,
-            log_path,
-            environment,
-            "stack-live-promoted",
-            success=False,
-            diagnostic="already carries the promoted gftb-site origin",
-        )
-        for state in ("ok", "stack-live-absent"):
-            expect_web_release_fixture_result(
-                just_binary,
-                "_web-stack-promotion-interlock",
-                state_path,
-                log_path,
-                environment,
-                state,
-                success=True,
-                diagnostic="the legacy carrier may proceed",
-            )
 
 def self_test() -> None:
     if not RETIRED_EDGE_RECIPE.search("just edge-plan"):
@@ -7076,110 +6896,6 @@ def self_test() -> None:
             raise SystemExit(
                 f"self-test FAILED: web-stack-tree-apply scan accepted {label}"
             )
-    stale_tree_allowlist = justfile.replace(
-        "web-stack-server-dry-run: web-stack-validate _web-apply-inputs",
-        "web-stack-server-dry-run-renamed: web-stack-validate _web-apply-inputs",
-        1,
-    )
-    if not any(
-        finding.rule == "imperative-pin-allowlist-stale"
-        for finding in scan_imperative_pin_text(stale_tree_allowlist, Path("Justfile"))
-    ):
-        raise SystemExit(
-            "self-test FAILED: web-stack-tree-apply allowlist survived the "
-            "removal of the recipe it names"
-        )
-    stale_allowlist = justfile.replace(
-        "web-stack-apply: _web-stack-promotion-interlock",
-        "web-stack-apply-renamed: _web-stack-promotion-interlock",
-        1,
-    )
-    if not any(
-        finding.rule == "imperative-pin-allowlist-stale"
-        for finding in scan_imperative_pin_text(stale_allowlist, Path("Justfile"))
-    ):
-        raise SystemExit(
-            "self-test FAILED: imperative-pin allowlist survived the removal of "
-            "the recipe it names"
-        )
-
-    # The legacy-CD promotion interlock: it must exist, keep reading live state,
-    # and stay the FIRST thing web-stack-apply does.
-    if scan_web_stack_promotion_interlock_text(justfile, Path("Justfile")):
-        raise SystemExit(
-            "self-test FAILED: the committed tree fails its own promotion "
-            "interlock contract"
-        )
-    interlock_cases = (
-        (
-            "interlock removed",
-            re.sub(
-                r"\n_web-stack-promotion-interlock:.*?\n(?=\n# Operator-gated)",
-                "\n",
-                justfile,
-                count=1,
-                flags=re.DOTALL,
-            ),
-            "web-stack-promotion-interlock-missing",
-        ),
-        (
-            "interlock stops reading live state",
-            mutate_recipe_body(
-                justfile,
-                "_web-stack-promotion-interlock",
-                "get deployment/greatfallstoolbus-org",
-                "get service/greatfallstoolbus-org",
-                "interlock stops reading live state",
-            ),
-            "web-stack-promotion-interlock-weakened",
-        ),
-        (
-            "interlock detached from the legacy carrier",
-            justfile.replace(
-                "web-stack-apply: _web-stack-promotion-interlock "
-                "web-stack-server-dry-run",
-                "web-stack-apply: web-stack-server-dry-run",
-                1,
-            ),
-            "web-stack-promotion-interlock-detached",
-        ),
-        (
-            "interlock body edited without a receipt update",
-            justfile.replace(
-                'echo "promotion interlock: live image',
-                'echo "promotion interlock (edited): live image',
-                1,
-            ),
-            "web-stack-promotion-interlock-receipt-mismatch",
-        ),
-        (
-            "interlock demoted behind the dry-run",
-            justfile.replace(
-                "web-stack-apply: _web-stack-promotion-interlock "
-                "web-stack-server-dry-run",
-                "web-stack-apply: web-stack-server-dry-run "
-                "_web-stack-promotion-interlock",
-                1,
-            ),
-            "web-stack-promotion-interlock-detached",
-        ),
-    )
-    for label, fixture, rule in interlock_cases:
-        if fixture == justfile:
-            raise SystemExit(
-                f"self-test FAILED: promotion interlock mutation {label!r} did "
-                "not change the Justfile"
-            )
-        if not any(
-            finding.rule == rule
-            for finding in scan_web_stack_promotion_interlock_text(
-                fixture, Path("Justfile")
-            )
-        ):
-            raise SystemExit(
-                f"self-test FAILED: promotion interlock scan accepted {label}"
-            )
-
     release_wrapper_cases = (
         "web-release-ci: web-release-candidate-proof\n    true\n",
         "web-release-ci:\n    just web-release-candidate-proof\n",
@@ -7596,11 +7312,8 @@ def self_test() -> None:
     ):
         raise SystemExit("self-test FAILED: workflow ARC alias was accepted")
 
-    # TIN-3899: the retired CD plane. A workflow that re-declares a
-    # repository_dispatch trigger is exactly how the public site repo used to
-    # reach `just web-stack-apply` unattended, so the trigger itself is refused,
-    # and neither web-stack-apply nor its CD-only helpers remain approved for
-    # any hosted workflow.
+    # A repository_dispatch trigger or either old tree-apply recipe would
+    # recreate the forbidden repository-local CD bridge.
     if not any(
         finding.rule == "workflow-repository-dispatch-retired"
         for finding in scan_workflow_text(
@@ -7626,15 +7339,11 @@ def self_test() -> None:
             "self-test FAILED: workflow_dispatch was mistaken for the retired "
             "repository_dispatch CD trigger"
         )
-    for retired_cd_recipe in (
-        "web-stack-apply",
-        "web-stack-server-dry-run",
-        "web-stack-health",
-    ):
-        if retired_cd_recipe in HOSTED_WORKFLOW_JUST_ALLOWLIST:
+    for forbidden_bridge_recipe in ("web-stack-apply", "web-stack-server-dry-run"):
+        if forbidden_bridge_recipe in HOSTED_WORKFLOW_JUST_ALLOWLIST:
             raise SystemExit(
-                "self-test FAILED: the retired legacy web CD recipe "
-                f"{retired_cd_recipe!r} is still approved for hosted workflows"
+                "self-test FAILED: the forbidden web bridge recipe "
+                f"{forbidden_bridge_recipe!r} is approved for hosted workflows"
             )
     if (REPO / RETIRED_WEB_CD_WORKFLOW).exists():
         raise SystemExit(
@@ -8640,9 +8349,6 @@ def main() -> int:
             (REPO / "Justfile").read_text(encoding="utf-8"), Path("Justfile")
         )
         + scan_imperative_pin_text(
-            (REPO / "Justfile").read_text(encoding="utf-8"), Path("Justfile")
-        )
-        + scan_web_stack_promotion_interlock_text(
             (REPO / "Justfile").read_text(encoding="utf-8"), Path("Justfile")
         )
         + scan_web_release_validation_script_bytes(
