@@ -16,10 +16,8 @@ CORE_CHECKOUT_CONTRACT_SOURCES = [
     "Justfile",
     "MODULE.bazel",
     "README.md",
-    "//bazel/flywheel-proof:MODULE.bazel",
     "config/organization.yaml",
     "docs/ci-credentials.md",
-    "docs/implementation-overlay.md",
     "docs/runbooks/oncluster-web-cutover.md",
 ] + WORKFLOW_SOURCES
 

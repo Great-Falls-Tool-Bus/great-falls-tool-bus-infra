@@ -1,12 +1,10 @@
 # CI Credentials
 
-Hosted validation (`validate.yml`, the required status check) is
-self-contained: it checks out only this public overlay and does not fetch
-GloriousFlywheel or receive a cross-repository credential. The nine
-core-consuming workflows below are different: GloriousFlywheel went private
-(TIN-4015, 2026-08-22), so they credential their GloriousFlywheel checkout
-with a read-only deploy key. `web-plan.yml` (rung 2) needs neither approach —
-see its own section below.
+`validate.yml`, the sole required status check, is self-contained: it checks
+out only this public overlay and does not fetch GloriousFlywheel or receive a
+cross-repository credential. The seven core-consuming workflows below are
+different: GloriousFlywheel went private (TIN-4015, 2026-08-22), so they
+credential their GloriousFlywheel checkout with a read-only deploy key.
 
 ## Core Source Checkout
 
@@ -16,8 +14,8 @@ secret-free. Exact GloriousFlywheel source-dependent ARC validation and all
 ARC state plan/apply work are operator-local.
 
 The other core-consuming workflows (`archive-stack.yml`, `edge-drift.yml`,
-`edge-plan.yml`, `flywheel-cache-proof.yml`, `form-crs.yml`,
-`k8s-stack-drift.yml`, `list-crs.yml`, `mail-crs.yml`, `web-crs.yml`) checkout
+`edge-plan.yml`, `form-crs.yml`,
+`k8s-stack-drift.yml`, `list-crs.yml`, `mail-crs.yml`) checkout
 GloriousFlywheel at an exact pinned commit using the repository secret
 `GF_CORE_DEPLOY_KEY` — a read-only SSH deploy key attached to
 `tinyland-inc/GloriousFlywheel`, bound via `actions/checkout`'s `ssh-key:`
@@ -26,14 +24,12 @@ organization-admin, workflow-write, ARC state, or Kubernetes-apply privilege.
 `scripts/validate-core-checkout.py` (`just core-checkout`) enforces that every
 core-repository checkout binds exactly this credential — no `token:`, no
 alternate secret name, no off-census checkout path escaping the check
-entirely — and that the overlay/`validate`/`web-plan` checkouts remain
+entirely — and that the overlay/`validate` checkout remains
 credential-free. No **credentialed job** runs on `pull_request` (each job
 gates to `push`/`workflow_dispatch`, or declares no `pull_request` trigger at
-all — see `config/organization.yaml`'s `runner_group` comment); note that
-`flywheel-cache-proof.yml` does declare `on: pull_request` at the workflow
-level, it is the job's own `if:` that keeps `GF_CORE_DEPLOY_KEY` off every PR
-run. So the deploy key is never exposed to PR-authored content, fork or
-same-repo. This is also, as of this credential, the first time a
+all — see `config/organization.yaml`'s `runner_group` comment). So the deploy
+key is never exposed to PR-authored content, fork or same-repo. This is also,
+as of this credential, the first time a
 `push`-triggered job with no protected `environment:` carries a
 cross-repository credential in this repository — see
 `config/organization.yaml`'s `runner_group` comment for that posture note.
@@ -53,8 +49,7 @@ only to `tinyland-inc/GloriousFlywheel`. TIN-4015 supersedes that assumption:
 GloriousFlywheel went private again the same day roster admission (PR #128)
 gave every self-hosted workflow in this repository an actual runner for the
 first time, no such dedicated App installation exists (a GFTB GitHub App
-does exist — `config/organization.yaml`'s `github_app_secret_name`,
-`docs/implementation-overlay.md`'s "ARC GitHub App Secret" — but it is the
+does exist — `config/organization.yaml`'s `github_app_secret_name` — but it is the
 org-scoped ARC registration App, and 91ed60ea's prohibition on reusing it for
 this still holds; nothing here does), and the `GF_CORE_DEPLOY_KEY` secret
 itself was never deleted (minted 2026-07-14, six days before its own
@@ -101,23 +96,11 @@ GFTB_MAIL_KUBECONFIG=/path/to/latoolb-us-production.kubeconfig just mail-cr-appl
 ```
 
 Secret-free `validate` runs on the self-hosted `tinyland-nix` class (TIN-3914,
-PR #116) — not a GitHub-hosted runner. `web-plan.yml` (rung 2,
-`.github/workflows/web-plan.yml`) is also secret-free — it renders the
-committed `k8s/web` tree with `kubectl kustomize` and validates it with
-`scripts/validate-web-stack.sh`, contacting no registry, cluster, or Tofu
-state backend — but runs on the self-hosted `tinyland-nix` class like every
-other apply/drift lane in this repo, not on a GitHub-hosted runner; it binds
-no protected `environment:` because it needs none. It also does not check
-out GloriousFlywheel core at all (fixed post-roster-admission, TIN-3914: the
-core repository is private, and the default `GITHUB_TOKEN` scoped to this
-repo cannot read it — every self-hosted workflow that touched it,
-unauthenticated, failed the moment it actually got a runner). This repo's
-own `flake.nix` devshell already provides everything `web-stack-validate`/
-`web-stack-render` need, so `web-plan.yml` is simpler than the other
-self-hosted lanes, not merely equivalent to them — one fewer moving part,
-and one fewer private-repo dependency. Self-hosted workload and non-ARC
+PR #116), not a GitHub-hosted runner. It renders and validates the committed
+`k8s/web` tree without contacting a registry, cluster, or Tofu state backend,
+and it checks out no GloriousFlywheel source. Self-hosted workload and non-ARC
 apply lanes remain separately gated. ARC plan/apply always happens on the
-operator machine (see docs/implementation-overlay.md).
+operator machine.
 
 ## Why It Exists
 
@@ -130,22 +113,17 @@ core product logic into this repo.
 
 ## Current Status
 
-The finite `.yml`/`.yaml` census covers 11 workflows. Eight are
-`GF_CORE_REF`-pinned core-checkout consumers with 13 exact-SHA checkout
-declarations. `flywheel-cache-proof.yml` checks out GloriousFlywheel too, but
-at its own independent `GF_OIDC_PROFILE_REF` pin and to a distinct
-`GloriousFlywheel-oidc-profile` path — it is validated on its own terms, not
-counted in the 13. The other two workflows (`validate.yml`, `web-plan.yml`) do
-not check out core at all; all eleven remain in the census so a new source
+The finite `.yml`/`.yaml` census covers 8 workflows. Seven are
+`GF_CORE_REF`-pinned core-checkout consumers with 12 exact-SHA checkout
+declarations. `validate.yml` does not check out core; all eight remain in the census so a new source
 consumer cannot hide under the alternate extension.
 
 `just core-checkout` validates checkout action immutability, canonical repository,
 finite overlay/core paths, role pin, non-persistence, read-only workflow
-permission, closed HEAD assertion, all 23 exact `GF_CORE_CI_PATH` devshell
-sources, the pinned-and-hashed OIDC helper checkout, and that every
-core-repository checkout (both pin families) binds exactly one credential —
-the `GF_CORE_DEPLOY_KEY` deploy key, TIN-4015 — while the overlay/`validate`/
-`web-plan` checkouts stay credential-free. `just core-checkout-selftest`
+permission, closed HEAD assertion, all 22 exact `GF_CORE_CI_PATH` devshell
+sources, and that every core-repository checkout binds exactly one credential —
+the `GF_CORE_DEPLOY_KEY` deploy key, TIN-4015 — while the overlay/`validate`
+checkout stays credential-free. `just core-checkout-selftest`
 proves the guard rejects adversarial mutations. The pinned pre-#1208 GloriousFlywheel
 `implementation-overlay-preflight.py` still reports its legacy source-key row;
 that row is not hosted-CI authority and is not a reason to mint
@@ -154,15 +132,13 @@ a new credential.
 The overlay's implementation authority remains
 `2281b576bce0e8dd776a047b84e7464f5b508a62`, shared by
 `config/organization.yaml`, `MODULE.bazel`, `Justfile`, and the non-ARC core
-workflow consumers. The ARC runner and OIDC profile surfaces carry a separate
-role pin, advanced by TIN-3902 from
+workflow consumers. The ARC runner surface carries a separate role pin,
+advanced by TIN-3902 from
 `df510574d17b85e7f15470caf3574fcabc4768f1` to
 `11ace397282ff89aeb1dfeb4a32fcbed3200c2ff` so the `arc-runners` stack exposes
-the `runner_group` input. `scripts/flywheel-github-oidc-profile.sh` is
-byte-identical at both commits, so `GF_OIDC_PROFILE_SHA256` is unchanged and
-this workflow's fetched helper is the same file. The finite contract checks
-this mapping exactly. A future convergence must review the executable core
-delta as its own adoption change.
+the `runner_group` input. The finite contract checks this mapping exactly. A
+future convergence must review the executable core delta as its own adoption
+change.
 
 ## GloriousFlywheel credential helper: fleet-baked, no consumer credential (ruling 2026-08-31)
 
@@ -171,4 +147,7 @@ Operator ruling 2026-08-31 (TIN-4246 comment `7add7fd8`; TIN-4227): the released
 - `GF_RELEASE_READ_TOKEN` (fine-grained PAT, #153): never minted; the repository secret is deleted. Ruled as "completely circumventing the GH App pattern and skipping the intended -infra overlay repo".
 - `TINYLAND_CI_DISPATCH_CLIENT_ID` + `TINYLAND_CI_DISPATCH_APP_PRIVATE_KEY` (App-pair per-run mint, #154): projection reverted and verified absent by name. App reach extension, if ever wanted, goes through declared overlay IaC plus a per-target readiness gate (the blahaj precedent), never a hand-set secret.
 
-`flywheel-cache-proof.yml` now verifies the helper on the runner PATH and records its digest; provenance is the runner image digest. The `gf-credhelper-install` action remains only for external-org runners off the fleet. Follow-up in the same shape: the credentialed OIDC-profile checkout (`GF_CORE_DEPLOY_KEY`, TIN-4015) can retire once the baked image is proven on this lane, since #1689 bakes that helper too.
+The v3 cache-proof workflow and its credentialed OIDC-profile checkout are
+removed. GF v4 enrollment does not fetch producer code or credentials at job
+time: a consumer-owned overlay and the installed GitHub App establish demand,
+and the immutable action client resolves it through the signed catalog.

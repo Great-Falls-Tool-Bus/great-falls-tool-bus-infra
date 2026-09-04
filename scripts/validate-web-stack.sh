@@ -6,47 +6,23 @@ set -euo pipefail
 # the exported app variable plus strenv(app); the version preflight below
 # rejects kislyuk/python-yq before any predicate can be skipped.
 
-# ATTENDED-ONLY declare-only guard for the GFTB on-cluster web workload
-# (TIN-2543, ADR 0010; posture updated by TIN-3899). Asserts the invariants so a
-# regression that would open the public path or auto-apply on merge fails CI
-# before any apply. Never contacts a cluster; never needs a secret.
+# Declaration validator for the GFTB on-cluster web workload (TIN-2543,
+# ADR 0010; posture updated by TIN-3899). Asserts the invariants so a
+# regression that would change the declared production shape fails CI. Never
+# contacts a cluster and never needs a secret.
 #
 # ADR 0010 flips this stack to the executing-cutover shape: like the form stack
 # it now asserts a digest-pinned image and the running replica count (2). The
-# declare-only guarantee moves to the still-closed axes — NO Namespace object, NO
-# Secret, and a fail-closed tunnel route + reaper intent — so merging applies
-# nothing and routes no public traffic.
+# declaration contains NO Namespace object and NO Secret. Edge routing is live
+# state owned by the edge stack, not a parked placeholder in this tree.
 #
-# TIN-3899 retired the apply CARRIER, not this declaration. The dispatch-gated
-# .github/workflows/web-stack.yml is deleted, so no workflow in this repository
-# reaches this stack any more, and no repository_dispatch from the public site
-# repo reaches a cluster client of any kind. The sole surviving mutation path is
-# an attended operator running `just web-stack-apply` with an operator-custody
-# kubeconfig, and `_web-stack-promotion-interlock` refuses that once the
-# gftb-site static origin is live on Deployment/greatfallstoolbus-org. Hence
-# ATTENDED-ONLY, not DISPATCH-GATED.
+# TIN-3899 retired the dispatch carrier and this change removes its dead manual
+# adapter-node tail. The separate web-release-* transaction is the only current
+# mutation path and remains attended until the shared v4 owner-overlay path
+# proves a complete takeover.
 #
-# IMAGE ADMISSION IS BOUND TO THE STACK UNDER VALIDATION. The admitted container
-# repository is looked up from the Deployment's OWN target namespace, never from
-# a flat list that every stack shares. greatfallstoolbus-org-production admits
-# exactly ghcr.io/great-falls-tool-bus/gftb-site and nothing else, so
-# substituting any other repository -- including the retired legacy
-# greatfallstoolbus.org adapter-node image -- into this stack FAILS here rather
-# than silently widening the guard. A namespace with no entry in the table
-# fails closed.
-#
-# TREE HONESTY (rung 1, 2026-08-21). This admission used to name
-# ghcr.io/great-falls-tool-bus/greatfallstoolbus.org -- the pre-split legacy
-# adapter-node image -- and explicitly refused the gftb-site repository the
-# gftb-site promotion had already made the ONLY thing actually served. That
-# was itself part of the dishonesty this fix retires: the admitted repo now
-# matches what the declarative record in deployment.yaml pins, and what the
-# attended web-release-* ceremony (Justfile) actually promotes onto this
-# Deployment. The gftb-site candidate is STILL held, independently, to the
-# exact ghcr.io/great-falls-tool-bus/gftb-site@sha256:<64 hex> shape by
-# Justfile's _web-release-candidate-inputs before web-release-render ever
-# emits it -- this admission and that one are now the same repository by
-# design, not two axes that must be kept apart.
+# Image admission is bound to the target namespace. The production namespace
+# admits only the gftb-site repository, and an unknown namespace fails closed.
 
 dir="${1:?usage: validate-web-stack.sh <manifest-dir>}"
 web_root="$(cd "${dir}/.." && pwd)"
@@ -55,9 +31,6 @@ svc="${dir}/service.yaml"
 netpol="${dir}/networkpolicy.yaml"
 kustomization="${dir}/kustomization.yaml"
 rbac="${dir}/web-apply-rbac.yaml"
-route_intent="${web_root}/../../tofu/intent/great-falls-tool-bus/web-oncluster-route.json"
-prenv_schema="${web_root}/../../tofu/intent/great-falls-tool-bus/pr-env-lanes.schema.json"
-secrets_contract="${web_root}/secrets.contract.yaml"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -69,11 +42,10 @@ assert_eq() { [ "$1" = "$2" ] || fail "$3: got '$1', want '$2'"; }
 command -v yq >/dev/null 2>&1 || fail "yq is required"
 yq_version="$(yq --version 2>&1 || true)"
 if ! printf "%s" "${yq_version}" | grep -qi "mikefarah" || ! printf "%s" "${yq_version}" | grep -Eqi "version v?4\."; then fail "mikefarah yq-go v4 is required; got: ${yq_version:-unavailable}"; fi
-command -v jq >/dev/null 2>&1 || fail "jq is required (JSON intent assertions)"
+command -v jq >/dev/null 2>&1 || fail "jq is required (JSON shape assertions)"
 command -v kubectl >/dev/null 2>&1 || fail "kubectl is required for kubectl kustomize"
 
-for f in "${deploy}" "${svc}" "${netpol}" "${kustomization}" "${rbac}" \
-  "${route_intent}" "${prenv_schema}" "${secrets_contract}"; do
+for f in "${deploy}" "${svc}" "${netpol}" "${kustomization}" "${rbac}"; do
   require_file "${f}"
 done
 
@@ -97,8 +69,7 @@ deploy_name="$(yq -r 'select(.kind == "Deployment") | .metadata.name' "${deploy}
 assert_eq "${deploy_name}" "${app}" "Deployment name admitted in namespace ${stack_ns}"
 
 # --- axis 1: replicas MUST be the ADR 0010 cutover shape (2) ------------------
-# ADR 0010 §5 step 3 flips 0 -> 2. Merging still applies nothing (web-crs.yml is
-# validate-only, and after TIN-3899 no workflow applies this stack at all).
+# ADR 0010 §5 step 3 flips 0 -> 2. Merging this declaration does not apply it.
 replicas="$(yq -r 'select(.kind == "Deployment") | .spec.replicas' "${deploy}")"
 assert_eq "${replicas}" "2" "Deployment replicas (ADR 0010 cutover shape)"
 
@@ -174,7 +145,6 @@ jq --slurp -e '
       {"apiGroups":[""],"resources":["services"],"resourceNames":["greatfallstoolbus-org"],"verbs":["get","update","patch"]},
       {"apiGroups":[""],"resources":["services"],"verbs":["create"]},
       {"apiGroups":["networking.k8s.io"],"resources":["networkpolicies"],"resourceNames":["default-deny-ingress","allow-cloudflared-tunnel-ingress","allow-prometheus-scrape","default-deny-egress"],"verbs":["get","update","patch"]},
-      {"apiGroups":["networking.k8s.io"],"resources":["networkpolicies"],"resourceNames":["allow-egress-dns","allow-egress-discuss-archive"],"verbs":["delete"]},
       {"apiGroups":["networking.k8s.io"],"resources":["networkpolicies"],"verbs":["list","create"]},
       {"apiGroups":["discovery.k8s.io"],"resources":["endpointslices"],"verbs":["list"]}
     ]
@@ -228,24 +198,20 @@ assert_eq "${tunnel_port}" "3000" "public ingress port"
 if yq -r 'select(.kind == "NetworkPolicy") | .spec.egress[]?.to[]? | select(has("ipBlock")) | .ipBlock.cidr' "${netpol}" | grep -q "0.0.0.0/0"; then
   fail "web egress must not include 0.0.0.0/0"
 fi
-
-# --- FAIL-CLOSED route intent: applied/dns/route all false -------------------
-assert_eq "$(jq -r '.applied' "${route_intent}")" "false" "route intent applied"
-assert_eq "$(jq -r '.dns_enabled' "${route_intent}")" "false" "route intent dns_enabled"
-assert_eq "$(jq -r '.route_enabled' "${route_intent}")" "false" "route intent route_enabled"
-assert_eq "$(jq -r '.planned_route.dns_record.enabled' "${route_intent}")" "false" "route intent dns_record.enabled"
-# No live cfargotunnel UUID inlined (placeholder only).
-if jq -r '.. | strings' "${route_intent}" | grep -Eq "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.cfargotunnel\.com"; then
-  fail "route intent must NOT inline a live <uuid>.cfargotunnel.com target (dashboard/token-managed)"
-fi
-
-# --- FAIL-CLOSED reaper lane: enabled=false ----------------------------------
-assert_eq "$(jq -r '.enabled' "${prenv_schema}")" "false" "pr-env reaper lane enabled"
-assert_eq "$(jq -r '.teardown_model.leg_2_ttl_reaper_workflow.toggle_default' "${prenv_schema}")" "false" "reaper workflow toggle default"
-assert_eq "$(jq -r '.teardown_model.leg_3_incluster_backstop_cronjob.suspend_default' "${prenv_schema}")" "true" "backstop CronJob suspend default"
+# default-deny-egress is COMMITTED tree truth since TIN-4254 (W13): the static
+# origin gets no egress at all, so the policy must be present with an empty
+# egress rule list, exactly as the release ceremony has always applied it.
+egress_deny_json="$(yq eval -o=json -I=0 'select(.kind == "NetworkPolicy" and .metadata.name == "default-deny-egress")' "${netpol}")"
+jq -e '
+  .metadata.namespace == "greatfallstoolbus-org-production"
+  and .spec.policyTypes == ["Egress"]
+  and .spec.egress == []
+  and .spec.podSelector == {"matchLabels":{"app.kubernetes.io/name":"greatfallstoolbus-org","app.kubernetes.io/component":"web"}}
+' <<<"${egress_deny_json}" >/dev/null ||
+  fail "default-deny-egress NetworkPolicy must be committed with policyTypes [Egress] and an empty egress rule list"
 
 # --- No committed secret material anywhere in the web stack ------------------
-if grep -REn "kind:\s*Secret" "${dir}" "${secrets_contract}" >/dev/null 2>&1; then
+if grep -REn "kind:\s*Secret" "${web_root}" >/dev/null 2>&1; then
   fail "the declare-only web stack must not ship a Secret object"
 fi
 if grep -REn "AGE-SECRET-KEY-1|BEGIN [A-Z ]*PRIVATE KEY|cfat_[A-Za-z0-9_-]{8,}" "${web_root}" >/dev/null 2>&1; then
@@ -263,11 +229,12 @@ fi
 bash scripts/guard-no-remote-kustomize-resources.sh "${dir}"
 rendered_json_stream="$(kubectl kustomize "${dir}" | yq eval-all -o=json -I=0 '.' -)"
 jq --slurp -e '
-  length == 5
+  length == 6
   and ([.[] | "\(.kind)/\(.metadata.name)"] | sort) == [
     "Deployment/greatfallstoolbus-org",
     "NetworkPolicy/allow-cloudflared-tunnel-ingress",
     "NetworkPolicy/allow-prometheus-scrape",
+    "NetworkPolicy/default-deny-egress",
     "NetworkPolicy/default-deny-ingress",
     "Service/greatfallstoolbus-org"
   ]
@@ -279,6 +246,6 @@ jq --slurp -e '
     or .kind == "ClusterRoleBinding"
   )] | length) == 0
 ' <<<"${rendered_json_stream}" >/dev/null ||
-  fail "workload render must contain exactly Deployment/Service/three NetworkPolicies and no RBAC authority"
+  fail "workload render must contain exactly Deployment/Service/four NetworkPolicies and no RBAC authority"
 
-echo "web stack validation passed for ${app} in ${stack_ns}: ATTENDED-ONLY declare-only (replicas 2, image pinned to ${admitted_image_repo}@sha256:<64 hex>, no namespace, tracked exact web-apply RBAC excluded from workload kustomization, no workflow apply path -- the repository_dispatch CD carrier is retired and apply is attended-operator-only behind the promotion interlock), gftb-site static-origin ClusterIP 80->3000 with /health probes, default-deny + cloudflared-only public ingress, route+reaper fail-closed, no committed secrets"
+echo "web stack validation passed for ${app} in ${stack_ns}: declaration-only (replicas 2, image pinned to ${admitted_image_repo}@sha256:<64 hex>, no namespace, tracked exact web-apply RBAC excluded from workload kustomization, no workflow mutation path), gftb-site static-origin ClusterIP 80->3000 with /health probes, default-deny ingress + committed default-deny-egress (empty egress) + cloudflared-only public ingress, no committed secrets"

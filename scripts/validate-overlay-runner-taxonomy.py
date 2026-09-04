@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate implementation-overlay ARC runner taxonomy."""
+"""Validate legacy ARC registration and runner-label continuity."""
 
 from __future__ import annotations
 
@@ -62,27 +62,13 @@ PROJECT_IDENTITY_TOKENS = {
     "toolbus",
 }
 
+# The still-live legacy ARC scale set consumes this key. Keep only the narrow
+# state-continuity invariant here; cache topology and execution policy belong
+# to GloriousFlywheel v4 and must not grow back into this retiring validator.
 EXPECTED_ATTIC_PUBLIC_KEY = "main:eaUydxuDu7xBoy5cCo3MdknYAkVyTIASQ7DGuwxa+XA="
 RETIRED_ATTIC_PUBLIC_KEYS = {
     "main:l/gpjG5GLg1Gczmn5K97n5iSIRcsaWerICzdXqiBYT8=",
 }
-
-# Extra-runner-set anchors that are deliberately cache-less (non-Bazel / RBE-less
-# lanes). A nix/docker/dind anchor that omits bazel_cache_endpoint injects NO
-# bazel cache (arc-runner module locals.tf: bazel_env_enabled requires it), which
-# is the "under-wired RBE anchor" failure. Default-deny: every such anchor MUST
-# carry cache wiring UNLESS its map key is named here. The keys below are
-# retained verbatim from the template so scripts/test-overlay-runner-taxonomy.sh
-# passes unchanged; the GFTB tfvars keeps extra_runner_sets empty, so none of
-# them can match real config in this overlay.
-BARE_EXEMPT = frozenset(
-    {
-        "personal-docker",      # template fixture: blog docker runner, no Bazel
-        "massageithaca-dind",   # template fixture: quarantine anchor, no RBE
-        "massageithaca-browser",  # template fixture: browser e2e lane, no Bazel
-    }
-)
-
 
 @dataclass
 class RunnerSet:
@@ -90,10 +76,6 @@ class RunnerSet:
     start_line: int
     runner_label: str | None = None
     github_config_url: str | None = None
-    runner_type: str | None = None
-    attic_server: str | None = None
-    bazel_cache_endpoint: str | None = None
-    bazel_executor_endpoint: str | None = None
 
 
 def strip_comment(line: str) -> str:
@@ -190,25 +172,6 @@ def parse_extra_runner_sets(path: Path) -> list[RunnerSet]:
             if url_match:
                 current.github_config_url = url_match.group(1)
 
-            # RBE wiring fields. An explicit empty assignment (= "") does not
-            # match [^"]+ and leaves the field None, which validate_rbe_wiring
-            # treats identically to an omitted field (both mean "absent").
-            type_match = re.match(r'^\s*runner_type\s*=\s*"([^"]+)"\s*$', line)
-            if type_match:
-                current.runner_type = type_match.group(1)
-
-            attic_match = re.match(r'^\s*attic_server\s*=\s*"([^"]+)"\s*$', line)
-            if attic_match:
-                current.attic_server = attic_match.group(1)
-
-            cache_match = re.match(r'^\s*bazel_cache_endpoint\s*=\s*"([^"]+)"\s*$', line)
-            if cache_match:
-                current.bazel_cache_endpoint = cache_match.group(1)
-
-            executor_match = re.match(r'^\s*bazel_executor_endpoint\s*=\s*"([^"]+)"\s*$', line)
-            if executor_match:
-                current.bazel_executor_endpoint = executor_match.group(1)
-
         depth += brace_delta(line)
 
         if current is not None and depth < current_depth:
@@ -274,7 +237,8 @@ def validate_github_url(url: str, allow_repo_registration_anchor: bool) -> list[
     return []
 
 
-def validate_attic_contract(path: Path) -> list[str]:
+def validate_attic_continuity(path: Path) -> list[str]:
+    """Hold the live ARC cache key stable until the ARC resource is retired."""
     errors: list[str] = []
     attic_servers = parse_literal_assignments(path, "attic_server")
     attic_keys = parse_literal_assignments(path, "attic_public_key")
@@ -288,46 +252,8 @@ def validate_attic_contract(path: Path) -> list[str]:
             errors.append(f"{path}:{line_number}: attic_public_key uses retired cache key {key!r}")
         elif key != EXPECTED_ATTIC_PUBLIC_KEY:
             errors.append(
-                f"{path}:{line_number}: attic_public_key must match current shared cache key "
+                f"{path}:{line_number}: attic_public_key must match current continuity key "
                 f"{EXPECTED_ATTIC_PUBLIC_KEY!r}"
-            )
-
-    return errors
-
-
-def validate_rbe_wiring(runner: RunnerSet) -> list[str]:
-    """Reject under-wired RBE anchors.
-
-    A nix/docker/dind extra_runner_sets anchor that omits bazel_cache_endpoint
-    injects no bazel cache (arc-runner module locals.tf: bazel_env_enabled
-    requires it), and a nix anchor without attic_server gets no Nix substituter
-    — silent under-wiring that tofu plan does not catch. Default-deny: such an
-    anchor MUST carry cache (and attic, for nix) unless its key is in
-    BARE_EXEMPT. Independently, executor-backed mode requires a cache, so
-    bazel_executor_endpoint implies bazel_cache_endpoint (checked unconditionally).
-    """
-    errors: list[str] = []
-    cache = runner.bazel_cache_endpoint or ""
-    executor = runner.bazel_executor_endpoint or ""
-    attic = runner.attic_server or ""
-
-    # executor-implies-cache: applies to every anchor, exempt or not.
-    if executor and not cache:
-        errors.append(
-            "bazel_executor_endpoint is set but bazel_cache_endpoint is empty — "
-            "executor-backed mode requires a remote cache"
-        )
-
-    if runner.runner_type in {"nix", "docker", "dind"} and runner.key not in BARE_EXEMPT:
-        if not cache:
-            errors.append(
-                f"runner_type {runner.runner_type!r} requires bazel_cache_endpoint "
-                f"(RBE cache wiring); an under-wired anchor injects no bazel cache — "
-                f"add the endpoint or add {runner.key!r} to BARE_EXEMPT"
-            )
-        if runner.runner_type == "nix" and not attic:
-            errors.append(
-                'runner_type "nix" requires attic_server (Nix substituter wiring)'
             )
 
     return errors
@@ -359,7 +285,7 @@ def main() -> int:
             for error in validate_github_url(url, args.allow_repo_registration_anchor):
                 all_errors.append(f"{path}:{line_number}: {error}")
 
-        all_errors.extend(validate_attic_contract(path))
+        all_errors.extend(validate_attic_continuity(path))
 
         for runner in parse_extra_runner_sets(path):
             if runner.runner_label is None:
@@ -369,8 +295,6 @@ def main() -> int:
             # workflow-facing runner_label is the taxonomy contract.
             if runner.github_config_url is None:
                 all_errors.append(f"{path}:{runner.start_line}: {runner.key}: missing github_config_url")
-            for error in validate_rbe_wiring(runner):
-                all_errors.append(f"{path}:{runner.start_line}: {runner.key}: {error}")
 
     if all_errors:
         print("Overlay runner taxonomy validation failed:", file=sys.stderr)
