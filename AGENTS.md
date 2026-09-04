@@ -83,3 +83,50 @@ Hard rules:
   the DreamHost API is never used for registration-NS mutation, and no
   agent session mutates Cloudflare or DreamHost (applies are
   operator-gated)
+
+## Remote-only execution (operator ruling 2026-09-01)
+
+Heavy toolchain execution (tofu, kubectl/kustomize, gitleaks, actionlint,
+bazelisk — anything that launches a build or validation toolchain) is
+remote-only on this estate. Guarded Justfile recipes refuse locally via
+`scripts/remote-only-guard.sh` (`REFUSE` to stderr, exit 3, never
+warn-and-continue) and pass only on sanctioned hosted runners
+(`GITHUB_ACTIONS=true` and `RUNNER_ENVIRONMENT` not `github-hosted` — the GF
+admission shell, `tinyland-nix`/ARC). GF v4 is fail-closed with no
+local-execution fallback; the REAPI action, not the runner, is the unit of
+compute (R243). There is no override environment variable; the only non-CI
+pass is a baked `(lane, recipe)` allowlist inside the guard script, which is
+empty in this repository.
+
+The verification route is: push the branch and read hosted CI — `gh pr
+checks`, `gh run view`, `gh run watch`.
+
+Ratified attended exceptions (unguarded by design):
+
+- the ARC tofu ceremony (`arc-init` / `arc-plan` / `arc-plan-show` /
+  `arc-plan-scope-check` / `arc-apply` / `arc-capacity-readback` /
+  `arc-enrollment-plan` / `arc-app-secret-apply`, `arc-validate`,
+  `enrollment-preflight*`, and their `_arc-*` / `_reviewed-*` /
+  `_operator-apply-confirm` helpers) — confirm-gated, no CI caller,
+  ratified per docs/runbooks and the implementation overlay
+- the web-release ceremony (`web-release-*` and helpers; TIN-3899 /
+  decisions/0016) — attended-operator-only, unreachable from every CI
+  workflow by design
+- the attended operator lanes: `flywheel-enroll*`, `edge-zones-lock`,
+  `form-altcha-secret-apply`, `list-member-add`,
+  `listsync-stack-server-dry-run` / `listsync-stack-apply`,
+  `web-stack-health`, and the interlock-dead legacy carrier
+  (`web-stack-server-dry-run` / `_web-stack-promotion-interlock` /
+  `web-stack-apply`)
+- `web-stack-validate` — deliberately unguarded: it is the receipt-pinned
+  web-release validation callee, and the reviewed `web-release-render`
+  invokes it under `env -i`, which strips `GITHUB_ACTIONS`; a guard there
+  would break the ratified attended ceremony while every recipe-level
+  entrypoint that reaches it is already guarded
+
+`just check` locally now refuses at its `check-hosted` dependency; run
+`just arc-validate` for the attended portion. The local-only history-mode
+gitleaks recipe (`secrets-scan`) is removed — its `gitleaks git` scan now
+runs as a step inside `check-hosted` on the hosted runner.
+`core-checkout-bazel` (the sole local bazelisk launcher) is removed; the
+`//:core_checkout_contract_tests` Bazel targets remain.

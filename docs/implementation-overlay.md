@@ -108,9 +108,11 @@ Honey/sting pod budget is the scarce resource (TIN-2165/TIN-2234):
 - nix lane only (`deploy_docker_runner = false`, `deploy_dind_runner = false`)
 - `nix_min_runners = 0`, `nix_max_runners = 4`
 - `nix_warm_pool_enabled = false`
-- each nix runner requests 8 GiB and is limited to 16 GiB of ephemeral storage;
-  `/nix`, `_work`, and `.cache` remain on the container root filesystem while
-  the optional volumes are disabled
+- each nix runner requests 12 GiB and is limited to 24 GiB of ephemeral
+  storage (TIN-4246 bounded exception, 2026-08-31; up from the 8/16 GiB
+  envelope set after the 2026-08-17 evictions, see below); `/nix`, `_work`,
+  and `.cache` remain on the container root filesystem while the optional
+  volumes are disabled
 - runner pods pinned to `sting` with the
   `dedicated.tinyland.dev/compute-expansion` toleration (the tinyland-goo-nix
   anchor shape)
@@ -118,21 +120,36 @@ Honey/sting pod budget is the scarce resource (TIN-2165/TIN-2234):
 Raising any of these is an explicit operator decision followed by
 `just arc-plan` / `just arc-apply`.
 
-The 8/16 GiB envelope is the bounded response to the 2026-08-17 site-CI evidence:
-four independent build/test pods crossed the former 8 GiB limit and were
-evicted, while the lightweight carrier validation completed. The source carrier
-records max-runner node/quota fit first. After its attended apply and exact
-state/live readback, a natural-fanout run and immediate warm rerun are recorded
-on TIN-2299 and a reviewed follow-up before the envelope is accepted. Every
-self-hosted check must receive a real runner, the runner container's combined writable-rootfs plus log peak
-(`rootfs.usedBytes + logs.usedBytes`) must stay below 75% of its limit, and no
-pod eviction, restart, or node `DiskPressure` may occur. A warm cache rerun must
-also pass. Failure drains the scale set and requires a separate signed,
-reviewed rollback carrier. The scope guard admits the runner-group cutover's
-exact reversal in both its postures (the decomposed group-move reversal with
+The 8/16 GiB envelope was the bounded response to the 2026-08-17 site-CI
+evidence: four independent build/test pods crossed the former 8 GiB limit and
+were evicted, while the lightweight carrier validation completed. The source
+carrier records max-runner node/quota fit first. After its attended apply and
+exact state/live readback, a natural-fanout run and immediate warm rerun are
+recorded on TIN-2299 and a reviewed follow-up before the envelope is accepted.
+Every self-hosted check must receive a real runner, the runner container's
+combined writable-rootfs plus log peak (`rootfs.usedBytes + logs.usedBytes`)
+must stay below 75% of its limit, and no pod eviction, restart, or node
+`DiskPressure` may occur. A warm cache rerun must also pass. Failure drains
+the scale set and requires a separate signed, reviewed rollback carrier.
+
+**TIN-4246 (2026-08-31, bounded exception).** Pods were evicted again at the
+16 GiB limit on the second Bazel build of the platform spoke (GF seat, run
+33373351388). Operator-ratified via the GF seat interview (relayed 06:25 ET;
+recorded on TIN-4246/TIN-4227) as an Amendment-3-class exception to the
+02:44Z runtime hold: a bounded source-bump plus a bounded receipted apply of
+only the `great-falls-tool-bus-nix` scale set, raising the envelope to
+12/24 GiB. Codex #146's generic-ephemeral-volume PVC scratch pattern is the
+durable fix and retires this exception when it lands; it is not permission to
+raise the limit again without new evidence. The max-four posture is
+unchanged, but node-root ephemeral storage is shared across concurrent runner
+pods on the same node, so the worst case is 4 x 24 GiB = 96 GiB.
+
+The scope guard admits this bump's exact reverse (12/24 GiB -> 8/16 GiB) as
+part of the `capacity` shape, alongside the runner-group cutover's exact
+reversal in both its postures (the decomposed group-move reversal with
 storage retained at 8/16 GiB, or the combined reversal that carries the limit
 `16Gi -> 8Gi` and request `8Gi -> 4Gi` storage step with it); a
-capacity-only 8/16 GiB to 4/8 GiB reversal is not one of the enumerated
+capacity-only 8/16 GiB to 4/8 GiB reversal is still not one of the enumerated
 shapes and still needs its own reviewed scope-contract update.
 It is not permission to raise the limit again without new evidence. Per-runner bounded volumes for `/nix`,
 `_work`, and `.cache` remain the durable follow-up once the primary core stack
@@ -227,9 +244,13 @@ admits exactly three enumerated plans and refuses everything else:
 
 1. **capacity** — one in-place `module.gh_nix.helm_release.arc_runner` update
    whose only Helm-values delta is the runner container's `ephemeral-storage`
-   `4Gi -> 8Gi` request and `8Gi -> 16Gi` limit. In this shape the Helm `set`
-   block is compared whole, so a capacity plan cannot smuggle a `runnerGroup`
-   move: it fails with `changes fields outside values: set`.
+   moving as one of three enumerated pairs: `4Gi -> 8Gi` request and
+   `8Gi -> 16Gi` limit (the original TIN-2299 bump); `8Gi -> 12Gi` request and
+   `16Gi -> 24Gi` limit (the TIN-4246 bounded exception, 2026-08-31); or that
+   bump's exact reverse, `12Gi -> 8Gi` request and `24Gi -> 16Gi` limit. In
+   this shape the Helm `set` block is compared whole, so a capacity plan
+   cannot smuggle a `runnerGroup` move: it fails with `changes fields outside
+   values: set`.
 2. **cutover** — the TIN-3902 runner-group move: the `runnerGroup` Helm `set`
    entry `default -> great-falls-tool-bus-infra`, the pinned runner image
    digest carried by the advanced ARC role pin, the new
@@ -254,12 +275,17 @@ extra create, any delete or replacement of the Helm release, any values or
 requiring a separate reviewed decision. This operator surface has no delete
 bypass.
 
-The contract is pinned to today's reviewed capacity and roster. A **future
-capacity change** (for example `nix_max_runners` 4 -> 8, a memory or CPU
-envelope move, or a further `ephemeral-storage` step) is refused until its own
-scope-contract update lands; so is any roster, image-digest, or module-pin
-move. Advancing the contract is the reviewed decision point, never a
-workaround.
+The contract is pinned to today's reviewed capacity and roster, now including
+the TIN-4246 12Gi/24Gi bounded exception and its reverse (operator-ratified
+via the GF seat interview, recorded on TIN-4246/TIN-4227, as an
+Amendment-3-class exception to the 02:44Z runtime hold). A **future capacity
+change** (for example `nix_max_runners` 4 -> 8, a memory or CPU envelope
+move, or any `ephemeral-storage` step beyond the three enumerated pairs
+above, most notably Codex #146's generic-ephemeral-volume PVC pattern,
+which retires this exception and will need its own scope-contract update to
+land) is refused until its own reviewed scope-contract update lands with its
+own named authority; so is any roster, image-digest, or module-pin move.
+Advancing the contract is the reviewed decision point, never a workaround.
 
 ### Exclusive state window
 
@@ -281,8 +307,8 @@ makes that saved plan non-retryable. After restoring backend connectivity, run
 `GFTB_ARC_READBACK_MODE=reconcile GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just
 arc-capacity-readback`. That mode is keyed on the refreshed plan and the
 runner group, not the storage level: a pending plan (in any admitted posture,
-including today's live 8/16 GiB with the decomposed cutover pending) must pass
-`arc-plan-scope-check` again and yields the pre-change receipt, while an empty
+including a pending TIN-4246 capacity step from the live dedicated group) must
+pass `arc-plan-scope-check` again and yields the pre-change receipt, while an empty
 refreshed plan certifies the landed state (promoted at the dedicated group;
 converged group `default` requires an explicit `rolled-back` re-run); either
 way canonical state and the live scale set must also agree
@@ -390,11 +416,13 @@ kubectl --context honey -n arc-runners \
   -o jsonpath='{.spec.template.spec.containers[?(@.name=="runner")].resources.requests.ephemeral-storage}'
 ```
 
-`4Gi` means the combined posture; `8Gi` means the decomposed posture (the
-current live state — do **not** stop; the guard admits the zero-storage-delta
-cutover). Anything else is a stop condition. The tfvars stay at `8Gi`/`16Gi`
-in both postures: the plan's storage delta follows from canonical/live state,
-not from a tfvars edit.
+`4Gi` means the combined posture; `8Gi` means the decomposed posture. Anything
+else is a stop condition for this runbook, TIN-4246's `12Gi` included: the
+runner-group cutover landed in #113, so both postures are historical and a
+`12Gi` reading means the live group move is already done and the bounded
+capacity exception is on top of it. In either cutover posture the plan's
+storage delta follows from canonical/live state, not from a tfvars edit; the
+tfvars carry the reviewed envelope, which TIN-4246 moved to `12Gi`/`24Gi`.
 
 ### Step 3 — quiet window and plan
 
@@ -484,9 +512,13 @@ GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-capacity-readback
 
 `arc-capacity-readback` proves capacity convergence, runner-group convergence,
 and listener health. In the default `promoted` mode it now requires canonical
-state and the live AutoscalingRunnerSet to agree on **both** `8Gi`/`16Gi` and
-`.spec.runnerGroup: great-falls-tool-bus-infra`, so the receipt can no longer
-go green while the scale set is still idle in GitHub's `Default` group. It
+state and the live AutoscalingRunnerSet to agree on **both** the reviewed
+storage envelope (`8Gi`/`16Gi`, or `12Gi`/`24Gi` under the TIN-4246 bounded
+exception) and `.spec.runnerGroup: great-falls-tool-bus-infra`, so the receipt
+can no longer go green while the scale set is still idle in GitHub's `Default`
+group. `rolled-back` is deliberately not widened: it still demands `4Gi`/`8Gi`
+or `8Gi`/`16Gi`, so a group-move reversal cannot certify itself while the
+bounded exception is live. It
 still does not — and cannot — prove GitHub-side *admission*, which is an org
 setting. Add the independent group and admission readbacks:
 

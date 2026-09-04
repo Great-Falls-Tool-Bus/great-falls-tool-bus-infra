@@ -99,11 +99,7 @@ EXPECTED_CORE_CI_PATH_EXPORTS = {
 }
 
 EXPECTED_PERMISSIONS = {
-    workflow: (
-        ("contents: read", "id-token: write")
-        if workflow == "flywheel-cache-proof.yml"
-        else ("contents: read",)
-    )
+    workflow: (("contents: read", "id-token: write") if workflow == "flywheel-cache-proof.yml" else ("contents: read",))
     for workflow in EXPECTED_WORKFLOWS
 }
 

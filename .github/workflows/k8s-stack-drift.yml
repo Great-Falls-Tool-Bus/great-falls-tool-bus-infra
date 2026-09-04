@@ -35,26 +35,22 @@ name: K8s Stack Drift (zero-diff where applicable)
 # TWO KNOWN GAPS BETWEEN THE CHECKED-IN BASE AND WHAT THE RELEASE CEREMONY
 # ACTUALLY PRODUCES (adversarial review B2, 2026-08-21) -- handled two
 # different ways, not both "expected to show up":
-#   1. `web-release-render` unconditionally stamps
-#      `app.tinyland.dev/source-sha` onto the live Deployment at every
-#      release; the base can't carry a static value (it changes every
-#      release). This job's `kubectl diff -k` runs with
-#      `KUBECTL_EXTERNAL_DIFF=scripts/web-stack-diff.sh` (Justfile
-#      `web-stack-drift-check`), which strips exactly that one annotation
-#      from both sides before diffing -- so it does NOT show up here, and a
-#      clean run is meaningful rather than permanently red for a
-#      non-drift reason.
-#   2. `web-release-render` also synthesizes a `default-deny-egress`
-#      NetworkPolicy at render time that the checked-in base does not
-#      declare. This one CANNOT be normalized the same way and will NEVER
-#      show up here, clean run or not: `kubectl diff -k` compares the
-#      rendered LOCAL manifest set against LIVE and has no prune awareness,
-#      so it is structurally blind to any object that exists only on the
-#      cluster. A clean run of this job is not evidence that NetworkPolicy
-#      is correct -- see deployment.yaml/networkpolicy.yaml headers and
-#      k8s/web/README.md for that residual.
-# See Justfile `_k8s-drift-check` and `scripts/web-stack-diff.sh` for the
-# full rationale.
+# RESOLVED BY TIN-4254 (W13). Both former residuals are committed tree truth
+# now, so this job uses kubectl's own default differ like every other stack:
+#   1. `app.tinyland.dev/source-sha` is committed on the pod template, and
+#      `web-release-render` emits the committed kustomize bytes verbatim
+#      instead of stamping it. The retired `scripts/web-stack-diff.sh`
+#      external differ used to strip that annotation from both sides;
+#      keeping it would now MASK real divergence of the release identity,
+#      so ANY diff here -- that annotation included -- is real drift.
+#   2. `default-deny-egress` is committed in networkpolicy.yaml, so it is
+#      on the LOCAL side of the comparison and no longer invisible.
+# STILL STRUCTURALLY BLIND: `kubectl diff -k` compares the rendered LOCAL
+# manifest set against LIVE and has no prune awareness, so any object that
+# exists ONLY on the cluster (e.g. the two legacy allow-egress policies, if
+# they ever reappeared out of band) cannot surface here. Their live absence
+# is receipted by an attended read-only census, not by this job.
+# See Justfile `_k8s-drift-check` for the full rationale.
 #
 # CREDENTIALS: reuses the SAME namespace-scoped kubeconfig secrets the
 # existing apply lanes already use -- no new secret is introduced here.
@@ -62,9 +58,15 @@ name: K8s Stack Drift (zero-diff where applicable)
 #     is its only remaining consumer since TIN-3899 retired web-stack.yml)
 #   * MAIL_APPLY_KUBECONFIG_B64 / GFTB_MAIL_KUBECONFIG_B64, protected `mail`
 #     environment (mail-crs.yml / list-crs.yml / form-crs.yml / archive-stack.yml)
-# `kubectl diff` needs only read (get/list) RBAC on the stack's own resources --
-# a strict subset of what the apply-scoped kubeconfig already grants, so no new
-# permission is requested either. Runs on the same self-hosted `tinyland-nix`
+# `kubectl diff` performs a SERVER-SIDE DRY-RUN APPLY under the hood (it needs
+# patch/create verbs, not just read/list) -- this is NOT a strict subset of
+# read-only RBAC, contrary to what this header previously claimed
+# (reconciliation-safety review, R1). It is a strict subset of what the
+# apply-scoped kubeconfig already grants (that kubeconfig can apply for real),
+# so no new permission is requested here, and mail CRs above correctly surface
+# rc=1 rather than a 403 -- but do not use this workflow as a template for
+# minting a narrower, read-only kubeconfig; `kubectl diff` will not run under
+# one. Runs on the same self-hosted `tinyland-nix`
 # runner (on-cluster/tailnet reachable) every other apply/validate workflow in
 # this repo uses. Like edge-drift.yml, this fails SOFT (skip, not red) when an
 # environment secret is absent -- the runbook mints these late.
@@ -153,6 +155,7 @@ jobs:
           persist-credentials: false
 
       - name: Verify GloriousFlywheel core checkout
+        id: verify-core
         if: steps.secrets.outputs.kubeconfig-present == 'true'
         run: |
           set -euo pipefail
@@ -192,7 +195,25 @@ jobs:
             nix develop "${GF_CORE_CI_PATH}" -c just mail-cr-drift-check
 
       - name: Drift check -- list stack
-        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        # !cancelled() (round 2, reconciliation-safety review E2): each stack
+        # here is independently zero-diff (see header); one stack's real
+        # drift (e.g. mail CRs, above) must not blind this job to every stack
+        # after it. Before this fix, list/form/archive/list-sync had NEVER
+        # executed in ANY run of this workflow since #126 introduced the
+        # current job shape (2026-08-29 sweep g1: 100% of the runs sampled
+        # show mail CRs failing first and every subsequent step `-` skipped)
+        # -- a structural blind spot, not evidence those stacks are actually
+        # zero-diff. `always()` was rejected: it also un-gates on job
+        # cancellation and on the 20-minute timeout, AND it would still run
+        # these steps if "Verify GloriousFlywheel core checkout" itself
+        # failed (an unpinned/mismatched core tree) -- exactly the pin gate
+        # this job depends on to refuse comparing against the wrong core.
+        # `!cancelled()` gives the blind-spot fix without un-gating on
+        # cancellation; `steps.verify-core.outcome == 'success'` keeps the
+        # pin gate load-bearing. The kubeconfig path still fails closed
+        # either way (`_k8s-drift-check`'s `test -f` errors if materialization
+        # failed).
+        if: ${{ !cancelled() && steps.secrets.outputs.kubeconfig-present == 'true' && steps.verify-core.outcome == 'success' }}
         uses: ./GloriousFlywheel/.github/actions/nix-job
         with:
           push-cache: "false"
@@ -204,7 +225,7 @@ jobs:
             nix develop "${GF_CORE_CI_PATH}" -c just list-stack-drift-check
 
       - name: Drift check -- form stack
-        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        if: ${{ !cancelled() && steps.secrets.outputs.kubeconfig-present == 'true' && steps.verify-core.outcome == 'success' }}
         uses: ./GloriousFlywheel/.github/actions/nix-job
         with:
           push-cache: "false"
@@ -216,7 +237,7 @@ jobs:
             nix develop "${GF_CORE_CI_PATH}" -c just form-stack-drift-check
 
       - name: Drift check -- archive stack
-        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        if: ${{ !cancelled() && steps.secrets.outputs.kubeconfig-present == 'true' && steps.verify-core.outcome == 'success' }}
         uses: ./GloriousFlywheel/.github/actions/nix-job
         with:
           push-cache: "false"
@@ -228,7 +249,7 @@ jobs:
             nix develop "${GF_CORE_CI_PATH}" -c just archive-stack-drift-check
 
       - name: Drift check -- list-sync stack (TIN-3813)
-        if: steps.secrets.outputs.kubeconfig-present == 'true'
+        if: ${{ !cancelled() && steps.secrets.outputs.kubeconfig-present == 'true' && steps.verify-core.outcome == 'success' }}
         uses: ./GloriousFlywheel/.github/actions/nix-job
         with:
           push-cache: "false"

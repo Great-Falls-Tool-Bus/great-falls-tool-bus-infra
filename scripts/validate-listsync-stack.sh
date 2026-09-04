@@ -33,6 +33,8 @@ assert_eq() {
 }
 
 command -v yq >/dev/null 2>&1 || fail "yq is required"
+yq_version="$(yq --version 2>&1 || true)"
+if ! printf "%s" "${yq_version}" | grep -qi "mikefarah" || ! printf "%s" "${yq_version}" | grep -Eqi "version v?4\."; then fail "mikefarah yq-go v4 is required; got: ${yq_version:-unavailable}"; fi
 command -v kubectl >/dev/null 2>&1 || fail "kubectl is required for kubectl kustomize"
 
 require_file "${cm_file}"
@@ -105,7 +107,7 @@ secret_optional="$(field '.spec.jobTemplate.spec.template.spec.containers[0].env
 assert_eq "${secret_optional}" "false" "the Secret gate must be required (absence keeps the reconciler down)"
 # Semantic check (comments may DISCUSS mailman-app; no manifest may MOUNT it):
 # every secretKeyRef in the stack must name the dedicated Secret.
-referenced_secrets="$(yq -r '.. | objects | select(has("secretKeyRef")) | .secretKeyRef.name' "${cm_file}" "${cron_file}" "${np_file}" "${kustomization_file}" | sort -u)"
+referenced_secrets="$(yq -r '.. | select(tag == "!!map") | select(has("secretKeyRef")) | .secretKeyRef.name' "${cm_file}" "${cron_file}" "${np_file}" "${kustomization_file}" | sort -u)"
 assert_eq "${referenced_secrets}" "mailman-listsync-rest" "the only Secret the stack may reference is the dedicated one (never the engine's mailman-app; TIN-3813 separate credential lifecycle)"
 if grep -RIn 'kind: Secret' "${dir}" >/dev/null 2>&1; then
   fail "the listsync stack must not create Secrets; the operator mints mailman-listsync-rest"
@@ -197,7 +199,11 @@ assert_eq "${rendered_target_list}" "discuss.latoolb.us" "RENDERED declared targ
 rendered_egress_ports="$(field '[.spec.egress[].ports[].port | tostring] | sort | join(",")' "${rendered_np_sync_file}")"
 assert_eq "${rendered_egress_ports}" "53,53,8001" "RENDERED reconciler egress must be DNS + core REST only (patches-block check)"
 
-if field '.. | objects | select(has("ipBlock")) | .ipBlock.cidr' "${rendered_np_sync_file}" 2>/dev/null | grep -q "0.0.0.0/0"; then
+rendered_cidrs=""
+if ! rendered_cidrs="$(field '.. | select(tag == "!!map") | select(has("ipBlock")) | .ipBlock.cidr' "${rendered_np_sync_file}" 2>&1)"; then
+  fail "cannot inspect rendered NetworkPolicy CIDRs with yq-go: ${rendered_cidrs}"
+fi
+if printf '%s\n' "${rendered_cidrs}" | grep -Fxq "0.0.0.0/0"; then
   fail "RENDERED reconciler egress must not include 0.0.0.0/0 (patches-block check)"
 fi
 

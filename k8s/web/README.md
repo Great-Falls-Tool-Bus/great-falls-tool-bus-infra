@@ -44,8 +44,9 @@ visitor -> greatfallstoolbus.org (Cloudflare edge, TLS terminates here)
 |---|---|---|
 | `greatfallstoolbus-org-production/deployment.yaml` | gftb-site static-origin web Deployment | `replicas: 2`; **digest-pinned** `ghcr.io/great-falls-tool-bus/gftb-site@sha256:e95c9588…` (a tag, a truncated or uppercase digest, a foreign repository, or a `PLACEHOLDER` marker fails `just web-stack-validate`); non-root 65532; read-only rootfs; `/health` probes on :3000 |
 | `greatfallstoolbus-org-production/service.yaml` | ClusterIP 80→3000 | internal DNS only; never internet-exposed directly |
-| `greatfallstoolbus-org-production/networkpolicy.yaml` | default-deny + explicit allows | ingress only from the `cloudflared` namespace (:3000) and prometheus; no egress rules declared here — the static Caddy origin makes no outbound calls, and `web-release-render` additionally synthesizes a `default-deny-egress` NetworkPolicy at ceremony time (not yet git-tracked; see the Justfile `_k8s-drift-check` header) |
+| `greatfallstoolbus-org-production/networkpolicy.yaml` | default-deny + explicit allows | ingress only from the `cloudflared` namespace (:3000) and prometheus; **`default-deny-egress` is committed here** (TIN-4254 W13) with `policyTypes: [Egress]` and an empty `egress` list — the static Caddy origin makes no outbound calls, and the ceremony applies this object rather than synthesizing it |
 | `greatfallstoolbus-org-production/kustomization.yaml` | kustomize entrypoint | renders cleanly; creates **no** Namespace |
+| `greatfallstoolbus-org-production/web-apply-rbac.yaml` | desired source declaration for the namespace-scoped apply identity | one closed ServiceAccount/Role/RoleBinding set; live parity requires a separate protected readback; excluded from workload kustomization so this tree cannot bootstrap its own authority |
 | `secrets.contract.yaml` | names-only three-plane secrets contract | no values, ever |
 | `pr-env-lane.md` | reaper / PR-env lane note | parked (see below) |
 | `../../tofu/intent/great-falls-tool-bus/web-oncluster-route.json` | cloudflared route intent | `applied:false`, `dns_enabled:false`, `route_enabled:false` |
@@ -70,10 +71,15 @@ visitor -> greatfallstoolbus.org (Cloudflare edge, TLS terminates here)
    digest, or any other repository — including the retired legacy
    `ghcr.io/great-falls-tool-bus/greatfallstoolbus.org` adapter-node image —
    fails.
-3. **No namespace, no Secret.** `greatfallstoolbus-org-production` is not created
-   here (a `kind: Namespace` object fails validation) and the namespace-scoped
-   `web-apply` SA cannot create one; the namespace, the SA/RBAC, and the GHCR
-   pull Secret are operator-provisioned out of band.
+3. **No namespace, no Secret, no self-bootstrap.**
+   `greatfallstoolbus-org-production` is not created here (a `kind: Namespace`
+   object fails validation), and the namespace-scoped `web-apply` identity
+   cannot create one. Its desired ServiceAccount/Role/RoleBinding source declaration is tracked
+   beside the workload, including EndpointSlice `list` only. This proves the
+   reviewed source shape, not live equality; a protected readback remains
+   required. It is deliberately absent from `kustomization.yaml` so a workload
+   apply cannot grant or widen its own authority. Credential material,
+   namespace creation, and the GHCR pull Secret remain protected external state.
 4. **The surviving attended carrier is interlocked.** `just web-stack-apply`
    takes `_web-stack-promotion-interlock` as its FIRST dependency. The interlock
    reads the LIVE Deployment image and refuses when it is already a
@@ -189,21 +195,24 @@ just web-stack-validate     # invariant checks + `kubectl kustomize` render
 no workflow may. This tree is **ATTENDED-ONLY declare-only**, not parked:
 `scripts/validate-web-stack.sh` requires `replicas: 2` and a digest-pinned
 `ghcr.io/great-falls-tool-bus/gftb-site` image here, and forbids a
-`Namespace` object — the namespace and the `web-apply` SA/RBAC are minted by the
-operator out of band (the SA cannot create namespaces), the tunnel route stays
+`Namespace` object — the namespace and credential are protected external state;
+the closed desired `web-apply` RBAC source declaration is tracked but excluded
+from the workload kustomization so it cannot self-bootstrap; live equality is
+not claimed here. The SA cannot create namespaces, the tunnel route stays
 dashboard-managed, and the DNS flip (P6) plus CF Pages decommission (P7) remain
 separate operator steps. **Rung 1 tree honesty (2026-08-21):** this pin is now
 the declarative record of what is actually served — an operator updates it here
 at each `web-release-*` ceremony's pin step, it is not auto-reconciled, and
-`just web-stack-drift-check` fails on a real diff. Two known gaps between this
-base and what the ceremony actually produces, handled differently (see the
-Justfile `_k8s-drift-check` header and `scripts/web-stack-diff.sh`): the
-per-release `source-sha` annotation is stripped from both sides before
-diffing (`KUBECTL_EXTERNAL_DIFF`), so it never shows up as drift; the
-ceremony-synthesized `default-deny-egress` NetworkPolicy this file does not
-declare can **never** show up as drift either way, because `kubectl diff -k`
-has no prune awareness and is structurally blind to objects that exist only
-on the cluster — a clean run of that gate is not evidence it is correct.
+`just web-stack-drift-check` fails on a real diff. **TIN-4254 (W13) closed both
+former gaps between this base and what the ceremony produces** (see the Justfile
+`_k8s-drift-check` header): the per-release `source-sha` annotation is committed
+on the pod template, and the `default-deny-egress` NetworkPolicy is committed in
+`networkpolicy.yaml`, so the drift gate now uses kubectl's default differ and any
+diff — the release-identity annotation included — is real drift. What that gate
+still cannot see: `kubectl diff -k` has no prune awareness and is structurally
+blind to objects that exist only on the cluster, so live *absence* of the two
+retired legacy allow-egress policies is receipted by an attended read-only
+census, not by CI.
 
 Because `web-stack-apply` mutates the same Deployment the gftb-site release chain
 promotes, it is interlocked: `_web-stack-promotion-interlock` runs first, reads

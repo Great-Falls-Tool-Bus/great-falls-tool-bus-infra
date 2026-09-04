@@ -30,16 +30,23 @@ name: Validate Overlay
 # sufficient compensation for a `pull_request`-unfiltered job on this runner
 # class -- making this job a deliberate, single exception to the invariant
 # rather than a violation of it -- is the thing this PR's review needs to
-# confirm, not something already decided by landing it.
+# confirm, not something already decided by landing it. (UPDATE, W17 /
+# TIN-4256: that review confirmed the posture, and `web-plan.yml` has since
+# become the SECOND sanctioned exception under the same compensating
+# control -- it now runs its render+validate body unfiltered on every
+# `pull_request` as the intended PR-required `web-plan` context. This job
+# remains the sole required status check until the operator wires
+# `web-plan` into ruleset 20930684; see
+# docs/runbooks/web-plan-required-status-activation.md.)
 #
 # ALSO CARRIES: the rung-2 web-stack plan render for pull requests (round 3,
-# after adversarial review PR #127 comment 5377613179). `.github/workflows/
-# web-plan.yml` is push-to-main/workflow_dispatch-only (PR #110's "keep
-# public PRs off private runners" invariant, restored there after round 2
-# briefly and wrongly removed it for this one workflow). Something still has
-# to report a real, always-executing conclusion on every PR so a future
+# after adversarial review PR #127 comment 5377613179; retained after W17 /
+# TIN-4256 as defense in depth now that `.github/workflows/web-plan.yml`
+# runs the same render on every `pull_request` itself -- removing this copy
+# is a separate operator call). Something still has
+# to report a real, always-executing conclusion on every PR so a
 # required `web-plan`-equivalent check can never freeze on an unrelated PR --
-# this job is that something: it already runs on every `pull_request`
+# this job is one such carrier: it already runs on every `pull_request`
 # unfiltered, is already this repository's declared PR validation authority
 # (PR #110's own commit message), is already secret-free for this purpose,
 # and, as of THIS PR, runs on the GF cache-fronted runner class directly
@@ -191,20 +198,22 @@ jobs:
               echo "Could not determine whether this change touches a web-stack path -- rendering unconditionally (fail open to render, never to silently skip)."
             fi
             echo ""
-            echo "This is the COMMITTED declare-only tree, not the reviewed"
-            echo "candidate-promotion ceremony's output. The ceremony still"
-            echo "supplies three things this render cannot, in order of"
-            echo "consequence:"
+            echo "This is the COMMITTED declare-only tree. Since TIN-4254"
+            echo "(W13) it is also, byte for byte, what the reviewed"
+            echo "candidate-promotion ceremony applies: the source-sha"
+            echo "annotation and the \`default-deny-egress\` NetworkPolicy are"
+            echo "committed here, and \`web-release-render\` emits these same"
+            echo "kustomize bytes verbatim rather than synthesizing them."
             echo ""
-            echo "1. **The per-release container image digest** -- the field"
-            echo "   that decides what code production actually runs. This"
-            echo "   render shows the digest currently committed to main"
-            echo "   (below); it is NOT necessarily what the next release"
-            echo "   ceremony will pin."
-            echo "2. The per-release \`app.tinyland.dev/source-sha\` annotation."
-            echo "3. The synthesized \`default-deny-egress\` NetworkPolicy."
+            echo "The one thing this render cannot tell you: **the per-release"
+            echo "container image digest** -- the field that decides what code"
+            echo "production actually runs -- is shown below as committed to"
+            echo "main today, which is NOT necessarily what the next release"
+            echo "ceremony will pin."
             echo ""
             echo "**Committed image digest:** \`${image}\`"
+            echo ""
+            echo "**Rendered-bytes sha256 (determinism receipt input):** \`$(sha256sum web-plan-rendered.yaml | cut -d' ' -f1)\`"
             echo ""
             echo "See \`.github/workflows/web-plan.yml\`'s header for the full explanation."
             echo ""

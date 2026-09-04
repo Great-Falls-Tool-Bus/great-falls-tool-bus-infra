@@ -136,12 +136,42 @@ jobs:
           echo "${tools_dir}" >> "${GITHUB_PATH}"
           echo "installed pinned flywheel-github-oidc-profile (sha256 ${actual})"
 
-      - name: Install released GF credential helper
-        uses: tinyland-inc/ci-templates/.github/actions/gf-credhelper-install@v2.11.0
-        with:
-          version: v0.2.0
-          sha256: 178fbf71b4892505e28ef5a05611485701fed8ba7ba1ada91d4d737b994f0cd2
-
+      # 2026-08-31: GloriousFlywheel is private (TIN-4015), so the action's
+      # unauthenticated releases/download fetch 404s (runs 33366365913,
+      # 33367833121). ci-templates v2.12.2+ (TIN-3066) resolves the release
+      # asset through the REST API when a contents:read token is supplied;
+      # v3.1.0 matches this estate's spoke-ci pin. GF_RELEASE_READ_TOKEN is a
+      # fine-grained token, single repository tinyland-inc/GloriousFlywheel,
+      # Contents: read only (docs/ci-credentials.md). While the secret is
+      # absent the input is empty and the action falls back to the
+      # unauthenticated path, so this change cannot regress the lane.
+      # Operator ruling 2026-08-31 (TIN-4246 7add7fd8, TIN-4227): the released
+      # gf-reapi-credhelper is FLEET-BAKED into the tinyland runner image (the
+      # GloriousFlywheel #1689 OIDC-helper pattern). Consumers on the fleet
+      # fetch nothing and hold no GloriousFlywheel read credential: the
+      # per-consumer PAT (#153) and the App-pair mint (#154) are retired as
+      # forbidden bridges, and the ci-templates fetch action stays only for
+      # external-org runners off the fleet, which this lane never uses. The
+      # binary's provenance is the runner image digest (GF supply plane); this
+      # step verifies presence and records the observed digest. Until the
+      # baked image rolls, this step fails and the lane is honestly red.
+      - name: Verify fleet-baked GF credential helper
+        shell: bash
+        env:
+          GF_CREDHELPER_RELEASE: v0.2.0
+          GF_CREDHELPER_RELEASE_SHA256_LINUX_AMD64: 178fbf71b4892505e28ef5a05611485701fed8ba7ba1ada91d4d737b994f0cd2
+        run: |
+          set -euo pipefail
+          if ! helper="$(command -v gf-reapi-credhelper 2>/dev/null)"; then
+            echo "::error::gf-reapi-credhelper is not on the runner PATH. Supply is fleet-baked by ruling (TIN-4246); this lane holds no fetch credential. Wait for the baked runner image to roll."
+            exit 1
+          fi
+          actual="$(sha256sum "${helper}" | awk '{ print $1 }')"
+          if [ "${actual}" = "${GF_CREDHELPER_RELEASE_SHA256_LINUX_AMD64}" ]; then
+            echo "fleet-baked gf-reapi-credhelper at ${helper} matches release ${GF_CREDHELPER_RELEASE} (sha256 ${actual})"
+          else
+            echo "::notice::fleet-baked gf-reapi-credhelper at ${helper} sha256 ${actual} (release ${GF_CREDHELPER_RELEASE} asset is ${GF_CREDHELPER_RELEASE_SHA256_LINUX_AMD64}; a nix-built image binary differs from the portable release asset by construction; provenance is the runner image digest)"
+          fi
       - name: Cache-backed org-tenancy Bazel proof
         shell: bash
         run: |

@@ -47,6 +47,7 @@ PUBLIC_ROLE_EMAILS = {
     "keyholders@latoolb.us",
     "lists-bounces@latoolb.us",
     "postmaster@latoolb.us",
+    "root@lists.latoolb.us",
 }
 
 EXAMPLE_DOMAINS = {"example.com", "example.org", "example.net"}
@@ -130,6 +131,8 @@ def scan() -> list[Finding]:
 def self_test() -> None:
     if not allowed_email("keyholders", "latoolb.us"):
         raise SystemExit("self-test FAILED: expected role address was not allowed")
+    if not allowed_email("root", "lists.latoolb.us"):
+        raise SystemExit("self-test FAILED: expected list root role address was not allowed")
     if not allowed_email("operator", "example.org"):
         raise SystemExit("self-test FAILED: expected example address was not allowed")
     if allowed_email("person", "private.invalid"):

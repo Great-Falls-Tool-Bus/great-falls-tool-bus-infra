@@ -1,6 +1,8 @@
 # CI Credentials
 
-Hosted validation (`validate.yml`, the required status check) is
+Hosted validation (`validate.yml`, the required status check, and
+`web-plan.yml`, the PR-side render/validate status slated to join the
+required list — W17/TIN-4256, an attended ruleset step) is
 self-contained: it checks out only this public overlay and does not fetch
 GloriousFlywheel or receive a cross-repository credential. The nine
 core-consuming workflows below are different: GloriousFlywheel went private
@@ -163,3 +165,12 @@ byte-identical at both commits, so `GF_OIDC_PROFILE_SHA256` is unchanged and
 this workflow's fetched helper is the same file. The finite contract checks
 this mapping exactly. A future convergence must review the executable core
 delta as its own adoption change.
+
+## GloriousFlywheel credential helper: fleet-baked, no consumer credential (ruling 2026-08-31)
+
+Operator ruling 2026-08-31 (TIN-4246 comment `7add7fd8`; TIN-4227): the released `gf-reapi-credhelper` binary is baked into the tinyland runner image by the GloriousFlywheel supply plane (the #1689 OIDC-helper pattern). Consumers on the fleet fetch nothing at job time and hold no GloriousFlywheel read credential. Two bridges were opened and retired the same night and must not return:
+
+- `GF_RELEASE_READ_TOKEN` (fine-grained PAT, #153): never minted; the repository secret is deleted. Ruled as "completely circumventing the GH App pattern and skipping the intended -infra overlay repo".
+- `TINYLAND_CI_DISPATCH_CLIENT_ID` + `TINYLAND_CI_DISPATCH_APP_PRIVATE_KEY` (App-pair per-run mint, #154): projection reverted and verified absent by name. App reach extension, if ever wanted, goes through declared overlay IaC plus a per-target readiness gate (the blahaj precedent), never a hand-set secret.
+
+`flywheel-cache-proof.yml` now verifies the helper on the runner PATH and records its digest; provenance is the runner image digest. The `gf-credhelper-install` action remains only for external-org runners off the fleet. Follow-up in the same shape: the credentialed OIDC-profile checkout (`GF_CORE_DEPLOY_KEY`, TIN-4015) can retire once the baked image is proven on this lane, since #1689 bakes that helper too.

@@ -45,12 +45,16 @@
 #
 # The pod-template fields below (securityContext, no command/env override) match
 # the exact contract Justfile's `web-release-render` asserts on the rendered
-# workload byte-for-byte (see the `jq -e` contract in that recipe), so the
-# checked-in base and the ceremony's render step now describe the same shape —
-# the ceremony still supplies (and this file cannot fix in advance) the
-# per-release image digest, source-sha annotation, and the
-# default-deny-egress NetworkPolicy it synthesizes at render time (tracked as a
-# residual; see the PR body / ../README.md).
+# workload byte-for-byte (see the `jq -e` contract in that recipe). Since
+# TIN-4254 (W13) there are NO ceremony-only residuals left: the per-release
+# source-sha annotation is committed on the pod template below, the
+# default-deny-egress NetworkPolicy is committed in networkpolicy.yaml, and
+# `web-release-render` emits `kubectl kustomize` bytes VERBATIM — it asserts
+# the committed pin equals the reviewed WEB_APPLY_IMAGE/WEB_APPLY_SHA inputs
+# instead of stamping them. The pin-step invariant extends accordingly: each
+# release ceremony's pin commit updates the image digest AND the
+# app.tinyland.dev/source-sha template annotation together, in the same
+# commit.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -78,6 +82,13 @@ spec:
       app.kubernetes.io/component: web
   template:
     metadata:
+      # Committed release identity (TIN-4254 W13): the full gftb-site source
+      # commit behind the digest pinned below. The pin step updates the image
+      # digest AND this annotation in the same commit; `web-release-render`
+      # refuses to plan when either differs from the reviewed
+      # WEB_APPLY_IMAGE/WEB_APPLY_SHA inputs.
+      annotations:
+        app.tinyland.dev/source-sha: 91cf300ddbe9068379bc7ade462dfcba92053966
       labels:
         app.kubernetes.io/name: greatfallstoolbus-org
         app.kubernetes.io/component: web
@@ -149,28 +160,28 @@ spec:
         - name: greatfallstoolbus-org
           # Digest-pinned production image: the promoted gftb-site static
           # origin (ADR 0010 §5 cutover shape; TIN-3899 promotion). Candidate
-          # d22c0ca8 (gftb-site main, PR #35 merge), generation 37, pinned via
-          # the attended web-release-* ceremony 2026-08-21 ~03:10 EDT
-          # (TIN-3959 cache-headers release; program board receipt "GEN 37
-          # CEREMONY COMPLETE"). Digest verified against the GHCR registry
-          # itself: `crane digest` / manifest HEAD on tag
-          # sha-d22c0ca8f4683e5d93a554872b78d0a4a81e0028 resolves to exactly
-          # this sha256, matching the short-form digest recorded in the
-          # ceremony receipt and the 2026-08-21 truthing
-          # (devenv-gitops-truth-20260821.md). The cluster read-only proof
-          # kubeconfig (~/.gftb/web-release-proofs.kubeconfig) had an expired
-          # 2h SA token at the time of this fix, so this is a registry-verified
-          # pin, not a fresh `kubectl get deploy` read — see the PR body.
-          #
-          # No command/env override: gftb-site's own image bakes
-          # Entrypoint=[dumb-init --] Cmd=[caddy run --config
-          # /etc/caddy/Caddyfile --adapter caddyfile] and needs no runtime env
-          # (the Caddyfile hardcodes :3000 and the /health, /healthz responders
-          # used by the probes below). This is not adapter-node; there is no
-          # build/index.js in this image. `web-release-render` (Justfile)
-          # deletes command/args/env/envFrom/volumeMounts unconditionally on
-          # every render for exactly this reason.
-          image: ghcr.io/great-falls-tool-bus/gftb-site@sha256:e95c9588a320a92986ccbeff630c2837b0f3be08a9100ef505225f55194746d3
+          # 91cf300d (signed gftb-site main; operator-ratified bus photographs,
+          # their goal/log mounts, the reusable optional featured-image
+          # rendering, the subsequent AGENTS-only D14 contract update, and the
+          # reviewed public-copy/front-matter corrections), generation 47. The
+          # immutable candidate was published by GitHub Actions run 33808652168
+          # on 2026-09-03; anonymous public
+          # GHCR manifest resolution of the full-sha tag returned exactly the
+          # digest pinned below. Previous pins (rollback candidates):
+          # generation 46
+          # sha256:f0e618ed5d27e6cf2ea9439d90d2f3111fa0189a29800b7feb5b95a2e7511702
+          # (PINNED desired-state only; superseded before apply; NEVER RUNNING),
+          # generation 45
+          # sha256:498b9715ed123ac8b5e1be0c35a5355ede6880e655e77809b85bf83c8f34f24c
+          # (RUNNING; retained rollback),
+          # generation 44 sha256:bf3ccd175d553f5b1a73f518c27d31c852aca1c97323d00d6b22a4767b5c63bc,
+          # generation 43 sha256:3096c166a25300581e89101effa078dcf4100c638b0ce357f473f485624d6862.
+          # This commit records reviewed desired release truth; merge applies
+          # nothing. No GFTB-local parity bridge remains. Production
+          # convergence belongs to the shared GloriousFlywheel/owner-overlay
+          # carrier required by decisions/0022 section 3; PINNED/RUNNING/SERVED
+          # are post-apply evidence.
+          image: ghcr.io/great-falls-tool-bus/gftb-site@sha256:f82534a08ba91f080fc67acec219659cb437a9874e1c3c99dedc0e6bd509fbcc
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
