@@ -81,8 +81,8 @@ just edge-zones-apply
 ```
 
 The current workflow carrier is `.github/workflows/edge-plan.yml`; it is
-credentialed only for the protected edge transaction. Direct Cloudflare API
-mutation and ad hoc OpenTofu entrypoints are not supported.
+credentialed only for the manually dispatched edge transaction. Direct
+Cloudflare API mutation and ad hoc OpenTofu entrypoints are not supported.
 
 The web-origin variable retains the historical name `pages_host` for state and
 input compatibility. Its admitted value is the shared tunnel CNAME declared
