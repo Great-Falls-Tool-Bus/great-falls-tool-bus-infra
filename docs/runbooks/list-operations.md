@@ -8,7 +8,10 @@ stack. It is written for operators and agents with read/write REST access to
 the running `mailman-core` pod.
 
 Verified read-only against the live stack on 2026-07-04 (GNU Mailman 3.3.10,
-REST API 3.1) in namespace `latoolb-us-production`, context `honey`.
+REST API 3.1) in namespace `latoolb-us-production`, context `honey`. The table
+below records the ratified target. TIN-4268 was filed from a later live
+observation of `subscription_policy=confirm`; that divergence is not CLOSED
+until the exact-main owner transaction and its readback receipts exist.
 
 ## 1. Mental model: two lists, one engine
 
@@ -33,12 +36,12 @@ first member and first owner of each.
   approval instead of taking effect, because membership account creation is
   the ONLY sanctioned writer path (2026-09-01 operator ruling, platform spec
   `docs/spec/discuss-board-lifecycle-2026-09-01.md` in `greatfallstoolbus.org`;
-  TIN-4268). Sanctioned add paths are the members provisioning lane
-  (`provision.add_lists`, TIN-3964), the attended `just list-member-add`
-  lane, and the add-only keyholders reconciler (section 8). Non-member posts
-  are **held** for moderation rather than accepted. Before 2026-09-03 the
-  policy was `confirm` (open, email-confirmed self-subscription); that was
-  the writer hole TIN-4268 closed.
+  TIN-4268). The sole product add path is members provisioning
+  (`provision.add_lists`, TIN-3964). Operator recovery and reconciliation may
+  repair that projection for an already-Active member, but they are not
+  admission paths. Non-member posts are **held** for moderation rather than
+  accepted. The live policy was observed as `confirm` (open, email-confirmed
+  self-subscription); that is the writer hole TIN-4268 must close.
 
 Both lists share one transport into the engine. The substrate postfix map routes
 list mail to the LMTP listener at
@@ -59,11 +62,16 @@ Consequences:
 - You cannot restore a list setting with `kubectl apply`. A setting changed
   through REST, the CLI, or Postorius is authoritative in the database and
   survives pod restarts (state is on the retained PVCs).
-- There is no GitOps reconciliation of list settings. The ratified baseline in
-  section 5 is the written source of truth; if the database drifts from it, an
-  operator must PATCH it back by hand. (One narrow, declared exception exists
-  for ROSTERS, not settings: the add-only keyholders ⊆ discuss reconciler,
-  section 8, which only ever adds discuss@ memberships.)
+- The checked-in `discuss-list-policy-intent` ConfigMap records the ratified
+  target, but no workload consumes it at this head. Source presence is not
+  activation or evidence of live state. Reconciliation requires the already-
+  ratified purpose-bound in-cluster projection Job, applied automatically from
+  exact signed infra `main` by the owner transaction. It must use dedicated
+  workload authority, bounded cleanup and absence readback, and redacted
+  receipts. The existing dispatch-era `list-crs` workflow and an operator-
+  local PATCH are not substitutes. (One narrow, declared exception exists for
+  ROSTERS, not settings: the add-only keyholders ⊆ discuss reconciler, section
+  8, which only ever adds discuss@ memberships.)
 - Back up by protecting the `mailman-postgres-data` PVC, not by trusting Git.
 
 ## 2. Admin access pattern
@@ -245,13 +253,15 @@ kubectl --context honey -n latoolb-us-production exec "$CORE" -- sh -c '
 
 ### Subscription requests (owner approval)
 
-Both lists are `moderate` now (discuss@ since 2026-09-03, TIN-4268). A
-candidate who mails a `-join@` address or a REST add without `pre_approved`
-lands in that list's requests queue. On `discuss@`, do **not** approve
-self-serve requests from strangers: membership account creation is the only
-sanctioned writer path (section 1), so `discard` (silent) or `reject` them
-and let the sanctioned add lanes do the adding. List pending requests and act
-on one with an `action` of `accept`, `discard`, `reject`, or `defer`:
+The ratified target is `moderate` for both lists. The later TIN-4268 observation
+still has `discuss@` live at `confirm` until an owner-transaction close/probe
+receipt proves otherwise. Under `moderate`, a candidate who mails a `-join@`
+address or a REST add without `pre_approved` lands in that list's requests
+queue. On `discuss@`, do **not** approve self-serve requests from strangers:
+membership account creation is the only sanctioned writer path (section 1),
+so `discard` (silent) or `reject` them and let members provisioning do the
+adding. List pending requests and act on one with an `action` of `accept`,
+`discard`, `reject`, or `defer`:
 
 ```bash
 # View pending subscription requests.
@@ -297,8 +307,8 @@ If the database drifts, restore these values. They are the operator-ratified
 > membership account creation is the ONLY writer path. Under `confirm`, any
 > anonymous reader of the public archive could self-subscribe as a writer
 > with nothing but an email confirmation. The 2026-07-04 value (`confirm`)
-> is superseded; restore `moderate`. Live PATCH + refusal-probe receipt ride
-> the attended writer-gate lanes below.
+> is superseded; restore `moderate`. Live PATCH + refusal-probe receipts must
+> ride the exact signed-main owner transaction described below.
 
 **`keyholders@latoolb.us`:**
 
@@ -322,40 +332,45 @@ If the database drifts, restore these values. They are the operator-ratified
 | `advertised` | `true` |
 | `admin_immed_notify` | `true` |
 
-### Writer-gate close + refusal probe (TIN-4268 attended lanes)
+### Writer-gate source carrier and activation hold (TIN-4268)
 
-The `subscription_policy` amendment above is applied to the live engine by an
-attended operator lane, not by `kubectl apply` (list settings live in
-Postgres — section 1). Both lanes require the dedicated list-admin
-kubeconfig (`GFTB_LIST_KUBECONFIG`, same contract as `just list-member-add`)
-and a clean, signed, current `main` checkout:
+`k8s/list/latoolb-us-production/configmap-discuss-policy-intent.yaml` is the
+machine-readable consumer target. It is inert: list settings live in Postgres,
+and no workload consumes the ConfigMap at this head. Do not add a local
+kubeconfig recipe, `pods/exec`, workflow dispatch, or direct REST fallback.
 
-```bash
-# One-time close (idempotent; refuses unexpected pre-states), then probes:
-GFTB_APPLY_CONFIRM=apply just list-discuss-writer-gate-close
+Activation is blocked until the already-ratified purpose-bound in-cluster
+projection Job exists and the v4 owner transaction applies it automatically
+from exact signed infra `main`. That transaction must project a dedicated
+Secret reference, PATCH only `discuss.latoolb.us`, accept only the expected
+`confirm` or already-converged `moderate` pre-state, and emit redacted
+plan/apply/readback/rollback receipts. The current `list-crs` workflow has no
+such Job or owner transaction and cannot authorize `pods/exec`. Until those
+prerequisites and the live receipts exist, TIN-4268 remains open.
 
-# Re-runnable refusal probe on its own (purpose-bounded mutation; parks then
-# discards one probe request):
-GFTB_APPLY_CONFIRM=apply just list-discuss-writer-gate-probe
-```
-
-The probe emulates the self-serve join exactly — a subscribe attempt with no
-owner pre-approval, which is all a self-serve flow can ever present — and
-passes only when:
+The probe exercises a stronger self-serve join — its reserved address is
+pre-verified and pre-confirmed, but it has no owner pre-approval — and passes
+only when:
 
 - the attempt parks for owner approval (HTTP `202`), instead of minting a
   member (`201` was the `confirm`-era hole);
+- the `202` response owns exactly one opaque request token on behalf of the
+  moderator (`token_owner=moderator`), and that token resolves to exactly one
+  matching subscription request;
 - membership readback for the probe address is absent;
-- the parked request is discarded cleanly (`discard` is silent — no mail to
-  the probe address; owners do get Mailman's ordinary
-  `admin_immed_notify` notice, the one expected system mail);
+- every membership or subscription request for the reserved probe address is
+  discarded, then both resources are read back absent; an interrupted or
+  failed probe retries that bounded cleanup without logging its token, and
+  fails visibly if absence cannot be proved (`discard` is silent — no mail to
+  the probe address; owners do get Mailman's ordinary `admin_immed_notify`
+  notice, the one expected system mail);
 - the anonymous archive deep link
   `https://lists.latoolb.us/hyperkitty/list/discuss@latoolb.us/` still
   returns `200` (read stays open to everyone).
 
-Record the two emitted `writer-gate.*` receipt lines on TIN-4268. No agent
-sends mail at any step. Rolling `subscription_policy` back to `confirm` is a
-settings change **against the ratified ruling** and needs a new dated
+Record the redacted close/readback/refusal/archive receipts on TIN-4268. No
+agent sends mail at any step. Rolling `subscription_policy` back to `confirm`
+is a settings change **against the ratified ruling** and needs a new dated
 operator ruling here first.
 
 ### Safety-critical settings
@@ -474,8 +489,9 @@ controller does not yet converge it automatically.
   access-request PII would be published. This is a hard stop.
 - **Do not rely on `kubectl port-forward` for REST.** It cannot reach the
   pod-IP-bound listener; use `kubectl exec` (section 2).
-- **Do not expect list settings in Git.** They live in Postgres; restore drift
-  from the section 5 baseline, not from `kubectl apply`.
+- **Do not mistake a Git target for live list state.** Settings live in
+  Postgres; reconcile drift from the section 5 baseline through the protected
+  exact-main owner transaction, not an operator-local PATCH or dispatch.
 
 ## 8. keyholders ⊆ discuss auto-add reconciler (TIN-3813 lane)
 

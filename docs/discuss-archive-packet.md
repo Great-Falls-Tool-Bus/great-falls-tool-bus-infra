@@ -302,9 +302,9 @@ ever rebuilt.
 2. ⛔ **[operator]** Land the `discuss@` list itself (TIN-2498) with
    `archive_policy=public`, `subscription_policy=confirm`, non-member action
    `hold`, `advertised=true` per `list-operations.md` §1. *(Historical value:
-   `subscription_policy` was amended to `moderate` on 2026-09-03, TIN-4268 —
-   on any rebuild use the current `list-operations.md` §5 baseline, not this
-   executed record.)*
+   the ratified `subscription_policy` target was amended to `moderate` on
+   2026-09-03 under TIN-4268. On any rebuild use the current
+   `list-operations.md` §5 target, not this executed record.)*
 3. ⛔ **[operator]** Confirm / set HyperKitty hardening §6 items 1–8 on the
    mailman-web tier (version ≥ 1.3.8; hide-private-lists; signup disabled;
    mbox-export off; robots/search rate-limit at edge; Django hygiene).

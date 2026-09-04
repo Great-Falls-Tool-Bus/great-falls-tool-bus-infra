@@ -10,12 +10,9 @@ they exist as **console-created zones on the house Cloudflare account**
   step 1)
 - manages `greatfallstoolbus.org` apex CNAME (CF-flattened) + `www`
   CNAME → `var.pages_host`, proxied — default is now the on-cluster
-  honey-ingress tunnel cname (site ADR 0010, executed 2026-07-06; see
-  `variables.tf`'s `pages_host` description). The variable's original
-  default, `greatfallstoolbus-org.pages.dev` (the ADR 0003 CF Pages
-  cutover, executed 2026-07-03, PR #15 — see "`pages_host` cutover"
-  below), is **historical**: that Pages project is deleted (ADR 0010
-  Amendment 2, TIN-2560), so the hostname no longer resolves.
+  honey-ingress tunnel CNAME. The variable keeps its old name only for state
+  and input compatibility; a Pages or GitHub Pages hostname is not admitted
+  as a deploy or rollback target.
 - gates the apex behind a Cloudflare Access application + allow policy
   (`access_allowed_emails` supplied from the protected edge environment; no
   personal allowlist addresses are committed) — packet row (g) REV-2
@@ -34,10 +31,10 @@ they exist as **console-created zones on the house Cloudflare account**
   honey-ingress Cloudflare Tunnel (proxied), gated behind
   `var.forms_dns_enabled` (default `true` after the 2026-07-05 route + smoke
   proof) — TIN-2420 Path B; see "`forms.latoolb.us` DNS enable sequence" below
-- stages the `lists.latoolb.us` public-archive ingress CNAME → the SAME
+- manages the live `lists.latoolb.us` public-archive ingress CNAME → the SAME
   shared honey-ingress Cloudflare Tunnel (proxied), gated behind
-  `var.archives_dns_enabled` (default `false`, fail-closed) — TIN-2528;
-  see "`lists.latoolb.us` archives DNS enable sequence" below
+  `var.archives_dns_enabled` (default `true`) — TIN-2528;
+  see "`lists.latoolb.us` archive ingress" below
 - manages the live Google Workspace SSO identity provider on the CF Access account
   (`cloudflare_zero_trust_access_identity_provider` type `google-apps`),
   gated behind `var.enable_google_sso` (code default `false`, live `edge`
@@ -62,32 +59,19 @@ EXACTLY these two zones, held as the protected-environment secret
 ([`secrets/README.md`](../../secrets/README.md)). No account id input:
 the account id the Access policy needs is read off the zone lookup.
 
-## `pages_host` cutover (ADR 0003 — EXECUTED 2026-07-03; HISTORICAL, see below)
+## Web origin
 
-> **Superseded 2026-07-06 by ADR 0010** (`docs/runbooks/oncluster-web-cutover.md`
-> P6): `var.pages_host`'s default moved from `greatfallstoolbus-org.pages.dev`
-> to the on-cluster honey-ingress tunnel cname. **Superseded again 2026-07-07
-> by ADR 0010 Amendment 2** (TIN-2560): the CF Pages project named below is
-> **deleted**, so the "rollback is a one-line flip" language two paragraphs
-> down no longer has a CF Pages target to flip to (a GH Pages rollback, if
-> ever needed, would first require re-standing up that publisher — it was
-> never deleted, only demoted, but has not been verified serving since this
-> section was written). The current rollback path is on-cluster and attended:
-> re-plan and re-apply the reviewed `web-release-*` chain with the previous
-> image digest (`docs/runbooks/oncluster-web-cutover.md` section S; the
-> `web-stack.yml` re-dispatch this note used to name was retired by TIN-3899).
+The apex and `www` targets are the shared honey-ingress tunnel CNAME held by
+`var.pages_host`. Cloudflare Access gates the hostnames and the tunnel routes
+allowed requests to the in-cluster `gftb-site` Service. The route itself is
+Cloudflare dashboard/API substrate state and is not declared by this stack.
 
-The apex + `www` targets are `var.pages_host`. The GH Pages → CF Pages
-flip was executed 2026-07-03: the CF Pages project exists with the
-`greatfallstoolbus.org` custom domain attached, and the cutover value
-`greatfallstoolbus-org.pages.dev` is committed as the variable default
-(PR #15) — apex + `www` serve from CF Pages behind the REV-2 Access
-gate. Full sequencing, token doctrine (account-scoped Pages:Edit token
-vs. the zone-scoped token), and the verify matrix:
-[`docs/runbooks/edge-token-and-zones.md`](../../docs/runbooks/edge-token-and-zones.md)
-step 5. Rollback is a one-line flip back to the GH Pages host
-(`great-falls-tool-bus.github.io`) via tfvars or `TF_VAR_pages_host` at
-apply time.
+Image promotion and rollback use the reviewed `web-release-*` saved-plan
+transaction in
+[`docs/runbooks/oncluster-web-cutover.md`](../../docs/runbooks/oncluster-web-cutover.md).
+Changing `pages_host` to a `pages.dev` or `github.io` value is explicitly not a
+rollback. Current edge-token custody and verification are documented in
+[`docs/runbooks/edge-token-and-zones.md`](../../docs/runbooks/edge-token-and-zones.md).
 
 ## `latoolb.us` mail DNS enable sequence (TIN-2379, D11 closed self-hosted)
 
@@ -140,7 +124,7 @@ were proven before the default flipped. Enable or rollback sequence:
    `workflow_dispatch action=apply` (dispatch-apply doctrine, D6) — no
    direct apply.
 
-## `lists.latoolb.us` archives DNS enable sequence (TIN-2528 — declare-only)
+## `lists.latoolb.us` archive ingress (TIN-2528 — live)
 
 The PUBLIC `discuss@latoolb.us` HyperKitty archive rides the shared
 honey-ingress Cloudflare Tunnel, fronted by a second Anubis PoW gate
@@ -151,30 +135,30 @@ the HyperKitty archive URL shape is already `https://lists.latoolb.us/
 hyperkitty/list/<list>@latoolb.us/` (TIN-2380) and one HyperKitty instance
 serves every list off that one host — see `docs/discuss-archive-packet.md`.
 
-Staged in `main.tf` gated behind `var.archives_dns_enabled` (default
-`false`, fail-closed — merging changes nothing until flipped).
+Declared in `main.tf` behind `var.archives_dns_enabled`, now default `true`.
+The stack, public-hostname tunnel route, privacy pre-flight, and DNS apply are
+complete; `.github/workflows/archive-stack.yml` records the same live posture.
 
 **This route has an extra HARD gate the forms route does not.** The same web
 tier also serves the PRIVATE `keyholders@` archive, so flipping this on
 without the privacy pre-flight would risk exposing private list content.
-Enable sequence:
+Continuous invariants:
 
-1. `latoolb.us` NS cutover to Cloudflare completes and the zone is live
-   (shared with the mail/forms enable sequences).
-2. The `k8s/archive/...` stack is applied and the honey-ingress tunnel has an
-   ingress route for `lists.latoolb.us` fronting `anubis-archive:8081`
-   (substrate/dashboard side).
-3. **PRIVACY PRE-FLIGHT PASSES** (operator-gated, read-only): `keyholders@`
+1. The `latoolb.us` Cloudflare zone and `lists.latoolb.us` proxied CNAME remain
+   live.
+2. The applied `k8s/archive/...` stack and honey-ingress public-hostname route
+   continue to front `anubis-archive:8081`.
+3. **PRIVACY PRE-FLIGHT REMAINS GREEN** (operator-gated, read-only): `keyholders@`
    `archive_policy=private|never`, HyperKitty is **>= 1.3.8** (the RSS-feed
    private-leak fix), and an anonymous probe confirms the private archive
    (HTML, RSS/Atom, permalinks, `/export/`, search) 403s while `discuss@`
    renders. Full procedure + command: `docs/discuss-archive-packet.md`.
-4. `var.archives_dns_enabled` flips to `true` in a follow-up change.
-5. PR-plan (`edge-plan.yml`) then `workflow_dispatch action=apply`
-   (dispatch-apply doctrine, D6) — no direct apply.
+4. `var.archives_dns_enabled` remains `true`; edge drift must not propose its
+   deletion.
 
-Rollback: flip `var.archives_dns_enabled` back to `false` (plan/apply) and
-remove the `lists.latoolb.us` tunnel public-hostname route dashboard-side.
+Recovery that disables the public archive is a separately reviewed change:
+plan `archives_dns_enabled=false`, apply it through the edge transaction, and
+remove the tunnel public-hostname route under its owning substrate authority.
 
 ## Google Workspace SSO steady-state contract (live; OTP retained)
 

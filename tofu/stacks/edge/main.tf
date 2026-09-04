@@ -7,8 +7,7 @@
 # Record surface (site repo tofu/dns-intent reconciled to TIN-2378):
 #   greatfallstoolbus.org  apex CNAME (CF-flattened) + www -> var.pages_host,
 #                          proxied (the honey-ingress tunnel / on-cluster web
-#                          Deployment since the ADR 0010 cutover, 2026-07-06;
-#                          CF Pages 2026-07-03..06 — see variables.tf)
+#                          static gftb-site Deployment)
 #   latoolb.us             root+www 301 redirect ruleset (variable target)
 # Mail DNS (MX/SPF/DMARC/DKIM) is managed below, gated behind
 # var.mail_dns_enabled (default true after D11 closed self-hosted and TIN-2379
@@ -37,10 +36,9 @@ data "cloudflare_zone" "alias" {
 
 # Apex CNAME: Cloudflare flattens apex CNAMEs automatically (RFC 1034
 # apex constraint is satisfied by CF's CNAME flattening), so the apex can
-# track the Pages host instead of pinning the 185.199.108-111.153 A set.
+# track the shared tunnel target instead of pinning an address set.
 # Proxied from day one: the Access gate (below) requires the apex orange-
-# clouded, and the proxy terminates TLS while the Pages custom-domain
-# certificate issues.
+# clouded, and the proxy terminates TLS before the tunnel origin.
 resource "cloudflare_dns_record" "web_apex" {
   zone_id = data.cloudflare_zone.web.zone_id
   name    = local.web_domain
@@ -78,10 +76,9 @@ resource "cloudflare_zero_trust_access_application" "web_apex" {
 }
 
 # www gets its own Access application sharing the apex allowlist policy.
-# CF Pages serves www.greatfallstoolbus.org as its own custom domain (no
-# implicit www->apex redirect like GitHub Pages did), so without this the
-# www hostname would be an ungated public surface during the REV-2 gated
-# phase. Additive: leaves the apex application untouched.
+# The tunnel serves www.greatfallstoolbus.org independently, so without this
+# application the www hostname would be an ungated public surface during the
+# gated phase. Additive: leaves the apex application untouched.
 resource "cloudflare_zero_trust_access_application" "web_www" {
   zone_id          = data.cloudflare_zone.web.zone_id
   name             = "greatfallstoolbus.org www gate (REV-2)"
@@ -414,7 +411,7 @@ resource "cloudflare_dns_record" "alias_forms" {
 }
 
 # --- lists.latoolb.us — public discuss@ archive ingress tunnel CNAME --------
-# (TIN-2528, declare-only design packet). Mirrors the forms.latoolb.us record
+# (TIN-2528). Mirrors the forms.latoolb.us record
 # above EXACTLY: a PROXIED CNAME to the SAME shared honey-ingress Cloudflare
 # Tunnel cname target, so the proxied edge answers and the tunnel carries the
 # request to the in-cluster anubis-archive PoW gate, which fronts the
@@ -428,13 +425,10 @@ resource "cloudflare_dns_record" "alias_forms" {
 # the host name reflects the whole lists engine, not a single archive. See
 # docs/discuss-archive-packet.md for the full rationale.
 #
-# FAIL-CLOSED: gated behind var.archives_dns_enabled, which DEFAULTS FALSE.
-# Merging this record changes NOTHING (no-op plan) until the flag is flipped
-# in a deliberate follow-up. Activation stays an operator-reviewable plan/apply
-# (dispatch-apply doctrine, D6), never a merge side effect — and, uniquely for
-# this route, it must NOT be flipped until the PRIVACY PRE-FLIGHT passes
-# (keyholders@ archive_policy=private|never AND HyperKitty enforces it for
-# anonymous users). Flip sequence: README.md "archives DNS enable sequence".
+# LIVE: var.archives_dns_enabled defaults true after the stack, tunnel route,
+# privacy pre-flight, and DNS apply completed. The private keyholders@ archive
+# must remain private|never and anonymous-denied. Recovery to false is an
+# operator-reviewed plan/apply; see README.md "lists.latoolb.us archive ingress".
 resource "cloudflare_dns_record" "alias_archives" {
   count = var.archives_dns_enabled ? 1 : 0
 

@@ -164,139 +164,114 @@ flowchart TD
     pfx --- rsp
 ```
 
-## 4. Bazel and GloriousFlywheel flow
+## 4. GloriousFlywheel v4 flow
 
-**Claim.** The public spoke's `ci.yml` is a thin wrapper over
-`tinyland-inc/ci-templates` `spoke-ci.yml`, pinned at `v2.9.0`, running on the
-`tinyland-nix` runner class (honey/sting pool). Bazel work goes through the
-`scripts/gloriousflywheel-bazel.sh` wrapper, which holds the endpoint authority
-and injects `--remote_cache` (and, only when executor mode is selected,
-`--remote_executor`) so `.bazelrc.flywheel` stays endpoint-free. Registries
-resolve `tinyland-inc/bazel-registry` first, then BCR. The shared cache is
-read-only on PRs (`--remote_upload_local_results=false`); the `gf-reapi-cell`
-executor is configured as a documented substrate fact but is opt-in and not
-wired into the primary lane, and cache-write publication is blocked pending
-TIN-1147.
-
-**Sources of truth.** Runner class and template pin:
-`greatfallstoolbus.org` `.github/workflows/ci.yml`
-(`uses: tinyland-inc/ci-templates/.github/workflows/spoke-ci.yml@v2.9.0`,
-`default_runner_class: tinyland-nix`, `flywheel_config: flywheel`,
-`cache_backed: true`). Registry chain and endpoint-free posture:
-`greatfallstoolbus.org` `.bazelrc` (two `--registry` lines, bazel-registry
-first) and `.bazelrc.flywheel` (`remote_upload_local_results=false`, TIN-1147
-invariant, `flywheel-executor` config separate and tag-gated). Wrapper
-authority: `greatfallstoolbus.org` `scripts/gloriousflywheel-bazel.sh` and
-`Justfile` `flywheel-*` recipes. Executor endpoint as documented-only fact:
-this repo's `README.md` ("Shared Bazel executor
-`grpc://gf-reapi-cell.gf-rbe.svc.cluster.local:8980`, documented substrate
-fact, NOT wired into the primary lane yet").
+**Target, not present-tense status.** GFTB owns immutable demand declarations;
+provider topology remains opaque. An application repository names an exact
+action through the immutable v4 template. The image-custodied client resolves
+its GFTB binding from the controller catalog and sends the action to the pooled
+REAPI/CAS fabric. ARC, when present, is only a thin GitHub edge. This repository
+does not yet carry the signed GFTB operands or an installed controller catalog,
+so the flow below is not live evidence.
 
 ```mermaid
-flowchart TD
-    ci["Spoke ci.yml"]
-    tmpl["ci-templates spoke-ci.yml@v2.9.0<br/>runs-on tinyland-nix (honey/sting)"]
-    wrapper["scripts/gloriousflywheel-bazel.sh<br/>endpoint authority<br/>injects --remote_cache / --remote_executor"]
-    rc[".bazelrc.flywheel<br/>endpoint-free<br/>upload_local_results=false"]
-    cache["GF shared Bazel cache<br/>read-only on PRs<br/>cache-write blocked TIN-1147"]
-    exec["gf-reapi-cell executor<br/>configured, opt-in<br/>NOT in primary lane"]
-    reg1["Registry 1<br/>tinyland-inc/bazel-registry"]
-    reg2["Registry 2<br/>BCR"]
+flowchart LR
+    app["application repo<br/>ActionPlan"]
+    template["immutable ci-templates v4"]
+    edge["thin GitHub edge"]
+    overlay["GFTB -infra<br/>signed demand + revocation"]
+    appinstall["GFTB GitHub App installation"]
+    controller["owner controller<br/>verified demand"]
+    supply["provider<br/>verified supply"]
+    catalog["immutable resolved binding catalog"]
+    client["image-custodied action client"]
+    reapi["pooled REAPI / CAS<br/>action scheduler"]
 
-    ci -->|"uses"| tmpl
-    tmpl -->|"bazel via"| wrapper
-    wrapper -->|"reads"| rc
-    wrapper -->|"--remote_cache"| cache
-    wrapper -.->|"--remote_executor (opt-in)"| exec
-    wrapper -->|"resolve first"| reg1
-    reg1 -->|"fallback"| reg2
+    app --> template --> edge --> client
+    overlay --> controller
+    appinstall --> controller
+    controller --> catalog
+    supply --> catalog
+    catalog --> client --> reapi
 ```
+
+There is no arrow from provider supply back into the GFTB repository and no
+consumer registration row in GF core. Missing authority stops before execution;
+it never selects a local, cache-only, hosted, or direct-endpoint path.
 
 ## 5. Public -> cluster HTTP edge path
 
 **Claim.** Every inbound HTTP request for the GFTB properties enters at the
-Cloudflare edge and takes one of three paths, none of which serves web content
-from the cluster. (a) `greatfallstoolbus.org` apex and `www` are proxied CNAMEs
-to `var.pages_host` (default `greatfallstoolbus-org.pages.dev`); the CF edge
-terminates TLS, then Cloudflare Access gates the surface via three self-hosted
-Access applications — apex, www, and an **account-level** app covering
-`greatfallstoolbus-org.pages.dev` + `*.greatfallstoolbus-org.pages.dev` — all
-sharing one allowlist policy (`var.access_allowed_emails`, supplied from
-protected operator custody); an allowed request is served from the CF Pages
-origin, which is itself Access-gated by that account-level app. (b)
-`forms.latoolb.us` is a proxied
-CNAME to the shared honey-ingress cloudflared tunnel
-(`da3ffda2-68ee-46d1-aa55-ec8dae2bd471.cfargotunnel.com`, gated
-`var.forms_dns_enabled`); the tunnel's public-hostname route
-(`forms.latoolb.us -> anubis:8081`) is Cloudflare-dashboard/token-managed and is
-**not** in this repo, so it is drawn as an explicit boundary. Past it the
-non-host-networked `cloudflared` pods (namespace `cloudflared`) reach the
-in-cluster form chain admitted by the `latoolb-us-production` NetworkPolicy:
-`anubis` PoW gate `:8081` -> `form-handler` `:8080` -> `mailman-core` `:8024`
-LMTP (which then joins the mail flow, Diagram 1). (c) `latoolb.us` apex and
-`www` are a proxied `192.0.2.1` (RFC 5737 documentation IP the proxy answers
-in front of) plus a 301 redirect ruleset to `var.alias_redirect_target`. No
-on-cluster web serving exists.
+Cloudflare edge and takes one of four paths. (a) `greatfallstoolbus.org` apex
+and `www` are proxied CNAMEs to the shared honey-ingress tunnel target. The CF
+edge terminates TLS, the apex and `www` Access applications share the protected
+allowlist, and allowed requests cross the tunnel to the in-cluster `gftb-site`
+Service and static Caddy pods in `greatfallstoolbus-org-production`. (b)
+`forms.latoolb.us` uses the same tunnel target, then reaches the in-cluster
+form chain: `anubis` PoW gate `:8081` -> `form-handler` `:8080` ->
+`mailman-core` `:8024` LMTP. (c) Live `lists.latoolb.us` uses the shared tunnel
+to reach `anubis-archive:8081`, then the HyperKitty web tier serving the public
+`discuss@` archive while the private `keyholders@` archive remains denied to
+anonymous clients. (d) `latoolb.us` apex and `www` are a proxied `192.0.2.1`
+documentation address plus a 301 redirect ruleset to
+`var.alias_redirect_target`.
 
 **Sources of truth.** Web edge + Access: `tofu/stacks/edge/main.tf`
-(`web_apex`/`web_www` proxied CNAME -> `var.pages_host` at lines 42-58; the
-three `cloudflare_zero_trust_access_application` — apex 65-76, www 83-94,
-account-level `pages_dev` with `self_hosted_domains` = `greatfallstoolbus-org.pages.dev`
-+ `*.greatfallstoolbus-org.pages.dev` at 103-114 — all binding the single
-`cloudflare_zero_trust_access_policy.web_apex_allow` at 122-134) and
-`tofu/stacks/edge/variables.tf` (`pages_host` default `greatfallstoolbus-org.pages.dev`
-26-41; `access_allowed_emails` required operator input 15-26). Forms
-CNAME: `tofu/stacks/edge/main.tf` `alias_forms` proxied CNAME ->
-`da3ffda2-68ee-46d1-aa55-ec8dae2bd471.cfargotunnel.com`, `count = var.forms_dns_enabled`
-(245-254); var at `variables.tf` 95-113. Alias redirect: `tofu/stacks/edge/main.tf`
-`alias_apex` A `192.0.2.1` proxied (142-149), `alias_www` (151-158),
-`cloudflare_ruleset.alias_redirect` 301 -> `var.alias_redirect_target` (256-277);
-var at `variables.tf` 115-128. In-cluster form chain:
-`k8s/form/latoolb-us-production/networkpolicy.yaml` (anubis ingress `8081` from
-`namespaceSelector kubernetes.io/metadata.name: cloudflared` at 42-48; anubis
-egress `8080` to form-handler at 57-63; form-handler ingress `8080` from anubis
-at 81-87; form-handler egress `8024` LMTP to mailman-core at 103-109; the
-TUNNEL-SOURCE FINDING comment 7-25 records cloudflared as a non-host-networked
-Deployment with live pod IPs `10.244.0.90` (honey) / `10.244.2.133` (sting)).
-Tunnel boundary: `k8s/form/latoolb-us-production/service-anubis.yaml` (ClusterIP
-`8081`; comment 1-6 — the tunnel public-hostname -> `Service:8081` route lives in
-the Cloudflare zero-trust dashboard/API, token-managed, NOT in this repo).
+declares the proxied apex and `www` CNAMEs, their Access applications, the
+independent dev/preview application, forms CNAME, and alias redirect.
+`tofu/stacks/edge/variables.tf` binds the compatibility-named `pages_host`
+default to the shared tunnel CNAME. `k8s/web/greatfallstoolbus-org-production/`
+declares the web Deployment, Service, and NetworkPolicies.
+`k8s/form/latoolb-us-production/` declares the form chain, and
+`k8s/archive/latoolb-us-production/` declares the archive gate. Public-hostname
+routes and the cloudflared deployment are substrate state outside this overlay.
 
 ```mermaid
 flowchart TD
     client["Public HTTP client"]
 
-    subgraph cf["Cloudflare edge — CONFIG-BACKED (tofu/stacks/edge)"]
-        webdns["greatfallstoolbus.org apex + www<br/>PROXIED CNAME to var.pages_host<br/>default greatfallstoolbus-org.pages.dev"]
-        proxy["CF proxy: terminate TLS + orange-cloud<br/>proxied=true"]
-        access["CF Access gate REV-2<br/>3 self_hosted apps: apex / www / account-level *.pages.dev<br/>shared policy var.access_allowed_emails<br/>operator allowlist from protected env"]
-        formsdns["forms.latoolb.us<br/>PROXIED CNAME to cfargotunnel<br/>da3ffda2-68ee-46d1-aa55-ec8dae2bd471.cfargotunnel.com<br/>gated var.forms_dns_enabled"]
+    subgraph cf["Cloudflare edge (tofu/stacks/edge)"]
+        webdns["greatfallstoolbus.org apex + www<br/>proxied CNAME to shared tunnel"]
+        proxy["CF proxy: TLS termination"]
+        access["apex + www Access apps<br/>shared protected allowlist"]
+        formsdns["forms.latoolb.us<br/>proxied CNAME to shared tunnel"]
+        listsdns["lists.latoolb.us<br/>live proxied CNAME to shared tunnel"]
         aliasdns["latoolb.us apex + www<br/>PROXIED A 192.0.2.1 (RFC 5737)<br/>301 ruleset to var.alias_redirect_target"]
     end
 
-    pages["CF Pages origin<br/>greatfallstoolbus-org.pages.dev<br/>also Access-gated (account-level app)<br/>build/deploy in site repo, not this overlay"]
+    tunnel["shared honey-ingress tunnel<br/>public-hostname routes outside this repo"]
+    cfd["cloudflared pods<br/>namespace cloudflared"]
 
-    tunnel["Shared honey-ingress cloudflared tunnel<br/>public-hostname route forms.latoolb.us to anubis:8081<br/>SUBSTRATE-REFERENCED: CF dashboard/token-managed, NOT in repo"]
+    subgraph webcluster["greatfallstoolbus-org-production"]
+        websvc["Service :80"]
+        web["gftb-site static Caddy pods :3000"]
+    end
 
-    cfd["cloudflared pods (ns cloudflared)<br/>non-host-networked<br/>SUBSTRATE-REFERENCED deploy<br/>pod IPs 10.244.0.90 / 10.244.2.133 LIVE-OBSERVED-ONLY"]
-
-    subgraph cluster["honey cluster: latoolb-us-production — CONFIG-BACKED (k8s/form/networkpolicy.yaml)"]
+    subgraph formcluster["latoolb-us-production"]
         anubis["anubis PoW gate :8081"]
         fh["form-handler :8080"]
         mmc["mailman-core :8024 LMTP<br/>joins mail flow — see Diagram 1"]
+        anubisarchive["anubis-archive PoW gate :8081"]
+        hyperkitty["HyperKitty web tier<br/>public discuss@ / private keyholders@"]
     end
 
     client -->|"GET greatfallstoolbus.org / www"| webdns
     webdns -->|"resolve, proxied"| proxy
     proxy --> access
-    access -->|"allow -> serve"| pages
+    access -->|"allow"| tunnel
+    tunnel -.->|"web public-hostname route"| cfd
+    cfd --> websvc --> web
 
     client -->|"POST forms.latoolb.us"| formsdns
     formsdns -->|"resolve, proxied"| tunnel
-    tunnel -.->|"tunnel route (boundary)"| cfd
-    cfd -->|"ingress :8081 from ns cloudflared"| anubis
+    cfd -->|"forms route :8081"| anubis
     anubis -->|"egress :8080"| fh
     fh -->|"egress :8024 LMTP"| mmc
+
+    client -->|"GET lists.latoolb.us"| listsdns
+    listsdns -->|"resolve, proxied"| tunnel
+    cfd -->|"archive route :8081"| anubisarchive
+    anubisarchive --> hyperkitty
 
     client -->|"GET latoolb.us / www"| aliasdns
     aliasdns -.->|"301 Location: var.alias_redirect_target"| client
@@ -304,14 +279,9 @@ flowchart TD
 
 **Open / not-in-config.**
 
-- The tunnel public-hostname ingress map (`forms.latoolb.us -> anubis:8081`)
-  is Cloudflare zero-trust dashboard/API state, token-managed; not in this repo
-  or any ConfigMap (`service-anubis.yaml` comment). Drawn as the dashed boundary.
-- `cloudflared` pod IPs (`10.244.0.90` honey / `10.244.2.133` sting) are
-  LIVE-OBSERVED-ONLY (2026-07-04 read-only kubectl); not pinned in config — the
-  netpol admits by `namespaceSelector`, not ipBlock, on this leg.
-- The CF Pages origin's build/deploy config lives in the site repo
-  (`greatfallstoolbus.org`), not this overlay; this stack owns only the CNAME
-  target and the Access gating.
-- `var.forms_dns_enabled` default is `true` in `variables.tf` (the forms CNAME
-  is live after the 2026-07-05 route + smoke proof).
+- The tunnel public-hostname maps for apex, `www`, forms, and lists are
+  Cloudflare-dashboard/API substrate state, not repository declarations.
+- The cloudflared Deployment and placement are substrate-owned. NetworkPolicy
+  admits its namespace label rather than live pod IPs.
+- Live image, rollout, and externally served source equality are proved by the
+  protected web release observer; they are not inferred from this diagram.

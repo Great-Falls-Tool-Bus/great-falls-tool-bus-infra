@@ -14,6 +14,7 @@ dir="${1:?usage: validate-list-stack.sh <manifest-dir>}"
 account_file="${dir}/mailaccount-lists-bounces.yaml"
 core_svc_file="${dir}/service-mailman-core.yaml"
 cfg_file="${dir}/configmap-mailman.yaml"
+discuss_policy_file="${dir}/configmap-discuss-policy-intent.yaml"
 pvcs_file="${dir}/pvcs.yaml"
 kustomization_file="${dir}/kustomization.yaml"
 core_deploy="${dir}/deployment-mailman-core.yaml"
@@ -145,6 +146,53 @@ assert_rendered_submission_contract() {
   done
 }
 
+assert_rendered_discuss_policy_intent() {
+  local rendered="$1"
+  local context="$2"
+  local selected_dir
+  local policy_doc
+
+  selected_dir="$(mktemp -d "${contract_tmpdir}/policy-selection.XXXXXX")"
+  policy_doc="${selected_dir}/discuss-policy.yaml"
+  select_rendered_doc \
+    "${rendered}" \
+    "v1" \
+    "ConfigMap" \
+    "discuss-list-policy-intent" \
+    "latoolb-us-production" \
+    "${policy_doc}" \
+    "${context}: discuss policy selector"
+
+  assert_eq \
+    "$(field '.metadata.annotations["greatfallstoolbus.org/authority"]' "${policy_doc}")" \
+    "TIN-4268" \
+    "${context}: authority"
+  assert_eq \
+    "$(field '.data.list_id' "${policy_doc}")" \
+    "discuss.latoolb.us" \
+    "${context}: list identity"
+  assert_eq \
+    "$(field '.data.archive_policy' "${policy_doc}")" \
+    "public" \
+    "${context}: anonymous archive-read policy"
+  assert_eq \
+    "$(field '.data.subscription_policy' "${policy_doc}")" \
+    "moderate" \
+    "${context}: self-subscription writer gate"
+  assert_eq \
+    "$(field '.data.default_nonmember_action' "${policy_doc}")" \
+    "hold" \
+    "${context}: non-member post policy"
+  assert_eq \
+    "$(field '.data.advertised' "${policy_doc}")" \
+    "true" \
+    "${context}: advertised list policy"
+  assert_eq \
+    "$(field '.data.writer_admission' "${policy_doc}")" \
+    "active-member-provisioning-only" \
+    "${context}: writer admission"
+}
+
 expect_rendered_submission_contract_rejection() {
   local rendered="$1"
   local case_name="$2"
@@ -170,6 +218,7 @@ command -v kubectl >/dev/null 2>&1 || fail "kubectl is required for kubectl kust
 require_file "${account_file}"
 require_file "${core_svc_file}"
 require_file "${cfg_file}"
+require_file "${discuss_policy_file}"
 require_file "${pvcs_file}"
 require_file "${kustomization_file}"
 require_file "${core_deploy}"
@@ -214,6 +263,7 @@ trap cleanup_contract_tmpdir EXIT
 rendered_stack="${contract_tmpdir}/rendered.yaml"
 kubectl kustomize "${dir}" >"${rendered_stack}"
 assert_rendered_submission_contract "${rendered_stack}" "list stack"
+assert_rendered_discuss_policy_intent "${rendered_stack}" "list stack"
 
 # Bounded poison coverage for the three render-time bypass classes this guard
 # closes. These mutate only temporary decoded fixtures, never source manifests.

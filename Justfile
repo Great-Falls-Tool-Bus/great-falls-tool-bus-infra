@@ -103,7 +103,7 @@ core-checkout-selftest:
 # TIN-3902 runner-group admission contract. config/organization.yaml declares
 # the GitHub-side roster and the ARC tfvars binds the scale sets to it; nothing
 # else holds the two together, because the GloriousFlywheel arc-runners module
-# never reads the roster and the taxonomy validator only parses runner labels.
+# never reads the roster and the taxonomy validator does not own that roster.
 runner-group-contract:
     python3 -B scripts/validate-runner-group-contract.py
 
@@ -220,7 +220,7 @@ arc-app-secret-apply: _arc-app-secret-inputs _reviewed-clean-main _reviewed-impl
 taxonomy:
     python3 scripts/validate-overlay-runner-taxonomy.py {{ arc_tfvars }}
 
-# Self-test the overlay taxonomy guard (incl. the RBE cache/executor wiring rule).
+# Self-test the bounded legacy ARC registration/label continuity contract.
 taxonomy-selftest:
     bash scripts/test-overlay-runner-taxonomy.sh
 
@@ -236,41 +236,6 @@ substrate-boundary:
 
 substrate-boundary-selftest:
     python3 scripts/validate-substrate-boundary.py --self-test
-
-# Verify a registered RBE/image consumer against the three live realities GF-core
-# CI cannot see (overlay tfvars anchor + RBE wiring, consumer workflow runs-on,
-# live Helm-managed runner), each reusing an already-built guard. Read-only.
-flywheel-enroll-verify repo="Great-Falls-Tool-Bus/great-falls-tool-bus.github.io":
-    GF_CORE_PATH="{{ gf_core }}" bash scripts/flywheel-enroll-verify.sh "{{ repo }}"
-
-# Read-only enrollment orchestrator: GF-core registry static check -> live verify
-# -> operator-gated provisioning handoff. Never mutates the cluster (mirrors
-# arc-enrollment-plan: sequence read-only verbs, then hand off to the operator).
-flywheel-enroll repo="Great-Falls-Tool-Bus/great-falls-tool-bus.github.io":
-    @python3 "{{ gf_core }}/scripts/validate-consumer-registry.py" --self-test
-    @GF_CORE_PATH="{{ gf_core }}" bash scripts/flywheel-enroll-verify.sh "{{ repo }}"
-    @echo ""
-    @echo "Runner provisioning is operator-gated. To provision/update the scale set:"
-    @echo "  GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-enrollment-plan"
-    @echo "  just arc-plan-show         # review the plan (expect no unexpected destroys)"
-    @echo "  just arc-plan-scope-check  # exact capacity/cutover/rollback plan only"
-    @echo "  GFTB_APPLY_CONFIRM=apply GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-apply"
-    @echo "  GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-capacity-readback"
-    @echo "This umbrella does NOT mutate the cluster."
-
-# GloriousFlywheel org-tenancy cache-backed Bazel proof (TIN-2364 pre-soak
-# surface). Declare-only + INERT until the operator flips
-# runtime_grants_enabled:true for org-great-falls-tool-bus and rolls the
-# gf-reapi cell + exchange onto the org-grammar image. Exchanges this repo's
-# GitHub OIDC identity for a gf-reapi-cell profile and runs a cache-backed,
-# READ-ONLY Bazel round-trip routed to remote_instance_name=org-great-falls-tool-bus
-# against the hermetic bazel/flywheel-proof/ genrule. Endpoint authority is
-# fleet-runtime env (BAZEL_REMOTE_CACHE, GF_REAPI_TOKEN_EXCHANGE_ENDPOINT); this
-# recipe bakes none and never hard-fails when they are absent. NOT part of
-# `check` (it needs the on-cluster cache substrate).
-flywheel-cache-proof:
-    @bash scripts/remote-only-guard.sh flywheel-cache-proof
-    GFW_EXPECTED_INSTANCE_NAME=org-great-falls-tool-bus bash scripts/flywheel-cache-proof.sh
 
 arc-fmt-check:
     #!/usr/bin/env bash
@@ -1499,26 +1464,119 @@ arc-enrollment-plan: enrollment-preflight arc-plan
 # The remote readback prevents a stale local origin/main ref from becoming apply
 # authority.
 _reviewed-clean-main:
-    #!/usr/bin/env bash
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
     set -euo pipefail
+    # The developer/CI toolchain PATH is an explicit input; privileged bash
+    # refuses imported functions and startup files, while Git config below is
+    # isolated from system/global state before repository state is inspected.
+    export LC_ALL=C
+    for name in GIT_CONFIG GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_SYSTEM GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_DIR GIT_WORK_TREE GIT_IMPLICIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_QUARANTINE_PATH GIT_REPLACE_REF_BASE GIT_NO_REPLACE_OBJECTS GIT_NAMESPACE GIT_REFERENCE_BACKEND GIT_SHALLOW_FILE GIT_ATTR_SOURCE GIT_ATTR_NOSYSTEM GIT_OPTIONAL_LOCKS GIT_EXEC_PATH GIT_SSH_COMMAND GIT_ASKPASS; do
+      [[ -z "${!name:-}" ]] || { echo "Guarded ARC operation refuses ambient ${name}" >&2; exit 2; }
+    done
+    export GIT_NO_REPLACE_OBJECTS=1
+    export GIT_ATTR_NOSYSTEM=1
+    export GIT_OPTIONAL_LOCKS=0
+    export GIT_CONFIG_NOSYSTEM=1
+    export GIT_CONFIG_GLOBAL=/dev/null
+    set +e
+    scoped_config="$(git config --show-scope --name-only --get-regexp '.*' 2>/dev/null)"
+    config_status=$?
+    set -e
+    case "${config_status}" in
+      0|1) ;;
+      *) echo "Guarded ARC operation could not inspect repository Git configuration" >&2; exit 2 ;;
+    esac
+    set +e
+    awk '
+      {
+        scope = tolower($1)
+        name = tolower($2)
+        if ((scope == "local" || scope == "worktree") &&
+            (name ~ /^url\..*\.insteadof$/ ||
+             name == "gpg.program" ||
+             name ~ /^gpg\..*\.program$/ ||
+             name == "core.sshcommand" ||
+             name == "core.worktree" ||
+             name == "core.fsmonitor" ||
+             name == "core.excludesfile" ||
+             name == "core.attributesfile" ||
+             name == "attr.tree" ||
+             name == "core.trustctime" ||
+             name == "core.checkstat" ||
+             name == "core.ignorestat" ||
+             name == "extensions.refstorage" ||
+             name ~ /^filter\./ ||
+             name == "status.showuntrackedfiles" ||
+             name ~ /^include\./ ||
+             name ~ /^includeif\./ ||
+             name ~ /^http\./)) {
+          found = 1
+        }
+      }
+      END { exit(found ? 0 : 1) }
+    ' <<<"${scoped_config}"
+    scoped_status=$?
+    set -e
+    case "${scoped_status}" in
+      0) echo "Guarded ARC operation refuses local/worktree Git configuration that can redirect repository, remote, TLS, proxy, status, or signature verification" >&2; exit 2 ;;
+      1) ;;
+      *) echo "Guarded ARC operation could not evaluate repository Git configuration" >&2; exit 2 ;;
+    esac
+    for info_name in exclude attributes; do
+      set +e
+      info_path="$(git rev-parse --path-format=absolute --git-path "info/${info_name}" 2>/dev/null)"
+      info_status=$?
+      set -e
+      [[ "${info_status}" == "0" && "${info_path}" == /* ]] || { echo "Guarded ARC operation could not resolve repository-local Git metadata" >&2; exit 2; }
+      if [[ -e "${info_path}" || -L "${info_path}" ]]; then
+        [[ -f "${info_path}" && ! -L "${info_path}" ]] || { echo "Guarded ARC operation refuses non-regular repository-local Git metadata" >&2; exit 2; }
+        set +e
+        if [[ "${info_name}" == "exclude" ]]; then
+          awk '!/^#/ && !/^[[:space:]]*$/ { found = 1 } END { exit(found ? 0 : 1) }' "${info_path}"
+        else
+          awk '!/^[[:space:]]*(#|$)/ { found = 1 } END { exit(found ? 0 : 1) }' "${info_path}"
+        fi
+        info_status=$?
+        set -e
+        case "${info_status}" in
+          0) echo "Guarded ARC operation refuses active repository-local Git ignore or attribute rules" >&2; exit 2 ;;
+          1) ;;
+          *) echo "Guarded ARC operation could not inspect repository-local Git metadata" >&2; exit 2 ;;
+        esac
+      fi
+    done
     [[ "$(git branch --show-current)" == "main" ]] || { echo "Guarded ARC operation requires the main branch" >&2; exit 2; }
-    [[ -z "$(git status --porcelain)" ]] || { echo "Guarded ARC operation requires a clean worktree" >&2; exit 2; }
+    set +e
+    worktree_status="$(git -c core.excludesFile=/dev/null -c core.attributesFile=/dev/null -c core.untrackedCache=false status --porcelain --untracked-files=all 2>/dev/null)"
+    worktree_status_rc=$?
+    set -e
+    [[ "${worktree_status_rc}" == "0" ]] || { echo "Guarded ARC operation could not inspect worktree status" >&2; exit 2; }
+    [[ -z "${worktree_status}" ]] || { echo "Guarded ARC operation requires a clean worktree" >&2; exit 2; }
     index_flags="$(git ls-files -v | awk '$1 != "H"')"
     [[ -z "${index_flags}" ]] || { echo "Guarded ARC operation refuses assume-unchanged, skip-worktree, or non-cached index flags: ${index_flags}" >&2; exit 2; }
     canonical_remote="https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git"
     origin_url="$(git remote get-url origin)"
     case "${origin_url}" in
       https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra|https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git|git@github.com:Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git) ;;
-      *) echo "Guarded ARC operation origin is not the canonical GFTB infra repository: ${origin_url}" >&2; exit 2 ;;
+      *) echo "Guarded ARC operation origin is not the canonical GFTB infra repository" >&2; exit 2 ;;
     esac
     git show-ref --verify --quiet refs/remotes/origin/main || { echo "Fetch canonical origin/main before the guarded ARC operation" >&2; exit 2; }
     head_sha="$(git rev-parse HEAD)"
     origin_sha="$(git rev-parse origin/main)"
     [[ "${head_sha}" == "${origin_sha}" ]] || { echo "Guarded ARC operation HEAD ${head_sha} is not origin/main ${origin_sha}" >&2; exit 2; }
-    remote_sha="$(git ls-remote --exit-code "${canonical_remote}" refs/heads/main | awk 'NR == 1 { print $1 }')"
+    remote_sha="$(
+      env -i \
+        PATH="${PATH}" \
+        HOME=/ \
+        GIT_CONFIG_NOSYSTEM=1 \
+        GIT_CONFIG_GLOBAL=/dev/null \
+        GIT_NO_REPLACE_OBJECTS=1 \
+        git -C / ls-remote --exit-code "${canonical_remote}" refs/heads/main |
+        awk 'NR == 1 { print $1 }'
+    )"
     [[ "${remote_sha}" =~ ^[0-9a-f]{40}$ ]] || { echo "Could not resolve the current remote main SHA" >&2; exit 2; }
     [[ "${head_sha}" == "${remote_sha}" ]] || { echo "Guarded ARC operation HEAD ${head_sha} is not current remote main ${remote_sha}" >&2; exit 2; }
-    git verify-commit "${head_sha}" >/dev/null
+    git -c gpg.format=openpgp -c gpg.program=gpg -c gpg.openpgp.program=gpg verify-commit "${head_sha}" >/dev/null
     echo "reviewed infra carrier: ${head_sha}"
 
 # Enrollment and GitHub App Secret materialization use the implementation-role
@@ -1804,6 +1862,7 @@ _arc-plan-input-preflight: _reviewed-clean-main _reviewed-arc-core _arc-backend-
     test "${target_uid}" = "$(tr -d '\n' < .tofu-plans/arc-runners.target-uid)" || { echo "ARC plan was created for a different target cluster/release" >&2; exit 2; }
 
 _operator-apply-confirm:
+    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
     [[ "${GFTB_APPLY_CONFIRM:-}" == "apply" ]] || { echo "Set GFTB_APPLY_CONFIRM=apply for this attended mutation" >&2; exit 2; }
 
 _arc-exclusive-confirm:
@@ -2082,151 +2141,6 @@ list-member-add: _list-member-add-inputs _reviewed-clean-main _operator-apply-co
     test "$(classify_membership <<<"${after_json}")" = "present" || { echo "Membership readback did not converge." >&2; exit 2; }
     echo "Selected list membership added and read back."
 
-# --- discuss@ writer-gate close: subscription_policy=moderate (TIN-4268) ----
-# Ratified 2026-09-01 operator ruling (platform spec
-# docs/spec/discuss-board-lifecycle-2026-09-01.md in greatfallstoolbus.org):
-# anyone READS the discuss board; only MEMBERS write; membership account
-# creation is the ONLY writer path. subscription_policy=confirm let any
-# anonymous archive reader self-subscribe as a writer, so the ratified
-# baseline for discuss@ is now `moderate` (docs/runbooks/list-operations.md
-# section 5, amended 2026-09-03). These attended lanes PATCH the live engine
-# to that baseline and emit the refusal-probe receipt TIN-4268 requires.
-# No agent-sent mail at any step: the probe is admin REST only; Mailman's own
-# owner notification for the parked probe request is the one expected system
-# mail, and the parked request is discarded (silent — discard sends nothing
-# to the probe address).
-
-_list-discuss-writer-gate-inputs:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    : "${GFTB_LIST_KUBECONFIG:?Set GFTB_LIST_KUBECONFIG to the dedicated namespace list-admin kubeconfig}"
-    python3 -I - "${GFTB_LIST_KUBECONFIG}" "$(git rev-parse --show-toplevel)" <<'PY'
-    import os
-    import stat
-    import sys
-    from pathlib import Path
-
-    path = Path(sys.argv[1]).expanduser().resolve(strict=True)
-    repo = Path(sys.argv[2]).resolve(strict=True)
-    try:
-        path.relative_to(repo)
-    except ValueError:
-        pass
-    else:
-        raise SystemExit("GFTB_LIST_KUBECONFIG must remain outside the public repository")
-    metadata = path.stat()
-    if not path.is_file() or metadata.st_uid != os.getuid():
-        raise SystemExit("GFTB_LIST_KUBECONFIG must be a regular file owned by the operator")
-    if stat.S_IMODE(metadata.st_mode) != 0o600:
-        raise SystemExit("GFTB_LIST_KUBECONFIG must have mode 0600")
-    PY
-
-# Close the discuss@ writer hole: move subscription_policy to the ratified
-# `moderate` baseline, read it back, then run the refusal probe in the same
-# attended sitting. Idempotent: an already-moderate list is a no-op patch and
-# still gets probed. Any pre-state other than confirm/moderate stops for
-# operator review instead of overwriting an unknown ruling.
-list-discuss-writer-gate-close: _list-discuss-writer-gate-inputs _reviewed-clean-main _operator-apply-confirm
-    #!/usr/bin/env bash
-    set -euo pipefail
-    namespace="latoolb-us-production"
-    pod_json="$(kubectl --kubeconfig "${GFTB_LIST_KUBECONFIG}" --namespace "${namespace}" get pods -l app.kubernetes.io/name=mailman-core -o json)"
-    core_pod="$(jq -er '[.items[] | select(.metadata.deletionTimestamp == null)] as $active | if (($active | length) == 1 and $active[0].status.phase == "Running" and any($active[0].status.conditions[]?; .type == "Ready" and .status == "True")) then $active[0].metadata.name else error("expected exactly one active Ready mailman-core pod") end' <<<"${pod_json}")"
-    read_policy() {
-      kubectl --kubeconfig "${GFTB_LIST_KUBECONFIG}" --namespace "${namespace}" exec -i "${core_pod}" --container mailman-core -- sh -eu -c '
-        curl --fail --silent --show-error \
-          --user "restadmin:${MAILMAN_REST_PASSWORD}" \
-          "http://$(hostname -i):8001/3.1/lists/discuss.latoolb.us/config/subscription_policy"
-      ' | jq -er '.subscription_policy'
-    }
-    before="$(read_policy)"
-    if [[ "${before}" == "moderate" ]]; then
-      echo "writer-gate.noop list=discuss.latoolb.us subscription_policy already moderate"
-    else
-      [[ "${before}" == "confirm" ]] || { echo "Refusing to overwrite unexpected discuss@ subscription_policy pre-state: ${before}" >&2; exit 2; }
-      status="$(kubectl --kubeconfig "${GFTB_LIST_KUBECONFIG}" --namespace "${namespace}" exec -i "${core_pod}" --container mailman-core -- sh -eu -c '
-        curl --silent --show-error --output /dev/null --write-out "%{http_code}" \
-          --user "restadmin:${MAILMAN_REST_PASSWORD}" --request PATCH \
-          --data-urlencode "subscription_policy=moderate" \
-          "http://$(hostname -i):8001/3.1/lists/discuss.latoolb.us/config"
-      ')"
-      test "${status}" = "204" || { echo "subscription_policy PATCH returned HTTP ${status}." >&2; exit 2; }
-      after="$(read_policy)"
-      test "${after}" = "moderate" || { echo "subscription_policy readback did not converge: ${after}" >&2; exit 2; }
-      echo "writer-gate.closed list=discuss.latoolb.us subscription_policy=${before}->moderate"
-    fi
-    just list-discuss-writer-gate-probe
-
-# Refusal-probe receipt (TIN-4268 acceptance): an anonymous/self-serve
-# subscription attempt on discuss@ must be REFUSED (parked for owner
-# approval, never a membership), while anonymous archive read stays open.
-# The probe emulates the self-serve join exactly — a subscribe with no owner
-# pre-approval — because self-serve flows can never pre-approve themselves.
-# Under the old `confirm` policy this identical call minted a member (HTTP
-# 201, the hole); under `moderate` it parks (HTTP 202). The parked request is
-# then discarded (no mail to the probe address). Record the emitted receipt
-# lines on TIN-4268.
-list-discuss-writer-gate-probe: _list-discuss-writer-gate-inputs _reviewed-clean-main _operator-apply-confirm
-    #!/usr/bin/env bash
-    set -euo pipefail
-    namespace="latoolb-us-production"
-    probe_subscriber="writer-gate-probe@latoolb.us"
-    archive_deep_link="https://lists.latoolb.us/hyperkitty/list/discuss@latoolb.us/"
-    pod_json="$(kubectl --kubeconfig "${GFTB_LIST_KUBECONFIG}" --namespace "${namespace}" get pods -l app.kubernetes.io/name=mailman-core -o json)"
-    core_pod="$(jq -er '[.items[] | select(.metadata.deletionTimestamp == null)] as $active | if (($active | length) == 1 and $active[0].status.phase == "Running" and any($active[0].status.conditions[]?; .type == "Ready" and .status == "True")) then $active[0].metadata.name else error("expected exactly one active Ready mailman-core pod") end' <<<"${pod_json}")"
-    policy="$(kubectl --kubeconfig "${GFTB_LIST_KUBECONFIG}" --namespace "${namespace}" exec -i "${core_pod}" --container mailman-core -- sh -eu -c '
-      curl --fail --silent --show-error \
-        --user "restadmin:${MAILMAN_REST_PASSWORD}" \
-        "http://$(hostname -i):8001/3.1/lists/discuss.latoolb.us/config/subscription_policy"
-    ' | jq -er '.subscription_policy')"
-    test "${policy}" = "moderate" || { echo "Probe precondition failed: discuss@ subscription_policy is ${policy}, not moderate. Run the writer-gate close recipe first." >&2; exit 2; }
-    status="$(printf '%s\n' "${probe_subscriber}" | \
-      kubectl --kubeconfig "${GFTB_LIST_KUBECONFIG}" --namespace "${namespace}" exec -i "${core_pod}" --container mailman-core -- sh -eu -c '
-        IFS= read -r subscriber
-        curl --silent --show-error --output /dev/null --write-out "%{http_code}" \
-          --user "restadmin:${MAILMAN_REST_PASSWORD}" --request POST \
-          --data-urlencode "list_id=discuss.latoolb.us" \
-          --data-urlencode "subscriber=${subscriber}" \
-          --data-urlencode "pre_verified=true" \
-          --data-urlencode "pre_confirmed=true" \
-          --data-urlencode "role=member" \
-          "http://$(hostname -i):8001/3.1/members"
-      ')"
-    test "${status}" = "202" || { echo "REFUSAL PROBE FAILED: self-serve subscribe attempt returned HTTP ${status} (expected 202 parked-for-approval; 201 means the writer hole is OPEN)." >&2; exit 2; }
-    membership_json="$(printf '%s\n' "${probe_subscriber}" | \
-      kubectl --kubeconfig "${GFTB_LIST_KUBECONFIG}" --namespace "${namespace}" exec -i "${core_pod}" --container mailman-core -- sh -eu -c '
-        IFS= read -r subscriber
-        curl --fail --silent --show-error \
-          --user "restadmin:${MAILMAN_REST_PASSWORD}" --get \
-          --data-urlencode "list_id=discuss.latoolb.us" \
-          --data-urlencode "subscriber=${subscriber}" \
-          --data-urlencode "role=member" \
-          "http://$(hostname -i):8001/3.1/members/find"
-      ')"
-    membership_count="$(jq -er '.total_size // 0' <<<"${membership_json}")"
-    test "${membership_count}" = "0" || { echo "REFUSAL PROBE FAILED: probe address holds a discuss@ membership (writer hole OPEN)." >&2; exit 2; }
-    token="$(printf '%s\n' "${probe_subscriber}" | \
-      kubectl --kubeconfig "${GFTB_LIST_KUBECONFIG}" --namespace "${namespace}" exec -i "${core_pod}" --container mailman-core -- sh -eu -c '
-        IFS= read -r subscriber
-        curl --fail --silent --show-error \
-          --user "restadmin:${MAILMAN_REST_PASSWORD}" \
-          "http://$(hostname -i):8001/3.1/lists/discuss.latoolb.us/requests"
-      ' | jq -er --arg subscriber "${probe_subscriber}" '[.entries[]? | select((.email | ascii_downcase) == ($subscriber | ascii_downcase))] | if length >= 1 then .[0].token else error("parked probe request not found in the discuss@ requests queue") end')"
-    discard_status="$(printf '%s\n' "${token}" | \
-      kubectl --kubeconfig "${GFTB_LIST_KUBECONFIG}" --namespace "${namespace}" exec -i "${core_pod}" --container mailman-core -- sh -eu -c '
-        IFS= read -r token
-        curl --silent --show-error --output /dev/null --write-out "%{http_code}" \
-          --user "restadmin:${MAILMAN_REST_PASSWORD}" --request POST \
-          --data-urlencode "action=discard" \
-          "http://$(hostname -i):8001/3.1/lists/discuss.latoolb.us/requests/${token}"
-      ')"
-    test "${discard_status}" = "204" || { echo "Probe cleanup failed: discard of parked request ${token} returned HTTP ${discard_status}; discard it by hand (list-operations.md section 4)." >&2; exit 2; }
-    archive_status="$(curl --silent --output /dev/null --write-out "%{http_code}" "${archive_deep_link}")"
-    test "${archive_status}" = "200" || { echo "ARCHIVE-READ PROBE FAILED: anonymous GET of ${archive_deep_link} returned HTTP ${archive_status} (expected 200)." >&2; exit 2; }
-    echo "writer-gate.refusal-probe list=discuss.latoolb.us subscriber=${probe_subscriber} http=202 membership=absent parked-request=discarded"
-    echo "writer-gate.archive-read url=${archive_deep_link} http=${archive_status}"
-    echo "Record both receipt lines on TIN-4268 (probe receipt: anonymous subscription attempt refused; archive read stays anonymous)."
-
 # --- keyholders -> discuss add-only membership reconciler (TIN-3813 lane) ---
 # Enforces members(keyholders@latoolb.us) as a subset of
 # members(discuss@latoolb.us) going forward (the ratified private/public list
@@ -2388,15 +2302,10 @@ archive-stack-apply: archive-stack-server-dry-run
 # repository_dispatch consumer can reach kubectl. MERGING APPLIES NOTHING, and
 # now neither does any push to the public site repo.
 #
-# LEGACY CARRIER IS NOW DEAD CODE. `web-stack-apply` below still exists as the
-# original adapter-node cutover carrier (an operator with an operator-custody
-# web-apply kubeconfig could run `just web-stack-apply` by hand), but
-# `_web-stack-promotion-interlock` refuses it unconditionally now that the
-# gftb-site static origin is permanently promoted onto
-# Deployment/greatfallstoolbus-org -- there is no live state this carrier could
-# run against without the interlock firing. The reviewed, actually-used
-# forward path for the static origin is the web-release-* chain below, not
-# this carrier.
+# The retired adapter-node apply carrier is absent. The reviewed, currently
+# usable production path for the static origin is the web-release-* chain
+# below; it remains attended until the shared v4 owner-overlay transaction
+# proves a complete takeover.
 #
 # TREE HONESTY (rung 1, 2026-08-21; ratification basis: operator interview
 # 2026-08-21, session register L71 Q2 rungs 1+2). This comment used to say the
@@ -2483,68 +2392,11 @@ web-stack-render:
     bash scripts/guard-no-remote-kustomize-resources.sh {{ web_stack_dir }}
     kubectl kustomize {{ web_stack_dir }}
 
-# Operator-supplied cutover inputs (attended env; never baked, and since
-# TIN-3899 never workflow-delivered either):
-#   WEB_APPLY_KUBECONFIG  path to the materialized namespace-scoped SA kubeconfig
-#   WEB_APPLY_IMAGE       image to serve (operator-resolved; not the PLACEHOLDER)
-# WEB_APPLY_REPLICAS    replica count to flip to (default 2, the MI prod shape)
-_web-apply-inputs:
-    test -n "${WEB_APPLY_KUBECONFIG:-}" || { echo "Set WEB_APPLY_KUBECONFIG to the web-apply kubeconfig path"; exit 1; }
-    test -f "${WEB_APPLY_KUBECONFIG}"
-    test -n "${WEB_APPLY_IMAGE:-}" || { echo "Set WEB_APPLY_IMAGE to the operator-resolved image reference"; exit 1; }
-    case "${WEB_APPLY_IMAGE}" in *PLACEHOLDER*) echo "refusing the declare-only PLACEHOLDER image; supply the real operator-resolved reference"; exit 1 ;; esac
-
 # Lighter-weight input check for read-only commands (drift-check) that need
 # only the kubeconfig, not an image to pin.
 _web-apply-kubeconfig-only:
     test -n "${WEB_APPLY_KUBECONFIG:-}" || { echo "Set WEB_APPLY_KUBECONFIG to the web-apply kubeconfig path"; exit 1; }
     test -f "${WEB_APPLY_KUBECONFIG}"
-
-# Server-side dry-run of the workload apply against the live API (no mutation).
-web-stack-server-dry-run: web-stack-validate _web-apply-inputs
-    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply --dry-run=server -k {{ web_stack_dir }}
-
-# PROMOTION INTERLOCK (TIN-3816; unattended trigger retired by TIN-3899). This
-# legacy adapter-node carrier and the reviewed web-release chain both mutate
-# Deployment/greatfallstoolbus-org in {{ web_stack_ns }}. Once the gftb-site
-# static origin is promoted in place, re-running this carrier would re-pin the
-# adapter-node image over it -- silently reverting the promotion and falsifying
-# the SERVED proof. (Until TIN-4254 pruned them from every surface, a tree
-# apply would also have recreated the two legacy allow-egress policies; the
-# committed tree now declares default-deny-egress instead.)
-#
-# The carrier USED TO be fired unattended by web-stack.yml's
-# `repository_dispatch: web-image-published` (sent by greatfallstoolbus.org's
-# container-ghcr.yml on every push to main). TIN-3899 deleted that workflow and
-# the site-side signal job, so the carrier now has no automated caller at all and
-# the runbook quiesce rule is retired. This interlock is KEPT as the mechanical
-# belt-and-braces on the one remaining, attended path: it refuses from live
-# state, so an operator cannot revert the promotion by hand either, and its
-# receipt in WEB_RELEASE_CRITICAL_RECIPE_DIGESTS keeps any future re-wiring of a
-# mutating carrier failing closed at `just public-surface`.
-_web-stack-promotion-interlock: _web-apply-kubeconfig-only
-    #!/usr/bin/env bash
-    set -euo pipefail
-    live_image="$(kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} get deployment/greatfallstoolbus-org --ignore-not-found -o jsonpath='{.spec.template.spec.containers[?(@.name=="greatfallstoolbus-org")].image}')"
-    case "${live_image}" in
-      ghcr.io/great-falls-tool-bus/gftb-site@*|ghcr.io/great-falls-tool-bus/gftb-site:*)
-        echo "::error::promotion interlock: Deployment/greatfallstoolbus-org in {{ web_stack_ns }} already carries the promoted gftb-site origin (${live_image}). The legacy adapter-node carrier would revert it. Refusing." >&2
-        echo "Quiesce greatfallstoolbus.org main (the repository_dispatch source) until this carrier is retired; see docs/runbooks/oncluster-web-cutover.md section S." >&2
-        exit 1
-        ;;
-    esac
-    echo "promotion interlock: live image '${live_image:-<absent>}' is not a promoted gftb-site origin; the legacy carrier may proceed"
-
-# Operator-gated cutover apply: workload -> pin image -> flip replicas 0 -> N.
-# The namespace must already exist (the SA is namespace-scoped and cannot create
-# it); replicas are patched on the Deployment resource, not via the scale
-# subresource, so the least-privilege patch-Deployment grant is sufficient.
-web-stack-apply: _web-stack-promotion-interlock web-stack-server-dry-run
-    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply -k {{ web_stack_dir }}
-    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} set image deployment/greatfallstoolbus-org greatfallstoolbus-org="${WEB_APPLY_IMAGE}"
-    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} patch deployment/greatfallstoolbus-org --type merge --patch '{"spec":{"replicas":'"${WEB_APPLY_REPLICAS:-2}"'}}'
-    # 300s (was 180s): run 28769199755 (2026-07-06) hit `timed out waiting for the condition` on a cold-node image pull, but the rollout verified Ready seconds later -- a benign race, not a real failure.
-    kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} rollout status deployment/greatfallstoolbus-org --timeout=300s
 
 # Post-apply read-only health gate: Deployment readyReplicas == desired. A ready
 # replica means the kubelet readinessProbe (GET /health on :3000) passed, so this
@@ -2582,12 +2434,9 @@ grafana-dashboards-validate:
     bash scripts/validate-grafana-dashboards.sh {{ grafana_dashboard_dir }}
 
 # --- Reviewed gftb-site release candidate proofs ----------------------------
-# These recipes are read-only/proof-only. They deliberately do not share the
-# legacy `web-stack-apply` mutation carrier, which pins the adapter-node image
-# and must never receive the static Caddy candidate; that candidate travels only
-# through the reviewed exact-render/apply/rollback contract below. The workflow
-# that used to drive the legacy carrier (.github/workflows/web-stack.yml) is
-# retired (TIN-3899).
+# These recipes are read-only/proof-only. The retired adapter-node carrier is
+# absent; the static Caddy candidate travels only through the reviewed
+# exact-render/apply/rollback contract below.
 
 _web-release-candidate-inputs:
     #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
@@ -4040,8 +3889,7 @@ web-release-served-proof: _web-release-candidate-inputs
 # refuses unless the re-render is byte-identical to the recorded plan, and then
 # applies THOSE bytes. So the reviewed bytes and the applied bytes cannot diverge,
 # and `kubectl rollout history` can always be reconciled against a render of the
-# reviewed inputs. This is deliberately unlike the legacy `web-stack-apply`
-# carrier, which imperatively `set image`s the adapter-node origin.
+# reviewed inputs. The former imperative adapter-node carrier is absent.
 #
 # Nothing here creates the namespace (the apply identity is namespace-scoped and
 # cannot), ships a Secret, or touches Cloudflare. The public path does not change:
@@ -4271,8 +4119,8 @@ web-release-apply: _reviewed-clean-main _operator-apply-confirm _web-release-app
 # to any object that exists ONLY on the cluster (for the web stack, e.g. the
 # two legacy allow-egress policies if they ever reappeared out of band; their
 # live ABSENCE is receipted by an attended read-only census, not by this
-# gate). This check is read-only and therefore not interlocked; the attended
-# mutating carrier is (see _web-stack-promotion-interlock).
+# gate). This check is read-only and separate from the reviewed release
+# transaction.
 _k8s-drift-check kubeconfig namespace dir label:
     #!/usr/bin/env bash
     set -uo pipefail

@@ -28,6 +28,13 @@ These manifests intentionally do **not** contain:
 - a public ingress / Cloudflare tunnel route (follow-up; nothing exposed
   before the round-trip smoke passes)
 
+`latoolb-us-production/configmap-discuss-policy-intent.yaml` is a source-only
+exception for list-level desired state: it records the ratified TIN-4268
+`discuss@` policy but is consumed by no workload at this head. It does not
+change the Mailman database. Activation remains blocked on the purpose-bound
+in-cluster projection Job and exact signed-main v4 owner transaction described
+in `docs/runbooks/list-operations.md` section 5.
+
 ### Submission-capability transition
 
 The currently working Mailman sender uses an exact, named Postfix NetworkPolicy
