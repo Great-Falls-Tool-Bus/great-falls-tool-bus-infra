@@ -1,0 +1,29 @@
+{
+  "authorizationPolicyDigest": "<TO-FILL: O-3 — sha256:<64-hex> of the ratified Great-Falls-Tool-Bus authorization policy>",
+  "generation": 1,
+  "capabilityPolicies": [
+    {
+      "capability": "rbe-linux-x86_64",
+      "maxConcurrentActions": 16
+    }
+  ],
+  "subjectPolicy": {
+    "allowPullRequests": true,
+    "allowBranchPushes": true,
+    "allowWorkflowDispatch": false,
+    "allowSchedules": false,
+    "allowEnvironments": false
+  },
+  "trustedWorkflows": [
+    {
+      "jobWorkflowRef": "Great-Falls-Tool-Bus/great-falls-tool-bus-infra/.github/workflows/publish-operands.yml@<TO-FILL: O-2 — 40-hex main commit that carries publish-operands.yml>",
+      "jobWorkflowSha": "<TO-FILL: O-2 — the same 40-hex commit>"
+    }
+  ],
+  "writerPolicy": {
+    "actionCacheWriteRefs": []
+  },
+  "registryPullProjection": {
+    "kind": "no-projection"
+  }
+}

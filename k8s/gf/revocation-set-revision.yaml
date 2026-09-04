@@ -1,0 +1,39 @@
+# RevocationSetRevision (consumer scope) for Great-Falls-Tool-Bus — a
+# DECLARATION ONLY. TIN-2611.
+#
+# OOC #19 currently ships no RevocationSetRevision CRD; the AMEND that adds it
+# is pending on TIN-2609. Nothing in this repository and no workflow submits
+# this object anywhere. It is the checked-in shape the consumer will submit
+# once the CRD exists, the three operator ceremonies in operands/README.md have
+# run, and publish-operands.yml has recorded the revocation-set reference under
+# operands/references/. No provider placement is admissible here: no
+# namespace, node, storage, worker, or endpoint literal, ever.
+#
+# metadata.name is derived, never chosen. With
+#   h = hex(sha256("consumer" || 0x00 || ownerId || 0x00 || installationId))
+# the name is  revocation-set.<h[0:32]>.<h[32:64]>. It can only be computed
+# after ceremony O-1 supplies installationId.
+apiVersion: gloriousflywheel.tinyland.dev/v1alpha1
+kind: RevocationSetRevision
+metadata:
+  name: "<derived: revocation-set.<h[0:32]>.<h[32:64]> where h = sha256(\"consumer\\0\" + ownerId + \"\\0\" + installationId)>"
+  labels:
+    app.kubernetes.io/managed-by: great-falls-tool-bus-infra
+    app.kubernetes.io/part-of: great-falls-tool-bus
+  annotations:
+    linear.app/issue: TIN-2611
+spec:
+  contractVersion: RevocationSetRevision/v1
+  scope:
+    kind: consumer
+    ownerId: 297983955
+    installationId: "<TO-FILL: O-1 — product GloriousFlywheel App installation id; NEVER the ARC registration App 143981297>"
+  transitionMode: ordinary
+  artifact:
+    repository: oci://ghcr.io/great-falls-tool-bus/gf-revocation-set
+    manifestDigest: "<TO-FILL: copy from operands/references/revocation-set.reference.json after the first publish-operands.yml run>"
+    artifactType: application/vnd.tinyland.gf.revocation-set.v1
+    payload:
+      digest: "<TO-FILL: copy from operands/references/revocation-set.reference.json>"
+      mediaType: application/vnd.tinyland.gf.revocation-set.v1+json
+      size: "<TO-FILL: copy from operands/references/revocation-set.reference.json>"
