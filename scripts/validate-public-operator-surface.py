@@ -138,7 +138,6 @@ HOSTED_WORKFLOW_JUST_ALLOWLIST = {
     "mail-cr-validate",
     "web-stack-drift-check",
     "web-stack-render",
-    "web-stack-validate",
 }
 
 EDGE_RUNTIME_TF_VARS = {
