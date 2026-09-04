@@ -2236,7 +2236,6 @@ def scan_web_generation47_bridge_contract(
     )
     carrier_integrity_fragments = (
         "#!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p",
-        "    export LC_ALL=C",
         "for name in GIT_CONFIG GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS "
         "GIT_CONFIG_SYSTEM GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_DIR "
         "GIT_WORK_TREE GIT_IMPLICIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE "
@@ -2278,6 +2277,8 @@ def scan_web_generation47_bridge_contract(
         for fragment in carrier_integrity_fragments
         if fragment not in carrier_executable
     ]
+    if "    export LC_ALL=C" not in carrier_executable.splitlines():
+        missing_carrier_integrity.append("exact executable line: export LC_ALL=C")
     if missing_carrier_integrity:
         findings.append(
             Finding(
