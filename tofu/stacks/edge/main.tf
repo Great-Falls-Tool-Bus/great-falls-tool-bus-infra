@@ -411,7 +411,7 @@ resource "cloudflare_dns_record" "alias_forms" {
 }
 
 # --- lists.latoolb.us — public discuss@ archive ingress tunnel CNAME --------
-# (TIN-2528, declare-only design packet). Mirrors the forms.latoolb.us record
+# (TIN-2528). Mirrors the forms.latoolb.us record
 # above EXACTLY: a PROXIED CNAME to the SAME shared honey-ingress Cloudflare
 # Tunnel cname target, so the proxied edge answers and the tunnel carries the
 # request to the in-cluster anubis-archive PoW gate, which fronts the
@@ -425,13 +425,10 @@ resource "cloudflare_dns_record" "alias_forms" {
 # the host name reflects the whole lists engine, not a single archive. See
 # docs/discuss-archive-packet.md for the full rationale.
 #
-# FAIL-CLOSED: gated behind var.archives_dns_enabled, which DEFAULTS FALSE.
-# Merging this record changes NOTHING (no-op plan) until the flag is flipped
-# in a deliberate follow-up. Activation stays an operator-reviewable plan/apply
-# (dispatch-apply doctrine, D6), never a merge side effect — and, uniquely for
-# this route, it must NOT be flipped until the PRIVACY PRE-FLIGHT passes
-# (keyholders@ archive_policy=private|never AND HyperKitty enforces it for
-# anonymous users). Flip sequence: README.md "archives DNS enable sequence".
+# LIVE: var.archives_dns_enabled defaults true after the stack, tunnel route,
+# privacy pre-flight, and DNS apply completed. The private keyholders@ archive
+# must remain private|never and anonymous-denied. Recovery to false is an
+# operator-reviewed plan/apply; see README.md "lists.latoolb.us archive ingress".
 resource "cloudflare_dns_record" "alias_archives" {
   count = var.archives_dns_enabled ? 1 : 0
 

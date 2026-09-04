@@ -31,10 +31,10 @@ they exist as **console-created zones on the house Cloudflare account**
   honey-ingress Cloudflare Tunnel (proxied), gated behind
   `var.forms_dns_enabled` (default `true` after the 2026-07-05 route + smoke
   proof) — TIN-2420 Path B; see "`forms.latoolb.us` DNS enable sequence" below
-- stages the `lists.latoolb.us` public-archive ingress CNAME → the SAME
+- manages the live `lists.latoolb.us` public-archive ingress CNAME → the SAME
   shared honey-ingress Cloudflare Tunnel (proxied), gated behind
-  `var.archives_dns_enabled` (default `false`, fail-closed) — TIN-2528;
-  see "`lists.latoolb.us` archives DNS enable sequence" below
+  `var.archives_dns_enabled` (default `true`) — TIN-2528;
+  see "`lists.latoolb.us` archive ingress" below
 - manages the live Google Workspace SSO identity provider on the CF Access account
   (`cloudflare_zero_trust_access_identity_provider` type `google-apps`),
   gated behind `var.enable_google_sso` (code default `false`, live `edge`
@@ -124,7 +124,7 @@ were proven before the default flipped. Enable or rollback sequence:
    `workflow_dispatch action=apply` (dispatch-apply doctrine, D6) — no
    direct apply.
 
-## `lists.latoolb.us` archives DNS enable sequence (TIN-2528 — declare-only)
+## `lists.latoolb.us` archive ingress (TIN-2528 — live)
 
 The PUBLIC `discuss@latoolb.us` HyperKitty archive rides the shared
 honey-ingress Cloudflare Tunnel, fronted by a second Anubis PoW gate
@@ -135,30 +135,30 @@ the HyperKitty archive URL shape is already `https://lists.latoolb.us/
 hyperkitty/list/<list>@latoolb.us/` (TIN-2380) and one HyperKitty instance
 serves every list off that one host — see `docs/discuss-archive-packet.md`.
 
-Staged in `main.tf` gated behind `var.archives_dns_enabled` (default
-`false`, fail-closed — merging changes nothing until flipped).
+Declared in `main.tf` behind `var.archives_dns_enabled`, now default `true`.
+The stack, public-hostname tunnel route, privacy pre-flight, and DNS apply are
+complete; `.github/workflows/archive-stack.yml` records the same live posture.
 
 **This route has an extra HARD gate the forms route does not.** The same web
 tier also serves the PRIVATE `keyholders@` archive, so flipping this on
 without the privacy pre-flight would risk exposing private list content.
-Enable sequence:
+Continuous invariants:
 
-1. `latoolb.us` NS cutover to Cloudflare completes and the zone is live
-   (shared with the mail/forms enable sequences).
-2. The `k8s/archive/...` stack is applied and the honey-ingress tunnel has an
-   ingress route for `lists.latoolb.us` fronting `anubis-archive:8081`
-   (substrate/dashboard side).
-3. **PRIVACY PRE-FLIGHT PASSES** (operator-gated, read-only): `keyholders@`
+1. The `latoolb.us` Cloudflare zone and `lists.latoolb.us` proxied CNAME remain
+   live.
+2. The applied `k8s/archive/...` stack and honey-ingress public-hostname route
+   continue to front `anubis-archive:8081`.
+3. **PRIVACY PRE-FLIGHT REMAINS GREEN** (operator-gated, read-only): `keyholders@`
    `archive_policy=private|never`, HyperKitty is **>= 1.3.8** (the RSS-feed
    private-leak fix), and an anonymous probe confirms the private archive
    (HTML, RSS/Atom, permalinks, `/export/`, search) 403s while `discuss@`
    renders. Full procedure + command: `docs/discuss-archive-packet.md`.
-4. `var.archives_dns_enabled` flips to `true` in a follow-up change.
-5. PR-plan (`edge-plan.yml`) then `workflow_dispatch action=apply`
-   (dispatch-apply doctrine, D6) — no direct apply.
+4. `var.archives_dns_enabled` remains `true`; edge drift must not propose its
+   deletion.
 
-Rollback: flip `var.archives_dns_enabled` back to `false` (plan/apply) and
-remove the `lists.latoolb.us` tunnel public-hostname route dashboard-side.
+Recovery that disables the public archive is a separately reviewed change:
+plan `archives_dns_enabled=false`, apply it through the edge transaction, and
+remove the tunnel public-hostname route under its owning substrate authority.
 
 ## Google Workspace SSO steady-state contract (live; OTP retained)
 

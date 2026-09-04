@@ -202,15 +202,18 @@ it never selects a local, cache-only, hosted, or direct-endpoint path.
 ## 5. Public -> cluster HTTP edge path
 
 **Claim.** Every inbound HTTP request for the GFTB properties enters at the
-Cloudflare edge and takes one of three paths. (a) `greatfallstoolbus.org` apex
+Cloudflare edge and takes one of four paths. (a) `greatfallstoolbus.org` apex
 and `www` are proxied CNAMEs to the shared honey-ingress tunnel target. The CF
 edge terminates TLS, the apex and `www` Access applications share the protected
 allowlist, and allowed requests cross the tunnel to the in-cluster `gftb-site`
 Service and static Caddy pods in `greatfallstoolbus-org-production`. (b)
 `forms.latoolb.us` uses the same tunnel target, then reaches the in-cluster
 form chain: `anubis` PoW gate `:8081` -> `form-handler` `:8080` ->
-`mailman-core` `:8024` LMTP. (c) `latoolb.us` apex and `www` are a proxied
-`192.0.2.1` documentation address plus a 301 redirect ruleset to
+`mailman-core` `:8024` LMTP. (c) Live `lists.latoolb.us` uses the shared tunnel
+to reach `anubis-archive:8081`, then the HyperKitty web tier serving the public
+`discuss@` archive while the private `keyholders@` archive remains denied to
+anonymous clients. (d) `latoolb.us` apex and `www` are a proxied `192.0.2.1`
+documentation address plus a 301 redirect ruleset to
 `var.alias_redirect_target`.
 
 **Sources of truth.** Web edge + Access: `tofu/stacks/edge/main.tf`
@@ -219,7 +222,8 @@ independent dev/preview application, forms CNAME, and alias redirect.
 `tofu/stacks/edge/variables.tf` binds the compatibility-named `pages_host`
 default to the shared tunnel CNAME. `k8s/web/greatfallstoolbus-org-production/`
 declares the web Deployment, Service, and NetworkPolicies.
-`k8s/form/latoolb-us-production/` declares the form chain. Public-hostname
+`k8s/form/latoolb-us-production/` declares the form chain, and
+`k8s/archive/latoolb-us-production/` declares the archive gate. Public-hostname
 routes and the cloudflared deployment are substrate state outside this overlay.
 
 ```mermaid
@@ -231,6 +235,7 @@ flowchart TD
         proxy["CF proxy: TLS termination"]
         access["apex + www Access apps<br/>shared protected allowlist"]
         formsdns["forms.latoolb.us<br/>proxied CNAME to shared tunnel"]
+        listsdns["lists.latoolb.us<br/>live proxied CNAME to shared tunnel"]
         aliasdns["latoolb.us apex + www<br/>PROXIED A 192.0.2.1 (RFC 5737)<br/>301 ruleset to var.alias_redirect_target"]
     end
 
@@ -246,6 +251,8 @@ flowchart TD
         anubis["anubis PoW gate :8081"]
         fh["form-handler :8080"]
         mmc["mailman-core :8024 LMTP<br/>joins mail flow — see Diagram 1"]
+        anubisarchive["anubis-archive PoW gate :8081"]
+        hyperkitty["HyperKitty web tier<br/>public discuss@ / private keyholders@"]
     end
 
     client -->|"GET greatfallstoolbus.org / www"| webdns
@@ -261,13 +268,18 @@ flowchart TD
     anubis -->|"egress :8080"| fh
     fh -->|"egress :8024 LMTP"| mmc
 
+    client -->|"GET lists.latoolb.us"| listsdns
+    listsdns -->|"resolve, proxied"| tunnel
+    cfd -->|"archive route :8081"| anubisarchive
+    anubisarchive --> hyperkitty
+
     client -->|"GET latoolb.us / www"| aliasdns
     aliasdns -.->|"301 Location: var.alias_redirect_target"| client
 ```
 
 **Open / not-in-config.**
 
-- The tunnel public-hostname maps for apex, `www`, and forms are
+- The tunnel public-hostname maps for apex, `www`, forms, and lists are
   Cloudflare-dashboard/API substrate state, not repository declarations.
 - The cloudflared Deployment and placement are substrate-owned. NetworkPolicy
   admits its namespace label rather than live pod IPs.

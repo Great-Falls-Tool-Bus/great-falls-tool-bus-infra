@@ -23,7 +23,8 @@ custody. This runbook never authorizes a secret mint, rotation, or revocation.
   flip. Dev and preview hostnames retain their independent Access application.
 - `latoolb.us` apex and `www` use the managed redirect ruleset. Mail, forms,
   and archive records are controlled by their explicit variables in the edge
-  stack.
+  stack. `lists.latoolb.us` archive ingress is live with
+  `archives_dns_enabled=true`.
 
 ## Registrar custody
 
