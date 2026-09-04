@@ -29,6 +29,11 @@ CORE_FLAKE_PREFIX = f"github:{CORE_REPOSITORY}/"
 CHECKOUT_ACTION = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10"
 IMPLEMENTATION_CORE_PIN = "2281b576bce0e8dd776a047b84e7464f5b508a62"
 ARC_CORE_PIN = "11ace397282ff89aeb1dfeb4a32fcbed3200c2ff"
+# Operand publisher role pin (TIN-2611). publish-operands.yml consumes the
+# closed v4 operand wire (services/gf-reapi-cell/pkg/operand) and the
+# gf-operand-publisher command from this exact GloriousFlywheel revision. It is
+# advanced only together with operands/README.md when the publisher lands.
+OPERAND_PUBLISHER_CORE_PIN = "8d428cb83015205ec8e26354e9f9baf479b9a81b"
 EXACT_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 EXPECTED_WORKFLOWS = {
@@ -39,6 +44,8 @@ EXPECTED_WORKFLOWS = {
     "k8s-stack-drift.yml",
     "list-crs.yml",
     "mail-crs.yml",
+    "operand-references-pr.yml",
+    "publish-operands.yml",
     "validate.yml",
 }
 
@@ -52,6 +59,7 @@ EXPECTED_CORE_CHECKOUTS = {
     "k8s-stack-drift.yml": 2,
     "list-crs.yml": 2,
     "mail-crs.yml": 2,
+    "publish-operands.yml": 1,
 }
 
 # Preserve the reviewed executable authority for each role. Checkout
@@ -61,6 +69,7 @@ EXPECTED_CORE_PINS = {
     workflow: IMPLEMENTATION_CORE_PIN
     for workflow in EXPECTED_CORE_CHECKOUTS
 }
+EXPECTED_CORE_PINS["publish-operands.yml"] = OPERAND_PUBLISHER_CORE_PIN
 
 # Every source checkout, including the overlay checkout, is immutable and does
 # not persist the source repository's per-run GITHUB_TOKEN into Git config.
@@ -72,6 +81,8 @@ EXPECTED_ACTION_CHECKOUTS = {
     "k8s-stack-drift.yml": 4,
     "list-crs.yml": 4,
     "mail-crs.yml": 4,
+    "operand-references-pr.yml": 1,
+    "publish-operands.yml": 2,
     "validate.yml": 1,
 }
 
@@ -83,12 +94,29 @@ EXPECTED_CORE_CI_PATH_EXPORTS = {
     "k8s-stack-drift.yml": 6,
     "list-crs.yml": 3,
     "mail-crs.yml": 3,
+    "operand-references-pr.yml": 0,
+    "publish-operands.yml": 2,
     "validate.yml": 0,
 }
 
 EXPECTED_PERMISSIONS = {
     workflow: ("contents: read",) for workflow in EXPECTED_WORKFLOWS
 }
+# TIN-2611 privilege split. The publisher (the O-2 signer identity) holds
+# id-token for Sigstore keyless signing and packages for the GHCR push, and
+# reads Git only. The commit-back holds Git/pull-request write on the
+# repository token only, with no id-token, no packages, and no core checkout,
+# so neither workflow can both sign an operand and write to Git.
+EXPECTED_PERMISSIONS["publish-operands.yml"] = (
+    "contents: read",
+    "id-token: write",
+    "packages: write",
+)
+EXPECTED_PERMISSIONS["operand-references-pr.yml"] = (
+    "actions: read",
+    "contents: write",
+    "pull-requests: write",
+)
 
 CONDITIONAL_CHECKOUTS = {
     "edge-drift.yml": "if: steps.secrets.outputs.edge-deploy-secrets-present == 'true'",
@@ -866,7 +894,8 @@ def main() -> int:
         f"{sum(EXPECTED_CORE_CHECKOUTS.values())} exact-SHA checkout declarations, "
         f"{sum(EXPECTED_CORE_CI_PATH_EXPORTS.values())} pinned #ci devshell sources, "
         f"implementation pin {IMPLEMENTATION_CORE_PIN}, "
-        f"ARC role pin {ARC_CORE_PIN}; "
+        f"ARC role pin {ARC_CORE_PIN}, "
+        f"operand publisher pin {OPERAND_PUBLISHER_CORE_PIN}; "
         "every core-repository checkout binds the read-only GF_CORE_DEPLOY_KEY "
         "deploy key (TIN-4015)"
     )

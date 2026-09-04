@@ -1,0 +1,222 @@
+name: Operand References PR
+
+# TIN-2611: the bounded commit-back for publish-operands.yml. After a
+# successful publication run on main, this workflow downloads that run's
+# ArtifactReference artifact, verifies the receipt against the exact triggering
+# run and source revision, creates the branch operands/references-<sha12> from
+# that revision, writes the references there through one GitHub-signed commit
+# (GraphQL createCommitOnBranch), and opens a pull request against main. It
+# never pushes to main and never signs, pushes, or reads an operand.
+#
+# Privilege split (workflow-level, deliberately not the publisher's): this job
+# holds contents: write and pull-requests: write on the repository token only;
+# it holds no id-token, no packages scope, and no GloriousFlywheel checkout or
+# deploy key. The publisher holds the inverse set.
+#
+# GitHub does not start pull_request workflows for a pull request opened with
+# the repository token, so validate.yml will not run on the commit-back branch
+# until a person pushes to it or closes and reopens the pull request.
+
+on:
+  workflow_run:
+    workflows:
+      - Publish Operands
+    types:
+      - completed
+    branches:
+      - main
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: operand-references-pr
+  cancel-in-progress: false
+
+env:
+  # The ARC runner image's Node runtime serves JavaScript actions under this
+  # shim, matching the other Great-Falls-Tool-Bus tinyland-nix workflows.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  OPERAND_REGISTRY_NAMESPACE: ghcr.io/great-falls-tool-bus
+  OPERAND_PUBLISHER_WORKFLOW_FILE: publish-operands.yml
+
+jobs:
+  open-pr:
+    name: Open the bounded operand-reference commit-back
+    if: >-
+      github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.head_branch == 'main'
+      && github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: tinyland-nix
+    timeout-minutes: 20
+    steps:
+      - name: Checkout overlay
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          path: overlay
+          persist-credentials: false
+
+      - name: Download the published ArtifactReferences
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: gftb-operand-references
+          path: references
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify the receipt and open the commit-back pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_ACTION_TOKEN: ${{ github.token }}
+          PUBLISH_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          PUBLISH_RUN_ID: ${{ github.event.workflow_run.id }}
+          PUBLISH_RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+
+          for nixbin in /nix/var/nix/profiles/default/bin "${HOME}/.nix-profile/bin"; do
+            if [ -d "${nixbin}" ]; then
+              export PATH="${nixbin}:${PATH}"
+            fi
+          done
+
+          if ! command -v nix >/dev/null 2>&1; then
+            echo "::error::nix is required on the tinyland-nix runner."
+            exit 1
+          fi
+
+          if ! nix store ping >/dev/null 2>&1; then
+            echo "::error::Nix daemon is unavailable on the tinyland-nix runner."
+            exit 1
+          fi
+
+          append_nix_config_line() {
+            local key="$1"
+            local value="$2"
+            if printf '%s\n' "${NIX_CONFIG:-}" | grep -Eq "^[[:space:]]*${key}[[:space:]]*="; then
+              return 0
+            fi
+            if [ -n "${NIX_CONFIG:-}" ]; then
+              export NIX_CONFIG="$(printf '%s\n%s = %s' "${NIX_CONFIG}" "${key}" "${value}")"
+            else
+              export NIX_CONFIG="${key} = ${value}"
+            fi
+          }
+
+          append_nix_config_line "experimental-features" "nix-command flakes"
+          append_nix_config_line "accept-flake-config" "true"
+          append_nix_config_line "access-tokens" "github.com=${GH_ACTION_TOKEN}"
+
+          cat > "${RUNNER_TEMP}/operand-commit-back.sh" <<'COMMIT_BACK'
+          set -euo pipefail
+          : "${GH_TOKEN:?}" "${PUBLISH_HEAD_SHA:?}" "${PUBLISH_RUN_ID:?}" "${PUBLISH_RUN_URL:?}"
+          : "${OPERAND_REGISTRY_NAMESPACE:?}" "${OPERAND_PUBLISHER_WORKFLOW_FILE:?}"
+          references="${GITHUB_WORKSPACE}/references"
+          receipt="${references}/publication.json"
+
+          if [[ ! ${PUBLISH_HEAD_SHA} =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::triggering run head ${PUBLISH_HEAD_SHA} is not an exact commit"
+            exit 1
+          fi
+          for file in tenant-overlay.reference.json owner-installation.reference.json revocation-set.reference.json publication.json; do
+            if [ ! -s "${references}/${file}" ]; then
+              echo "::error::${file} is missing from the publication artifact"
+              exit 1
+            fi
+          done
+          if grep -R -n -E '<(TO-FILL|derived)[:>]' "${references}"; then
+            echo "::error::placeholders never travel into a published reference"
+            exit 1
+          fi
+          jq -e \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg revision "${PUBLISH_HEAD_SHA}" \
+            --arg run "${PUBLISH_RUN_ID}" \
+            --arg identity "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/.github/workflows/${OPERAND_PUBLISHER_WORKFLOW_FILE}@refs/heads/main" \
+            '.sourceRepository == $repository and .sourceRevision == $revision and .runId == $run and .publisherIdentity == $identity' \
+            "${receipt}" >/dev/null || {
+              echo "::error::publication receipt does not bind the triggering run ${PUBLISH_RUN_ID} at ${PUBLISH_HEAD_SHA}"
+              exit 1
+            }
+          check_reference() {
+            local operand="$1"
+            local artifact_type="$2"
+            jq -e \
+              --arg repository "oci://${OPERAND_REGISTRY_NAMESPACE}/gf-${operand}" \
+              --arg artifactType "${artifact_type}" \
+              --arg mediaType "${artifact_type}+json" \
+              '.repository == $repository
+                and .artifactType == $artifactType
+                and (.manifestDigest | test("^sha256:[0-9a-f]{64}$"))
+                and (.payload.digest | test("^sha256:[0-9a-f]{64}$"))
+                and .manifestDigest != .payload.digest
+                and .payload.mediaType == $mediaType
+                and (.payload.size | type == "number" and . >= 1 and . <= 1048576)' \
+              "${references}/${operand}.reference.json" >/dev/null || {
+                echo "::error::${operand}.reference.json is not an exact ${artifact_type} ArtifactReference"
+                exit 1
+              }
+          }
+          check_reference tenant-overlay application/vnd.tinyland.gf.tenant-overlay.v1
+          check_reference owner-installation application/vnd.tinyland.gf.owner-installation.v1
+          check_reference revocation-set application/vnd.tinyland.gf.revocation-set.v1
+
+          short="${PUBLISH_HEAD_SHA:0:12}"
+          branch="operands/references-${short}"
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch}" >/dev/null 2>&1; then
+            echo "::error::branch ${branch} already exists; refusing to reuse it"
+            exit 1
+          fi
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+            --field ref="refs/heads/${branch}" \
+            --field sha="${PUBLISH_HEAD_SHA}" >/dev/null
+
+          additions="$(
+            for file in tenant-overlay.reference.json owner-installation.reference.json revocation-set.reference.json publication.json; do
+              jq -n \
+                --arg path "operands/references/${file}" \
+                --arg contents "$(base64 -w0 < "${references}/${file}")" \
+                '{path: $path, contents: $contents}'
+            done | jq -s .
+          )"
+          headline="operands: record ArtifactReferences published from ${short}"
+          body="$(printf 'Published by %s at %s from source revision %s.\n\nThe three references bind exact OCI manifest and payload digests under the O-2 publisher identity. k8s/gf/revocation-set-revision.yaml keeps its TO-FILL fields until an operator copies the revocation-set digests in.' \
+            "${OPERAND_PUBLISHER_WORKFLOW_FILE}" "${PUBLISH_RUN_URL}" "${PUBLISH_HEAD_SHA}")"
+          jq -n \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg branch "${branch}" \
+            --arg head "${PUBLISH_HEAD_SHA}" \
+            --arg headline "${headline}" \
+            --arg body "${body}" \
+            --argjson additions "${additions}" \
+            '{query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid url } } }",
+              variables: {input: {
+                branch: {repositoryNameWithOwner: $repository, branchName: $branch},
+                expectedHeadOid: $head,
+                message: {headline: $headline, body: $body},
+                fileChanges: {additions: $additions}}}}' \
+            > "${RUNNER_TEMP}/operand-commit-back.json"
+          commit="$(gh api graphql --input "${RUNNER_TEMP}/operand-commit-back.json" --jq '.data.createCommitOnBranch.commit.oid')"
+          if [[ ! ${commit} =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::createCommitOnBranch did not return a commit"
+            exit 1
+          fi
+          gh pr create \
+            --repo "${GITHUB_REPOSITORY}" \
+            --base main \
+            --head "${branch}" \
+            --title "${headline}" \
+            --body "${body}"
+          {
+            echo "## Operand reference commit-back"
+            echo ""
+            echo "- Branch: \`${branch}\` at \`${commit}\` (GitHub-signed via createCommitOnBranch)"
+            echo "- Publication run: ${PUBLISH_RUN_URL}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          COMMIT_BACK
+
+          cd overlay
+          nix develop . -c bash "${RUNNER_TEMP}/operand-commit-back.sh"

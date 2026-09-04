@@ -2,7 +2,7 @@
 
 `validate.yml`, the sole required status check, is self-contained: it checks
 out only this public overlay and does not fetch GloriousFlywheel or receive a
-cross-repository credential. The seven core-consuming workflows below are
+cross-repository credential. The eight core-consuming workflows below are
 different: GloriousFlywheel went private (TIN-4015, 2026-08-22), so they
 credential their GloriousFlywheel checkout with a read-only deploy key.
 
@@ -15,7 +15,8 @@ ARC state plan/apply work are operator-local.
 
 The other core-consuming workflows (`archive-stack.yml`, `edge-drift.yml`,
 `edge-plan.yml`, `form-crs.yml`,
-`k8s-stack-drift.yml`, `list-crs.yml`, `mail-crs.yml`) checkout
+`k8s-stack-drift.yml`, `list-crs.yml`, `mail-crs.yml`,
+`publish-operands.yml`) checkout
 GloriousFlywheel at an exact pinned commit using the repository secret
 `GF_CORE_DEPLOY_KEY` — a read-only SSH deploy key attached to
 `tinyland-inc/GloriousFlywheel`, bound via `actions/checkout`'s `ssh-key:`
@@ -57,6 +58,31 @@ retirement) — so TIN-4015 reuses it rather than blocking on new credential
 infrastructure. If GloriousFlywheel goes private a third time, or this
 deploy key needs rotating, that is again a reviewed authority change, not a
 silent edit.
+
+## Operand Publisher and Commit-Back Tokens (TIN-2611)
+
+`publish-operands.yml` is the O-2 operand publisher identity
+(`operands/README.md`). Beyond the deploy key for its GloriousFlywheel
+checkout it holds two repository-token privileges and no other credential:
+`id-token: write`, so Sigstore Fulcio can issue the keyless signing
+certificate bound to
+`…/.github/workflows/publish-operands.yml@refs/heads/main`, and
+`packages: write`, so `oras` and `cosign` can push the operand manifests and
+their signatures to `ghcr.io/great-falls-tool-bus/gf-*` with `GITHUB_TOKEN`.
+It holds `contents: read` only, runs on `push` to `main` only, and never
+writes to Git. Its `GF_CORE_REF` is a separate role pin
+(`OPERAND_PUBLISHER_CORE_PIN` in `scripts/validate-core-checkout.py`), so
+advancing it never moves the implementation or ARC pins.
+
+`operand-references-pr.yml` is the inverse: it checks out no GloriousFlywheel
+source, carries no deploy key, no `id-token`, and no `packages` scope, and
+holds `actions: read` (to download the publisher run's artifact),
+`contents: write`, and `pull-requests: write` on the repository token so it
+can create the `operands/references-<sha12>` branch, commit the published
+`ArtifactReference` JSONs there through GitHub's signed
+`createCommitOnBranch`, and open the pull request. It runs on `workflow_run`
+of the publisher only and never pushes to `main`. No workflow may hold both
+halves.
 
 ## Optional Site-CI Metadata Token — RETIRED (TIN-3899)
 
@@ -113,10 +139,11 @@ core product logic into this repo.
 
 ## Current Status
 
-The finite `.yml`/`.yaml` census covers 8 workflows. Seven are
-`GF_CORE_REF`-pinned core-checkout consumers with 12 exact-SHA checkout
-declarations. `validate.yml` does not check out core; all eight remain in the census so a new source
-consumer cannot hide under the alternate extension.
+The finite `.yml`/`.yaml` census covers 10 workflows. Eight are
+`GF_CORE_REF`-pinned core-checkout consumers with 13 exact-SHA checkout
+declarations. `validate.yml` and `operand-references-pr.yml` do not check out
+core; all ten remain in the census so a new source consumer cannot hide under
+the alternate extension.
 
 `just core-checkout` validates checkout action immutability, canonical repository,
 finite overlay/core paths, role pin, non-persistence, read-only workflow

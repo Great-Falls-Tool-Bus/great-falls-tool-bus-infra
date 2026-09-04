@@ -1,0 +1,298 @@
+name: Publish Operands
+
+# TIN-2611: the GFTB v4 operand publication carrier. This workflow, at
+# refs/heads/main, IS the O-2 publisher identity. The Sigstore certificate it
+# obtains through GitHub OIDC is the only signer authority the consumer
+# RevocationSet/v1 names as its active root, and it is the only workflow in
+# this repository allowed to push or sign a demand operand. Do not add a second
+# publisher, a manual dispatch path, or a re-sign lane here.
+#
+# It is fail-closed and UNARMED until the three operator ceremonies in
+# operands/README.md have run: every `<TO-FILL:` / `<derived:` placeholder in
+# operands/*.json refuses the run before any registry write, and the run also
+# refuses when the pinned GloriousFlywheel revision does not ship the
+# gf-operand-publisher command (there is no fallback canonicalizer). Nothing in
+# this workflow reads config/organization.yaml or any runner group: the roster
+# ban forbids promoting legacy ARC declarations into v4 demand.
+#
+# Publication order is fixed: TenantOverlay/v1, then OwnerInstallation/v1
+# (its tenantOverlayDigest is the canonical tenant-overlay payload digest),
+# then the consumer RevocationSet/v1. Each operand is one immutable OCI
+# manifest with one exact JSON layer, pushed by digest (no operand tag; the
+# only tags cosign leaves behind are its own signature tags) and signed keyless
+# under this workflow's OIDC identity. The three ArtifactReference JSONs are
+# handed to operand-references-pr.yml as a run artifact; this workflow never
+# writes to Git and holds no contents: write privilege.
+#
+# Triggers are exact: the three authored operand inputs and nothing else, so a
+# README or reference commit-back never republishes.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "operands/owner-installation.json"
+      - "operands/revocation-set.json"
+      - "operands/tenant-overlay.json"
+
+permissions:
+  contents: read
+  id-token: write
+  packages: write
+
+concurrency:
+  group: publish-operands
+  cancel-in-progress: false
+
+env:
+  GF_CORE_REF: 8d428cb83015205ec8e26354e9f9baf479b9a81b
+  # The ARC runner image's Node runtime serves JavaScript actions under this
+  # shim, matching the other Great-Falls-Tool-Bus tinyland-nix workflows.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  # Expected command path inside the pinned GloriousFlywheel checkout. The
+  # guard step refuses when it is absent; nothing here substitutes for it.
+  GF_OPERAND_PUBLISHER_PACKAGE: services/gf-reapi-cell/cmd/gf-operand-publisher
+  OPERAND_REGISTRY_NAMESPACE: ghcr.io/great-falls-tool-bus
+  OPERAND_PUBLISHER_WORKFLOW_FILE: publish-operands.yml
+
+jobs:
+  publish:
+    name: Publish GFTB demand operands
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: tinyland-nix
+    timeout-minutes: 30
+    steps:
+      - name: Checkout overlay
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          path: overlay
+          persist-credentials: false
+
+      - name: Assert the exact source revision and publisher ref
+        run: |
+          set -euo pipefail
+          actual="$(git -C overlay rev-parse --verify HEAD)"
+          if [ "${actual}" != "${GITHUB_SHA}" ]; then
+            echo "::error::overlay checkout ${actual} is not the pushed revision ${GITHUB_SHA}"
+            exit 1
+          fi
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::the publisher identity is bound to refs/heads/main; observed ${GITHUB_REF}"
+            exit 1
+          fi
+          printf 'source revision %s at %s\n' "${GITHUB_SHA}" "${GITHUB_REF}"
+
+      - name: Refuse unfilled ceremony placeholders
+        working-directory: overlay
+        run: |
+          set -euo pipefail
+          status=0
+          for operand in tenant-overlay owner-installation revocation-set; do
+            input="operands/${operand}.json"
+            if [ ! -f "${input}" ]; then
+              echo "::error::${input} is missing"
+              exit 1
+            fi
+            if grep -n -E '<(TO-FILL|derived)[:>]' "${input}"; then
+              echo "::error file=${input}::${input} still carries ceremony placeholders; see operands/README.md"
+              status=1
+            fi
+          done
+          exit "${status}"
+
+      - name: Checkout pinned GloriousFlywheel core
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: tinyland-inc/GloriousFlywheel
+          ref: ${{ env.GF_CORE_REF }}
+          path: GloriousFlywheel
+          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
+          persist-credentials: false
+
+      - name: Verify GloriousFlywheel core checkout
+        run: |
+          set -euo pipefail
+          actual="$(git -C GloriousFlywheel rev-parse --verify HEAD)"
+          if [ "${actual}" != "${GF_CORE_REF}" ]; then
+            echo "::error::GloriousFlywheel checkout mismatch: expected ${GF_CORE_REF}, got ${actual}"
+            exit 1
+          fi
+
+      - name: Refuse when the GloriousFlywheel operand publisher is absent
+        run: |
+          set -euo pipefail
+          publisher="GloriousFlywheel/${GF_OPERAND_PUBLISHER_PACKAGE}"
+          if [ ! -d "${publisher}" ] || ! compgen -G "${publisher}/*.go" >/dev/null; then
+            echo "::error::gf-operand-publisher is absent from GloriousFlywheel@${GF_CORE_REF} (${GF_OPERAND_PUBLISHER_PACKAGE}); refusing. There is no fallback canonicalizer: advance GF_CORE_REF to the revision that ships it."
+            exit 1
+          fi
+          printf 'gf-operand-publisher present at %s\n' "${publisher}"
+
+      - name: Canonicalize operands with the pinned GloriousFlywheel publisher
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            export GF_CORE_PATH=../GloriousFlywheel
+            export GF_CORE_CI_PATH="path:${GF_CORE_PATH}#ci"
+            work="${GITHUB_WORKSPACE}/operand-work"
+            mkdir -p "${work}"
+            inputs="$(pwd)/operands"
+            publisher_module="${GF_CORE_PATH}/services/gf-reapi-cell"
+            run_publisher() {
+              nix develop "${GF_CORE_CI_PATH}" -c env GOTOOLCHAIN=local \
+                go -C "${publisher_module}" run ./cmd/gf-operand-publisher "$@"
+            }
+            run_publisher canonicalize \
+              --kind TenantOverlay/v1 \
+              --input "${inputs}/tenant-overlay.json" \
+              --output "${work}/tenant-overlay.payload.json"
+            run_publisher canonicalize \
+              --kind OwnerInstallation/v1 \
+              --input "${inputs}/owner-installation.json" \
+              --tenant-overlay-payload "${work}/tenant-overlay.payload.json" \
+              --output "${work}/owner-installation.payload.json"
+            run_publisher canonicalize \
+              --kind RevocationSet/v1 \
+              --input "${inputs}/revocation-set.json" \
+              --output "${work}/revocation-set.payload.json"
+            for operand in tenant-overlay owner-installation revocation-set; do
+              test -s "${work}/${operand}.payload.json"
+            done
+
+      - name: Install oras
+        uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6 # v1
+        with:
+          version: "1.2.0"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: Log in to GHCR for oras and cosign
+        env:
+          OPERAND_REGISTRY_USERNAME: ${{ github.actor }}
+          OPERAND_REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "${OPERAND_REGISTRY_TOKEN}" |
+            oras login ghcr.io --username "${OPERAND_REGISTRY_USERNAME}" --password-stdin
+          printf '%s\n' "${OPERAND_REGISTRY_TOKEN}" |
+            cosign login ghcr.io --username "${OPERAND_REGISTRY_USERNAME}" --password-stdin
+
+      - name: Push and sign each operand by digest
+        run: |
+          set -euo pipefail
+          work="${GITHUB_WORKSPACE}/operand-work"
+          identity="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/.github/workflows/${OPERAND_PUBLISHER_WORKFLOW_FILE}@refs/heads/main"
+          issuer="https://token.actions.githubusercontent.com"
+          signer="${GITHUB_WORKSPACE}/GloriousFlywheel/scripts/sign-image-with-cosign.sh"
+          if [ ! -f "${signer}" ]; then
+            echo "::error::${signer} is absent from GloriousFlywheel@${GF_CORE_REF}"
+            exit 1
+          fi
+          publish_one() {
+            local operand="$1"
+            local artifact_type="$2"
+            local repository="${OPERAND_REGISTRY_NAMESPACE}/gf-${operand}"
+            local payload="${work}/${operand}.payload.json"
+            local manifest="${work}/${operand}.manifest.json"
+            local size
+            size="$(wc -c < "${payload}" | tr -d '[:space:]')"
+            if [ "${size}" -lt 1 ] || [ "${size}" -gt 1048576 ]; then
+              echo "::error::${operand} payload size ${size} is outside the 1..1048576 byte wire bound"
+              return 1
+            fi
+            (
+              cd "${work}"
+              oras push "${repository}" \
+                --artifact-type "${artifact_type}" \
+                --annotation "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+                --export-manifest "${manifest}" \
+                "${operand}.payload.json:${artifact_type}+json"
+            )
+            local digest
+            digest="sha256:$(sha256sum "${manifest}" | cut -d ' ' -f 1)"
+            if ! oras manifest fetch --descriptor "${repository}@${digest}" >/dev/null; then
+              echo "::error::${repository}@${digest} did not resolve after push"
+              return 1
+            fi
+            bash "${signer}" "${repository}@${digest}"
+            cosign verify \
+              --certificate-identity "${identity}" \
+              --certificate-oidc-issuer "${issuer}" \
+              "${repository}@${digest}" >/dev/null
+            printf '%s\n' "${digest}" > "${work}/${operand}.manifest-digest"
+            printf '%s %s@%s\n' "${operand}" "${repository}" "${digest}"
+          }
+          publish_one tenant-overlay application/vnd.tinyland.gf.tenant-overlay.v1
+          publish_one owner-installation application/vnd.tinyland.gf.owner-installation.v1
+          publish_one revocation-set application/vnd.tinyland.gf.revocation-set.v1
+
+      - name: Emit ArtifactReferences with the pinned GloriousFlywheel publisher
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            export GF_CORE_PATH=../GloriousFlywheel
+            export GF_CORE_CI_PATH="path:${GF_CORE_PATH}#ci"
+            work="${GITHUB_WORKSPACE}/operand-work"
+            references="${work}/references"
+            mkdir -p "${references}"
+            publisher_module="${GF_CORE_PATH}/services/gf-reapi-cell"
+            run_publisher() {
+              nix develop "${GF_CORE_CI_PATH}" -c env GOTOOLCHAIN=local \
+                go -C "${publisher_module}" run ./cmd/gf-operand-publisher "$@"
+            }
+            emit_reference() {
+              local operand="$1"
+              local kind="$2"
+              run_publisher reference \
+                --kind "${kind}" \
+                --repository "oci://${OPERAND_REGISTRY_NAMESPACE}/gf-${operand}" \
+                --manifest-digest "$(cat "${work}/${operand}.manifest-digest")" \
+                --payload "${work}/${operand}.payload.json" \
+                --output "${references}/${operand}.reference.json"
+              test -s "${references}/${operand}.reference.json"
+            }
+            emit_reference tenant-overlay TenantOverlay/v1
+            emit_reference owner-installation OwnerInstallation/v1
+            emit_reference revocation-set RevocationSet/v1
+            nix develop "${GF_CORE_CI_PATH}" -c jq -n \
+              --arg sourceRepository "${GITHUB_REPOSITORY}" \
+              --arg sourceRevision "${GITHUB_SHA}" \
+              --arg publisherIdentity "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/.github/workflows/${OPERAND_PUBLISHER_WORKFLOW_FILE}@refs/heads/main" \
+              --arg gfCoreRef "${GF_CORE_REF}" \
+              --arg runId "${GITHUB_RUN_ID}" \
+              --arg runAttempt "${GITHUB_RUN_ATTEMPT}" \
+              '{sourceRepository: $sourceRepository, sourceRevision: $sourceRevision, publisherIdentity: $publisherIdentity, gfCoreRef: $gfCoreRef, runId: $runId, runAttempt: $runAttempt}' \
+              > "${references}/publication.json"
+            test -s "${references}/publication.json"
+
+      - name: Upload the ArtifactReferences for the bounded commit-back
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: gftb-operand-references
+          path: operand-work/references/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Summarize the publication
+        run: |
+          set -euo pipefail
+          work="${GITHUB_WORKSPACE}/operand-work"
+          {
+            echo "## GFTB demand operands published (${GITHUB_SHA})"
+            echo ""
+            echo "Publisher identity: \`${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/.github/workflows/${OPERAND_PUBLISHER_WORKFLOW_FILE}@refs/heads/main\`"
+            echo ""
+            for operand in tenant-overlay owner-installation revocation-set; do
+              echo "- \`${OPERAND_REGISTRY_NAMESPACE}/gf-${operand}@$(cat "${work}/${operand}.manifest-digest")\`"
+            done
+            echo ""
+            echo "The ArtifactReference JSONs are in the \`gftb-operand-references\` run artifact; operand-references-pr.yml opens the bounded commit-back pull request."
+          } >> "$GITHUB_STEP_SUMMARY"
