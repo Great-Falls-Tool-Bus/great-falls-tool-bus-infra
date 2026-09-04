@@ -30,28 +30,13 @@ variable "pages_host" {
   description = <<-EOT
     Host the greatfallstoolbus.org apex + www CNAMEs point at (both
     CF-proxied; the apex is CF-flattened). Default is the ON-CLUSTER
-    origin: the shared honey-ingress Cloudflare Tunnel cname target,
-    routing to the adapter-node web Deployment in
-    greatfallstoolbus-org-production (site ADR 0010 + Amendment 1;
-    cutover 2026-07-06 — web-stack apply run 28767572897 put 2/2
-    replicas Ready on /health, and the tunnel carries public hostnames
-    for apex + www -> the web Service). The REV-2 Access gate is
-    host-scoped and unaffected by this origin change. History: ADR 0003
-    pointed this at CF Pages (greatfallstoolbus-org.pages.dev,
-    2026-07-03, PR #15); ADR 0010 retired the Pages lane, and ADR 0010
-    Amendment 2 (TIN-2560, 2026-07-07) closed the cutover-rollback
-    window early -- the greatfallstoolbus-org Pages project itself is
-    DELETED (workflow run 28801030150, 2026-07-06). Flipping this
-    variable back to "greatfallstoolbus-org.pages.dev" is NOT a valid
-    rollback anymore -- that hostname resolves to nothing; doing so
-    would point the apex at a dead origin. The real rollback is
-    on-cluster and attended: re-plan and re-apply the reviewed
-    web-release-* chain with the previous image digest. The
-    web-stack.yml re-dispatch this note used to name was retired by
-    TIN-3899 -- sequencing: docs/runbooks/oncluster-web-cutover.md
-    section S. (Variable
-    name kept for continuity; renaming to web_origin_host is a
-    follow-up.)
+    origin: the shared honey-ingress Cloudflare Tunnel CNAME target,
+    routing to the static gftb-site Service in
+    greatfallstoolbus-org-production. The Access gate is host-scoped and
+    independent of the origin. A pages.dev or github.io value is not an
+    admitted rollback target. Rollback keeps this DNS target and promotes
+    the previous reviewed image digest through web-release-*. The variable
+    name is retained only for state and input compatibility.
   EOT
   type        = string
   default     = "da3ffda2-68ee-46d1-aa55-ec8dae2bd471.cfargotunnel.com"

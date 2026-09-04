@@ -61,13 +61,8 @@ RAW_TOFU_WORKFLOW = re.compile(r"(?<![A-Za-z0-9_-])tofu(?:\s|-chdir\b)")
 WORKFLOW_ENV_ENTRY = re.compile(r"^          (TF_VAR_[A-Za-z0-9_]+):[ \t]*(.+)$")
 
 RETIRED_ARC_WORKFLOW = Path(".github/workflows/deploy-arc-runners.yml")
-# TIN-3899 Phase 5 step 2: the legacy adapter-node CD carrier. It was the only
-# workflow that ran `just web-stack-apply`, and its
-# `repository_dispatch: web-image-published` trigger let a push to the PUBLIC
-# site repo mutate Deployment/greatfallstoolbus-org unattended. It is deleted;
-# re-adding the file, or re-introducing ANY repository_dispatch consumer in this
-# repository, fails the public surface. The site repo's signal job is retired in
-# the same change.
+# A repository-local web CD workflow or repository_dispatch consumer would
+# recreate the forbidden bridge. Either shape fails the public surface.
 RETIRED_WEB_CD_WORKFLOW = Path(".github/workflows/web-stack.yml")
 # All GFTB-local web parity bridges are historical and may not return. Runs for
 # generations 40/42/43/44/45 ended with terminal success receipts under Meta
@@ -600,7 +595,7 @@ WEB_RELEASE_VALIDATION_SCRIPT = Path("scripts/validate-web-stack.sh")
 # the dead adapter-node carrier are absent; validation covers only live
 # declarations, tracked RBAC, render shape, and secret absence.
 WEB_RELEASE_VALIDATION_SCRIPT_SHA256 = _receipt(
-    "2d866bd9fc106a11", "21e0aea3282875f5", "50d527e66ed326af", "544d1ad54199712a"
+    "b48d56be8f473221", "15b46781dc7700b7", "58053094a6bb24e9", "398906ec15539dcd"
 )
 
 FLAKE_RELEASE_PACKAGES = ("crane", "curl")
@@ -4209,28 +4204,7 @@ def install_web_release_fixture_mocks(
                     value["metadata"] = {"resourceVersion": "fixture-np-list-drift"}
                 sys.stdout.write(json.dumps(value))
                 raise SystemExit(0)
-            # --- the mutating half (web-release-apply / the legacy interlock) ---
-            interlock_jsonpath = (
-                "jsonpath={.spec.template.spec.containers"
-                '[?(@.name=="greatfallstoolbus-org")].image}'
-            )
-            if args == namespace_prefix + [
-                "get",
-                "deployment/greatfallstoolbus-org",
-                "--ignore-not-found",
-                "-o",
-                interlock_jsonpath,
-            ]:
-                if state == "stack-live-absent":
-                    sys.stdout.write("")
-                elif state == "stack-live-promoted":
-                    sys.stdout.write(__IMAGE__)
-                else:
-                    sys.stdout.write(
-                        "ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:"
-                        + "9" * 64
-                    )
-                raise SystemExit(0)
+            # --- the mutating half (web-release-apply) ---
             if args[: len(namespace_prefix) + 1] == namespace_prefix + ["apply"]:
                 apply_args = args[len(namespace_prefix) + 1 :]
                 dry_run = apply_args[:1] == ["--dry-run=server"]
@@ -6043,13 +6017,9 @@ def build_web_release_sandbox_repo(root: Path) -> Path:
 def run_web_release_mutation_fixtures() -> None:
     """Exercise the MUTATING half as real children against mocked binaries.
 
-    The proof recipes have had this coverage since PR #109; the plan/dry-run/
-    apply chain and the legacy-carrier promotion interlock did not. These
-    fixtures assert behavior a body digest cannot: argument order, that the
-    authorization preflight runs before anything is applied, that the legacy
-    egress prune carries --ignore-not-found and happens AFTER the apply and
-    BEFORE the rollout wait, and that every refusal path refuses before the
-    first mutation.
+    These fixtures assert behavior a body digest cannot: argument order, that
+    authorization runs before apply, and that every refusal path stops before
+    the first mutation.
     """
     just_binary = shutil.which("just")
     if just_binary is None:
@@ -6226,9 +6196,8 @@ def run_web_release_mutation_fixtures() -> None:
                 "self-test FAILED: web-release-apply mutated before finishing "
                 "its authorization preflight"
             )
-        # TIN-4254 (W13): the apply-time legacy-egress prune is retired, so the
-        # mutating lane is exactly dry-run -> apply -> rollout wait. A delete
-        # reappearing here is a regression, not a prune.
+        # The mutation is exactly dry-run -> apply -> rollout wait. A delete
+        # or other mutation reappearing here is a regression.
         expected_mutations = [
             f"--kubeconfig {kubeconfig} --namespace {namespace} apply "
             f"--dry-run=server -f {plan}",
@@ -7344,11 +7313,8 @@ def self_test() -> None:
     ):
         raise SystemExit("self-test FAILED: workflow ARC alias was accepted")
 
-    # TIN-3899: the retired CD plane. A workflow that re-declares a
-    # repository_dispatch trigger is exactly how the public site repo used to
-    # reach `just web-stack-apply` unattended, so the trigger itself is refused,
-    # and neither web-stack-apply nor its CD-only helpers remain approved for
-    # any hosted workflow.
+    # A repository_dispatch trigger or either old tree-apply recipe would
+    # recreate the forbidden repository-local CD bridge.
     if not any(
         finding.rule == "workflow-repository-dispatch-retired"
         for finding in scan_workflow_text(
@@ -7374,15 +7340,11 @@ def self_test() -> None:
             "self-test FAILED: workflow_dispatch was mistaken for the retired "
             "repository_dispatch CD trigger"
         )
-    for retired_cd_recipe in (
-        "web-stack-apply",
-        "web-stack-server-dry-run",
-        "web-stack-health",
-    ):
-        if retired_cd_recipe in HOSTED_WORKFLOW_JUST_ALLOWLIST:
+    for forbidden_bridge_recipe in ("web-stack-apply", "web-stack-server-dry-run"):
+        if forbidden_bridge_recipe in HOSTED_WORKFLOW_JUST_ALLOWLIST:
             raise SystemExit(
-                "self-test FAILED: the retired legacy web CD recipe "
-                f"{retired_cd_recipe!r} is still approved for hosted workflows"
+                "self-test FAILED: the forbidden web bridge recipe "
+                f"{forbidden_bridge_recipe!r} is approved for hosted workflows"
             )
     if (REPO / RETIRED_WEB_CD_WORKFLOW).exists():
         raise SystemExit(

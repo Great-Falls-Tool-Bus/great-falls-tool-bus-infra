@@ -7,8 +7,7 @@
 # Record surface (site repo tofu/dns-intent reconciled to TIN-2378):
 #   greatfallstoolbus.org  apex CNAME (CF-flattened) + www -> var.pages_host,
 #                          proxied (the honey-ingress tunnel / on-cluster web
-#                          Deployment since the ADR 0010 cutover, 2026-07-06;
-#                          CF Pages 2026-07-03..06 — see variables.tf)
+#                          static gftb-site Deployment)
 #   latoolb.us             root+www 301 redirect ruleset (variable target)
 # Mail DNS (MX/SPF/DMARC/DKIM) is managed below, gated behind
 # var.mail_dns_enabled (default true after D11 closed self-hosted and TIN-2379
@@ -37,10 +36,9 @@ data "cloudflare_zone" "alias" {
 
 # Apex CNAME: Cloudflare flattens apex CNAMEs automatically (RFC 1034
 # apex constraint is satisfied by CF's CNAME flattening), so the apex can
-# track the Pages host instead of pinning the 185.199.108-111.153 A set.
+# track the shared tunnel target instead of pinning an address set.
 # Proxied from day one: the Access gate (below) requires the apex orange-
-# clouded, and the proxy terminates TLS while the Pages custom-domain
-# certificate issues.
+# clouded, and the proxy terminates TLS before the tunnel origin.
 resource "cloudflare_dns_record" "web_apex" {
   zone_id = data.cloudflare_zone.web.zone_id
   name    = local.web_domain
@@ -78,10 +76,9 @@ resource "cloudflare_zero_trust_access_application" "web_apex" {
 }
 
 # www gets its own Access application sharing the apex allowlist policy.
-# CF Pages serves www.greatfallstoolbus.org as its own custom domain (no
-# implicit www->apex redirect like GitHub Pages did), so without this the
-# www hostname would be an ungated public surface during the REV-2 gated
-# phase. Additive: leaves the apex application untouched.
+# The tunnel serves www.greatfallstoolbus.org independently, so without this
+# application the www hostname would be an ungated public surface during the
+# gated phase. Additive: leaves the apex application untouched.
 resource "cloudflare_zero_trust_access_application" "web_www" {
   zone_id          = data.cloudflare_zone.web.zone_id
   name             = "greatfallstoolbus.org www gate (REV-2)"

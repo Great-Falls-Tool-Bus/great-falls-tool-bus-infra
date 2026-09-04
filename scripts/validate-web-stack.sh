@@ -25,6 +25,7 @@ set -euo pipefail
 # admits only the gftb-site repository, and an unknown namespace fails closed.
 
 dir="${1:?usage: validate-web-stack.sh <manifest-dir>}"
+web_root="$(cd "${dir}/.." && pwd)"
 deploy="${dir}/deployment.yaml"
 svc="${dir}/service.yaml"
 netpol="${dir}/networkpolicy.yaml"
@@ -210,10 +211,10 @@ jq -e '
   fail "default-deny-egress NetworkPolicy must be committed with policyTypes [Egress] and an empty egress rule list"
 
 # --- No committed secret material anywhere in the web stack ------------------
-if grep -REn "kind:\s*Secret" "${dir}" >/dev/null 2>&1; then
+if grep -REn "kind:\s*Secret" "${web_root}" >/dev/null 2>&1; then
   fail "the declare-only web stack must not ship a Secret object"
 fi
-if grep -REn "AGE-SECRET-KEY-1|BEGIN [A-Z ]*PRIVATE KEY|cfat_[A-Za-z0-9_-]{8,}" "${dir}" >/dev/null 2>&1; then
+if grep -REn "AGE-SECRET-KEY-1|BEGIN [A-Z ]*PRIVATE KEY|cfat_[A-Za-z0-9_-]{8,}" "${web_root}" >/dev/null 2>&1; then
   fail "possible committed key material under ${web_root}; this stack carries none"
 fi
 

@@ -1,10 +1,9 @@
 # GFTB production web release and recovery
 
 This is the current operator procedure for promoting the static `gftb-site`
-origin on `greatfallstoolbus.org`. The historical adapter-node cutover,
-Cloudflare Pages bridge, cross-repository dispatch, duplicate web-plan
-workflows, parked preview/reaper contract, and imperative tree-apply carrier
-are retired.
+origin on `greatfallstoolbus.org`. There is no alternate origin,
+cross-repository dispatch, parked preview/reaper contract, or imperative
+tree-apply carrier.
 
 The target is protected GloriousFlywheel v4 owner-overlay convergence. That
 path does not yet provide the complete saved-plan, apply, observer, and
@@ -139,9 +138,9 @@ uses this same transaction:
 3. dry-run and apply that plan;
 4. repeat PINNED, RUNNING, and SERVED proof.
 
-There is no adapter-node, Cloudflare Pages, raw `kubectl`, or direct-tree
-fallback. If the previous immutable candidate is unavailable, stop and restore
-its package/publication authority before changing production.
+There is no alternate-origin, raw `kubectl`, or direct-tree fallback. If the
+previous immutable candidate is unavailable, stop and restore its
+package/publication authority before changing production.
 
 ## Release receipt
 

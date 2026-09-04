@@ -33,8 +33,7 @@ in this directory.
 
 `just web-stack-validate` checks the committed shape and
 `just web-stack-render` renders it without contacting the cluster. The required
-`validate` workflow runs both checks for pull requests. The former duplicate
-`web-plan.yml` and `web-crs.yml` workflows are retired.
+`validate` workflow runs both checks for pull requests.
 
 Validation requires all of the following:
 
@@ -49,8 +48,7 @@ Validation requires all of the following:
 
 ## Current production transaction
 
-The retired adapter-node carrier (`web-stack-apply`, its server dry-run, and
-its promotion interlock) is absent. The current static-origin transaction is:
+The current static-origin transaction is:
 
 1. `just web-release-candidate-proof`
 2. `just web-release-plan`

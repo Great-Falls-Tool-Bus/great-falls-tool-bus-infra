@@ -3,8 +3,7 @@ name: Validate Overlay
 # The sole required status check for main. It is deliberately secret-free and
 # runs unfiltered on every pull request on the GF cache-fronted `tinyland-nix`
 # class (TIN-3914). It validates the complete overlay and renders the committed
-# web declaration offline. The duplicate `web-plan` and `web-crs` workflows are
-# retired; this one job owns that evidence.
+# web declaration offline. This one job owns that evidence.
 
 on:
   pull_request:

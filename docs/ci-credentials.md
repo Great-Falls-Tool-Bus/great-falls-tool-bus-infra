@@ -4,8 +4,7 @@
 out only this public overlay and does not fetch GloriousFlywheel or receive a
 cross-repository credential. The seven core-consuming workflows below are
 different: GloriousFlywheel went private (TIN-4015, 2026-08-22), so they
-credential their GloriousFlywheel checkout with a read-only deploy key. The
-duplicate `web-plan.yml` and `web-crs.yml` workflows are retired.
+credential their GloriousFlywheel checkout with a read-only deploy key.
 
 ## Core Source Checkout
 
