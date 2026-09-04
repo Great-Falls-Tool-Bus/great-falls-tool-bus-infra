@@ -2762,56 +2762,12 @@ web-release-render: _web-release-candidate-inputs
     render_dir="$(mktemp -d "${temp_root}/gftb-web-render.XXXXXX")"
     trap 'rm -rf "${render_dir}"' EXIT
     mkdir -m 700 "${render_dir}/home"
-    [[ -z "${WEB_RELEASE_RENDER_COMMIT:-}" ]] || { echo "WEB_RELEASE_RENDER_COMMIT is not an admitted release input" >&2; exit 2; }
-    render_target="{{ web_stack_dir }}"
-    case "${GFTB_AMENDMENT4_GEN47_REVERSE:-}" in
-    "")
-      env -i PATH="${PATH}" HOME="${render_dir}/home" just web-stack-validate >/dev/null
-      ;;
-    1)
-      [[ "${WEB_APPLY_IMAGE}" == "ghcr.io/great-falls-tool-bus/gftb-site@sha256:498b9715ed123ac8b5e1be0c35a5355ede6880e655e77809b85bf83c8f34f24c" ]] || { echo "Amendment 4 reverse image is not the exact generation-45 operand" >&2; exit 2; }
-      [[ "${WEB_APPLY_SHA}" == "836857bce295dec206cb4ebd6ba45f2956bc8aed" ]] || { echo "Amendment 4 reverse source is not the exact generation-45 operand" >&2; exit 2; }
-      if [[ "${GFTB_AMENDMENT4_GEN47_AUTHORIZED_CARRIER:-}" == 1 ]]; then
-        just _reviewed-web-release-carrier >/dev/null
-      else
-        env -i PATH="${PATH}" HOME="${render_dir}/home" GNUPGHOME="${GNUPGHOME:-}" just _reviewed-clean-main >/dev/null
-      fi
-      bridge_path=".github/workflows/web-generation-47-parity.yml"
-      bridge_entry="$(GIT_NO_REPLACE_OBJECTS=1 git ls-tree HEAD -- "${bridge_path}")"
-      [[ "$(awk '{print $1 " " $2}' <<<"${bridge_entry}")" == "100644 blob" ]] || { echo "Amendment 4 reverse requires its tracked generation-47 bridge" >&2; exit 2; }
-      render_commit="8ecf26987896659727fc623142e170779ff92d41"
-      GIT_NO_REPLACE_OBJECTS=1 git cat-file -e "${render_commit}^{commit}" 2>/dev/null || { echo "Amendment 4 reverse commit does not exist" >&2; exit 2; }
-      GIT_NO_REPLACE_OBJECTS=1 git merge-base --is-ancestor "${render_commit}" HEAD >/dev/null 2>&1 || { echo "Amendment 4 reverse commit is not an ancestor of the carrier" >&2; exit 2; }
-      GIT_NO_REPLACE_OBJECTS=1 git -c gpg.format=openpgp -c gpg.program=gpg -c gpg.openpgp.program=gpg verify-commit "${render_commit}" >/dev/null 2>&1 || { echo "Amendment 4 reverse commit is not validly signed" >&2; exit 2; }
-      render_root="${render_dir}/tree"
-      closed_inputs=(
-        k8s/web/greatfallstoolbus-org-production/deployment.yaml
-        k8s/web/greatfallstoolbus-org-production/service.yaml
-        k8s/web/greatfallstoolbus-org-production/networkpolicy.yaml
-        k8s/web/greatfallstoolbus-org-production/kustomization.yaml
-        k8s/web/greatfallstoolbus-org-production/web-apply-rbac.yaml
-        k8s/web/secrets.contract.yaml
-        tofu/intent/great-falls-tool-bus/web-oncluster-route.json
-        tofu/intent/great-falls-tool-bus/pr-env-lanes.schema.json
-      )
-      for input in "${closed_inputs[@]}"; do
-        [[ "$(GIT_NO_REPLACE_OBJECTS=1 git ls-tree "${render_commit}" -- "${input}" | awk '{print $1 " " $2}')" == "100644 blob" ]] || { echo "Amendment 4 reverse input is not one regular blob: ${input}" >&2; exit 2; }
-        mkdir -p "${render_root}/$(dirname "${input}")"
-        GIT_NO_REPLACE_OBJECTS=1 git cat-file blob "${render_commit}:${input}" > "${render_root}/${input}"
-      done
-      env -i PATH="${PATH}" HOME="${render_dir}/home" bash scripts/validate-web-stack.sh "${render_root}/{{ web_stack_dir }}" >/dev/null
-      render_target="${render_root}/{{ web_stack_dir }}"
-      ;;
-    *)
-      echo "GFTB_AMENDMENT4_GEN47_REVERSE must be unset or exactly 1" >&2
-      exit 2
-      ;;
-    esac
+    env -i PATH="${PATH}" HOME="${render_dir}/home" just web-stack-validate >/dev/null
     rendered="${render_dir}/rendered.yaml"
     # VERBATIM: the committed kustomize bytes are the release bytes. Any
     # yq/jq round-trip on this path would be synthesis-time re-serialization
     # variance and break digest equality with `kubectl kustomize` output.
-    kubectl kustomize "${render_target}" > "${rendered}"
+    kubectl kustomize {{ web_stack_dir }} > "${rendered}"
     # The reviewed inputs are asserted against the COMMITTED pin, never
     # injected. A mismatch means the operator has not committed the pin step
     # for this release yet.
@@ -4205,132 +4161,14 @@ web-release-server-dry-run: _web-release-apply-kubeconfig-contract _web-release-
     repo_root="$(git rev-parse --show-toplevel)"
     kubectl --kubeconfig "${WEB_APPLY_KUBECONFIG}" --namespace {{ web_stack_ns }} apply --dry-run=server -f "${repo_root}/.k8s-plans/web-release.rendered.yaml"
 
-# Ordinary applies require clean, signed, current canonical main. The temporary
-# Amendment-4 generation-47 carrier may instead use the frozen authority marker
-# written only after its workflow proves the signed squash, reviewed parent,
-# exact PR provenance, ruleset, one-shot run, and frozen bytes. That marker
-# deliberately remains valid if an unrelated main merge lands during rollout,
-# so a post-mutation failure cannot strand recovery behind moving-main policy.
-_reviewed-web-release-carrier:
-    #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
-    set -euo pipefail
-    case "${GFTB_AMENDMENT4_GEN47_AUTHORIZED_CARRIER:-}" in
-      "") just _reviewed-clean-main ;;
-      1)
-        [[ "${GITHUB_ACTIONS:-}" == true ]] || { echo "Generation-47 frozen-carrier authority is CI-only" >&2; exit 2; }
-        [[ "${GITHUB_REPOSITORY:-}" == Great-Falls-Tool-Bus/great-falls-tool-bus-infra ]] || { echo "Generation-47 frozen-carrier repository mismatch" >&2; exit 2; }
-        [[ "${GITHUB_EVENT_NAME:-}" == push && "${GITHUB_REF:-}" == refs/heads/main ]] || { echo "Generation-47 frozen-carrier event mismatch" >&2; exit 2; }
-        [[ "${GITHUB_WORKFLOW_REF:-}" == Great-Falls-Tool-Bus/great-falls-tool-bus-infra/.github/workflows/web-generation-47-parity.yml@refs/heads/main ]] || { echo "Generation-47 frozen-carrier workflow mismatch" >&2; exit 2; }
-        [[ "${GITHUB_WORKFLOW_SHA:-}" == "${GITHUB_SHA:-}" && "${GITHUB_RUN_ATTEMPT:-}" == 1 ]] || { echo "Generation-47 frozen-carrier invocation mismatch" >&2; exit 2; }
-        [[ -n "${RUNNER_TEMP:-}" && "${RUNNER_TEMP}" == /* ]] || { echo "Generation-47 frozen-carrier RUNNER_TEMP is invalid" >&2; exit 2; }
-        export LC_ALL=C
-        for name in GIT_CONFIG GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_SYSTEM GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_DIR GIT_WORK_TREE GIT_IMPLICIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_QUARANTINE_PATH GIT_REPLACE_REF_BASE GIT_NO_REPLACE_OBJECTS GIT_NAMESPACE GIT_REFERENCE_BACKEND GIT_SHALLOW_FILE GIT_ATTR_SOURCE GIT_ATTR_NOSYSTEM GIT_OPTIONAL_LOCKS GIT_EXEC_PATH GIT_SSH_COMMAND GIT_ASKPASS; do
-          [[ -z "${!name:-}" ]] || { echo "Generation-47 frozen-carrier authority refuses ambient ${name}" >&2; exit 2; }
-        done
-        export GIT_NO_REPLACE_OBJECTS=1
-        export GIT_ATTR_NOSYSTEM=1
-        export GIT_OPTIONAL_LOCKS=0
-        export GIT_CONFIG_NOSYSTEM=1
-        export GIT_CONFIG_GLOBAL=/dev/null
-        set +e
-        scoped_config="$(git config --show-scope --name-only --get-regexp '.*' 2>/dev/null)"
-        config_status=$?
-        set -e
-        case "${config_status}" in
-          0|1) ;;
-          *) echo "Generation-47 frozen-carrier could not inspect repository Git configuration" >&2; exit 2 ;;
-        esac
-        set +e
-        awk '
-          {
-            scope = tolower($1)
-            name = tolower($2)
-            if ((scope == "local" || scope == "worktree") &&
-                (name ~ /^url\..*\.insteadof$/ ||
-                 name == "gpg.program" ||
-                 name ~ /^gpg\..*\.program$/ ||
-                 name == "core.sshcommand" ||
-                 name == "core.worktree" ||
-                 name == "core.fsmonitor" ||
-                 name == "core.excludesfile" ||
-                 name == "core.attributesfile" ||
-                 name == "attr.tree" ||
-                 name == "core.trustctime" ||
-                 name == "core.checkstat" ||
-                 name == "core.ignorestat" ||
-                 name == "extensions.refstorage" ||
-                 name ~ /^filter\./ ||
-                 name == "status.showuntrackedfiles" ||
-                 name ~ /^include\./ ||
-                 name ~ /^includeif\./ ||
-                 name ~ /^http\./)) {
-              found = 1
-            }
-          }
-          END { exit(found ? 0 : 1) }
-        ' <<<"${scoped_config}"
-        scoped_status=$?
-        set -e
-        case "${scoped_status}" in
-          0) echo "Generation-47 frozen-carrier authority refuses local/worktree Git configuration that can redirect repository, TLS, proxy, status, or signature verification" >&2; exit 2 ;;
-          1) ;;
-          *) echo "Generation-47 frozen-carrier could not evaluate repository Git configuration" >&2; exit 2 ;;
-        esac
-        for info_name in exclude attributes; do
-          set +e
-          info_path="$(git rev-parse --path-format=absolute --git-path "info/${info_name}" 2>/dev/null)"
-          info_status=$?
-          set -e
-          [[ "${info_status}" == "0" && "${info_path}" == /* ]] || { echo "Generation-47 frozen-carrier could not resolve repository-local Git metadata" >&2; exit 2; }
-          if [[ -e "${info_path}" || -L "${info_path}" ]]; then
-            [[ -f "${info_path}" && ! -L "${info_path}" ]] || { echo "Generation-47 frozen-carrier refuses non-regular repository-local Git metadata" >&2; exit 2; }
-            set +e
-            if [[ "${info_name}" == "exclude" ]]; then
-              awk '!/^#/ && !/^[[:space:]]*$/ { found = 1 } END { exit(found ? 0 : 1) }' "${info_path}"
-            else
-              awk '!/^[[:space:]]*(#|$)/ { found = 1 } END { exit(found ? 0 : 1) }' "${info_path}"
-            fi
-            info_status=$?
-            set -e
-            case "${info_status}" in
-              0) echo "Generation-47 frozen-carrier refuses active repository-local Git ignore or attribute rules" >&2; exit 2 ;;
-              1) ;;
-              *) echo "Generation-47 frozen-carrier could not inspect repository-local Git metadata" >&2; exit 2 ;;
-            esac
-          fi
-        done
-        [[ "$(git branch --show-current)" == main ]] || { echo "Generation-47 frozen-carrier checkout is not main" >&2; exit 2; }
-        set +e
-        worktree_status="$(git -c core.excludesFile=/dev/null -c core.attributesFile=/dev/null -c core.untrackedCache=false status --porcelain --untracked-files=all 2>/dev/null)"
-        worktree_status_rc=$?
-        set -e
-        [[ "${worktree_status_rc}" == "0" ]] || { echo "Generation-47 frozen-carrier could not inspect worktree status" >&2; exit 2; }
-        [[ -z "${worktree_status}" ]] || { echo "Generation-47 frozen-carrier checkout is dirty" >&2; exit 2; }
-        index_flags="$(git ls-files -v | awk '$1 != "H"')"
-        [[ -z "${index_flags}" ]] || { echo "Generation-47 frozen-carrier refuses assume-unchanged, skip-worktree, or non-cached index flags" >&2; exit 2; }
-        origin_url="$(git remote get-url origin)"
-        case "${origin_url}" in
-          https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra|https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git) ;;
-          *) echo "Generation-47 frozen-carrier origin is not canonical" >&2; exit 2 ;;
-        esac
-        authority_file="${RUNNER_TEMP}/gftb-web-generation-47.authorized-carrier"
-        [[ -f "${authority_file}" && ! -L "${authority_file}" ]] || { echo "Generation-47 frozen-carrier authority marker is absent or unsafe" >&2; exit 2; }
-        [[ "$(stat -c '%a' "${authority_file}")" == 600 ]] || { echo "Generation-47 frozen-carrier authority marker mode is not 0600" >&2; exit 2; }
-        [[ "$(tr -d '\n' < "${authority_file}")" == "${GITHUB_SHA}" ]] || { echo "Generation-47 frozen-carrier authority marker mismatch" >&2; exit 2; }
-        [[ "$(git rev-parse HEAD)" == "${GITHUB_SHA}" ]] || { echo "Generation-47 frozen-carrier checkout mismatch" >&2; exit 2; }
-        git -c gpg.format=openpgp -c gpg.program=gpg -c gpg.openpgp.program=gpg verify-commit "${GITHUB_SHA}" >/dev/null
-        ;;
-      *) echo "Invalid GFTB_AMENDMENT4_GEN47_AUTHORIZED_CARRIER selector" >&2; exit 2 ;;
-    esac
-
-# ATTENDED APPLY. Gated by the carrier contract above, GFTB_APPLY_CONFIRM=apply,
-# an operator-custody kubeconfig, and a plan that still reproduces byte-for-byte.
-# It dry-runs, applies the recorded bytes, and waits for the rollout. (The
-# apply-time prune of the two legacy
+# ATTENDED APPLY. Gated exactly like arc-apply: a clean, signed checkout equal to
+# canonical main, GFTB_APPLY_CONFIRM=apply, an operator-custody kubeconfig, and a
+# plan that still reproduces byte-for-byte. It dry-runs, applies the recorded
+# bytes, and waits for the rollout. (The apply-time prune of the two legacy
 # adapter-node egress policies is retired by TIN-4254: every gen 37..43 apply
 # already ran the delete, the committed tree declares default-deny-egress, and
 # live absence is receipted by an attended read-only census on the pruning PR.)
-web-release-apply: _reviewed-web-release-carrier _operator-apply-confirm _web-release-apply-kubeconfig-contract _web-release-plan-preflight
+web-release-apply: _reviewed-clean-main _operator-apply-confirm _web-release-apply-kubeconfig-contract _web-release-plan-preflight
     #!/usr/bin/env -S BASH_ENV= ENV= SHELLOPTS= BASHOPTS= bash -p
     set +x
     set -euo pipefail
