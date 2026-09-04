@@ -8,7 +8,20 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VALIDATOR="${REPO_ROOT}/scripts/validate-overlay-runner-taxonomy.py"
 TMP_DIR="$(mktemp -d)"
-trap 'test -n "${TMP_DIR}" && test -d "${TMP_DIR}" && rm -rf -- "${TMP_DIR}"' EXIT
+
+cleanup() {
+    rm -f -- \
+        "${TMP_DIR}/out" \
+        "${TMP_DIR}/valid.tfvars" \
+        "${TMP_DIR}/identity-label.tfvars" \
+        "${TMP_DIR}/private-label.tfvars" \
+        "${TMP_DIR}/org-scope.tfvars" \
+        "${TMP_DIR}/repo-scope.tfvars" \
+        "${TMP_DIR}/missing-label.tfvars" \
+        "${TMP_DIR}/missing-registration.tfvars"
+    rmdir -- "${TMP_DIR}"
+}
+trap cleanup EXIT
 
 run() { python3 "${VALIDATOR}" --allow-repo-registration-anchor "$1" >"${TMP_DIR}/out" 2>&1; }
 fail() { echo "SELF-TEST FAILED: $1" >&2; sed -n '1,120p' "${TMP_DIR}/out" >&2; exit 1; }
