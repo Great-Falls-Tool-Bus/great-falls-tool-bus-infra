@@ -150,20 +150,15 @@ readonly WANT_MIGRATOR_SOURCE_SHA="af60fcd7539a4beff6f24e1a95eb11160df7c166"
 readonly WANT_MIGRATOR_IMAGE="ghcr.io/great-falls-tool-bus/greatfallstoolbus.org@sha256:10f853938dc6823afe8c9bdc54943587f963d22117aafd17247350b2b5712b35"
 readonly WANT_PUBLISHER_RUN="33279762284"
 readonly WANT_PUBLISHER_ATTEMPT="1"
-# B1 ruling (2026-08-20): GFTB-owned rustfs backup store. Digest reused
-# verbatim from the house pin source, blahaj deploy/nix-cache/
-# attic-rustfs-openebs.yaml:214.
+# B1 ruling (2026-08-20): GFTB-owned rustfs backup store.
 readonly WANT_RUSTFS_REPO="docker.io/rustfs/rustfs"
-# The house pin source (blahaj attic-rustfs-openebs.yaml:214) carries both a
-# tag and a digest; the digest is what actually pins the pull, and this
-# validator requires it be present and correct regardless of the tag string.
+# The digest pins the pull; the validator requires it be present and correct
+# regardless of the tag string.
 readonly WANT_RUSTFS_TAG="1.0.0-beta.8"
 readonly WANT_RUSTFS_DIGEST="sha256:fa19210ac4697c79d7ccca1ec9b0eb91aebacc6691991ffb14014bb3c67e6cc3"
 readonly WANT_RUSTFS_NAME="gftb-member-db-backup-store"
 readonly MIN_RUSTFS_STORAGE_GI=50
-# B-3 (PR #118 review round): the bucket-create Job. Image digest reused
-# verbatim from the estate's already-vetted mc pin (blahaj
-# scripts/ci-ensure-rustfs-bucket.sh TOFU_RUSTFS_BUCKET_MC_IMAGE default).
+# B-3 (PR #118 review round): the bucket-create Job.
 readonly WANT_MC_REPO="quay.io/minio/mc"
 readonly WANT_MC_DIGEST="sha256:b55b1283c0b81b8bb473c94133d4e00a552518c4796a954ddb04bb7b6e05927d"
 readonly WANT_RUSTFS_ROOT_SECRET="gftb-member-db-backup-store-root"
@@ -455,16 +450,10 @@ assert_closed_pg_egress() {
   policy_types="$(yaml_query -c --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | .spec.policyTypes | sort' "${rendered}")"
   assert_eq "${policy_types}" '["Egress"]' "${policy} policyTypes"
   rule_count="$(yaml_query -r --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | [.spec.egress[]] | length' "${rendered}")"
-  assert_eq "${rule_count}" "3" "${policy} exact egress rule count"
+  assert_eq "${rule_count}" "2" "${policy} exact egress rule count"
   to_count="$(yaml_query -r --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | [.spec.egress[].to[]] | length' "${rendered}")"
-  assert_eq "${to_count}" "3" "${policy} exact destination count"
-  local dns_ns dns_pod dns_ports store_names store_ports peer_names peer_ports
-  dns_ns="$(yaml_query -c --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | [.spec.egress[].to[] | select((.namespaceSelector.matchLabels["kubernetes.io/metadata.name"] // "") == "kube-system") | .namespaceSelector.matchLabels["kubernetes.io/metadata.name"]]' "${rendered}")"
-  assert_eq "${dns_ns}" '["kube-system"]' "${policy} DNS namespace destination"
-  dns_pod="$(yaml_query -c --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | [.spec.egress[].to[] | select((.podSelector.matchLabels["k8s-app"] // "") == "kube-dns") | .podSelector.matchLabels["k8s-app"]]' "${rendered}")"
-  assert_eq "${dns_pod}" '["kube-dns"]' "${policy} DNS pod destination"
-  dns_ports="$(yaml_query -c --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | [.spec.egress[] | select(any(.to[]?; (.podSelector.matchLabels["k8s-app"] // "") == "kube-dns")) | .ports[] | (.protocol + ":" + (.port|tostring))] | sort' "${rendered}")"
-  assert_eq "${dns_ports}" '["TCP:53","UDP:53"]' "${policy} DNS ports"
+  assert_eq "${to_count}" "2" "${policy} exact destination count"
+  local store_names store_ports peer_names peer_ports
   store_names="$(yaml_query -c --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | [.spec.egress[].to[] | select((.podSelector.matchLabels["app.kubernetes.io/name"] // "") == "gftb-member-db-backup-store") | .podSelector.matchLabels["app.kubernetes.io/name"]]' "${rendered}")"
   assert_eq "${store_names}" '["gftb-member-db-backup-store"]' "${policy} backup-store destination"
   store_ports="$(yaml_query -c --arg p "${policy}" 'select(.kind == "NetworkPolicy" and .metadata.name == $p) | [.spec.egress[] | select(any(.to[]?; (.podSelector.matchLabels["app.kubernetes.io/name"] // "") == "gftb-member-db-backup-store")) | .ports[] | (.protocol + ":" + (.port|tostring))] | sort' "${rendered}")"
@@ -493,7 +482,7 @@ allow-intra-cluster
 allow-platform-postgres-ingress
 allow-postgres-egress
 allow-restore-postgres-egress
-backup-store-egress-dns-only
+backup-store-deny-egress
 default-deny-ingress')" "rendered NetworkPolicy names"
 assert_eq "$(yaml_query -r 'select(.kind == "Cluster") | .kind' "${rendered}" | wc -l | tr -d ' ')" "1" "rendered Cluster count"
 assert_eq "$(yaml_query -r 'select(.kind == "ScheduledBackup") | .kind' "${rendered}" | wc -l | tr -d ' ')" "1" "rendered ScheduledBackup count"
@@ -651,20 +640,18 @@ bucket_ingress_identity="$(yaml_query -c "${rustfs_ingress_pol} | [.spec.ingress
 assert_eq "${bucket_ingress_identity}" '[{"app.kubernetes.io/component":"object-store-bootstrap","app.kubernetes.io/name":"gftb-member-db-backup-bucket-create","app.kubernetes.io/part-of":"great-falls-tool-bus"}]' \
   "rustfs ingress bucket-create workload identity"
 
-# Egress: exactly the DNS leg, nothing else — "zero egress beyond DNS".
-rustfs_egress_pol="select(.kind == \"NetworkPolicy\" and .metadata.name == \"backup-store-egress-dns-only\")"
-rustfs_egress_to_count="$(yaml_query -r "${rustfs_egress_pol} | [.spec.egress[].to[]] | length" "${rendered}")"
-assert_eq "${rustfs_egress_to_count}" "1" "rustfs egress NetworkPolicy must admit exactly one destination (DNS)"
-rustfs_egress_ports="$(yaml_query -c "${rustfs_egress_pol} | [.spec.egress[].ports[].port] | sort" "${rendered}")"
-assert_eq "${rustfs_egress_ports}" "[53,53]" "rustfs egress ports (UDP/TCP 53 only)"
+# The passive store has no consumer-owned outbound relation.
+rustfs_egress_pol="select(.kind == \"NetworkPolicy\" and .metadata.name == \"backup-store-deny-egress\")"
+rustfs_egress_rules="$(yaml_query -c "${rustfs_egress_pol} | .spec.egress" "${rendered}")"
+assert_eq "${rustfs_egress_rules}" "[]" "rustfs egress must be denied completely"
 
 bucket_egress_pol='select(.kind == "NetworkPolicy" and .metadata.name == "allow-bucket-create-egress")'
 bucket_egress_selector="$(yaml_query -c "${bucket_egress_pol} | .spec.podSelector.matchLabels | to_entries | sort_by(.key) | from_entries" "${rendered}")"
 assert_eq "${bucket_egress_selector}" '{"app.kubernetes.io/component":"object-store-bootstrap","app.kubernetes.io/name":"gftb-member-db-backup-bucket-create","app.kubernetes.io/part-of":"great-falls-tool-bus"}' \
   "bucket-create egress workload identity"
 bucket_egress_ports="$(yaml_query -c "${bucket_egress_pol} | [.spec.egress[].ports[] | (.protocol + \":\" + (.port|tostring))] | sort" "${rendered}")"
-assert_eq "${bucket_egress_ports}" '["TCP:53","TCP:9000","UDP:53"]' \
-  "bucket-create egress ports (DNS and backup store only)"
+assert_eq "${bucket_egress_ports}" '["TCP:9000"]' \
+  "bucket-create consumer egress port (backup store only)"
 bucket_egress_store="$(yaml_query -c "${bucket_egress_pol} | [.spec.egress[].to[] | select((.podSelector.matchLabels[\"app.kubernetes.io/name\"] // \"\") == \"gftb-member-db-backup-store\") | .podSelector.matchLabels[\"app.kubernetes.io/name\"]]" "${rendered}")"
 assert_eq "${bucket_egress_store}" '["gftb-member-db-backup-store"]' \
   "bucket-create egress backup-store destination"

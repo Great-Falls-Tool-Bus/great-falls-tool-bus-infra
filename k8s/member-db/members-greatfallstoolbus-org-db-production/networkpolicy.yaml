@@ -77,10 +77,10 @@ spec:
         - protocol: TCP
           port: 8000
 ---
-# Consumer-owned egress for the database pods: DNS, the in-namespace backup
-# store, and same-cluster peers. This source is not activatable until protected
-# provider authority supplies the required CNPG control-plane relation outside
-# this carrier; no composition adapter is claimed here.
+# Consumer-owned egress for the database pods: the in-namespace backup store
+# and same-cluster peers. This source is not activatable until protected
+# provider authority supplies the required CNPG control-plane and DNS relations
+# outside this carrier; no composition adapter is claimed here.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -94,19 +94,6 @@ spec:
       cnpg.io/cluster: gftb-member-db
   policyTypes: [Egress]
   egress:
-    # Cluster DNS (rke2-coredns carries k8s-app=kube-dns; verified read-only).
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
     # WAL archive + base backup destination (cluster.yaml barmanObjectStore).
     # This leg is what the RPO row depends on: if it is denied, archive_command
     # fails and WAL piles up on the dedicated walStorage volume.
@@ -138,9 +125,9 @@ spec:
 # Restore rehearsal egress. This is a separate closed policy rather than an
 # In[primary,restore] selector: each cluster may reach only its own peers, so
 # the rehearsal cannot open a primary<->restore path. Destinations mirror the
-# reviewed primary pattern exactly: DNS, the in-namespace backup store, and
+# reviewed primary pattern exactly: the in-namespace backup store and
 # same-cluster CNPG peer traffic. Activation has the same external
-# control-plane prerequisite described above.
+# control-plane and DNS prerequisites described above.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -154,18 +141,6 @@ spec:
       cnpg.io/cluster: gftb-member-db-restore
   policyTypes: [Egress]
   egress:
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
     - to:
         - podSelector:
             matchLabels:
@@ -225,8 +200,9 @@ spec:
           port: 9000
 ---
 # The one-shot bucket initializer carries object-store bootstrap authority.
-# Give that identity exactly DNS and the in-namespace backup-store endpoint;
-# never let it borrow the CNPG label and its API/database-peer egress.
+# Give that identity exactly the in-namespace backup-store endpoint; provider
+# DNS admission is an activation prerequisite outside this carrier. Never let
+# the Job borrow the CNPG label and its API/database-peer egress.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -243,18 +219,6 @@ spec:
   policyTypes: [Egress]
   egress:
     - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
-    - to:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: gftb-member-db-backup-store
@@ -262,15 +226,12 @@ spec:
         - protocol: TCP
           port: 9000
 ---
-# Egress for the backup store pod itself: DNS only. rustfs is a passive S3
-# server with no outbound dependency of its own; this NetworkPolicy's mere
-# presence (policyTypes: [Egress] scoped to this pod) is what turns "no rule
-# matched" into deny, since there is no namespace-wide default-deny-egress
-# policy the way there is for ingress.
+# Deny all egress from the passive backup-store pod. The empty Egress policy is
+# what turns "no rule matched" into deny without encoding provider DNS topology.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: backup-store-egress-dns-only
+  name: backup-store-deny-egress
   namespace: members-greatfallstoolbus-org-db-production
   labels:
     app.kubernetes.io/name: gftb-member-db-backup-store
@@ -279,16 +240,4 @@ spec:
     matchLabels:
       app.kubernetes.io/name: gftb-member-db-backup-store
   policyTypes: [Egress]
-  egress:
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
+  egress: []

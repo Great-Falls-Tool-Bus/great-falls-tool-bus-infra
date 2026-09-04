@@ -50,7 +50,7 @@ consumers.
 - Workload images are digest-pinned and private-registry credentials are
   referenced only by their namespace-local Secret name.
 - Network policies admit only the consumer-owned web, worker, migrator, CNPG,
-  DNS, and backup-store relationships. Provider control-plane and observability
+  and backup-store relationships. Provider control-plane, DNS, and observability
   relations are deliberately absent from this carrier.
 
 The migration image source SHA, publisher receipt, and digest must be advanced
