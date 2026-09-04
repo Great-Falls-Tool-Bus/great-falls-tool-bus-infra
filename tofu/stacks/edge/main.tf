@@ -58,40 +58,23 @@ resource "cloudflare_dns_record" "web_www" {
 }
 
 # --- Access gate for the apex (packet row g REV-2) ---------------------------
-# The live apex serves GATED behind Cloudflare Access until public
-# un-gating is deliberately flipped. Allowlist: var.access_allowed_emails
-# supplied from protected operator custody, not committed.
-
-resource "cloudflare_zero_trust_access_application" "web_apex" {
-  zone_id          = data.cloudflare_zone.web.zone_id
-  name             = "greatfallstoolbus.org apex gate (REV-2)"
-  domain           = local.web_domain
-  type             = "self_hosted"
-  session_duration = "24h"
-
-  policies = [{
-    id         = cloudflare_zero_trust_access_policy.web_apex_allow.id
-    precedence = 1
-  }]
-}
-
-# www gets its own Access application sharing the apex allowlist policy.
-# The tunnel serves www.greatfallstoolbus.org independently, so without this
-# application the www hostname would be an ungated public surface during the
-# gated phase. Additive: leaves the apex application untouched.
-resource "cloudflare_zero_trust_access_application" "web_www" {
-  zone_id          = data.cloudflare_zone.web.zone_id
-  name             = "greatfallstoolbus.org www gate (REV-2)"
-  domain           = "www.${local.web_domain}"
-  type             = "self_hosted"
-  session_duration = "24h"
-
-  policies = [{
-    id         = cloudflare_zero_trust_access_policy.web_apex_allow.id
-    precedence = 1
-  }]
-}
-
+# DESIRED RETIREMENT (TIN-2421, decisions/0014 §1.1, decisions/0021): this
+# change removes the prod apex + www Access gate. The
+# cloudflare_zero_trust_access_application.web_apex / web_www resources and
+# their shared cloudflare_zero_trust_access_policy.web_apex_allow policy
+# (below) are DROPPED here, not scoped down, so the apex and www serve
+# publicly with no Access application in front of them at all.
+#
+# What this deliberately does NOT touch: cloudflare_dns_record.web_apex /
+# web_www above (the CNAMEs keep pointing at var.pages_host unchanged — this
+# is an Access-layer change only, not a DNS or origin change), and the
+# pages_dev / dev_preview_allow dev+preview gate below, which rides its own
+# DECOUPLED policy precisely so this retirement can never un-gate it as a
+# side effect (see the DECOUPLE comment on pages_dev).
+#
+# Rollback: revert this PR and re-apply via edge-plan.yml workflow_dispatch
+# action=apply, which recreates both Access applications and the policy
+# (fresh AUD tags — any bookmarked Access session URLs would need reissuing).
 # --- dev + preview gate (TIN-2535 DECOUPLE keystone) -------------------------
 # RETARGETED from the orphaned "GFTB pages.dev gate (REV-2)" Access application.
 # That app was created out-of-band 2026-07-03 (adopted into state via a one-time
@@ -116,8 +99,9 @@ resource "cloudflare_zero_trust_access_application" "web_www" {
 # DECOUPLE (the safety keystone): this app references its OWN policy
 # (dev_preview_allow -> the "GFTB dev team" group), NOT the shared
 # web_apex_allow. So when TIN-2421 opens the prod apex gate by dropping
-# web_apex / web_www / web_apex_allow, THIS dev/preview gate is untouched and
-# can NEVER be un-gated as a side effect. allowed_idps pins GitHub SSO (when
+# web_apex / web_www / web_apex_allow (see the desired-retirement comment
+# above), THIS dev/preview gate is untouched and can NEVER be
+# un-gated as a side effect. allowed_idps pins GitHub SSO (when
 # enabled) + One-Time-PIN; Google is deliberately absent (it authenticates
 # @sulliwood.org operators only, not the dev team).
 #
@@ -149,7 +133,8 @@ resource "cloudflare_zero_trust_access_application" "pages_dev" {
   self_hosted_domains = ["dev.greatfallstoolbus.org", "*.preview.greatfallstoolbus.org"]
   session_duration    = "24h"
 
-  # DECOUPLED policy — its own allowlist, not web_apex_allow (see above).
+  # DECOUPLED policy — its own allowlist, not the retiring web_apex_allow
+  # (see above).
   policies = [{
     id         = cloudflare_zero_trust_access_policy.dev_preview_allow.id
     precedence = 1
@@ -160,31 +145,19 @@ resource "cloudflare_zero_trust_access_application" "pages_dev" {
 }
 
 
-# Reusable Access policies are account-level API objects; the account id
-# is read from the zone lookup, never committed. The token's Access
-# permission is granted on the account resource but the policy gates only
-# the apex application above — see the token-mint caveat in
-# docs/runbooks/edge-token-and-zones.md step 2.
-resource "cloudflare_zero_trust_access_policy" "web_apex_allow" {
-  account_id = data.cloudflare_zone.web.account.id
-  name       = "GFTB apex allowlist"
-  decision   = "allow"
-
-  include = [
-    for email in var.access_allowed_emails : {
-      email = {
-        email = email
-      }
-    }
-  ]
-}
+# cloudflare_zero_trust_access_policy.web_apex_allow (the shared apex/www
+# allowlist policy) is removed alongside web_apex / web_www above — see the
+# desired-retirement comment on the apex gate section.
+# var.access_allowed_emails has no remaining consumer in this stack; it is
+# left in variables.tf for now as a rollback input rather than pruned in this
+# same change.
 
 # --- dev/preview allowlist (TIN-2535 DECOUPLE keystone) ----------------------
 # A SEPARATE membership + policy pair backing the dev + preview gate, entirely
-# independent of web_apex_allow. This is the decouple: the prod apex retirement
-# (TIN-2421) drops web_apex / web_www / web_apex_allow, and because the
-# dev/preview gate rides THIS group + policy instead, that retirement can never
-# ungate dev or preview.
+# independent of the retiring web_apex_allow. This is the decouple: the
+# prod apex retirement (TIN-2421) drops web_apex / web_www / web_apex_allow,
+# and because the dev/preview gate rides THIS group + policy instead, that
+# retirement can never ungate dev or preview.
 #
 # The group holds the dev-team email membership (var.dev_preview_allowed_emails,
 # fed from the edge secret DEV_PREVIEW_ALLOWED_EMAILS_JSON, default "[]"); the
