@@ -85,13 +85,11 @@ Required list settings:
   requests from strangers reach the keyholders. Rspamd and Mailman moderation
   are the spam/abuse controls.
 - **Public discussion list:** `discuss@latoolb.us` carries public HyperKitty
-  archive semantics (anyone reads). Its ratified TIN-4268 target is
-  `subscription_policy=moderate`, because membership account creation is the
-  only sanctioned writer path. The ticket remains open while the live engine
-  is observed at `confirm` and until the exact-main owner transaction emits
-  its close/readback/refusal receipts — see `list-operations.md` sections 1
-  and 5. Its source/transport reconciliation is tracked separately on
-  TIN-2498. Do not give `keyholders@` public-archive semantics.
+  archive semantics (anyone reads), but only Active-member provisioning may
+  add writers. Its ratified subscription target is `moderate`; TIN-4268 tracks
+  the live `confirm` drift and protected owner-transaction convergence. Its
+  source/transport reconciliation is tracked separately on TIN-2498. Do not
+  give `keyholders@` public-archive semantics.
 
 ## Component pins (TIN-2380)
 
