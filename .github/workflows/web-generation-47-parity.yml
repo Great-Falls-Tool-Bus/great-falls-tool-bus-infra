@@ -63,7 +63,7 @@ env:
   # The bridge-adding PR in great-falls-tool-bus-infra; the authority step
   # binds the merge to it and the parity receipt embeds it. The sole remaining
   # placeholder is filled immediately after GitHub assigns the draft PR number.
-  BRIDGE_PR_NUMBER: PLACEHOLDER_BRIDGE_PR_NUMBER
+  BRIDGE_PR_NUMBER: "179"
 
 jobs:
   parity:
