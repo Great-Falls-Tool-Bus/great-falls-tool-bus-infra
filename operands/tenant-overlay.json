@@ -1,0 +1,30 @@
+{
+  "generation": 1,
+  "capabilityPolicies": [
+    {
+      "capability": "rbe-linux-x86_64",
+      "maxConcurrentActions": "<TO-FILL: O-3 — ratified GFTB organization-wide concurrent-action demand; not an ARC runner count>"
+    }
+  ],
+  "subjectPolicy": {
+    "allowPullRequests": "<TO-FILL: O-3 — ratified boolean>",
+    "allowBranchPushes": "<TO-FILL: O-3 — ratified boolean>",
+    "allowWorkflowDispatch": "<TO-FILL: O-3 — ratified boolean>",
+    "allowSchedules": "<TO-FILL: O-3 — ratified boolean>",
+    "allowEnvironments": "<TO-FILL: O-3 — ratified boolean>"
+  },
+  "trustedWorkflows": [
+    {
+      "jobWorkflowRef": "tinyland-inc/ci-templates/.github/workflows/spoke-ci-v4.yml@32e39ced0008edf4564ebeb173a5e8fbf069e28f",
+      "jobWorkflowSha": "32e39ced0008edf4564ebeb173a5e8fbf069e28f"
+    }
+  ],
+  "writerPolicy": {
+    "actionCacheWriteRefs": [
+      "refs/heads/main"
+    ]
+  },
+  "registryPullProjection": {
+    "kind": "no-projection"
+  }
+}

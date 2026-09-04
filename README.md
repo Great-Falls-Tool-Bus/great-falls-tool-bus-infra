@@ -16,12 +16,18 @@ producer repository:
    those exact OCI artifacts;
 4. application repositories carry exact ActionPlans and call the immutable
    `ci-templates` v4 entrypoint; and
-5. the owner controller verifies GFTB demand, joins it to independently
-   verified provider supply, and publishes the catalog consumed by the v4
-   action client.
+5. the adopter-owned controller verifies GFTB demand and emits a canonical
+   contribution; the tenant-blind provider aggregator joins that contribution
+   to independently verified supply and publishes the catalog consumed by the
+   v4 action client.
 
-That path is not installed here yet. This tree currently carries none of the
-four signed v4 instance types above and no installed controller catalog. The
+That path is not installed here yet. This tree currently carries no signed v4
+instance and no installed controller catalog. [`operands/`](operands/README.md)
+carries deliberately incomplete consumer-owned inputs for the first three
+operand types. It carries no local publisher or reference commit-back: GF's
+landed codec is the sole assembly authority, while its image-custodied
+publication carrier does not yet exist. No operand or controller input is
+published, signed, or live. The
 remaining ARC declarations describe external state that still exists; they are
 an explicit state-continuity hold until the v4 canary proves and one protected
 main change retires the ARC resources and their inputs together. They are not

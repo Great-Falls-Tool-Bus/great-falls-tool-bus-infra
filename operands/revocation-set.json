@@ -1,0 +1,20 @@
+{
+  "scope": {
+    "kind": "consumer",
+    "ownerId": 297983955,
+    "installationId": "<TO-FILL: O-1 — the same product App installation id as owner-installation.json>"
+  },
+  "generation": 1,
+  "predecessor": {
+    "kind": "genesis"
+  },
+  "activeSetRootAuthorityDigest": "<TO-FILL: O-2 — sha256:<64-hex> over the ratified publication signer's canonical three-field authority tuple; no signer exists in this repository today>",
+  "issuedAtEpochSeconds": "<TO-FILL: O-2 — unix seconds at which the genesis set is issued>",
+  "generationFloors": {
+    "ownerInstallation": 1,
+    "tenantOverlay": 1,
+    "providerCapability": 0
+  },
+  "revokedArtifacts": [],
+  "revokedSignerAuthorityDigests": []
+}

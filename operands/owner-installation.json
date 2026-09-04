@@ -1,0 +1,7 @@
+{
+  "ownerId": 297983955,
+  "installationId": "<TO-FILL: O-1 — product GloriousFlywheel App installation id on Great-Falls-Tool-Bus; NEVER the ARC registration App 143981297>",
+  "allRepositories": true,
+  "generation": 1,
+  "tenantOverlayDigest": "<TO-FILL: O-3 — exact sha256 digest of the final GF-canonical TenantOverlay/v1 payload bytes; publication must compare, never derive or repair it>"
+}
