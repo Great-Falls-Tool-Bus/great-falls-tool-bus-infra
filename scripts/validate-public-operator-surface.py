@@ -118,7 +118,7 @@ RETIRED_WEB_GENERATION45_BRIDGE_WORKFLOW = Path(".github/workflows/web-generatio
 # The shared TIN-2611 GF v4 owner-controller chain is the permanent successor;
 # this exception does not arm the superseded local W14 executor.
 WEB_GENERATION47_BRIDGE_WORKFLOW = Path(".github/workflows/web-generation-47-parity.yml")
-WEB_GENERATION47_BRIDGE_SHA256 = "5dd61ab863e77980137581842e029f33bc987c52e3c4252ccb7d6559389745ff"
+WEB_GENERATION47_BRIDGE_SHA256 = "e6f4edd41e95d6362650c873b14b0e85d5a17fb2b256f9f33f32118812f2c4d6"
 WEB_GENERATION47_REVERSE_SELECTOR = "GFTB_AMENDMENT4_GEN47_REVERSE"
 WEB_GENERATION47_PIN_BASE = "f673b5036c2e9195b63ccedf28f94f011db3bd00"
 WEB_GENERATION47_ROLLBACK_INFRA = "8ecf26987896659727fc623142e170779ff92d41"
@@ -165,9 +165,19 @@ WEB_GENERATION47_FROZEN_INPUT_SHA256 = {
     Path("scripts/guard-no-remote-kustomize-resources.sh"): "aacf50ada42c322a8e12eee0af40d55d77598f5468b73c1df574a8b50cc3be17",
     Path("scripts/validate-web-stack.sh"): "c4c3bc53977330afbb79be1f90a783116960a56f9ccf38d57f89936da686d1b3",
 }
-WEB_GENERATION47_GIT_STEERING_PATTERN = (
-    r"url\..*\.insteadof|gpg\.program|gpg\..*\.program|core\.sshcommand|"
-    r"include\..*|includeif\..*"
+WEB_GENERATION47_CLEAN_SHELL = (
+    "shell: /usr/bin/env BASH_ENV= ENV= SHELLOPTS= BASHOPTS= "
+    "/bin/bash --noprofile --norc -p -e {0}"
+)
+WEB_GENERATION47_AMBIENT_GIT_INPUTS = (
+    "for name in GIT_CONFIG GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS "
+    "GIT_CONFIG_SYSTEM GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_DIR "
+    "GIT_WORK_TREE GIT_IMPLICIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE "
+    "GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES "
+    "GIT_QUARANTINE_PATH GIT_REPLACE_REF_BASE GIT_NO_REPLACE_OBJECTS "
+    "GIT_NAMESPACE GIT_REFERENCE_BACKEND GIT_SHALLOW_FILE GIT_ATTR_SOURCE "
+    "GIT_ATTR_NOSYSTEM GIT_OPTIONAL_LOCKS GIT_EXEC_PATH GIT_SSH_COMMAND "
+    "GIT_ASKPASS; do"
 )
 WORKFLOW_REPOSITORY_DISPATCH = re.compile(r"^\s*repository_dispatch\s*:")
 JUST_COMMAND_START = re.compile(r"\bjust\b")
@@ -2083,6 +2093,25 @@ def scan_web_generation47_reverse_selector_contract(
     return findings
 
 
+def workflow_named_step_text(text: str, name: str) -> str:
+    """Return one named workflow step without reading the working tree."""
+    lines = text.splitlines()
+    marker = f"      - name: {name}"
+    matches = [index for index, line in enumerate(lines) if line == marker]
+    if len(matches) != 1:
+        return ""
+    start = matches[0]
+    end = next(
+        (
+            index
+            for index in range(start + 1, len(lines))
+            if lines[index].startswith("      - name: ")
+        ),
+        len(lines),
+    )
+    return "\n".join(lines[start:end])
+
+
 def scan_web_generation47_bridge_contract(
     workflow_text: str, deployment_text: str, justfile_text: str
 ) -> list[Finding]:
@@ -2168,13 +2197,44 @@ def scan_web_generation47_bridge_contract(
             '"strict_required_status_checks_policy":true',
             "length == 5",
         ),
+        "web-generation47-environment-contract-weakened": (
+            'repos/${GITHUB_REPOSITORY}/environments/web-apply',
+            '.name == "web-apply"',
+            ".can_admins_bypass == false",
+            '.deployment_branch_policy == {',
+            '"protected_branches": true',
+            '"custom_branch_policies": false',
+            "(.protection_rules | length) == 1",
+            '.protection_rules[0].type == "branch_policy"',
+        ),
         "web-generation47-pin-provenance-drift": (
             '--arg base "${PIN_BASE_SHA}"',
             '--arg parent "${PIN_BASE_SHA}"',
         ),
         "web-generation47-verifier-steering-weakened": (
+            WEB_GENERATION47_CLEAN_SHELL,
+            WEB_GENERATION47_AMBIENT_GIT_INPUTS,
+            "export GIT_NO_REPLACE_OBJECTS=1",
+            "export GIT_ATTR_NOSYSTEM=1",
+            "export GIT_OPTIONAL_LOCKS=0",
+            "export GIT_CONFIG_NOSYSTEM=1",
+            "export GIT_CONFIG_GLOBAL=/dev/null",
+            "git config --show-scope --name-only --get-regexp '.*'",
+            'name == "core.fsmonitor"',
+            'name == "core.hookspath"',
+            'name == "core.excludesfile"',
+            'name == "core.attributesfile"',
+            'name ~ /^filter\\./',
+            'name ~ /^http\\./',
+            'git rev-parse --path-format=absolute --git-path "info/${info_name}"',
+            "Refusing non-regular repository-local Git metadata.",
+            "Refusing active repository-local Git ignore or attribute rules.",
+            "git -c core.excludesFile=/dev/null -c core.attributesFile=/dev/null "
+            "-c core.untrackedCache=false status --porcelain --untracked-files=all",
+            "git ls-files -v",
+            'git -c core.hooksPath=/dev/null update-ref refs/remotes/origin/main "${GITHUB_SHA}"',
+            'git -c core.hooksPath=/dev/null switch -C main "${GITHUB_SHA}"',
             "exec env -i PATH=\"${tool_path}\" HOME=\"$1\" curl --disable",
-            WEB_GENERATION47_GIT_STEERING_PATTERN,
             "clean_curl https://github.com/web-flow.gpg",
             "git -c gpg.format=openpgp -c gpg.program=gpg "
             "-c gpg.openpgp.program=gpg verify-commit \"${GITHUB_SHA}\"",
@@ -2226,6 +2286,69 @@ def scan_web_generation47_bridge_contract(
                     f"weakened; missing={missing!r}.",
                 )
             )
+    authority_step = workflow_named_step_text(
+        workflow_text, "Verify signed squash authority and frozen inputs"
+    )
+    authority_lines = set(authority_step.splitlines())
+    exact_authority_lines = (
+        "          export LC_ALL=C",
+        f"          {WEB_GENERATION47_AMBIENT_GIT_INPUTS}",
+    )
+    clean_shell_line = f"        {WEB_GENERATION47_CLEAN_SHELL}"
+    workflow_shell_lines = [
+        line
+        for line in workflow_text.splitlines()
+        if line.lstrip().startswith("shell:")
+    ]
+    config_read = (
+        "scoped_config=\"$(git config --show-scope --name-only "
+        "--get-regexp '.*' 2>/dev/null)\""
+    )
+    metadata_read = (
+        'info_path="$(git rev-parse --path-format=absolute --git-path '
+        '"info/${info_name}" 2>/dev/null)"'
+    )
+    status_read = (
+        'worktree_status="$(git -c core.excludesFile=/dev/null '
+        "-c core.attributesFile=/dev/null -c core.untrackedCache=false "
+        'status --porcelain --untracked-files=all 2>/dev/null)"'
+    )
+    ordering_fragments = (
+        WEB_GENERATION47_AMBIENT_GIT_INPUTS,
+        "export GIT_NO_REPLACE_OBJECTS=1",
+        config_read,
+        metadata_read,
+        status_read,
+        'git -c gpg.format=openpgp -c gpg.program=gpg '
+        '-c gpg.openpgp.program=gpg verify-commit "${GITHUB_SHA}"',
+    )
+    ordering_positions = [
+        authority_step.find(fragment) for fragment in ordering_fragments
+    ]
+    git_positions = [
+        match.start() for match in re.finditer(r"\bgit\s", authority_step)
+    ]
+    boundary_weakened = (
+        not authority_step
+        or workflow_shell_lines != [clean_shell_line]
+        or workflow_text.find(clean_shell_line) > workflow_text.find("    steps:")
+        or any(line not in authority_lines for line in exact_authority_lines)
+        or any(position < 0 for position in ordering_positions)
+        or ordering_positions != sorted(ordering_positions)
+        or not git_positions
+        or git_positions[0] != ordering_positions[2] + config_read.index("git ")
+    )
+    if boundary_weakened:
+        findings.append(
+            Finding(
+                "web-generation47-verifier-steering-weakened",
+                WEB_GENERATION47_BRIDGE_WORKFLOW,
+                1,
+                "The authority step must enter its clean shell, refuse every "
+                "ambient Git input, inspect local/worktree configuration and "
+                "metadata, and census the isolated status before any other Git read.",
+            )
+        )
     carrier_definitions = all_just_recipe_blocks(justfile_text).get(
         "_reviewed-web-release-carrier", []
     )
@@ -9459,15 +9582,76 @@ def self_test() -> None:
                     component,
                     replacement,
                     "web-generation47-verifier-steering-weakened",
-                    f"{label} steering reopening",
+                    label,
                 )
                 for component, replacement, label in (
-                    (r"url\..*\.insteadof", r"url\..*\.insteadOf", "URL rewrite"),
-                    (r"gpg\.program", r"gpg\.xprogram", "generic GPG program"),
-                    (r"gpg\..*\.program", r"gpg\..*\.xprogram", "format GPG program"),
-                    (r"core\.sshcommand", r"core\.sshCommand", "SSH command"),
-                    (r"include\..*", r"included\..*", "Git include"),
-                    (r"includeif\..*", r"includeIf\..*", "conditional Git include"),
+                    (
+                        WEB_GENERATION47_CLEAN_SHELL,
+                        "shell: /bin/bash -e {0}",
+                        "job-wide clean-shell removal",
+                    ),
+                    (
+                        WEB_GENERATION47_AMBIENT_GIT_INPUTS,
+                        WEB_GENERATION47_AMBIENT_GIT_INPUTS.replace(
+                            "GIT_CONFIG ", ""
+                        ),
+                        "ambient GIT_CONFIG admission",
+                    ),
+                    (
+                        "export LC_ALL=C",
+                        "export LC_ALL=C.UTF-8",
+                        "locale pin weakening",
+                    ),
+                    (
+                        "export GIT_NO_REPLACE_OBJECTS=1",
+                        "export GIT_NO_REPLACE_OBJECTS=0",
+                        "replacement-object admission",
+                    ),
+                    (
+                        'name == "core.fsmonitor"',
+                        'name == "core.xfsmonitor"',
+                        "fsmonitor steering admission",
+                    ),
+                    (
+                        'name == "core.hookspath"',
+                        'name == "core.xhookspath"',
+                        "hooksPath steering admission",
+                    ),
+                    (
+                        "git config --show-scope --name-only --get-regexp '.*'",
+                        "git config --show-scope --get-regexp '.*'",
+                        "Git configuration value disclosure",
+                    ),
+                    (
+                        'git rev-parse --path-format=absolute --git-path "info/${info_name}"',
+                        'git rev-parse --git-path "info/${info_name}"',
+                        "repository metadata path isolation removal",
+                    ),
+                    (
+                        "git -c core.excludesFile=/dev/null -c core.attributesFile=/dev/null "
+                        "-c core.untrackedCache=false status --porcelain --untracked-files=all",
+                        "git status --porcelain",
+                        "worktree status isolation removal",
+                    ),
+                    (
+                        "git -c core.hooksPath=/dev/null update-ref "
+                        'refs/remotes/origin/main "${GITHUB_SHA}"',
+                        'git update-ref refs/remotes/origin/main "${GITHUB_SHA}"',
+                        "reference-transaction hook reopening",
+                    ),
+                    (
+                        'git -c core.hooksPath=/dev/null switch -C main "${GITHUB_SHA}"',
+                        'git switch -C main "${GITHUB_SHA}"',
+                        "post-checkout hook reopening",
+                    ),
+                    (
+                        "scoped_config=\"$(git config --show-scope --name-only "
+                        "--get-regexp '.*' 2>/dev/null)\"",
+                        "test \"$(git rev-parse HEAD)\" = \"${GITHUB_SHA}\"\n"
+                        "          scoped_config=\"$(git config --show-scope "
+                        "--name-only --get-regexp '.*' 2>/dev/null)\"",
+                        "pre-inspection Git read",
+                    ),
                 )
             ),
             (
@@ -9511,6 +9695,12 @@ def self_test() -> None:
                 '"required_review_thread_resolution":false',
                 "web-generation47-ruleset-contract-weakened",
                 "ruleset review-thread protection changed",
+            ),
+            (
+                ".can_admins_bypass == false",
+                ".can_admins_bypass == true",
+                "web-generation47-environment-contract-weakened",
+                "environment administrator bypass enabled",
             ),
             *(
                 (

@@ -72,6 +72,9 @@ jobs:
     runs-on: tinyland-nix
     timeout-minutes: 30
     environment: web-apply
+    defaults:
+      run:
+        shell: /usr/bin/env BASH_ENV= ENV= SHELLOPTS= BASHOPTS= /bin/bash --noprofile --norc -p -e {0}
     steps:
       - name: Checkout overlay
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -88,6 +91,16 @@ jobs:
           GH_HOST: github.com
         run: |
           set -euo pipefail
+          export LC_ALL=C
+          for name in GIT_CONFIG GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_SYSTEM GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_DIR GIT_WORK_TREE GIT_IMPLICIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_QUARANTINE_PATH GIT_REPLACE_REF_BASE GIT_NO_REPLACE_OBJECTS GIT_NAMESPACE GIT_REFERENCE_BACKEND GIT_SHALLOW_FILE GIT_ATTR_SOURCE GIT_ATTR_NOSYSTEM GIT_OPTIONAL_LOCKS GIT_EXEC_PATH GIT_SSH_COMMAND GIT_ASKPASS; do
+            test -z "${!name:-}" || { echo "::error::Refusing ambient ${name}."; exit 2; }
+          done
+          export GIT_NO_REPLACE_OBJECTS=1
+          export GIT_ATTR_NOSYSTEM=1
+          export GIT_OPTIONAL_LOCKS=0
+          export GIT_CONFIG_NOSYSTEM=1
+          export GIT_CONFIG_GLOBAL=/dev/null
+
           # Refuse before any network call while any operand is still an
           # unfilled placeholder. Every placeholder must be substituted in the
           # env block AND at its inline re-assert below; this guard makes a
@@ -99,15 +112,85 @@ jobs:
             esac
           done
           test "${GITHUB_REPOSITORY}" = Great-Falls-Tool-Bus/great-falls-tool-bus-infra
-          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
-          test -z "$(git status --porcelain)"
-          for name in GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_SYSTEM GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_SSH_COMMAND GIT_ASKPASS; do
-            test -z "${!name:-}" || { echo "::error::Refusing ambient ${name}."; exit 2; }
+
+          set +e
+          scoped_config="$(git config --show-scope --name-only --get-regexp '.*' 2>/dev/null)"
+          config_status=$?
+          set -e
+          case "${config_status}" in
+            0|1) ;;
+            *) echo "::error::Could not inspect repository Git configuration."; exit 2 ;;
+          esac
+          set +e
+          awk '
+            {
+              scope = tolower($1)
+              name = tolower($2)
+              if ((scope == "local" || scope == "worktree") &&
+                  (name ~ /^url\..*\.insteadof$/ ||
+                   name == "gpg.program" ||
+                   name ~ /^gpg\..*\.program$/ ||
+                   name == "core.sshcommand" ||
+                   name == "core.hookspath" ||
+                   name == "core.worktree" ||
+                   name == "core.fsmonitor" ||
+                   name == "core.excludesfile" ||
+                   name == "core.attributesfile" ||
+                   name == "attr.tree" ||
+                   name == "core.trustctime" ||
+                   name == "core.checkstat" ||
+                   name == "core.ignorestat" ||
+                   name == "extensions.refstorage" ||
+                   name ~ /^filter\./ ||
+                   name == "status.showuntrackedfiles" ||
+                   name ~ /^include\./ ||
+                   name ~ /^includeif\./ ||
+                   name ~ /^http\./)) {
+                found = 1
+              }
+            }
+            END { exit(found ? 0 : 1) }
+          ' <<<"${scoped_config}"
+          scoped_status=$?
+          set -e
+          case "${scoped_status}" in
+            0) echo "::error::Refusing local/worktree Git configuration that can steer repository, TLS, proxy, status, or signature verification."; exit 2 ;;
+            1) ;;
+            *) echo "::error::Could not evaluate repository Git configuration."; exit 2 ;;
+          esac
+          for info_name in exclude attributes; do
+            set +e
+            info_path="$(git rev-parse --path-format=absolute --git-path "info/${info_name}" 2>/dev/null)"
+            info_status=$?
+            set -e
+            test "${info_status}" = 0 && [[ "${info_path}" == /* ]] || { echo "::error::Could not resolve repository-local Git metadata."; exit 2; }
+            if [[ -e "${info_path}" || -L "${info_path}" ]]; then
+              [[ -f "${info_path}" && ! -L "${info_path}" ]] || { echo "::error::Refusing non-regular repository-local Git metadata."; exit 2; }
+              set +e
+              if [[ "${info_name}" == exclude ]]; then
+                awk '!/^#/ && !/^[[:space:]]*$/ { found = 1 } END { exit(found ? 0 : 1) }' "${info_path}"
+              else
+                awk '!/^[[:space:]]*(#|$)/ { found = 1 } END { exit(found ? 0 : 1) }' "${info_path}"
+              fi
+              info_status=$?
+              set -e
+              case "${info_status}" in
+                0) echo "::error::Refusing active repository-local Git ignore or attribute rules."; exit 2 ;;
+                1) ;;
+                *) echo "::error::Could not inspect repository-local Git metadata."; exit 2 ;;
+              esac
+            fi
           done
-          if git config --get-regexp '^(url\..*\.insteadof|gpg\.program|gpg\..*\.program|core\.sshcommand|include\..*|includeif\..*)$'; then
-            echo "::error::Git configuration may redirect canonical or signature verification."
-            exit 2
-          fi
+          test "$(git branch --show-current)" = main
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          set +e
+          worktree_status="$(git -c core.excludesFile=/dev/null -c core.attributesFile=/dev/null -c core.untrackedCache=false status --porcelain --untracked-files=all 2>/dev/null)"
+          worktree_status_rc=$?
+          set -e
+          test "${worktree_status_rc}" = 0 || { echo "::error::Could not inspect worktree status."; exit 2; }
+          test -z "${worktree_status}" || { echo "::error::Checkout is dirty."; exit 2; }
+          index_flags="$(git ls-files -v | awk '$1 != "H"')"
+          test -z "${index_flags}" || { echo "::error::Refusing non-default index flags."; exit 2; }
           case "$(git remote get-url origin)" in
             https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra|https://github.com/Great-Falls-Tool-Bus/great-falls-tool-bus-infra.git) ;;
             *) echo "::error::Noncanonical origin."; exit 2 ;;
@@ -228,6 +311,17 @@ jobs:
             )
             and ([.[].type] | sort) == (["deletion", "non_fast_forward", "pull_request", "required_signatures", "required_status_checks"] | sort)
           ' <<<"${effective_rules}" >/dev/null
+          apply_environment="$(api "repos/${GITHUB_REPOSITORY}/environments/web-apply")"
+          jq -e '
+            .name == "web-apply"
+            and .can_admins_bypass == false
+            and .deployment_branch_policy == {
+              "protected_branches": true,
+              "custom_branch_policies": false
+            }
+            and (.protection_rules | length) == 1
+            and .protection_rules[0].type == "branch_policy"
+          ' <<<"${apply_environment}" >/dev/null
 
           # Meta is private to this token. Exact byte-pinned constants bind the
           # already-merged ratification without widening this credential.
@@ -262,8 +356,8 @@ jobs:
           ' <<<"${carrier_runs}" >/dev/null
           printf 'pr-head=%s\nspent=false\n' "${pr_head}" >> "${GITHUB_OUTPUT}"
 
-          git update-ref refs/remotes/origin/main "${GITHUB_SHA}"
-          git switch -C main "${GITHUB_SHA}"
+          git -c core.hooksPath=/dev/null update-ref refs/remotes/origin/main "${GITHUB_SHA}"
+          git -c core.hooksPath=/dev/null switch -C main "${GITHUB_SHA}"
           signer_home="${RUNNER_TEMP}/gftb-web-flow-gnupg"
           mkdir -m 700 "${signer_home}"
           clean_curl https://github.com/web-flow.gpg > "${RUNNER_TEMP}/web-flow.gpg"
