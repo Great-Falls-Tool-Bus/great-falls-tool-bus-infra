@@ -103,7 +103,7 @@ core-checkout-selftest:
 # TIN-3902 runner-group admission contract. config/organization.yaml declares
 # the GitHub-side roster and the ARC tfvars binds the scale sets to it; nothing
 # else holds the two together, because the GloriousFlywheel arc-runners module
-# never reads the roster and the taxonomy validator only parses runner labels.
+# never reads the roster and the taxonomy validator does not own that roster.
 runner-group-contract:
     python3 -B scripts/validate-runner-group-contract.py
 
