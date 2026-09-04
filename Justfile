@@ -103,7 +103,7 @@ core-checkout-selftest:
 # TIN-3902 runner-group admission contract. config/organization.yaml declares
 # the GitHub-side roster and the ARC tfvars binds the scale sets to it; nothing
 # else holds the two together, because the GloriousFlywheel arc-runners module
-# never reads the roster and the taxonomy validator only parses runner labels.
+# never reads the roster and the taxonomy validator does not own that roster.
 runner-group-contract:
     python3 -B scripts/validate-runner-group-contract.py
 
@@ -220,7 +220,7 @@ arc-app-secret-apply: _arc-app-secret-inputs _reviewed-clean-main _reviewed-impl
 taxonomy:
     python3 scripts/validate-overlay-runner-taxonomy.py {{ arc_tfvars }}
 
-# Self-test the overlay taxonomy guard (incl. the RBE cache/executor wiring rule).
+# Self-test the bounded legacy ARC registration/label continuity contract.
 taxonomy-selftest:
     bash scripts/test-overlay-runner-taxonomy.sh
 
@@ -236,41 +236,6 @@ substrate-boundary:
 
 substrate-boundary-selftest:
     python3 scripts/validate-substrate-boundary.py --self-test
-
-# Verify a registered RBE/image consumer against the three live realities GF-core
-# CI cannot see (overlay tfvars anchor + RBE wiring, consumer workflow runs-on,
-# live Helm-managed runner), each reusing an already-built guard. Read-only.
-flywheel-enroll-verify repo="Great-Falls-Tool-Bus/great-falls-tool-bus.github.io":
-    GF_CORE_PATH="{{ gf_core }}" bash scripts/flywheel-enroll-verify.sh "{{ repo }}"
-
-# Read-only enrollment orchestrator: GF-core registry static check -> live verify
-# -> operator-gated provisioning handoff. Never mutates the cluster (mirrors
-# arc-enrollment-plan: sequence read-only verbs, then hand off to the operator).
-flywheel-enroll repo="Great-Falls-Tool-Bus/great-falls-tool-bus.github.io":
-    @python3 "{{ gf_core }}/scripts/validate-consumer-registry.py" --self-test
-    @GF_CORE_PATH="{{ gf_core }}" bash scripts/flywheel-enroll-verify.sh "{{ repo }}"
-    @echo ""
-    @echo "Runner provisioning is operator-gated. To provision/update the scale set:"
-    @echo "  GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-enrollment-plan"
-    @echo "  just arc-plan-show         # review the plan (expect no unexpected destroys)"
-    @echo "  just arc-plan-scope-check  # exact capacity/cutover/rollback plan only"
-    @echo "  GFTB_APPLY_CONFIRM=apply GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-apply"
-    @echo "  GFTB_ARC_EXCLUSIVE_CONFIRM=exclusive just arc-capacity-readback"
-    @echo "This umbrella does NOT mutate the cluster."
-
-# GloriousFlywheel org-tenancy cache-backed Bazel proof (TIN-2364 pre-soak
-# surface). Declare-only + INERT until the operator flips
-# runtime_grants_enabled:true for org-great-falls-tool-bus and rolls the
-# gf-reapi cell + exchange onto the org-grammar image. Exchanges this repo's
-# GitHub OIDC identity for a gf-reapi-cell profile and runs a cache-backed,
-# READ-ONLY Bazel round-trip routed to remote_instance_name=org-great-falls-tool-bus
-# against the hermetic bazel/flywheel-proof/ genrule. Endpoint authority is
-# fleet-runtime env (BAZEL_REMOTE_CACHE, GF_REAPI_TOKEN_EXCHANGE_ENDPOINT); this
-# recipe bakes none and never hard-fails when they are absent. NOT part of
-# `check` (it needs the on-cluster cache substrate).
-flywheel-cache-proof:
-    @bash scripts/remote-only-guard.sh flywheel-cache-proof
-    GFW_EXPECTED_INSTANCE_NAME=org-great-falls-tool-bus bash scripts/flywheel-cache-proof.sh
 
 arc-fmt-check:
     #!/usr/bin/env bash

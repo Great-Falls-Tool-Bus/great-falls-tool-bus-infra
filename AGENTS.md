@@ -1,16 +1,13 @@
 # great-falls-tool-bus-infra Agent Guidance
 
-This repository is the public Great-Falls-Tool-Bus (GFTB) organization
-implementation overlay for GloriousFlywheel. The required `validate` workflow
-is secret-free and, per the 2026-08-19 operator ruling (TIN-3914), runs on the
-GF cache-fronted ARC fleet -- GitHub-hosted runners are not permitted anywhere
-in this org. The other self-hosted workflows hold one repository-scoped,
-read-only source-checkout credential (`GF_CORE_DEPLOY_KEY`, TIN-4015,
-2026-08-22: GloriousFlywheel went private and this repository's own
-`validate-core-checkout.py` enforces that it is the only credential any core
-checkout may carry) -- see docs/ci-credentials.md. ARC apply authority and
-Kubernetes/Cloudflare/DreamHost credentials remain operator-owned; this one
-source-read credential is not apply authority.
+This repository is the public, consumer-owned Great-Falls-Tool-Bus (GFTB)
+overlay and the designated ownership home for GFTB's future signed immutable
+`OwnerInstallation/v1`, `TenantOverlay/v1`, cumulative consumer
+`RevocationSet/v1`, and `OwnerOverlayRevision/v1` instances. Those instances
+and an installed controller catalog do not exist in this tree yet. The legacy
+ARC declarations that remain are explicitly bounded state-continuity surfaces,
+not v4 enrollment authority. GloriousFlywheel core owns the types and verifier,
+never GFTB instances. Provider topology is opaque to the v4 interface.
 
 Hard rules:
 
@@ -20,53 +17,16 @@ Hard rules:
   JSON, workflows, and stacks; use Git history and the changelog for recovery.
   Retain only live declarations and explicitly labelled state-continuity HOLDs
   whose external state still requires readback or a reviewed retirement plan
-- do not introduce repo-specific or org-identity runner labels
-- keep runner labels capability-shaped and aligned with GloriousFlywheel;
-  workflows request shared `tinyland-*` labels only. No workflow in this
-  repository may name a GitHub-hosted label (`ubuntu-*`, `macos-*`,
-  `windows-*`) in `runs-on:` (TIN-3914). The `check-hosted` Just recipe keeps
-  its name for compatibility; it now means "the checks CI runs", not "the
-  checks a GitHub-hosted runner runs"
-- ADMISSION HOLD RESOLVED (PR #128, operator ruling 2026-08-22, TIN-3914):
-  this repository joined the `great-falls-tool-bus-infra` runner group's
-  roster (see the roster rule below), so the `validate` workflow may request
-  `tinyland-nix`. `validate` is the single required status check on `main`
-  and, unlike every other self-hosted workflow here, runs unfiltered on
-  every `pull_request` with no trusted-event gate (by design — a required
-  check must run on every PR); its compensating control is staying
-  secret-free rather than event-gated. That is a standing invariant, not a
-  one-time review note: any future change to `validate.yml` that adds a
-  credential or a protected `environment:` would need its own review against
-  this exception
-- ARC registration for this org is org-scoped
-  (`https://github.com/Great-Falls-Tool-Bus`); do not add repo-scoped
-  registration anchors. Org-scoped registration does not override the
-  separately selected GitHub runner-group admission policy
-- the scale sets bind to the dedicated `great-falls-tool-bus-infra` GitHub
-  runner group (`runner_group` / `runner_group_policy` in the ARC tfvars,
-  roster in `config/organization.yaml` `runner_contract.runner_group`,
-  TIN-3902). That group name is an owner/tenancy admission identity, NOT a
-  runner label and NOT an org-identity label — it does not violate the label
-  rule above and must not be removed as if it did. Never re-point these scale
-  sets at GitHub's `Default` group. Public repository admission
-  (`allows_public_repositories: true`) is accepted by operator ruling
-  2026-08-18 (TIN-3902) so the public `greatfallstoolbus.org` roster entry is
-  effective; TIN-3209's cross-tenant concern is acknowledged and tracked
-  there. Admission stays `visibility: selected` — this repository itself
-  remains excluded. With public admission on, the roster is the ONLY control
-  keeping this repository out (the public-repository flag is no longer a
-  second lock), so adding id 1286829099 is a one-line edit and must stay an
-  explicit operator decision; `just runner-group-contract` fails on that id
-  unless an `infra_repo_admission_ruling:` field records the decision
-- keep `config/organization.yaml` `runner_contract.runner_group` and the ARC
-  tfvars `runner_group` / `runner_group_policy` in agreement; the
-  GloriousFlywheel module never reads the roster, so
-  `scripts/validate-runner-group-contract.py` (via `just check-hosted`) is the
-  only thing holding the two halves of the admission boundary together
-- keep the capacity posture conservative (nix lane only,
-  `nix_max_runners = 4`, no warm pool, docker/dind off) unless an explicit
-  operator decision raises it; the honey/sting pod budget is the scarce
-  resource (TIN-2165/TIN-2234)
+- do not add producer-owned consumer rows, callback/writeback paths, direct
+  provider endpoints, node or storage placement, runner labels, or ARC scale
+  sets to the v4 overlay
+- do not add a local, hosted-runner, cache-only, unauthenticated, v1-token,
+  profile, or direct-endpoint fallback. Missing v4 authority fails closed
+- application repositories declare exact actions; the REAPI action is the
+  unit of work. A GitHub runner may be a thin edge, never the compute or
+  scheduling abstraction
+- the legacy ARC and provider-shaped declarations still present in this tree
+  are retirement inventory, not v4 enrollment authority. Do not extend them
 - keep reusable OpenTofu modules, runner images, and product docs in
   `tinyland-inc/GloriousFlywheel`
 - this overlay owns the GFTB edge/DNS **apply plane**
@@ -90,16 +50,18 @@ Heavy toolchain execution (tofu, kubectl/kustomize, gitleaks, actionlint,
 bazelisk — anything that launches a build or validation toolchain) is
 remote-only on this estate. Guarded Justfile recipes refuse locally via
 `scripts/remote-only-guard.sh` (`REFUSE` to stderr, exit 3, never
-warn-and-continue) and pass only on sanctioned hosted runners
-(`GITHUB_ACTIONS=true` and `RUNNER_ENVIRONMENT` not `github-hosted` — the GF
-admission shell, `tinyland-nix`/ARC). GF v4 is fail-closed with no
-local-execution fallback; the REAPI action, not the runner, is the unit of
-compute (R243). There is no override environment variable; the only non-CI
-pass is a baked `(lane, recipe)` allowlist inside the guard script, which is
-empty in this repository.
+warn-and-continue) and currently pass only on the protected self-hosted CI
+edge (`GITHUB_ACTIONS=true` and `RUNNER_ENVIRONMENT` not `github-hosted`). That
+ARC edge is continuity, not the v4 compute abstraction or proof. The v4 target
+is fail-closed and action-granular: the image-custodied client sends the named
+ActionPlan action to REAPI; missing authority does not enable local execution.
+There is no override environment variable; the only non-CI pass is a baked
+`(lane, recipe)` allowlist inside the guard script, which is empty in this
+repository.
 
-The verification route is: push the branch and read hosted CI — `gh pr
-checks`, `gh run view`, `gh run watch`.
+Until the v4 instance/catalog rung exists, source verification runs through the
+protected CI edge; that is source evidence only, not remote-execution or
+enrollment evidence.
 
 Ratified attended exceptions (unguarded by design):
 
@@ -108,12 +70,14 @@ Ratified attended exceptions (unguarded by design):
   `arc-enrollment-plan` / `arc-app-secret-apply`, `arc-validate`,
   `enrollment-preflight*`, and their `_arc-*` / `_reviewed-*` /
   `_operator-apply-confirm` helpers) — confirm-gated, no CI caller,
-  ratified per docs/runbooks and the implementation overlay
+  bound to the current `Justfile` and
+  `tofu/stacks/arc-runners/great-falls-tool-bus.tfvars` state-continuity
+  surface; it has no v4 authority
 - the web-release ceremony (`web-release-*` and helpers; TIN-3899 /
   decisions/0016) — attended-operator-only, unreachable from every CI
   workflow by design
-- the attended operator lanes: `flywheel-enroll*`, `edge-zones-lock`,
-  `form-altcha-secret-apply`, `list-member-add`,
+- the attended operator lanes: `edge-zones-lock`, `form-altcha-secret-apply`,
+  `list-member-add`,
   `listsync-stack-server-dry-run` / `listsync-stack-apply`,
   `web-stack-health`, and the interlock-dead legacy carrier
   (`web-stack-server-dry-run` / `_web-stack-promotion-interlock` /

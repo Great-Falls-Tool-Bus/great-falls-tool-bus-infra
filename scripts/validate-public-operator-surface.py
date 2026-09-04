@@ -128,7 +128,6 @@ HOSTED_WORKFLOW_JUST_ALLOWLIST = {
     "edge-zones-plan-destroy-check",
     "edge-zones-plan-show",
     "edge-zones-validate",
-    "flywheel-cache-proof",
     "form-stack-apply",
     "form-stack-drift-check",
     "form-stack-server-dry-run",
