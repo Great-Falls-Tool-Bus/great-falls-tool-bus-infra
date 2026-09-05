@@ -58,6 +58,9 @@ check-hosted:
     just arc-fmt-check
     just edge-zones-fmt-check
     just edge-zones-validate
+    just gf-v4-dispatch-fmt-check
+    just gf-v4-dispatch-contract-selftest
+    just gf-v4-dispatch-contract
     just substrate-boundary-selftest
     just substrate-boundary
 
@@ -4173,3 +4176,484 @@ listsync-stack-drift-check: _mail-kubeconfig-inputs
 web-stack-drift-check: _web-apply-kubeconfig-only
     @bash scripts/remote-only-guard.sh web-stack-drift-check
     just _k8s-drift-check "${WEB_APPLY_KUBECONFIG}" {{ web_stack_ns }} {{ web_stack_dir }} web-stack
+
+# --- GF v4 dispatch edge (TIN-2611, RULING 3) --------------------------------
+# Operator ruling 2026-09-05 (TIN-2611): GFTB's `gf-v4-dispatch` edge lives in
+# this -infra overlay. The GloriousFlywheel root module
+# tofu/stacks/arc-owner-overlay-release is consumed at an exact core checkout
+# with -chdir plus this overlay's -var-file and -backend-config, the same shape
+# as the ARC and edge stacks. Hosted CI (.github/workflows/gf-v4-dispatch.yml)
+# validates and plans on trusted push-to-main and applies only on
+# workflow_dispatch action=apply from main under the protected `gf-v4-dispatch`
+# environment. The GitHub App Secret is written only by the attended,
+# confirm-gated gf-v4-dispatch-app-secret-apply recipe, never by CI. The v4
+# dispatch role carries its own pin (a third role pin beside the implementation
+# and ARC pins); scripts/validate-core-checkout.py and
+# scripts/validate-gf-v4-dispatch-contract.py bind it. Procedure and the
+# ceremony 0d ledger: docs/runbooks/gf-v4-dispatch-edge.md.
+
+gf_v4_dispatch_core_sha := "82c96f5ce290bc768062782e911ed66a3527b941"
+gf_v4_dispatch_core_default := "../GloriousFlywheel-gf-v4-82c96f5c"
+gf_v4_dispatch_core_ci_default := "github:tinyland-inc/GloriousFlywheel/82c96f5ce290bc768062782e911ed66a3527b941#ci"
+gf_v4_dispatch_core_stack := "tofu/stacks/arc-owner-overlay-release"
+gf_v4_dispatch_stack := "tofu/stacks/gf-v4-dispatch"
+gf_v4_dispatch_tfvars := "tofu/stacks/gf-v4-dispatch/great-falls-tool-bus.tfvars"
+gf_v4_dispatch_backend := env_var_or_default("GF_V4_DISPATCH_BACKEND", "tofu/backend/honey-gf-v4-dispatch.s3.hcl")
+
+gf-v4-dispatch-fmt-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bash scripts/remote-only-guard.sh gf-v4-dispatch-fmt-check
+    core_ci="${GF_V4_DISPATCH_CORE_CI_PATH:-{{ gf_v4_dispatch_core_ci_default }}}"
+    if command -v tofu >/dev/null 2>&1; then
+        tofu fmt -check -recursive {{ gf_v4_dispatch_stack }}
+    else
+        nix develop "${core_ci}" -c tofu fmt -check -recursive {{ gf_v4_dispatch_stack }}
+    fi
+
+# Offline, toolchain-free contract over the committed overlay surface: tfvars
+# key set and values, organization.yaml joins, the three-way pin, the backend
+# state coordinates, and the tftest digest. Runs inside check-hosted.
+gf-v4-dispatch-contract:
+    python3 -B scripts/validate-gf-v4-dispatch-contract.py
+
+gf-v4-dispatch-contract-selftest:
+    python3 -B scripts/validate-gf-v4-dispatch-contract.py --self-test
+
+# Hosted-callable exact-pin checkout contract for the v4 dispatch role. It is
+# deliberately NOT an ARC operator-local root, so the hosted recipes that
+# depend on it stay untainted. Signature verification needs a keyring the
+# hosted edge does not hold; it is the separate _gf-v4-dispatch-core-signature
+# dependency of the attended recipe.
+_gf-v4-dispatch-core-contract:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    core="${GF_V4_DISPATCH_CORE_PATH:-{{ gf_v4_dispatch_core_default }}}"
+    test -d "${core}/.git" -o -f "${core}/.git" || { echo "GF_V4_DISPATCH_CORE_PATH is not a Git checkout: ${core}" >&2; exit 2; }
+    [[ -z "$(git -C "${core}" status --porcelain)" ]] || { echo "GloriousFlywheel v4 dispatch core must be clean" >&2; exit 2; }
+    index_flags="$(git -C "${core}" ls-files -v | awk '$1 != "H"')"
+    [[ -z "${index_flags}" ]] || { echo "GloriousFlywheel v4 dispatch core refuses assume-unchanged, skip-worktree, or non-cached index flags: ${index_flags}" >&2; exit 2; }
+    [[ "$(git -C "${core}" rev-parse HEAD)" == "{{ gf_v4_dispatch_core_sha }}" ]] || { echo "GloriousFlywheel v4 dispatch core must be {{ gf_v4_dispatch_core_sha }}" >&2; exit 2; }
+    case "$(git -C "${core}" remote get-url origin)" in
+      https://github.com/tinyland-inc/GloriousFlywheel|https://github.com/tinyland-inc/GloriousFlywheel.git|git@github.com:tinyland-inc/GloriousFlywheel.git) ;;
+      *) echo "GloriousFlywheel v4 dispatch core origin is not canonical" >&2; exit 2 ;;
+    esac
+    test -d "${core}/{{ gf_v4_dispatch_core_stack }}" || { echo "GloriousFlywheel v4 dispatch core lacks {{ gf_v4_dispatch_core_stack }}" >&2; exit 2; }
+    core_abs="$(cd "${core}" && pwd -P)"
+    core_ci="${GF_V4_DISPATCH_CORE_CI_PATH:-{{ gf_v4_dispatch_core_ci_default }}}"
+    pinned_ci="github:tinyland-inc/GloriousFlywheel/{{ gf_v4_dispatch_core_sha }}#ci"
+    local_ci="path:${core_abs}#ci"
+    declared_local_ci="path:${core}#ci"
+    [[ "${core_ci}" == "${pinned_ci}" || "${core_ci}" == "${local_ci}" || "${core_ci}" == "${declared_local_ci}" ]] || { echo "GF_V4_DISPATCH_CORE_CI_PATH must be ${pinned_ci} or the reviewed local checkout ${local_ci}" >&2; exit 2; }
+    untracked="$(
+      {
+        git -C "${core}" ls-files --others --exclude-standard -- {{ gf_v4_dispatch_core_stack }} tofu/modules
+        git -C "${core}" ls-files --others --ignored --exclude-standard -- {{ gf_v4_dispatch_core_stack }} tofu/modules
+      } | sort -u
+    )"
+    unexpected="$(python3 -I -c 'import re,sys; pattern=re.compile(r"(^|/)\.terraform(/|$)|(^|/)(override\.(tf|tofu)|.*_override\.(tf|tofu)|.*\.auto\.tfvars(\.json)?|.*\.tfvars(\.json)?|.*\.(tf|tofu)(\.json)?)$"); print("\\n".join(line for line in sys.stdin.read().splitlines() if pattern.search(line)))' <<<"${untracked}")"
+    [[ -z "${unexpected}" ]] || { echo "GloriousFlywheel v4 dispatch core contains untracked/ignored Terraform input: ${unexpected}" >&2; exit 2; }
+    echo "reviewed GF v4 dispatch core: {{ gf_v4_dispatch_core_sha }}"
+
+_gf-v4-dispatch-core-signature:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    core="${GF_V4_DISPATCH_CORE_PATH:-{{ gf_v4_dispatch_core_default }}}"
+    git -C "${core}" -c gpg.format=openpgp -c gpg.program=gpg -c gpg.openpgp.program=gpg verify-commit "{{ gf_v4_dispatch_core_sha }}" >/dev/null
+    echo "signed GF v4 dispatch core: {{ gf_v4_dispatch_core_sha }}"
+
+# The namespace-scoped dispatch transaction kubeconfig (environment secret
+# GF_V4_DISPATCH_KUBECONFIG_B64 in CI, operator custody locally). It is not
+# the ARC operator kubeconfig and this contract is not an ARC operator root.
+_gf-v4-dispatch-kubeconfig-contract:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kubeconfig="${GFTB_GF_V4_DISPATCH_KUBECONFIG:?Set GFTB_GF_V4_DISPATCH_KUBECONFIG to the namespace-scoped dispatch transaction kubeconfig}"
+    [[ -z "${KUBECONFIG:-}" ]] || { echo "Refusing ambient KUBECONFIG; GFTB_GF_V4_DISPATCH_KUBECONFIG is authoritative" >&2; exit 2; }
+    [[ -z "${TF_VAR_k8s_config_path:-}" ]] || { echo "Refusing ambient TF_VAR_k8s_config_path; GFTB_GF_V4_DISPATCH_KUBECONFIG is authoritative" >&2; exit 2; }
+    python3 -I - "${kubeconfig}" "$(pwd)" <<'PY'
+    import os
+    import stat
+    import sys
+    from pathlib import Path
+
+    path = Path(sys.argv[1]).expanduser().resolve(strict=True)
+    repo = Path(sys.argv[2]).resolve(strict=True)
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("GFTB_GF_V4_DISPATCH_KUBECONFIG must remain outside the public repository")
+    metadata = path.stat()
+    if not path.is_file() or metadata.st_uid != os.getuid():
+        raise SystemExit("GFTB_GF_V4_DISPATCH_KUBECONFIG must be a regular file owned by the caller")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise SystemExit("GFTB_GF_V4_DISPATCH_KUBECONFIG must have mode 0600")
+    PY
+    kubectl --kubeconfig "${kubeconfig}" config view --raw -o json | python3 -I - <<'PY'
+    import json
+    import re
+    import sys
+
+    config = json.load(sys.stdin)
+    contexts = config.get("contexts") or []
+    clusters = config.get("clusters") or []
+    users = config.get("users") or []
+    ok = (
+        config.get("current-context") == "honey"
+        and len(contexts) == 1
+        and contexts[0].get("name") == "honey"
+        and (contexts[0].get("context") or {}).get("cluster") == "honey"
+        and (contexts[0].get("context") or {}).get("user") == "honey"
+        and len(clusters) == 1
+        and clusters[0].get("name") == "honey"
+        and re.fullmatch(r"https://[^/?#]+", (clusters[0].get("cluster") or {}).get("server") or "") is not None
+        and bool((clusters[0].get("cluster") or {}).get("certificate-authority-data"))
+        and not (clusters[0].get("cluster") or {}).get("insecure-skip-tls-verify", False)
+        and "proxy-url" not in (clusters[0].get("cluster") or {})
+        and len(users) == 1
+        and users[0].get("name") == "honey"
+        and not any(
+            key in (users[0].get("user") or {})
+            for key in ("exec", "auth-provider", "tokenFile", "client-certificate", "client-key")
+        )
+        and (
+            bool((users[0].get("user") or {}).get("token"))
+            or (
+                bool((users[0].get("user") or {}).get("client-certificate-data"))
+                and bool((users[0].get("user") or {}).get("client-key-data"))
+            )
+        )
+    )
+    if not ok:
+        raise SystemExit("GFTB_GF_V4_DISPATCH_KUBECONFIG must be a single TLS-verified honey context with embedded credentials")
+    PY
+    namespace_uid="$(kubectl --kubeconfig "${kubeconfig}" --context honey get namespace arc-runners-great-falls-tool-bus -o jsonpath='{.metadata.uid}')"
+    [[ "${namespace_uid}" =~ ^[0-9a-f-]{36}$ ]] || { echo "dispatch kubeconfig cannot read the bootstrapped namespace arc-runners-great-falls-tool-bus" >&2; exit 2; }
+    echo "reviewed GF v4 dispatch target: honey/arc-runners-great-falls-tool-bus (${namespace_uid})"
+
+# Offline validation of the pinned root module against this overlay's committed
+# tfvars: init without a backend, validate, then the mock-provider tftest in
+# tofu/stacks/gf-v4-dispatch/tests run FROM the core stack with -var-file.
+gf-v4-dispatch-validate: _gf-v4-dispatch-core-contract
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bash scripts/remote-only-guard.sh gf-v4-dispatch-validate
+    core="${GF_V4_DISPATCH_CORE_PATH:-{{ gf_v4_dispatch_core_default }}}"
+    core_ci="${GF_V4_DISPATCH_CORE_CI_PATH:-{{ gf_v4_dispatch_core_ci_default }}}"
+    stack="${core}/{{ gf_v4_dispatch_core_stack }}"
+    test -d "${stack}"
+    tfvars="$(pwd)/{{ gf_v4_dispatch_tfvars }}"
+    test -f "${tfvars}"
+    tests_dir="$(python3 -I -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$(pwd)/{{ gf_v4_dispatch_stack }}/tests" "${stack}")"
+    tf_data_dir="$(mktemp -d -t great-falls-tool-bus-infra-gf-v4-dispatch-tofu-data.XXXXXX)"
+    trap 'rm -rf "${tf_data_dir}"' EXIT
+    if command -v tofu >/dev/null 2>&1; then
+        run_tofu() { tofu "$@"; }
+    else
+        run_tofu() { nix develop "${core_ci}" -c tofu "$@"; }
+    fi
+    TF_CLI_CONFIG_FILE=/dev/null TF_DATA_DIR="${tf_data_dir}" run_tofu -chdir="${stack}" init -backend=false -input=false -lockfile=readonly >/dev/null
+    TF_CLI_CONFIG_FILE=/dev/null TF_DATA_DIR="${tf_data_dir}" run_tofu -chdir="${stack}" validate
+    TF_CLI_CONFIG_FILE=/dev/null TF_DATA_DIR="${tf_data_dir}" run_tofu -chdir="${stack}" test -no-color -test-directory="${tests_dir}" -var-file="${tfvars}"
+
+gf-v4-dispatch-init: _gf-v4-dispatch-core-contract _gf-v4-dispatch-kubeconfig-contract
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bash scripts/remote-only-guard.sh gf-v4-dispatch-init
+    core="${GF_V4_DISPATCH_CORE_PATH:-{{ gf_v4_dispatch_core_default }}}"
+    core_ci="${GF_V4_DISPATCH_CORE_CI_PATH:-{{ gf_v4_dispatch_core_ci_default }}}"
+    stack="${core}/{{ gf_v4_dispatch_core_stack }}"
+    kubeconfig="${GFTB_GF_V4_DISPATCH_KUBECONFIG:?Set GFTB_GF_V4_DISPATCH_KUBECONFIG to the namespace-scoped dispatch transaction kubeconfig}"
+    : "${AWS_ACCESS_KEY_ID:?Set the exact RustFS state access key}"
+    : "${AWS_SECRET_ACCESS_KEY:?Set the exact RustFS state secret key}"
+    if [[ ! -e .tofu-plans && ! -L .tofu-plans ]]; then
+        mkdir -m 700 .tofu-plans
+    fi
+    [[ -d .tofu-plans && ! -L .tofu-plans ]] || { echo ".tofu-plans must be a real directory" >&2; exit 2; }
+    data_dir="$(pwd)/.tofu-plans/gf-v4-dispatch.tfdata"
+    if [[ ! -e "${data_dir}" && ! -L "${data_dir}" ]]; then
+        mkdir -m 700 "${data_dir}"
+    fi
+    [[ -d "${data_dir}" && ! -L "${data_dir}" ]] || { echo "GF v4 dispatch TF_DATA_DIR must be a real directory" >&2; exit 2; }
+    backend="{{ gf_v4_dispatch_backend }}"
+    test -f "${backend}"
+    if [[ "${backend}" != /* ]]; then
+        backend="$(pwd)/${backend}"
+    fi
+    python3 -I - "${backend}" "$(pwd)/tofu/backend/honey-gf-v4-dispatch.s3.hcl" "$(pwd)" <<'PY'
+    import os
+    import re
+    import stat
+    import sys
+    from pathlib import Path
+
+    candidate = Path(sys.argv[1]).resolve(strict=True)
+    canonical = Path(sys.argv[2]).resolve(strict=True)
+    repo = Path(sys.argv[3]).resolve(strict=True)
+    if not candidate.is_file():
+        raise SystemExit("GF_V4_DISPATCH_BACKEND must be a regular file")
+    endpoint_pattern = re.compile(r'(?m)^(\s*s3\s*=\s*)"([^"]+)"(\s*)$')
+    canonical_text = canonical.read_text(encoding="utf-8")
+    candidate_text = candidate.read_text(encoding="utf-8")
+    if len(endpoint_pattern.findall(canonical_text)) != 1 or len(endpoint_pattern.findall(candidate_text)) != 1:
+        raise SystemExit("GF v4 dispatch backend must declare exactly one endpoints.s3 value")
+    if endpoint_pattern.sub(r'\1"<ENDPOINT>"\3', candidate_text) != endpoint_pattern.sub(r'\1"<ENDPOINT>"\3', canonical_text):
+        raise SystemExit("GF_V4_DISPATCH_BACKEND may differ from the reviewed backend only at endpoints.s3")
+    endpoint = endpoint_pattern.findall(candidate_text)[0][1]
+    if candidate == canonical:
+        if endpoint != "http://tofu-state-rustfs.nix-cache.svc:9000":
+            raise SystemExit("canonical GF v4 dispatch backend endpoint changed unexpectedly")
+    else:
+        try:
+            candidate.relative_to(repo)
+        except ValueError:
+            pass
+        else:
+            raise SystemExit("temporary GF_V4_DISPATCH_BACKEND must remain outside the public repository")
+        metadata = candidate.stat()
+        if metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) != 0o600:
+            raise SystemExit("temporary GF_V4_DISPATCH_BACKEND must be caller-owned and mode 0600")
+        match = re.fullmatch(r"http://127\.0\.0\.1:([0-9]{1,5})", endpoint)
+        if match is None or not 1 <= int(match.group(1)) <= 65535:
+            raise SystemExit("temporary GF_V4_DISPATCH_BACKEND endpoint must be http://127.0.0.1:<port>")
+    print(f"reviewed GF v4 dispatch backend: tofu-state/great-falls-tool-bus-infra/gf-v4-dispatch via {endpoint}")
+    PY
+    if command -v tofu >/dev/null 2>&1; then
+        run_tofu() { tofu "$@"; }
+    else
+        run_tofu() { nix develop "${core_ci}" -c tofu "$@"; }
+    fi
+    TF_CLI_CONFIG_FILE=/dev/null TF_VAR_k8s_config_path="${kubeconfig}" TF_DATA_DIR="${data_dir}" run_tofu -chdir="${stack}" init -reconfigure -input=false -lockfile=readonly -backend-config="${backend}"
+    workspace="$(TF_CLI_CONFIG_FILE=/dev/null TF_VAR_k8s_config_path="${kubeconfig}" TF_DATA_DIR="${data_dir}" run_tofu -chdir="${stack}" workspace show)"
+    [[ "${workspace}" == "default" ]] || { echo "GF v4 dispatch state must use the default workspace, observed ${workspace}" >&2; exit 2; }
+
+gf-v4-dispatch-plan: _gf-v4-dispatch-core-contract _gf-v4-dispatch-kubeconfig-contract
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bash scripts/remote-only-guard.sh gf-v4-dispatch-plan
+    core="${GF_V4_DISPATCH_CORE_PATH:-{{ gf_v4_dispatch_core_default }}}"
+    core_ci="${GF_V4_DISPATCH_CORE_CI_PATH:-{{ gf_v4_dispatch_core_ci_default }}}"
+    stack="${core}/{{ gf_v4_dispatch_core_stack }}"
+    kubeconfig="${GFTB_GF_V4_DISPATCH_KUBECONFIG:?Set GFTB_GF_V4_DISPATCH_KUBECONFIG to the namespace-scoped dispatch transaction kubeconfig}"
+    data_dir="$(pwd)/.tofu-plans/gf-v4-dispatch.tfdata"
+    [[ -d "${data_dir}" && ! -L "${data_dir}" ]] || { echo "Run the init recipe first; GF v4 dispatch TF_DATA_DIR is missing" >&2; exit 2; }
+    umask 077
+    rm -f .tofu-plans/gf-v4-dispatch.tfplan .tofu-plans/gf-v4-dispatch.tfplan.json
+    if command -v tofu >/dev/null 2>&1; then
+        run_tofu() { tofu "$@"; }
+    else
+        run_tofu() { nix develop "${core_ci}" -c tofu "$@"; }
+    fi
+    TF_CLI_CONFIG_FILE=/dev/null TF_VAR_k8s_config_path="${kubeconfig}" TF_DATA_DIR="${data_dir}" run_tofu -chdir="${stack}" plan -input=false -var-file="$(pwd)/{{ gf_v4_dispatch_tfvars }}" -out="$(pwd)/.tofu-plans/gf-v4-dispatch.tfplan"
+    chmod 600 .tofu-plans/gf-v4-dispatch.tfplan
+
+# Plan JSON embeds variable values and prior state; it stays on the runner and
+# is never uploaded. Only the redacted plan TEXT leaves the job.
+_gf-v4-dispatch-plan-json: _gf-v4-dispatch-core-contract
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bash scripts/remote-only-guard.sh _gf-v4-dispatch-plan-json
+    core="${GF_V4_DISPATCH_CORE_PATH:-{{ gf_v4_dispatch_core_default }}}"
+    core_ci="${GF_V4_DISPATCH_CORE_CI_PATH:-{{ gf_v4_dispatch_core_ci_default }}}"
+    stack="${core}/{{ gf_v4_dispatch_core_stack }}"
+    data_dir="$(pwd)/.tofu-plans/gf-v4-dispatch.tfdata"
+    test -f .tofu-plans/gf-v4-dispatch.tfplan
+    umask 077
+    if command -v tofu >/dev/null 2>&1; then
+        run_tofu() { tofu "$@"; }
+    else
+        run_tofu() { nix develop "${core_ci}" -c tofu "$@"; }
+    fi
+    TF_CLI_CONFIG_FILE=/dev/null TF_DATA_DIR="${data_dir}" run_tofu -chdir="${stack}" show -json "$(pwd)/.tofu-plans/gf-v4-dispatch.tfplan" > .tofu-plans/gf-v4-dispatch.tfplan.json
+
+gf-v4-dispatch-plan-show: _gf-v4-dispatch-core-contract
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bash scripts/remote-only-guard.sh gf-v4-dispatch-plan-show
+    core="${GF_V4_DISPATCH_CORE_PATH:-{{ gf_v4_dispatch_core_default }}}"
+    core_ci="${GF_V4_DISPATCH_CORE_CI_PATH:-{{ gf_v4_dispatch_core_ci_default }}}"
+    stack="${core}/{{ gf_v4_dispatch_core_stack }}"
+    data_dir="$(pwd)/.tofu-plans/gf-v4-dispatch.tfdata"
+    test -f .tofu-plans/gf-v4-dispatch.tfplan
+    if command -v tofu >/dev/null 2>&1; then
+        run_tofu() { tofu "$@"; }
+    else
+        run_tofu() { nix develop "${core_ci}" -c tofu "$@"; }
+    fi
+    TF_CLI_CONFIG_FILE=/dev/null TF_DATA_DIR="${data_dir}" run_tofu -chdir="${stack}" show -no-color "$(pwd)/.tofu-plans/gf-v4-dispatch.tfplan"
+
+# Post-apply zero-diff readback: a fresh plan without -out. Text only.
+_gf-v4-dispatch-plan-text: _gf-v4-dispatch-core-contract _gf-v4-dispatch-kubeconfig-contract
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bash scripts/remote-only-guard.sh _gf-v4-dispatch-plan-text
+    core="${GF_V4_DISPATCH_CORE_PATH:-{{ gf_v4_dispatch_core_default }}}"
+    core_ci="${GF_V4_DISPATCH_CORE_CI_PATH:-{{ gf_v4_dispatch_core_ci_default }}}"
+    stack="${core}/{{ gf_v4_dispatch_core_stack }}"
+    kubeconfig="${GFTB_GF_V4_DISPATCH_KUBECONFIG:?Set GFTB_GF_V4_DISPATCH_KUBECONFIG to the namespace-scoped dispatch transaction kubeconfig}"
+    data_dir="$(pwd)/.tofu-plans/gf-v4-dispatch.tfdata"
+    [[ -d "${data_dir}" && ! -L "${data_dir}" ]] || { echo "Run the init recipe first; GF v4 dispatch TF_DATA_DIR is missing" >&2; exit 2; }
+    if command -v tofu >/dev/null 2>&1; then
+        run_tofu() { tofu "$@"; }
+    else
+        run_tofu() { nix develop "${core_ci}" -c tofu "$@"; }
+    fi
+    TF_CLI_CONFIG_FILE=/dev/null TF_VAR_k8s_config_path="${kubeconfig}" TF_DATA_DIR="${data_dir}" run_tofu -chdir="${stack}" plan -no-color -input=false -var-file="$(pwd)/{{ gf_v4_dispatch_tfvars }}"
+
+# Enumerated scope contract for the v4 dispatch edge. The pinned root module
+# owns exactly one managed resource (module.dispatch.helm_release.arc_runner;
+# the module's nix_store PVC is count-gated off) and exact-reads the bootstrap
+# namespace. Two plans are admitted and nothing else: the first install (one
+# create) and an in-place Helm update. Any delete, replace, import, move,
+# deposed object, drift, or other address fails closed. There is no
+# environment bypass by design.
+gf-v4-dispatch-plan-scope-check: _gf-v4-dispatch-core-contract
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bash scripts/remote-only-guard.sh gf-v4-dispatch-plan-scope-check
+    core="${GF_V4_DISPATCH_CORE_PATH:-{{ gf_v4_dispatch_core_default }}}"
+    core_ci="${GF_V4_DISPATCH_CORE_CI_PATH:-{{ gf_v4_dispatch_core_ci_default }}}"
+    stack="${core}/{{ gf_v4_dispatch_core_stack }}"
+    data_dir="$(pwd)/.tofu-plans/gf-v4-dispatch.tfdata"
+    test -f .tofu-plans/gf-v4-dispatch.tfplan
+    plan_json="$(mktemp "${TMPDIR:-/tmp}/gftb-gf-v4-dispatch-plan.XXXXXX.json")"
+    trap 'rm -f "${plan_json}"' EXIT
+    if command -v tofu >/dev/null 2>&1; then
+        run_tofu() { tofu "$@"; }
+    else
+        run_tofu() { nix develop "${core_ci}" -c tofu "$@"; }
+    fi
+    TF_CLI_CONFIG_FILE=/dev/null TF_DATA_DIR="${data_dir}" run_tofu -chdir="${stack}" show -json "$(pwd)/.tofu-plans/gf-v4-dispatch.tfplan" > "${plan_json}"
+    python3 -I - "${plan_json}" <<'PY'
+    import json
+    import sys
+    from pathlib import Path
+
+    HELM_ADDRESS = "module.dispatch.helm_release.arc_runner"
+    NAMESPACE_DATA_ADDRESS = "data.kubernetes_namespace_v1.dispatch"
+    OUTPUT_NAMES = {"dispatch_edge", "chart_authority", "standing_mutation_authorized"}
+
+
+    def canonical(value):
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+    plan = json.loads(Path(sys.argv[1]).read_text())
+    if not isinstance(plan, dict):
+        raise SystemExit("ERROR: GF v4 dispatch plan JSON must be an object")
+    if plan.get("format_version") != "1.2":
+        raise SystemExit("ERROR: GF v4 dispatch plan format_version must be exactly 1.2")
+    if plan.get("errored") is not False:
+        raise SystemExit("ERROR: GF v4 dispatch plan errored must be exactly false")
+    drift = plan.get("resource_drift", [])
+    if not isinstance(drift, list) or not all(isinstance(item, dict) for item in drift):
+        raise SystemExit("ERROR: GF v4 dispatch plan resource_drift must be a list of objects")
+    if drift:
+        raise SystemExit(
+            "ERROR: GF v4 dispatch plan contains resource drift: "
+            + repr([item.get("address") for item in drift])
+        )
+    changes = plan.get("resource_changes", [])
+    if not isinstance(changes, list):
+        raise SystemExit("ERROR: GF v4 dispatch plan resource_changes must be a list")
+    observed = []
+    for index, resource in enumerate(changes):
+        if not isinstance(resource, dict):
+            raise SystemExit(f"ERROR: resource_changes[{index}] must be an object")
+        change = resource.get("change", {})
+        if not isinstance(change, dict):
+            raise SystemExit(f"ERROR: resource_changes[{index}].change must be an object")
+        actions = change.get("actions")
+        if not isinstance(actions, list) or not actions or not all(isinstance(action, str) for action in actions):
+            raise SystemExit(f"ERROR: resource_changes[{index}] must carry concrete actions")
+        for owner, key in (
+            (resource, "previous_address"),
+            (resource, "deposed"),
+            (resource, "generated_config"),
+            (change, "importing"),
+            (change, "generated_config"),
+        ):
+            if key in owner and owner[key] not in (None, ""):
+                raise SystemExit(
+                    "ERROR: GF v4 dispatch plan contains move/import/deposed/generated metadata on "
+                    + repr(resource.get("address"))
+                )
+        address = resource.get("address")
+        if actions == ["no-op"]:
+            if canonical(change.get("before")) != canonical(change.get("after")):
+                raise SystemExit("ERROR: no-op resource change modifies " + repr(address))
+            continue
+        if resource.get("mode") == "data":
+            if address != NAMESPACE_DATA_ADDRESS or actions != ["read"]:
+                raise SystemExit(
+                    "ERROR: unadmitted data read " + repr(address) + " " + repr(actions)
+                )
+            continue
+        if (
+            resource.get("mode") != "managed"
+            or address != HELM_ADDRESS
+            or resource.get("type") != "helm_release"
+            or resource.get("name") != "arc_runner"
+        ):
+            raise SystemExit(
+                "ERROR: unadmitted resource change " + repr(address) + " " + repr(actions)
+            )
+        if actions not in (["create"], ["update"]):
+            raise SystemExit(
+                "ERROR: the dispatch Helm release admits only a create or an in-place update; observed "
+                + repr(actions)
+            )
+        if change.get("replace_paths"):
+            raise SystemExit("ERROR: the dispatch Helm release plan contains replacement paths")
+        observed.append((address, tuple(actions)))
+    if len(observed) > 1:
+        raise SystemExit("ERROR: the dispatch Helm release appears more than once: " + repr(observed))
+    outputs = plan.get("output_changes", {})
+    if not isinstance(outputs, dict):
+        raise SystemExit("ERROR: GF v4 dispatch plan output_changes must be an object")
+    for name, output in outputs.items():
+        if name not in OUTPUT_NAMES or not isinstance(output, dict):
+            raise SystemExit("ERROR: unadmitted output change " + repr(name))
+        if output.get("actions") not in (["no-op"], ["create"], ["update"]):
+            raise SystemExit("ERROR: unadmitted output action on " + repr(name) + ": " + repr(output.get("actions")))
+        if output.get("before_sensitive") is not False or output.get("after_sensitive") is not False:
+            raise SystemExit("ERROR: GF v4 dispatch outputs must be non-secret; " + repr(name))
+        if output.get("after_unknown") is not False:
+            raise SystemExit("ERROR: GF v4 dispatch output " + repr(name) + " has unknown after-values")
+    if not observed:
+        shape = "no-op"
+    elif observed[0][1] == ("create",):
+        shape = "first-install"
+    else:
+        shape = "in-place-update"
+    print(f"GF v4 dispatch plan scope check passed: {shape}")
+    PY
+
+gf-v4-dispatch-apply: _gf-v4-dispatch-kubeconfig-contract gf-v4-dispatch-plan-scope-check
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bash scripts/remote-only-guard.sh gf-v4-dispatch-apply
+    core="${GF_V4_DISPATCH_CORE_PATH:-{{ gf_v4_dispatch_core_default }}}"
+    core_ci="${GF_V4_DISPATCH_CORE_CI_PATH:-{{ gf_v4_dispatch_core_ci_default }}}"
+    stack="${core}/{{ gf_v4_dispatch_core_stack }}"
+    kubeconfig="${GFTB_GF_V4_DISPATCH_KUBECONFIG:?Set GFTB_GF_V4_DISPATCH_KUBECONFIG to the namespace-scoped dispatch transaction kubeconfig}"
+    data_dir="$(pwd)/.tofu-plans/gf-v4-dispatch.tfdata"
+    test -f .tofu-plans/gf-v4-dispatch.tfplan
+    if command -v tofu >/dev/null 2>&1; then
+        run_tofu() { tofu "$@"; }
+    else
+        run_tofu() { nix develop "${core_ci}" -c tofu "$@"; }
+    fi
+    TF_CLI_CONFIG_FILE=/dev/null TF_VAR_k8s_config_path="${kubeconfig}" TF_DATA_DIR="${data_dir}" run_tofu -chdir="${stack}" apply -input=false "$(pwd)/.tofu-plans/gf-v4-dispatch.tfplan"
+
+# Attended, operator-local, confirm-gated: writes the v4 product App Secret
+# (ceremony 0c custody, never the ARC registration App) into the bootstrapped
+# dispatch namespace ONLY. The core script's default namespace list applies
+# only when no --namespace is given. Unreachable from every CI workflow.
+gf-v4-dispatch-app-secret-apply: _arc-app-secret-inputs _reviewed-clean-main _gf-v4-dispatch-core-contract _gf-v4-dispatch-core-signature _arc-kubeconfig-contract _operator-apply-confirm
+    #!/usr/bin/env bash
+    set -euo pipefail
+    core="${GF_V4_DISPATCH_CORE_PATH:-{{ gf_v4_dispatch_core_default }}}"
+    KUBECONFIG="${GFTB_ARC_KUBECONFIG}" bash "${core}/scripts/implementation-overlay-arc-secret.sh" --overlay-root . --secret-name github-app-secret-great-falls-tool-bus-gf-v4-dispatch --context honey --namespace arc-runners-great-falls-tool-bus --apply

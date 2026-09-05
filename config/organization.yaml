@@ -34,6 +34,34 @@ core:
   # `runner_group` did not exist as an arc-runners stack input before
   # GloriousFlywheel f13f8ad9 (TIN-3209, PR #1303).
 
+# GF v4 GitHub dispatch edge (TIN-2611; operator ruling 2026-09-05, RULING 3:
+# the consumer org's dispatch edge is the consumer's own installation fact and
+# lives in this -infra overlay). The GloriousFlywheel root module
+# tofu/stacks/arc-owner-overlay-release is consumed at `core_pin` through
+# tofu/stacks/gf-v4-dispatch/great-falls-tool-bus.tfvars and the Justfile
+# gf-v4-dispatch-* recipes; scripts/validate-gf-v4-dispatch-contract.py joins
+# this block, the tfvars, the Justfile globals, the workflow pin, and the
+# backend key. `runner_namespace` and `app_secret_name` are module-derived
+# identities recorded here for the reader, not declared (the module derives
+# them from owner_slug). The hosted `gf-v4-dispatch.yml` job is admitted to
+# `tinyland-nix` under class (1) of the runner_group comment below: it carries
+# the `push`/`workflow_dispatch` event gate and its credentialed apply sits
+# behind the `gf-v4-dispatch` environment on workflow_dispatch only.
+dispatch_edge:
+  capability: gf-v4-dispatch
+  owner_slug: great-falls-tool-bus
+  # TO-RATIFY: reuse of the admitted tenancy group declared under
+  # runner_contract.runner_group below (group = tenancy boundary, not
+  # capability). The operator's fork is a dedicated
+  # great-falls-tool-bus-infra-gf-v4-dispatch group with a gftb-site-only
+  # canary roster; docs/runbooks/gf-v4-dispatch-edge.md step 1.
+  runner_group: great-falls-tool-bus-infra
+  core_pin: 82c96f5ce290bc768062782e911ed66a3527b941
+  state_key: great-falls-tool-bus-infra/gf-v4-dispatch/terraform.tfstate
+  environment: gf-v4-dispatch
+  app_secret_name: github-app-secret-great-falls-tool-bus-gf-v4-dispatch
+  runner_namespace: arc-runners-great-falls-tool-bus
+
 substrate:
   cluster:
     name: honey

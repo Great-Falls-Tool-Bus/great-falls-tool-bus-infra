@@ -29,6 +29,15 @@ CORE_FLAKE_PREFIX = f"github:{CORE_REPOSITORY}/"
 CHECKOUT_ACTION = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10"
 IMPLEMENTATION_CORE_PIN = "2281b576bce0e8dd776a047b84e7464f5b508a62"
 ARC_CORE_PIN = "11ace397282ff89aeb1dfeb4a32fcbed3200c2ff"
+# GF v4 dispatch role pin (TIN-2611, RULING 3): GloriousFlywheel main merge of
+# #1751, the first main commit carrying tofu/stacks/arc-owner-overlay-release
+# together with #1766. It binds gf-v4-dispatch.yml's GF_CORE_REF and the
+# Justfile gf_v4_dispatch_core_sha / gf_v4_dispatch_core_ci_default pair;
+# scripts/validate-gf-v4-dispatch-contract.py and
+# scripts/validate-public-operator-surface.py pin the same value. Advancing it
+# is a reviewed adoption change to all three validators together.
+GF_V4_DISPATCH_CORE_PIN = "82c96f5ce290bc768062782e911ed66a3527b941"
+GF_V4_DISPATCH_WORKFLOW = "gf-v4-dispatch.yml"
 EXACT_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 EXPECTED_WORKFLOWS = {
@@ -36,6 +45,7 @@ EXPECTED_WORKFLOWS = {
     "edge-drift.yml",
     "edge-plan.yml",
     "form-crs.yml",
+    GF_V4_DISPATCH_WORKFLOW,
     "k8s-stack-drift.yml",
     "list-crs.yml",
     "mail-crs.yml",
@@ -49,6 +59,7 @@ EXPECTED_CORE_CHECKOUTS = {
     "edge-drift.yml": 1,
     "edge-plan.yml": 1,
     "form-crs.yml": 2,
+    GF_V4_DISPATCH_WORKFLOW: 1,
     "k8s-stack-drift.yml": 2,
     "list-crs.yml": 2,
     "mail-crs.yml": 2,
@@ -56,10 +67,17 @@ EXPECTED_CORE_CHECKOUTS = {
 
 # Preserve the reviewed executable authority for each role. Checkout
 # hardening must not silently import a newer core implementation into unrelated
-# apply, drift, or mail lanes.
+# apply, drift, or mail lanes. The v4 dispatch lane is the one consumer of the
+# v4 role pin; every other consumer stays on the implementation pin.
 EXPECTED_CORE_PINS = {
-    workflow: IMPLEMENTATION_CORE_PIN
-    for workflow in EXPECTED_CORE_CHECKOUTS
+    "archive-stack.yml": IMPLEMENTATION_CORE_PIN,
+    "edge-drift.yml": IMPLEMENTATION_CORE_PIN,
+    "edge-plan.yml": IMPLEMENTATION_CORE_PIN,
+    "form-crs.yml": IMPLEMENTATION_CORE_PIN,
+    GF_V4_DISPATCH_WORKFLOW: GF_V4_DISPATCH_CORE_PIN,
+    "k8s-stack-drift.yml": IMPLEMENTATION_CORE_PIN,
+    "list-crs.yml": IMPLEMENTATION_CORE_PIN,
+    "mail-crs.yml": IMPLEMENTATION_CORE_PIN,
 }
 
 # Every source checkout, including the overlay checkout, is immutable and does
@@ -69,6 +87,7 @@ EXPECTED_ACTION_CHECKOUTS = {
     "edge-drift.yml": 2,
     "edge-plan.yml": 2,
     "form-crs.yml": 4,
+    GF_V4_DISPATCH_WORKFLOW: 2,
     "k8s-stack-drift.yml": 4,
     "list-crs.yml": 4,
     "mail-crs.yml": 4,
@@ -80,6 +99,7 @@ EXPECTED_CORE_CI_PATH_EXPORTS = {
     "edge-drift.yml": 1,
     "edge-plan.yml": 3,
     "form-crs.yml": 3,
+    GF_V4_DISPATCH_WORKFLOW: 5,
     "k8s-stack-drift.yml": 6,
     "list-crs.yml": 3,
     "mail-crs.yml": 3,
@@ -93,6 +113,9 @@ EXPECTED_PERMISSIONS = {
 CONDITIONAL_CHECKOUTS = {
     "edge-drift.yml": "if: steps.secrets.outputs.edge-deploy-secrets-present == 'true'",
     "edge-plan.yml": "if: steps.secrets.outputs.edge-deploy-secrets-present == 'true'",
+    GF_V4_DISPATCH_WORKFLOW: (
+        "if: steps.secrets.outputs.gf-v4-dispatch-secrets-present == 'true'"
+    ),
     "k8s-stack-drift.yml": "if: steps.secrets.outputs.kubeconfig-present == 'true'",
 }
 
@@ -353,6 +376,27 @@ def justfile_arc_pin(source: str) -> str:
     ci_sha = _exact_sha(ci_definition, "Justfile ARC core #ci commit")
     if sha != ci_sha:
         raise ContractError("Justfile ARC checkout and #ci pins must match")
+    return sha
+
+
+def justfile_gf_v4_dispatch_pin(source: str) -> str:
+    sha_definition = _one(
+        re.findall(r'(?m)^gf_v4_dispatch_core_sha\s*:=\s*"([0-9a-f]{40})"\s*$', source),
+        "Justfile gf_v4_dispatch_core_sha authority",
+    )
+    ci_definition = _one(
+        re.findall(
+            r'(?m)^gf_v4_dispatch_core_ci_default\s*:=\s*"'
+            + re.escape(CORE_FLAKE_PREFIX)
+            + r'([0-9a-f]{40})#ci"\s*$',
+            source,
+        ),
+        "Justfile gf_v4_dispatch_core_ci_default authority",
+    )
+    sha = _exact_sha(sha_definition, "Justfile v4 dispatch core commit")
+    ci_sha = _exact_sha(ci_definition, "Justfile v4 dispatch core #ci commit")
+    if sha != ci_sha:
+        raise ContractError("Justfile v4 dispatch checkout and #ci pins must match")
     return sha
 
 
@@ -627,6 +671,18 @@ def validate(root: Path) -> list[str]:
     except ContractError as exc:
         findings.append(str(exc))
 
+    try:
+        observed_v4_pin = justfile_gf_v4_dispatch_pin(
+            _read(root, Path("Justfile"), "Justfile")
+        )
+        if observed_v4_pin != GF_V4_DISPATCH_CORE_PIN:
+            findings.append(
+                "Justfile: v4 dispatch authority must preserve role pin "
+                f"{GF_V4_DISPATCH_CORE_PIN}"
+            )
+    except ContractError as exc:
+        findings.append(str(exc))
+
     for relative in AUTHORITY_DOCS:
         try:
             source = _read(root, relative, f"authority document {relative}")
@@ -816,6 +872,26 @@ def self_test(root: Path) -> None:
             f'arc_core_sha := "{ARC_CORE_PIN}"',
             f'arc_core_sha := "{"c" * 40}"',
         ),
+        "mismatched v4 dispatch role pin": (
+            Path("Justfile"),
+            f'gf_v4_dispatch_core_sha := "{GF_V4_DISPATCH_CORE_PIN}"',
+            f'gf_v4_dispatch_core_sha := "{"d" * 40}"',
+        ),
+        "floating v4 dispatch workflow pin": (
+            WORKFLOW_DIR / GF_V4_DISPATCH_WORKFLOW,
+            f"GF_CORE_REF: {GF_V4_DISPATCH_CORE_PIN}",
+            "GF_CORE_REF: main",
+        ),
+        "v4 dispatch workflow on the implementation pin": (
+            WORKFLOW_DIR / GF_V4_DISPATCH_WORKFLOW,
+            f"GF_CORE_REF: {GF_V4_DISPATCH_CORE_PIN}",
+            f"GF_CORE_REF: {IMPLEMENTATION_CORE_PIN}",
+        ),
+        "v4 dispatch checkout lane condition drift": (
+            WORKFLOW_DIR / GF_V4_DISPATCH_WORKFLOW,
+            "      - name: Checkout overlay\n        if: steps.secrets.outputs.gf-v4-dispatch-secrets-present == 'true'",
+            "      - name: Checkout overlay\n        if: always()",
+        ),
     }
 
     for label, (relative, old, new) in mutations.items():
@@ -866,7 +942,8 @@ def main() -> int:
         f"{sum(EXPECTED_CORE_CHECKOUTS.values())} exact-SHA checkout declarations, "
         f"{sum(EXPECTED_CORE_CI_PATH_EXPORTS.values())} pinned #ci devshell sources, "
         f"implementation pin {IMPLEMENTATION_CORE_PIN}, "
-        f"ARC role pin {ARC_CORE_PIN}; "
+        f"ARC role pin {ARC_CORE_PIN}, "
+        f"v4 dispatch role pin {GF_V4_DISPATCH_CORE_PIN}; "
         "every core-repository checkout binds the read-only GF_CORE_DEPLOY_KEY "
         "deploy key (TIN-4015)"
     )

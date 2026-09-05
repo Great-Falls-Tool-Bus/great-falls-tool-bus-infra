@@ -4,7 +4,10 @@ exports_files([
     "README.md",
     "config/organization.yaml",
     "tofu/backend/honey.s3.hcl",
+    "tofu/backend/honey-gf-v4-dispatch.s3.hcl",
     "tofu/stacks/arc-runners/great-falls-tool-bus.tfvars",
+    "tofu/stacks/gf-v4-dispatch/great-falls-tool-bus.tfvars",
+    "tofu/stacks/gf-v4-dispatch/tests/great-falls-tool-bus.tftest.hcl",
 ])
 
 WORKFLOW_SOURCES = glob([
@@ -65,5 +68,34 @@ test_suite(
     tests = [
         ":core_checkout_contract_selftest",
         ":core_checkout_contract_test",
+    ],
+)
+
+GF_V4_DISPATCH_CONTRACT_SOURCES = [
+    "Justfile",
+    "config/organization.yaml",
+    "tofu/backend/honey-gf-v4-dispatch.s3.hcl",
+    "tofu/stacks/gf-v4-dispatch/great-falls-tool-bus.tfvars",
+    "tofu/stacks/gf-v4-dispatch/tests/great-falls-tool-bus.tftest.hcl",
+] + WORKFLOW_SOURCES
+
+sh_test(
+    name = "gf_v4_dispatch_contract_test",
+    srcs = ["scripts/validate-gf-v4-dispatch-contract.py"],
+    data = GF_V4_DISPATCH_CONTRACT_SOURCES,
+)
+
+sh_test(
+    name = "gf_v4_dispatch_contract_selftest",
+    srcs = ["scripts/validate-gf-v4-dispatch-contract.py"],
+    args = ["--self-test"],
+    data = GF_V4_DISPATCH_CONTRACT_SOURCES,
+)
+
+test_suite(
+    name = "gf_v4_dispatch_contract_tests",
+    tests = [
+        ":gf_v4_dispatch_contract_selftest",
+        ":gf_v4_dispatch_contract_test",
     ],
 )

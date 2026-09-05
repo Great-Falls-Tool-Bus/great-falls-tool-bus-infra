@@ -1,0 +1,305 @@
+name: GF v4 Dispatch Edge
+
+# TIN-2611 / operator ruling 2026-09-05 (RULING 3): GFTB's `gf-v4-dispatch`
+# GitHub dispatch edge is the consumer's own installation fact and lives in this
+# -infra overlay. This workflow consumes the GloriousFlywheel root module
+# tofu/stacks/arc-owner-overlay-release at the exact v4 role pin (GF_CORE_REF
+# below) with this overlay's tfvars and backend, through Justfile recipes only.
+#
+# SHAPE (same as edge-plan.yml): the secret-free Validate Overlay covers pull
+# requests (fmt + offline contract inside `check-hosted`). This private-runner
+# job plans trusted pushes to main and manual dispatches; apply happens only on
+# workflow_dispatch action=apply from refs/heads/main. Every credentialed job in
+# this repository stays off `pull_request` (config/organization.yaml
+# runner_group comment, class (1)); the job-level `if:` below is that gate.
+#
+# CREDENTIALS by name only: GF_CORE_DEPLOY_KEY (repository; read-only core
+# checkout), ARC_RUNNERS_RUSTFS_ACCESS_KEY / ARC_RUNNERS_RUSTFS_SECRET_KEY
+# (repository; state backend), GF_V4_DISPATCH_KUBECONFIG_B64 (environment
+# `gf-v4-dispatch`; namespace-scoped transaction kubeconfig minted after the
+# v4 namespace bootstrap). The GitHub App private key is NEVER an Actions
+# secret: it lives in the GFTB sops lane and is materialized into the cluster
+# only by the attended gf-v4-dispatch-app-secret-apply recipe
+# (docs/runbooks/gf-v4-dispatch-edge.md).
+#
+# FAIL-SOFT on push while the environment secret is absent (the house
+# skip-green idiom, with a notice); manual action=apply fails closed instead.
+# The plan/apply are one job: the apply consumes the exact -out plan produced
+# in the same job, then a fresh text-only plan asserts "No changes.". No plan
+# binary or plan JSON ever leaves the runner.
+#
+# BOOTSTRAP NOTE: this job cannot plan until GloriousFlywheel core carries a
+# v4-shaped namespace bootstrap (labels the release root's namespace
+# postcondition requires plus the gf-v4-action-resolution-endpoint sink). That
+# gap is outside this overlay; see the runbook ledger row 0.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/gf-v4-dispatch.yml"
+      - "Justfile"
+      - "tofu/stacks/gf-v4-dispatch/**"
+      - "tofu/backend/honey-gf-v4-dispatch.s3.hcl"
+      - "scripts/validate-gf-v4-dispatch-contract.py"
+      - "docs/runbooks/gf-v4-dispatch-edge.md"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/gf-v4-dispatch.yml"
+      - "Justfile"
+      - "tofu/stacks/gf-v4-dispatch/**"
+      - "tofu/backend/honey-gf-v4-dispatch.s3.hcl"
+      - "scripts/validate-gf-v4-dispatch-contract.py"
+      - "docs/runbooks/gf-v4-dispatch-edge.md"
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Action to perform"
+        required: true
+        default: "plan"
+        type: choice
+        options:
+          - plan
+          - apply
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gf-v4-dispatch-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # v4 dispatch role pin: GloriousFlywheel main merge of #1751, which carries
+  # the arc-owner-overlay-release root module and #1766. Distinct from the
+  # implementation pin and the ARC pin; scripts/validate-core-checkout.py and
+  # scripts/validate-gf-v4-dispatch-contract.py bind all three copies.
+  GF_CORE_REF: 82c96f5ce290bc768062782e911ed66a3527b941
+  HAS_ARC_RUNNERS_RUSTFS_ACCESS_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_ACCESS_KEY != '' }}
+  HAS_ARC_RUNNERS_RUSTFS_SECRET_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_SECRET_KEY != '' }}
+
+jobs:
+  plan-apply:
+    name: Plan or apply the GFTB gf-v4-dispatch edge
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: tinyland-nix
+    timeout-minutes: 30
+    # The transaction kubeconfig lives ONLY in this `gf-v4-dispatch`
+    # environment. The operator creates it with deployment_branch_policy
+    # protected_branches (runbook step 2); required-reviewer rules are a paid
+    # feature not available on this free community org, and the TIN-4004
+    # ruling (config/organization.yaml) rejects a human approval gate on
+    # principle. The effective apply gate is workflow_dispatch action=apply on
+    # refs/heads/main, checked in the secrets step below.
+    environment: gf-v4-dispatch
+    steps:
+      - name: Validate deploy secrets
+        id: secrets
+        env:
+          # Environment-level secrets resolve only after the job declares
+          # `environment: gf-v4-dispatch`, so keep this presence check
+          # step-scoped. Presence only; the value is never read here.
+          HAS_GF_V4_DISPATCH_KUBECONFIG_B64: ${{ secrets.GF_V4_DISPATCH_KUBECONFIG_B64 != '' }}
+        run: |
+          set -euo pipefail
+          missing=0
+          missing_dispatch=0
+          if [ "${HAS_GF_V4_DISPATCH_KUBECONFIG_B64}" != "true" ]; then
+            echo "::notice::GF_V4_DISPATCH_KUBECONFIG_B64 is not configured in the gf-v4-dispatch environment; skipping the dispatch edge plan (minted after the v4 namespace bootstrap - docs/runbooks/gf-v4-dispatch-edge.md step 3)."
+            missing_dispatch=1
+          fi
+          if [ "${HAS_ARC_RUNNERS_RUSTFS_ACCESS_KEY}" != "true" ]; then
+            echo "::notice::ARC_RUNNERS_RUSTFS_ACCESS_KEY is not configured; skipping the dispatch edge plan."
+            missing_dispatch=1
+          fi
+          if [ "${HAS_ARC_RUNNERS_RUSTFS_SECRET_KEY}" != "true" ]; then
+            echo "::notice::ARC_RUNNERS_RUSTFS_SECRET_KEY is not configured; skipping the dispatch edge plan."
+            missing_dispatch=1
+          fi
+          if [ "${missing_dispatch}" -ne 0 ]; then
+            echo "gf-v4-dispatch-secrets-present=false" >> "$GITHUB_OUTPUT"
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.action }}" = "apply" ]; then
+              echo "::error::dispatch edge deploy secrets are required for action=apply."
+              missing=1
+            fi
+          else
+            echo "gf-v4-dispatch-secrets-present=true" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.action }}" = "apply" ] && [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "::error::action=apply is admitted only from refs/heads/main; observed ${{ github.ref }}."
+            missing=1
+          fi
+          exit "${missing}"
+
+      - name: Checkout overlay
+        if: steps.secrets.outputs.gf-v4-dispatch-secrets-present == 'true'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          path: overlay
+          persist-credentials: false
+
+      - name: Checkout pinned GloriousFlywheel core
+        if: steps.secrets.outputs.gf-v4-dispatch-secrets-present == 'true'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: tinyland-inc/GloriousFlywheel
+          ref: ${{ env.GF_CORE_REF }}
+          path: GloriousFlywheel
+          ssh-key: ${{ secrets.GF_CORE_DEPLOY_KEY }}
+          persist-credentials: false
+
+      - name: Verify GloriousFlywheel core checkout
+        if: steps.secrets.outputs.gf-v4-dispatch-secrets-present == 'true'
+        run: |
+          set -euo pipefail
+          actual="$(git -C GloriousFlywheel rev-parse --verify HEAD)"
+          if [ "${actual}" != "${GF_CORE_REF}" ]; then
+            echo "::error::GloriousFlywheel checkout mismatch: expected ${GF_CORE_REF}, got ${actual}"
+            exit 1
+          fi
+
+      - name: Materialize dispatch kubeconfig
+        if: steps.secrets.outputs.gf-v4-dispatch-secrets-present == 'true'
+        env:
+          GF_V4_DISPATCH_KUBECONFIG_B64: ${{ secrets.GF_V4_DISPATCH_KUBECONFIG_B64 }}
+        run: |
+          set -euo pipefail
+          kubeconfig="${RUNNER_TEMP}/gf-v4-dispatch.kubeconfig"
+          umask 077
+          printf '%s' "${GF_V4_DISPATCH_KUBECONFIG_B64}" | base64 -d > "${kubeconfig}"
+          chmod 600 "${kubeconfig}"
+          echo "GFTB_GF_V4_DISPATCH_KUBECONFIG=${kubeconfig}" >> "$GITHUB_ENV"
+
+      - name: Validate dispatch edge
+        if: steps.secrets.outputs.gf-v4-dispatch-secrets-present == 'true'
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            export GF_CORE_PATH=../GloriousFlywheel
+            export GF_CORE_CI_PATH="path:${GF_CORE_PATH}#ci"
+            export GF_V4_DISPATCH_CORE_PATH=../GloriousFlywheel
+            export GF_V4_DISPATCH_CORE_CI_PATH="path:${GF_V4_DISPATCH_CORE_PATH}#ci"
+            nix develop "${GF_CORE_CI_PATH}" -c just gf-v4-dispatch-fmt-check
+            nix develop "${GF_CORE_CI_PATH}" -c just gf-v4-dispatch-contract
+            nix develop "${GF_CORE_CI_PATH}" -c just gf-v4-dispatch-validate
+
+      - name: Plan dispatch edge
+        if: steps.secrets.outputs.gf-v4-dispatch-secrets-present == 'true'
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ARC_RUNNERS_RUSTFS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_SECRET_KEY }}
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            export GF_CORE_PATH=../GloriousFlywheel
+            export GF_CORE_CI_PATH="path:${GF_CORE_PATH}#ci"
+            export GF_V4_DISPATCH_CORE_PATH=../GloriousFlywheel
+            export GF_V4_DISPATCH_CORE_CI_PATH="path:${GF_V4_DISPATCH_CORE_PATH}#ci"
+            if [ -n "${KUBERNETES_SERVICE_HOST:-}" ]; then
+              cluster_name="$(nix develop "${GF_CORE_CI_PATH}" -c kubectl --kubeconfig "${GFTB_GF_V4_DISPATCH_KUBECONFIG}" config view --minify -o jsonpath='{.contexts[0].context.cluster}')"
+              nix develop "${GF_CORE_CI_PATH}" -c kubectl --kubeconfig "${GFTB_GF_V4_DISPATCH_KUBECONFIG}" config set-cluster "${cluster_name}" --server=https://kubernetes.default.svc >/dev/null
+            fi
+            nix develop "${GF_CORE_CI_PATH}" -c just gf-v4-dispatch-init
+            nix develop "${GF_CORE_CI_PATH}" -c just gf-v4-dispatch-plan
+            nix develop "${GF_CORE_CI_PATH}" -c just _gf-v4-dispatch-plan-json
+            nix develop "${GF_CORE_CI_PATH}" -c just gf-v4-dispatch-plan-show \
+              > .tofu-plans/gf-v4-dispatch.plan.txt
+            {
+              echo "## GFTB gf-v4-dispatch edge plan"
+              echo ""
+              echo '```'
+              cat .tofu-plans/gf-v4-dispatch.plan.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Classify plan
+        if: steps.secrets.outputs.gf-v4-dispatch-secrets-present == 'true'
+        id: classify
+        run: |
+          set -euo pipefail
+          cd overlay
+          export GF_CORE_PATH=../GloriousFlywheel
+          export GF_CORE_CI_PATH="path:${GF_CORE_PATH}#ci"
+          nix develop "${GF_CORE_CI_PATH}" -c python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          plan = json.loads(Path(".tofu-plans/gf-v4-dispatch.tfplan.json").read_text())
+          changes = [
+              change
+              for change in plan.get("resource_changes", [])
+              if change.get("change", {}).get("actions", ["no-op"]) != ["no-op"]
+          ]
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              print(f"has-changes={str(bool(changes)).lower()}", file=output)
+          PY
+
+      # Only the redacted plan TEXT leaves the runner. The plan binary and its
+      # JSON rendering embed the transaction kubeconfig path and prior state.
+      - name: Upload plan text artifact
+        if: steps.secrets.outputs.gf-v4-dispatch-secrets-present == 'true'
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: gftb-gf-v4-dispatch-plan-text
+          path: overlay/.tofu-plans/gf-v4-dispatch.plan.txt
+          retention-days: 7
+
+      # gf-v4-dispatch-apply depends on the enumerated scope check (create-only
+      # first install or in-place Helm update; anything else fails closed).
+      - name: Apply dispatch edge
+        if: >-
+          github.event_name == 'workflow_dispatch'
+          && github.event.inputs.action == 'apply'
+          && steps.secrets.outputs.gf-v4-dispatch-secrets-present == 'true'
+          && steps.classify.outputs.has-changes == 'true'
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ARC_RUNNERS_RUSTFS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_SECRET_KEY }}
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            export GF_CORE_PATH=../GloriousFlywheel
+            export GF_CORE_CI_PATH="path:${GF_CORE_PATH}#ci"
+            export GF_V4_DISPATCH_CORE_PATH=../GloriousFlywheel
+            export GF_V4_DISPATCH_CORE_CI_PATH="path:${GF_V4_DISPATCH_CORE_PATH}#ci"
+            nix develop "${GF_CORE_CI_PATH}" -c just gf-v4-dispatch-apply
+
+      - name: Post-apply zero-diff
+        if: >-
+          github.event_name == 'workflow_dispatch'
+          && github.event.inputs.action == 'apply'
+          && steps.secrets.outputs.gf-v4-dispatch-secrets-present == 'true'
+          && steps.classify.outputs.has-changes == 'true'
+        uses: ./GloriousFlywheel/.github/actions/nix-job
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ARC_RUNNERS_RUSTFS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ARC_RUNNERS_RUSTFS_SECRET_KEY }}
+        with:
+          push-cache: "false"
+          command: |
+            set -euo pipefail
+            cd overlay
+            export GF_CORE_PATH=../GloriousFlywheel
+            export GF_CORE_CI_PATH="path:${GF_CORE_PATH}#ci"
+            export GF_V4_DISPATCH_CORE_PATH=../GloriousFlywheel
+            export GF_V4_DISPATCH_CORE_CI_PATH="path:${GF_V4_DISPATCH_CORE_PATH}#ci"
+            nix develop "${GF_CORE_CI_PATH}" -c just _gf-v4-dispatch-plan-text \
+              > .tofu-plans/gf-v4-dispatch.post-apply.txt
+            if ! grep -q "No changes." .tofu-plans/gf-v4-dispatch.post-apply.txt; then
+              echo "::error::post-apply readback is not a zero-diff plan; the applied state does not match the reviewed declaration."
+              cat .tofu-plans/gf-v4-dispatch.post-apply.txt
+              exit 1
+            fi
+            echo "post-apply zero-diff readback passed"

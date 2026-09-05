@@ -2,7 +2,7 @@
 
 `validate.yml`, the sole required status check, is self-contained: it checks
 out only this public overlay and does not fetch GloriousFlywheel or receive a
-cross-repository credential. The seven core-consuming workflows below are
+cross-repository credential. The eight core-consuming workflows below are
 different: GloriousFlywheel went private (TIN-4015, 2026-08-22), so they
 credential their GloriousFlywheel checkout with a read-only deploy key.
 
@@ -14,7 +14,7 @@ secret-free. Exact GloriousFlywheel source-dependent ARC validation and all
 ARC state plan/apply work are operator-local.
 
 The other core-consuming workflows (`archive-stack.yml`, `edge-drift.yml`,
-`edge-plan.yml`, `form-crs.yml`,
+`edge-plan.yml`, `form-crs.yml`, `gf-v4-dispatch.yml`,
 `k8s-stack-drift.yml`, `list-crs.yml`, `mail-crs.yml`) checkout
 GloriousFlywheel at an exact pinned commit using the repository secret
 `GF_CORE_DEPLOY_KEY` — a read-only SSH deploy key attached to
@@ -69,12 +69,43 @@ GloriousFlywheel source credential and must not be named or reused as one.
 
 ## Edge Backend Secrets
 
-The edge plan/drift workflows legitimately retain the existing RustFS backend
-secret names `ARC_RUNNERS_RUSTFS_ACCESS_KEY` and
-`ARC_RUNNERS_RUSTFS_SECRET_KEY`. The names are historical and shared with the
-edge backend; their presence does not authorize ARC state planning or apply.
-ARC uses the runtime AWS SDK access-key pair from operator custody. No ARC
+The edge plan/drift workflows and the GF v4 dispatch-edge workflow legitimately
+retain the existing RustFS backend secret names `ARC_RUNNERS_RUSTFS_ACCESS_KEY`
+and `ARC_RUNNERS_RUSTFS_SECRET_KEY`. The names are historical and shared with
+the edge and dispatch-edge backends; their presence does not authorize legacy
+ARC state planning or apply. Legacy ARC uses the runtime AWS SDK access-key
+pair from operator custody. No legacy ARC (`arc-runners` continuity surface)
 kubeconfig belongs in Actions.
+
+## GF v4 dispatch edge (TIN-2611, RULING 3)
+
+`.github/workflows/gf-v4-dispatch.yml` plans and applies the consumer-owned
+`gf-v4-dispatch` edge (`tofu/stacks/gf-v4-dispatch/`,
+`docs/runbooks/gf-v4-dispatch-edge.md`). Its core checkout is the v4 dispatch
+role pin `82c96f5ce290bc768062782e911ed66a3527b941` (a third role pin beside
+the implementation and ARC pins; `just core-checkout` and
+`just gf-v4-dispatch-contract` bind it), credentialed with the same read-only
+`GF_CORE_DEPLOY_KEY` deploy key and nothing broader.
+
+`GF_V4_DISPATCH_KUBECONFIG_B64` belongs only in the protected `gf-v4-dispatch`
+environment. It is the base64-encoded namespace-scoped transaction kubeconfig
+for `arc-runners-great-falls-tool-bus`, minted after the v4 namespace
+bootstrap (runbook row 3). It is deliberately not the legacy ARC operator
+kubeconfig: it cannot create namespaces, read other namespaces, or touch the
+legacy `arc-runners` scale set, and the retired ARC kubeconfig names stay
+forbidden in every workflow. The environment's `protected_branches` policy plus
+the `workflow_dispatch action=apply` + `refs/heads/main` check in the workflow
+are the apply gate; the TIN-4004 ruling rejects a human approval gate.
+
+**TO-RATIFY**: this is the first time a Kubernetes-apply credential for a
+runner scale set sits in Actions in this repository (the legacy ARC plan/apply
+stays operator-local). The standing prose "no ARC kubeconfig belongs in
+Actions" is therefore re-scoped above to the legacy `arc-runners` continuity
+surface; the v4 edge is a consumer-declared, module-derived, scope-checked
+transaction, not the legacy ARC lane.
+
+The GitHub App private key for the v4 edge is never an Actions secret
+(`secrets/README.md` row `github-app-gf-v4-dispatch`).
 
 ## Mail CR Apply Secret
 
@@ -99,8 +130,9 @@ Secret-free `validate` runs on the self-hosted `tinyland-nix` class (TIN-3914,
 PR #116), not a GitHub-hosted runner. It renders and validates the committed
 `k8s/web` tree without contacting a registry, cluster, or Tofu state backend,
 and it checks out no GloriousFlywheel source. Self-hosted workload and non-ARC
-apply lanes remain separately gated. ARC plan/apply always happens on the
-operator machine.
+apply lanes remain separately gated. Legacy ARC (`arc-runners`) plan/apply
+always happens on the operator machine; the v4 dispatch edge plans and applies
+through its own protected-environment workflow (above).
 
 ## Why It Exists
 
@@ -113,14 +145,14 @@ core product logic into this repo.
 
 ## Current Status
 
-The finite `.yml`/`.yaml` census covers 8 workflows. Seven are
-`GF_CORE_REF`-pinned core-checkout consumers with 12 exact-SHA checkout
-declarations. `validate.yml` does not check out core; all eight remain in the census so a new source
+The finite `.yml`/`.yaml` census covers 9 workflows. Eight are
+`GF_CORE_REF`-pinned core-checkout consumers with 13 exact-SHA checkout
+declarations. `validate.yml` does not check out core; all nine remain in the census so a new source
 consumer cannot hide under the alternate extension.
 
 `just core-checkout` validates checkout action immutability, canonical repository,
 finite overlay/core paths, role pin, non-persistence, read-only workflow
-permission, closed HEAD assertion, all 22 exact `GF_CORE_CI_PATH` devshell
+permission, closed HEAD assertion, all 27 exact `GF_CORE_CI_PATH` devshell
 sources, and that every core-repository checkout binds exactly one credential —
 the `GF_CORE_DEPLOY_KEY` deploy key, TIN-4015 — while the overlay/`validate`
 checkout stays credential-free. `just core-checkout-selftest`
@@ -136,9 +168,12 @@ workflow consumers. The ARC runner surface carries a separate role pin,
 advanced by TIN-3902 from
 `df510574d17b85e7f15470caf3574fcabc4768f1` to
 `11ace397282ff89aeb1dfeb4a32fcbed3200c2ff` so the `arc-runners` stack exposes
-the `runner_group` input. The finite contract checks this mapping exactly. A
-future convergence must review the executable core delta as its own adoption
-change.
+the `runner_group` input. The GF v4 dispatch edge carries a third role pin,
+`82c96f5ce290bc768062782e911ed66a3527b941` (TIN-2611), shared by
+`gf-v4-dispatch.yml`, the `Justfile` `gf_v4_dispatch_core_*` globals, and
+`config/organization.yaml` `dispatch_edge.core_pin`. The finite contract
+checks this mapping exactly. A future convergence must review the executable
+core delta as its own adoption change.
 
 ## GloriousFlywheel credential helper: fleet-baked, no consumer credential (ruling 2026-08-31)
 

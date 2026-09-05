@@ -127,6 +127,15 @@ HOSTED_WORKFLOW_JUST_ALLOWLIST = {
     "form-stack-drift-check",
     "form-stack-server-dry-run",
     "form-stack-validate",
+    "gf-v4-dispatch-fmt-check",
+    "gf-v4-dispatch-contract",
+    "gf-v4-dispatch-validate",
+    "gf-v4-dispatch-init",
+    "gf-v4-dispatch-plan",
+    "_gf-v4-dispatch-plan-json",
+    "gf-v4-dispatch-plan-show",
+    "gf-v4-dispatch-apply",
+    "_gf-v4-dispatch-plan-text",
     "list-stack-apply",
     "list-stack-drift-check",
     "list-stack-server-dry-run",
@@ -172,6 +181,28 @@ ARC_GLOBAL_ASSIGNMENTS = {
     "arc_backend_default": '"tofu/backend/honey.s3.hcl"',
     "arc_cluster_uid": '"cc121476-7a95-4b24-aa61-79d1f45713bd"',
     "arc_target_uid": '"c768fdd2-e76f-4fbf-bc39-922430fedbb6"',
+}
+
+# GF v4 dispatch edge (TIN-2611, RULING 3). A third role pin beside the
+# implementation and ARC pins; scripts/validate-core-checkout.py and
+# scripts/validate-gf-v4-dispatch-contract.py bind the same value. The globals
+# are pinned exactly for the same reason as ARC_GLOBAL_ASSIGNMENTS: redirecting
+# the core stack, the tfvars, or the backend is the highest-leverage silent
+# mutation available to the hosted plan/apply lane.
+GF_V4_DISPATCH_CORE_SHA = "82c96f5ce290bc768062782e911ed66a3527b941"
+GF_V4_DISPATCH_GLOBAL_ASSIGNMENTS = {
+    "gf_v4_dispatch_core_sha": f'"{GF_V4_DISPATCH_CORE_SHA}"',
+    "gf_v4_dispatch_core_default": '"../GloriousFlywheel-gf-v4-82c96f5c"',
+    "gf_v4_dispatch_core_ci_default": (
+        f'"github:tinyland-inc/GloriousFlywheel/{GF_V4_DISPATCH_CORE_SHA}#ci"'
+    ),
+    "gf_v4_dispatch_core_stack": '"tofu/stacks/arc-owner-overlay-release"',
+    "gf_v4_dispatch_stack": '"tofu/stacks/gf-v4-dispatch"',
+    "gf_v4_dispatch_tfvars": '"tofu/stacks/gf-v4-dispatch/great-falls-tool-bus.tfvars"',
+    "gf_v4_dispatch_backend": (
+        'env_var_or_default("GF_V4_DISPATCH_BACKEND", '
+        '"tofu/backend/honey-gf-v4-dispatch.s3.hcl")'
+    ),
 }
 
 # Dependencies are an ordered control-flow contract. Adding a guard after the
@@ -261,6 +292,21 @@ ARC_RECIPE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     ),
     "_operator-apply-confirm": (),
     "_arc-exclusive-confirm": (),
+    # GF v4 dispatch edge (TIN-2611). The attended App Secret recipe reaches
+    # _arc-kubeconfig-contract, so it is receipted in the ARC family. Its two
+    # v4 helpers are receipted with it; they are deliberately NOT operator
+    # roots, so the hosted gf-v4-dispatch-* recipes that depend on the core
+    # contract stay untainted.
+    "_gf-v4-dispatch-core-contract": (),
+    "_gf-v4-dispatch-core-signature": (),
+    "gf-v4-dispatch-app-secret-apply": (
+        "_arc-app-secret-inputs",
+        "_reviewed-clean-main",
+        "_gf-v4-dispatch-core-contract",
+        "_gf-v4-dispatch-core-signature",
+        "_arc-kubeconfig-contract",
+        "_operator-apply-confirm",
+    ),
 }
 
 # SHA256 of executable_recipe_text(recipe body). Comments and blank lines are
@@ -348,6 +394,15 @@ ARC_CRITICAL_RECIPE_DIGESTS: dict[str, str] = {
     ),
     "_arc-exclusive-confirm": _receipt(
         "9c8565974cf6f3b0", "f2aca232a5ff6978", "8d566d4ae8c96152", "900813ed27e88e7a"
+    ),
+    "_gf-v4-dispatch-core-contract": _receipt(
+        "727a32c68f189519", "7ae526f21adbcc09", "db82234d3274b193", "d638034c8c439566"
+    ),
+    "_gf-v4-dispatch-core-signature": _receipt(
+        "201e02985805081c", "a09cde422d910483", "2022e62cce77c210", "82afda68fb579b2b"
+    ),
+    "gf-v4-dispatch-app-secret-apply": _receipt(
+        "d9ea42e2a7d37c4d", "5f5e1f3420108511", "c990ca42f6ad622a", "9300645e7026e2c9"
     ),
 }
 
@@ -764,6 +819,7 @@ ARC_OPERATOR_LOCAL_ROOTS = {
     "_arc-runtime-contract",
     "_arc-plan-input-snapshot",
     "_arc-plan-input-preflight",
+    "gf-v4-dispatch-app-secret-apply",
 }
 ARC_EXPLICIT_OPERATOR_LOCAL_WRAPPERS = {"check"}
 
@@ -959,20 +1015,24 @@ def scan_arc_operator_contract_text(text: str, path: Path) -> list[Finding]:
     """Bind every sensitive ARC operator recipe to one reviewed implementation."""
     findings: list[Finding] = []
 
-    for name, expected in ARC_GLOBAL_ASSIGNMENTS.items():
-        observed = re.findall(
-            rf"^{re.escape(name)}\s*:=\s*(.*?)\s*$", text, flags=re.MULTILINE
-        )
-        if observed != [expected]:
-            findings.append(
-                Finding(
-                    "arc-global-contract-mismatch",
-                    path,
-                    1,
-                    f"{name} must be declared exactly once as {expected!r}; "
-                    f"observed {observed!r}.",
-                )
+    for rule, assignments in (
+        ("arc-global-contract-mismatch", ARC_GLOBAL_ASSIGNMENTS),
+        ("gf-v4-dispatch-global-contract-mismatch", GF_V4_DISPATCH_GLOBAL_ASSIGNMENTS),
+    ):
+        for name, expected in assignments.items():
+            observed = re.findall(
+                rf"^{re.escape(name)}\s*:=\s*(.*?)\s*$", text, flags=re.MULTILINE
             )
+            if observed != [expected]:
+                findings.append(
+                    Finding(
+                        rule,
+                        path,
+                        1,
+                        f"{name} must be declared exactly once as {expected!r}; "
+                        f"observed {observed!r}.",
+                    )
+                )
 
     dependency_names = set(ARC_RECIPE_DEPENDENCIES)
     digest_names = set(ARC_CRITICAL_RECIPE_DIGESTS)
@@ -7115,6 +7175,27 @@ def self_test() -> None:
     )
     expect_arc_contract_rejection(
         global_drift, "implementation-core pin drift", "arc-global-contract-mismatch"
+    )
+
+    v4_dispatch_drift = justfile.replace(
+        f'gf_v4_dispatch_core_sha := "{GF_V4_DISPATCH_CORE_SHA}"',
+        'gf_v4_dispatch_core_sha := "' + "0" * 40 + '"',
+        1,
+    )
+    expect_arc_contract_rejection(
+        v4_dispatch_drift,
+        "v4 dispatch role pin drift",
+        "gf-v4-dispatch-global-contract-mismatch",
+    )
+    v4_stack_drift = justfile.replace(
+        'gf_v4_dispatch_core_stack := "tofu/stacks/arc-owner-overlay-release"',
+        'gf_v4_dispatch_core_stack := "tofu/stacks/arc-runners"',
+        1,
+    )
+    expect_arc_contract_rejection(
+        v4_stack_drift,
+        "v4 dispatch core stack redirect",
+        "gf-v4-dispatch-global-contract-mismatch",
     )
 
     reordered = mutate_recipe_dependencies(
