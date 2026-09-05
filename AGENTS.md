@@ -34,6 +34,15 @@ Hard rules:
   tenant sops lane (`secrets/`, repo-root `.sops.yaml`); the declarations
   SSOT is the public site repo's `tofu/{dns,mail}-intent/`, reconciled
   against the newer `docs/mvp-decision-packet.md` row (g) REVISED + REV-2
+- this overlay owns the GFTB **GF v4 dispatch-edge apply plane**
+  (`tofu/stacks/gf-v4-dispatch/`, `.github/workflows/gf-v4-dispatch.yml`,
+  `docs/runbooks/gf-v4-dispatch-edge.md`; TIN-2611, operator ruling
+  2026-09-05 RULING 3). It consumes the GloriousFlywheel root module
+  `tofu/stacks/arc-owner-overlay-release` at the v4 dispatch role pin through
+  the eight module inputs in the tfvars and the `dispatch_edge` record in
+  `config/organization.yaml`; every other identity is module-derived. It is
+  consumer demand, not the legacy ARC scale set, and never re-homes into GF
+  core or `tinyland-inc/tinyland-infra`
 - never re-home GFTB apply-plane content into `tinyland-inc/blahaj`.
   Blahaj is the house's logically replaceable IaC layer (reference
   backend, "never a required dependency"); consumer overlays live with
@@ -80,6 +89,12 @@ Ratified attended exceptions (unguarded by design):
   `list-member-add`,
   `listsync-stack-server-dry-run` / `listsync-stack-apply`,
   and read-only `web-stack-health`
+- the GF v4 dispatch App Secret ceremony (`gf-v4-dispatch-app-secret-apply`
+  and its `_gf-v4-dispatch-core-contract` / `_gf-v4-dispatch-core-signature`
+  helpers; TIN-2611 ceremony 0d row 4) — confirm-gated, signature-verified,
+  no CI caller, receipted in the ARC family of
+  `scripts/validate-public-operator-surface.py`. Every other
+  `gf-v4-dispatch-*` recipe is hosted-only and guarded
 - `web-stack-validate` — deliberately unguarded: it is the receipt-pinned
   web-release validation callee, and the reviewed `web-release-render`
   invokes it under `env -i`, which strips `GITHUB_ACTIONS`; a guard there

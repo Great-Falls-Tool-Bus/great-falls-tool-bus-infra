@@ -26,12 +26,19 @@ in this overlay. No values, hostnames, or key material in this README — ever.
 | `google-sso-client-secret` | OAuth 2.0 client secret paired with `google-sso-client-id`. Same value as the protected `edge` environment secret `GOOGLE_SSO_CLIENT_SECRET`. Never committed. Required for plan/apply/drift whenever `ENABLE_GOOGLE_SSO=true`; workflows check presence only and fail closed if it is absent. Rotate/mint per `docs/runbooks/cf-access-google-sso.md`. | `just edge-zones-plan` / `just edge-zones-apply` / scheduled edge drift (`TF_VAR_google_sso_client_secret`) |
 | `github-sso-client-id` | OAuth client id of the GitHub OAuth app backing the GitHub CF Access IdP that fronts the DECOUPLED dev + preview gate (`cf-access-dev-preview-and-github-sso` runbook, TIN-2535). Same value as the protected `edge` environment secret `GH_SSO_CLIENT_ID` (the `GH_` prefix, not `GITHUB_`, because GitHub reserves the `GITHUB_` secret/variable prefix). Kept out of git. Unused until `var.enable_github_sso` / the `ENABLE_GITHUB_SSO` environment variable is `true`. | `just edge-zones-plan` / `just edge-zones-apply` / scheduled edge drift (`TF_VAR_github_sso_client_id`) |
 | `github-sso-client-secret` | OAuth client secret paired with `github-sso-client-id`. Same value as the protected `edge` environment secret `GH_SSO_CLIENT_SECRET`. Never committed. Unused until GitHub SSO is enabled. Rotate/mint per `docs/runbooks/cf-access-dev-preview-and-github-sso.md`. | `just edge-zones-plan` / `just edge-zones-apply` / scheduled edge drift (`TF_VAR_github_sso_client_secret`) |
+| `github-app-gf-v4-dispatch` | The GFTB **product** GitHub App (TIN-2611 ceremony 0c; O-1 install, organization-wide, all repositories): App id, installation id, private key, and webhook secret, as `secrets/gf-v4-dispatch.enc.yaml` (keys `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_APP_WEBHOOK_SECRET`). NEVER the ARC registration App (installation id 143981297) and never an Actions secret. Materialized into the cluster Secret `github-app-secret-great-falls-tool-bus-gf-v4-dispatch` in the dispatch namespace only by the attended recipe; `docs/runbooks/gf-v4-dispatch-edge.md` row 4. | `sops exec-env secrets/gf-v4-dispatch.enc.yaml` with `GFTB_APPLY_CONFIRM=apply just gf-v4-dispatch-app-secret-apply` (operator machine only; no CI consumer) |
+| `gf-v4-dispatch-kubeconfig` | Namespace-scoped plan/apply transaction kubeconfig for `arc-runners-great-falls-tool-bus` (one `honey` context, embedded credentials, TLS-verified; minted after the v4 namespace bootstrap). Same value, base64, as the protected `gf-v4-dispatch` environment secret `GF_V4_DISPATCH_KUBECONFIG_B64`. It is not the ARC operator kubeconfig and cannot create namespaces or read other namespaces. | `.github/workflows/gf-v4-dispatch.yml` (`GFTB_GF_V4_DISPATCH_KUBECONFIG`), `just gf-v4-dispatch-init` / `just gf-v4-dispatch-plan` / `just gf-v4-dispatch-apply` |
 
 Usage shape (operator machine, key in age custody):
 
 ```bash
 sops exec-env secrets/edge-dns.enc.yaml 'just edge-zones-plan'
 ```
+
+The v4 dispatch App Secret ceremony decrypts the PEM to a caller-owned
+mode-0600 file outside the repository (`GITHUB_APP_PRIVATE_KEY_PATH`) for the
+duration of one attended recipe run and removes it afterwards; the ids travel
+through `sops exec-env` (`docs/runbooks/gf-v4-dispatch-edge.md` row 4).
 
 No file in this directory is created by CI; encryption and decryption are
 operator actions.

@@ -74,6 +74,23 @@ zone-scoped token, and reconciled here. Console and registrar steps live in
 the superseded pre-TIN-2385, fail-closed reference. It must not be applied
 while the live edge stack owns the zone surface.
 
+## GF v4 dispatch edge (TIN-2611, RULING 3)
+
+Operator ruling 2026-09-05: the `gf-v4-dispatch` GitHub dispatch edge for this
+organization is the consumer's own installation fact and lives here, in
+[`tofu/stacks/gf-v4-dispatch/`](tofu/stacks/gf-v4-dispatch/README.md). It
+consumes the GloriousFlywheel root module `arc-owner-overlay-release` at an
+exact v4 role pin through eight module inputs; the namespace, scale set, label,
+App Secret name, and action-resolution sink are module-derived. The governed
+plan/apply lane is `.github/workflows/gf-v4-dispatch.yml` (plan on trusted
+push, apply only on `workflow_dispatch action=apply` from `main` under the
+protected `gf-v4-dispatch` environment). Prerequisites, credentials by name,
+and the ceremony 0d ledger:
+[`docs/runbooks/gf-v4-dispatch-edge.md`](docs/runbooks/gf-v4-dispatch-edge.md).
+A Ready listener is dispatch capacity, not enrollment evidence; the v4 gap
+described above still holds until the operand, catalog, and controller rungs
+exist.
+
 ## Mail CR apply plane (TIN-2379)
 
 Tenant-owned mail custom resources live in
